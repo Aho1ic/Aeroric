@@ -1,0 +1,948 @@
+//! P8-05 切片一百零六（ide 刀一）：tests 命令族本地面——DTO 与发现/运行/
+//! 剖析主体（`src-tauri/src/tests.rs` verbatim 上收；remote 孪生留 Tauri SSH
+//! 适配层）。宿主 `ide_services.rs` 与 Tauri 转发壳消费同一实现。差异三处
+//! 注入：python 程序探测（宿主 default_python_program／Tauri 平台适配）、
+//! login shell 环境（宿主空表／Tauri 平台装配）、后台命令配置（core
+//! runtime::subprocess 同一函数）。
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TestRunStatus {
+    Passed,
+    Failed,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestProfile {
+    pub id: String,
+    pub label: String,
+    pub command: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCase {
+    pub profile: String,
+    pub name: String,
+    pub file: String,
+    pub line: usize,
+    pub column: usize,
+    pub status: TestRunStatus,
+    pub duration_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestFailure {
+    pub profile: String,
+    pub name: String,
+    pub file: String,
+    pub line: usize,
+    pub column: usize,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestRunResult {
+    pub profile: String,
+    pub status: TestRunStatus,
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub tests: Vec<TestCase>,
+    pub failures: Vec<TestFailure>,
+    pub coverage: Option<TestCoverageSummary>,
+    pub raw_output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCoverageMetric {
+    pub covered: usize,
+    pub total: usize,
+    pub percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCoverageSummary {
+    pub lines: TestCoverageMetric,
+    pub functions: TestCoverageMetric,
+    pub branches: TestCoverageMetric,
+    pub files: Vec<TestCoverageFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCoverageFile {
+    pub file: String,
+    pub lines: Vec<TestCoverageLine>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCoverageLine {
+    pub line: usize,
+    pub hits: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestRunTarget {
+    pub file_path: Option<String>,
+    pub test_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestDiscoveryResult {
+    pub profiles: Vec<TestProfile>,
+}
+
+pub fn join_test_path(root: &Path, file: &str) -> String {
+    let path = Path::new(file);
+    if path.is_absolute() {
+        path.to_string_lossy().into_owned()
+    } else {
+        root.join(path).to_string_lossy().into_owned()
+    }
+}
+
+/// 宿主侧的默认 python 探测（Tauri 侧的 `platform::local_python_program`
+/// 带 GUI 平台适配——conda 前缀/PATH 探测——由 Tauri 壳注入；无头宿主用
+/// PYTHON 环境变量与 python3 回落）。
+pub fn default_python_program() -> String {
+    if let Some(configured) = std::env::var_os("PYTHON").filter(|value| !value.is_empty()) {
+        return configured.to_string_lossy().into_owned();
+    }
+    "python3".to_string()
+}
+
+fn detect_package_manager(root: &Path) -> Option<&'static str> {
+    if root.join("pnpm-lock.yaml").is_file() {
+        Some("pnpm")
+    } else if root.join("yarn.lock").is_file() {
+        Some("yarn")
+    } else if root.join("package-lock.json").is_file() {
+        Some("npm")
+    } else {
+        None
+    }
+}
+
+fn package_json_has_vitest(root: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(root.join("package.json")) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return raw.contains("vitest");
+    };
+
+    for key in ["dependencies", "devDependencies", "optionalDependencies"] {
+        if value.get(key).and_then(|deps| deps.get("vitest")).is_some() {
+            return true;
+        }
+    }
+    value
+        .get("scripts")
+        .and_then(Value::as_object)
+        .map(|scripts| {
+            scripts
+                .values()
+                .filter_map(Value::as_str)
+                .any(|script| script.contains("vitest"))
+        })
+        .unwrap_or(false)
+}
+
+fn has_vitest_config(root: &Path) -> bool {
+    [
+        "vitest.config.ts",
+        "vitest.config.js",
+        "vitest.config.mts",
+        "vite.config.ts",
+        "vite.config.js",
+    ]
+    .iter()
+    .any(|file| root.join(file).is_file())
+}
+
+fn file_name_is_python_test(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    file_name.starts_with("test_") && file_name.ends_with(".py") || file_name.ends_with("_test.py")
+}
+
+fn directory_has_python_tests(root: &Path, max_entries: usize) -> bool {
+    let mut stack = vec![root.to_path_buf()];
+    let mut visited = 0usize;
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > max_entries {
+                return false;
+            }
+            let path = entry.path();
+            if path.is_file() && file_name_is_python_test(&path) {
+                return true;
+            }
+            if !path.is_dir() {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            if matches!(
+                name,
+                ".git" | ".venv" | "venv" | "node_modules" | "target" | "__pycache__"
+            ) {
+                continue;
+            }
+            stack.push(path);
+        }
+    }
+    false
+}
+
+fn has_pytest_project(root: &Path) -> bool {
+    if ["pytest.ini", ".pytest.ini"]
+        .iter()
+        .any(|file| root.join(file).is_file())
+    {
+        return true;
+    }
+    for file in ["tox.ini", "setup.cfg", "pyproject.toml"] {
+        let Ok(raw) = std::fs::read_to_string(root.join(file)) else {
+            continue;
+        };
+        if raw.contains("[pytest]") || raw.contains("[tool.pytest") || raw.contains("pytest") {
+            return true;
+        }
+    }
+    directory_has_python_tests(root, 10_000)
+}
+
+fn scoped_test_name(target: Option<&TestRunTarget>) -> Option<String> {
+    target
+        .and_then(|target| target.test_name.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+fn scoped_file_arg(root: &Path, target: Option<&TestRunTarget>) -> Result<Option<String>, String> {
+    let Some(file_path) = target
+        .and_then(|target| target.file_path.as_deref())
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return Ok(None);
+    };
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve project path: {e}"))?;
+    let path = Path::new(file_path);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let path = path
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve test file: {e}"))?;
+    if !path.starts_with(&root) || !path.is_file() {
+        return Err("Test file is outside project root".to_string());
+    }
+    Ok(Some(
+        path.strip_prefix(&root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/"),
+    ))
+}
+
+pub fn vitest_command(
+    root: &Path,
+    target: Option<&TestRunTarget>,
+    coverage: bool,
+) -> Result<(String, Vec<String>, String), String> {
+    let package_manager =
+        detect_package_manager(root).ok_or_else(|| "Vitest tests were not detected".to_string())?;
+    let mut args = match package_manager {
+        "pnpm" => vec!["exec", "vitest", "run", "--reporter=json"],
+        "yarn" => vec!["vitest", "run", "--reporter=json"],
+        "npm" => vec!["exec", "--", "vitest", "run", "--reporter=json"],
+        _ => return Err("Vitest tests were not detected".to_string()),
+    }
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    if let Some(file) = scoped_file_arg(root, target)? {
+        args.push(file);
+    }
+    if let Some(test_name) = scoped_test_name(target) {
+        args.push("-t".to_string());
+        args.push(test_name);
+    }
+    if coverage {
+        args.push("--coverage".to_string());
+    }
+    let display = format!("{package_manager} {}", args.join(" "));
+    Ok((package_manager.to_string(), args, display))
+}
+
+fn cargo_manifest(root: &Path) -> Option<PathBuf> {
+    let root_manifest = root.join("Cargo.toml");
+    if root_manifest.is_file() {
+        return Some(root_manifest);
+    }
+    let tauri_manifest = root.join("src-tauri").join("Cargo.toml");
+    if tauri_manifest.is_file() {
+        return Some(tauri_manifest);
+    }
+    None
+}
+
+pub fn cargo_command(
+    root: &Path,
+    target: Option<&TestRunTarget>,
+) -> Result<(String, Vec<String>, String), String> {
+    let manifest =
+        cargo_manifest(root).ok_or_else(|| "Cargo tests were not detected".to_string())?;
+    let relative_manifest = manifest
+        .strip_prefix(root)
+        .unwrap_or(&manifest)
+        .to_string_lossy()
+        .into_owned();
+    let mut args = if relative_manifest == "Cargo.toml" {
+        vec!["test".to_string(), "--message-format=json".to_string()]
+    } else {
+        vec![
+            "test".to_string(),
+            "--manifest-path".to_string(),
+            relative_manifest,
+            "--message-format=json".to_string(),
+        ]
+    };
+    if let Some(file) = scoped_file_arg(root, target)? {
+        let path = Path::new(&file);
+        if path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            == Some("tests")
+        {
+            if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+                args.push("--test".to_string());
+                args.push(stem.to_string());
+            }
+        } else if scoped_test_name(target).is_none() {
+            return Err(
+                "Cargo file scoped runs require an integration test file under tests/ or a test name"
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(test_name) = scoped_test_name(target) {
+        args.push(test_name);
+    }
+    let display = format!("cargo {}", args.join(" "));
+    Ok(("cargo".to_string(), args, display))
+}
+
+pub fn python_command(
+    root: &Path,
+    target: Option<&TestRunTarget>,
+    python_program: &dyn Fn() -> String,
+) -> Result<(String, Vec<String>, String), String> {
+    if !has_pytest_project(root) {
+        return Err("Python tests were not detected".to_string());
+    }
+    let mut args = vec!["-m".to_string(), "pytest".to_string(), "-q".to_string()];
+    let file = scoped_file_arg(root, target)?;
+    let test_name = scoped_test_name(target);
+    if let Some(file) = file {
+        if !file_name_is_python_test(Path::new(&file)) {
+            return Err("Pytest scoped file must be a Python test file".to_string());
+        }
+        let target_arg = test_name
+            .as_ref()
+            .map(|name| format!("{file}::{name}"))
+            .unwrap_or(file);
+        args.push(target_arg);
+    } else if let Some(test_name) = test_name {
+        args.push("-k".to_string());
+        args.push(test_name);
+    }
+    let program = python_program();
+    let display = format!("{program} {}", args.join(" "));
+    Ok((program, args, display))
+}
+
+pub fn discover_test_profiles_from_root(root: &Path) -> Result<Vec<TestProfile>, String> {
+    let mut profiles = Vec::new();
+    if package_json_has_vitest(root) || has_vitest_config(root) {
+        if let Ok((_, _, command)) = vitest_command(root, None, false) {
+            profiles.push(TestProfile {
+                id: "vitest".to_string(),
+                label: "Vitest".to_string(),
+                command,
+            });
+        }
+    }
+    if let Ok((_, _, command)) = cargo_command(root, None) {
+        profiles.push(TestProfile {
+            id: "cargo".to_string(),
+            label: "Cargo".to_string(),
+            command,
+        });
+    }
+    if let Ok((_, _, command)) = python_command(root, None, &default_python_program) {
+        profiles.push(TestProfile {
+            id: "python".to_string(),
+            label: "Pytest".to_string(),
+            command,
+        });
+    }
+    Ok(profiles)
+}
+
+fn numeric_field(value: &Value, name: &str) -> usize {
+    value.get(name).and_then(Value::as_u64).unwrap_or(0) as usize
+}
+
+fn coverage_metric(covered: usize, total: usize) -> TestCoverageMetric {
+    let percent = if total == 0 {
+        0.0
+    } else {
+        ((covered as f64 / total as f64) * 1000.0).round() / 10.0
+    };
+    TestCoverageMetric {
+        covered,
+        total,
+        percent,
+    }
+}
+
+fn normalize_lcov_file_path(root: &Path, file: &str) -> String {
+    let path = Path::new(file.trim());
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn finish_lcov_file(
+    root: &Path,
+    current_file: &mut Option<String>,
+    current_lines: &mut Vec<TestCoverageLine>,
+    files: &mut Vec<TestCoverageFile>,
+) {
+    let Some(file) = current_file.take() else {
+        current_lines.clear();
+        return;
+    };
+    if current_lines.is_empty() {
+        return;
+    }
+    let mut merged = BTreeMap::new();
+    for line in current_lines.drain(..) {
+        *merged.entry(line.line).or_insert(0usize) += line.hits;
+    }
+    files.push(TestCoverageFile {
+        file: normalize_lcov_file_path(root, &file),
+        lines: merged
+            .into_iter()
+            .map(|(line, hits)| TestCoverageLine { line, hits })
+            .collect(),
+    });
+}
+
+pub fn parse_lcov_summary_from_root(root: &Path, raw: &str) -> Option<TestCoverageSummary> {
+    let mut lines_total = 0;
+    let mut lines_covered = 0;
+    let mut functions_total = 0;
+    let mut functions_covered = 0;
+    let mut branches_total = 0;
+    let mut branches_covered = 0;
+    let mut files = Vec::new();
+    let mut current_file: Option<String> = None;
+    let mut current_lines = Vec::new();
+
+    for line in raw.lines() {
+        if line == "end_of_record" {
+            finish_lcov_file(root, &mut current_file, &mut current_lines, &mut files);
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        match key {
+            "SF" => {
+                finish_lcov_file(root, &mut current_file, &mut current_lines, &mut files);
+                current_file = Some(value.trim().to_string());
+            }
+            "DA" => {
+                let mut parts = value.split(',');
+                let Some(line) = parts.next().and_then(|line| line.trim().parse().ok()) else {
+                    continue;
+                };
+                let Some(hits) = parts.next().and_then(|hits| hits.trim().parse().ok()) else {
+                    continue;
+                };
+                current_lines.push(TestCoverageLine { line, hits });
+            }
+            "LF" => {
+                if let Ok(count) = value.trim().parse::<usize>() {
+                    lines_total += count;
+                }
+            }
+            "LH" => {
+                if let Ok(count) = value.trim().parse::<usize>() {
+                    lines_covered += count;
+                }
+            }
+            "FNF" => {
+                if let Ok(count) = value.trim().parse::<usize>() {
+                    functions_total += count;
+                }
+            }
+            "FNH" => {
+                if let Ok(count) = value.trim().parse::<usize>() {
+                    functions_covered += count;
+                }
+            }
+            "BRF" => {
+                if let Ok(count) = value.trim().parse::<usize>() {
+                    branches_total += count;
+                }
+            }
+            "BRH" => {
+                if let Ok(count) = value.trim().parse::<usize>() {
+                    branches_covered += count;
+                }
+            }
+            _ => {}
+        }
+    }
+    finish_lcov_file(root, &mut current_file, &mut current_lines, &mut files);
+    files.sort_by(|a, b| a.file.cmp(&b.file));
+
+    (lines_total > 0 || functions_total > 0 || branches_total > 0).then_some(TestCoverageSummary {
+        lines: coverage_metric(lines_covered, lines_total),
+        functions: coverage_metric(functions_covered, functions_total),
+        branches: coverage_metric(branches_covered, branches_total),
+        files,
+    })
+}
+
+pub fn read_lcov_summary_from_root(root: &Path) -> Option<TestCoverageSummary> {
+    let raw = std::fs::read_to_string(root.join("coverage").join("lcov.info")).ok()?;
+    parse_lcov_summary_from_root(root, &raw)
+}
+
+fn string_field<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
+    value.get(name).and_then(Value::as_str)
+}
+
+fn location_from_message(
+    root: &Path,
+    fallback_file: &str,
+    message: &str,
+) -> (String, usize, usize) {
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
+    let pattern = regex::Regex::new(
+        r"(?m)(?P<file>(?:[A-Za-z]:)?[/\\]?[A-Za-z0-9_./\\-][^:\n]*?):(?P<line>\d+):(?P<column>\d+)",
+    )
+    .expect("valid test location regex");
+    if let Some(captures) = pattern.captures(message) {
+        let file = captures
+            .name("file")
+            .map(|m| m.as_str().trim())
+            .unwrap_or(fallback_file);
+        let file = file.strip_prefix("at ").map(str::trim).unwrap_or(file);
+        let line = captures
+            .name("line")
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(1);
+        let column = captures
+            .name("column")
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(1);
+        return (join_test_path(root, file.trim()), line, column);
+    }
+    (join_test_path(root, fallback_file), 1, 1)
+}
+
+pub fn parse_vitest_json(root: &Path, output: &str) -> TestRunResult {
+    let json_start = output.find('{').unwrap_or(0);
+    let parsed = serde_json::from_str::<Value>(&output[json_start..]);
+    let Ok(value) = parsed else {
+        return TestRunResult {
+            profile: "vitest".to_string(),
+            status: TestRunStatus::Error,
+            total: 0,
+            passed: 0,
+            failed: 0,
+            tests: Vec::new(),
+            failures: Vec::new(),
+            coverage: None,
+            raw_output: output.to_string(),
+        };
+    };
+
+    let mut tests = Vec::new();
+    let mut failures = Vec::new();
+    for file in value
+        .get("testResults")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let file_name = string_field(file, "name").unwrap_or("");
+        for assertion in file
+            .get("assertionResults")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let name = string_field(assertion, "fullName")
+                .or_else(|| string_field(assertion, "title"))
+                .unwrap_or("Unnamed test")
+                .to_string();
+            let status = match string_field(assertion, "status") {
+                Some("failed") => TestRunStatus::Failed,
+                Some("passed") => TestRunStatus::Passed,
+                _ => TestRunStatus::Error,
+            };
+            let failure_message = assertion
+                .get("failureMessages")
+                .and_then(Value::as_array)
+                .map(|messages| {
+                    messages
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            let (file_path, line, column) =
+                location_from_message(root, file_name, &failure_message);
+            tests.push(TestCase {
+                profile: "vitest".to_string(),
+                name: name.clone(),
+                file: file_path.clone(),
+                line,
+                column,
+                status: status.clone(),
+                duration_ms: assertion.get("duration").and_then(Value::as_f64),
+            });
+            if status == TestRunStatus::Failed {
+                failures.push(TestFailure {
+                    profile: "vitest".to_string(),
+                    name,
+                    file: file_path,
+                    line,
+                    column,
+                    message: failure_message,
+                });
+            }
+        }
+    }
+
+    let total = numeric_field(&value, "numTotalTests");
+    let passed = numeric_field(&value, "numPassedTests");
+    let failed = numeric_field(&value, "numFailedTests");
+    let status = if value
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(failed == 0)
+    {
+        TestRunStatus::Passed
+    } else {
+        TestRunStatus::Failed
+    };
+
+    TestRunResult {
+        profile: "vitest".to_string(),
+        status,
+        total,
+        passed,
+        failed,
+        tests,
+        failures,
+        coverage: None,
+        raw_output: output.to_string(),
+    }
+}
+
+pub fn parse_cargo_test_output(root: &Path, output: &str) -> TestRunResult {
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
+    let test_line = regex::Regex::new(r"^test (?P<name>.+?) \.\.\. (?P<status>ok|FAILED|ignored)")
+        .expect("valid cargo test line regex");
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
+    let summary = regex::Regex::new(
+        r"test result: (?P<status>ok|FAILED)\. (?P<passed>\d+) passed; (?P<failed>\d+) failed;",
+    )
+    .expect("valid cargo summary regex");
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
+    let section = regex::Regex::new(r"^---- (?P<name>.+?) stdout ----$")
+        .expect("valid cargo failure section regex");
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
+    let panic = regex::Regex::new(r"panicked at (?P<file>.*?):(?P<line>\d+):(?P<column>\d+):")
+        .expect("valid cargo panic regex");
+
+    let mut tests = Vec::new();
+    let mut current_failure: Option<(String, Vec<String>)> = None;
+    let mut failure_sections: Vec<(String, Vec<String>)> = Vec::new();
+    let mut passed = 0;
+    let mut failed = 0;
+
+    for line in output.lines() {
+        if let Some(captures) = test_line.captures(line) {
+            let name = captures.name("name").map(|m| m.as_str()).unwrap_or("");
+            let status = match captures.name("status").map(|m| m.as_str()) {
+                Some("ok") => TestRunStatus::Passed,
+                Some("FAILED") => TestRunStatus::Failed,
+                _ => TestRunStatus::Error,
+            };
+            tests.push(TestCase {
+                profile: "cargo".to_string(),
+                name: name.to_string(),
+                file: String::new(),
+                line: 1,
+                column: 1,
+                status,
+                duration_ms: None,
+            });
+        }
+
+        if let Some(captures) = summary.captures(line) {
+            passed = captures
+                .name("passed")
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(0);
+            failed = captures
+                .name("failed")
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(0);
+        }
+
+        if let Some(captures) = section.captures(line) {
+            if let Some(previous) = current_failure.take() {
+                failure_sections.push(previous);
+            }
+            current_failure = Some((
+                captures
+                    .name("name")
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default(),
+                Vec::new(),
+            ));
+            continue;
+        }
+
+        if let Some((_, lines)) = current_failure.as_mut() {
+            lines.push(line.to_string());
+        }
+    }
+    if let Some(previous) = current_failure.take() {
+        failure_sections.push(previous);
+    }
+
+    let failures = failure_sections
+        .into_iter()
+        .map(|(name, lines)| {
+            let body = lines.join("\n");
+            let (file, line, column) = panic
+                .captures(&body)
+                .map(|captures| {
+                    let file = captures.name("file").map(|m| m.as_str()).unwrap_or("");
+                    let line = captures
+                        .name("line")
+                        .and_then(|m| m.as_str().parse().ok())
+                        .unwrap_or(1);
+                    let column = captures
+                        .name("column")
+                        .and_then(|m| m.as_str().parse().ok())
+                        .unwrap_or(1);
+                    (join_test_path(root, file), line, column)
+                })
+                .unwrap_or_else(|| (String::new(), 1, 1));
+            TestFailure {
+                profile: "cargo".to_string(),
+                name,
+                file,
+                line,
+                column,
+                message: body.trim().to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let total = if passed + failed > 0 {
+        passed + failed
+    } else {
+        tests.len()
+    };
+    let status = if failed > 0 {
+        TestRunStatus::Failed
+    } else {
+        TestRunStatus::Passed
+    };
+
+    TestRunResult {
+        profile: "cargo".to_string(),
+        status,
+        total,
+        passed,
+        failed,
+        tests,
+        failures,
+        coverage: None,
+        raw_output: output.to_string(),
+    }
+}
+
+fn pytest_summary_count(output: &str, label: &str) -> usize {
+    #[allow(clippy::expect_used, reason = "字面量正则拼接，不可能失败")]
+    let pattern =
+        regex::Regex::new(&format!(r"(?P<count>\d+)\s+{label}")).expect("valid pytest regex");
+    pattern
+        .captures_iter(output)
+        .filter_map(|captures| {
+            captures
+                .name("count")
+                .and_then(|count| count.as_str().parse::<usize>().ok())
+        })
+        .sum()
+}
+
+pub fn parse_pytest_output(root: &Path, output: &str) -> TestRunResult {
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
+    let failed_line = regex::Regex::new(r"^FAILED\s+(?P<node>\S+)(?:\s+-\s+(?P<message>.*))?$")
+        .expect("valid pytest failed line regex");
+    let mut failures = Vec::new();
+    let mut tests = Vec::new();
+
+    for line in output.lines() {
+        let Some(captures) = failed_line.captures(line) else {
+            continue;
+        };
+        let node = captures.name("node").map(|m| m.as_str()).unwrap_or("");
+        let message = captures
+            .name("message")
+            .map(|m| m.as_str().trim().to_string())
+            .filter(|message| !message.is_empty())
+            .unwrap_or_else(|| line.to_string());
+        let mut node_parts = node.split("::");
+        let file = node_parts.next().unwrap_or("");
+        let name = node_parts.collect::<Vec<_>>().join("::");
+        let name = if name.is_empty() {
+            node.to_string()
+        } else {
+            name
+        };
+        let file = join_test_path(root, file);
+        tests.push(TestCase {
+            profile: "python".to_string(),
+            name: name.clone(),
+            file: file.clone(),
+            line: 1,
+            column: 1,
+            status: TestRunStatus::Failed,
+            duration_ms: None,
+        });
+        failures.push(TestFailure {
+            profile: "python".to_string(),
+            name,
+            file,
+            line: 1,
+            column: 1,
+            message,
+        });
+    }
+
+    let passed = pytest_summary_count(output, "passed");
+    let failed = pytest_summary_count(output, "failed") + pytest_summary_count(output, "error");
+    let total = passed + failed;
+    let status = if failed > 0 {
+        TestRunStatus::Failed
+    } else if total > 0 {
+        TestRunStatus::Passed
+    } else {
+        TestRunStatus::Error
+    };
+
+    TestRunResult {
+        profile: "python".to_string(),
+        status,
+        total,
+        passed,
+        failed,
+        tests,
+        failures,
+        coverage: None,
+        raw_output: output.to_string(),
+    }
+}
+
+pub fn run_profile(
+    root: &Path,
+    profile: &str,
+    target: Option<&TestRunTarget>,
+    coverage: bool,
+    python_program: &dyn Fn() -> String,
+    envs: &[(String, String)],
+) -> Result<TestRunResult, String> {
+    let (program, args, _) = match profile {
+        "cargo" => cargo_command(root, target)?,
+        "python" => python_command(root, target, python_program)?,
+        _ => vitest_command(root, target, coverage)?,
+    };
+    let mut command = Command::new(program);
+    crate::runtime::subprocess::configure_background_command(&mut command);
+    let output = command
+        .args(args)
+        .current_dir(root)
+        .envs(envs.iter().cloned())
+        .output()
+        .map_err(|e| format!("Failed to run tests: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let raw_output = if stderr.trim().is_empty() {
+        stdout.clone()
+    } else {
+        format!("{stdout}{stderr}")
+    };
+    let mut result = match profile {
+        "cargo" => parse_cargo_test_output(root, &raw_output),
+        "python" => parse_pytest_output(root, &raw_output),
+        _ => parse_vitest_json(root, &stdout),
+    };
+    if profile == "vitest" && coverage {
+        result.coverage = read_lcov_summary_from_root(root);
+    }
+    result.raw_output = raw_output;
+    if !output.status.success() && result.failures.is_empty() {
+        result.status = TestRunStatus::Error;
+    }
+    Ok(result)
+}

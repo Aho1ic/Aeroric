@@ -160,7 +160,7 @@
       "remote-lan-roundtrip-rust@remote": 7,
       "remote-network-exposure-rust@remote": 9,
       "remote-ui-unit@remote": 5,
-      "run-config-command-rust@cutover": 23,
+      "run-config-command-rust@cutover": 12,
       "run-config-core-rust@cutover": 9,
       "run-config-host-rust@cutover": 8,
       "runtime-lifecycle-rust@runtime": 5,
@@ -178,7 +178,7 @@
       "settings-transaction-rust@cutover": 5,
       "settings-ui-unit@settings-ui": 13,
       "shell-unit@shell": 36,
-      "src-tauri-lib-tests@tauri-adapter": 1345,
+      "src-tauri-lib-tests@tauri-adapter": 1272,
       "ssh-host-keys-rust@connections": 8,
       "storage-backends-rust@notebook-services": 6,
       "storage-core-rust@storage": 488,
@@ -235,7 +235,30 @@
       "database-redis-host-rust@cutover": 2,
       "database-mongo-host-rust@cutover": 2,
       "database-dbx-cli-rust@cutover": 2,
-      "database-dbx-command-rust@cutover": 5
+      "database-dbx-command-rust@cutover": 5,
+      "database-import-export-core-rust@database": 17,
+      "database-import-export-host-rust@database": 14,
+      "database-import-export-cli-rust@database": 3,
+      "database-import-export-command-rust@database": 7,
+      "database-import-export-core-rust@cutover": 17,
+      "database-import-export-host-rust@cutover": 14,
+      "database-import-export-cli-rust@cutover": 3,
+      "database-import-export-command-rust@cutover": 7,
+      "database-transfer-core-rust@database": 10,
+      "database-transfer-core-rust@cutover": 10,
+      "database-transfer-host-rust@database": 10,
+      "database-transfer-host-rust@cutover": 10,
+      "database-transfer-command-rust@database": 5,
+      "database-transfer-command-rust@cutover": 5,
+      "event-pump-rust@tauri-adapter": 3,
+      "event-pump-confirm-rust@cutover": 1,
+      "event-pump-confirm-rust@database": 1,
+      "task-events-log-rust@cutover": 1,
+      "task-events-log-rust@database": 1,
+      "ide-test-services-rust@cutover": 5,
+      "ide-test-services-rust@database": 5,
+      "lsp-session-services-rust@cutover": 6,
+      "lsp-session-services-rust@database": 6
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -1179,7 +1202,7 @@
           "name": "src-tauri-lib-tests",
           "kind": "test",
           "parse": "rust",
-          "minCases": 1345,
+          "minCases": 1272,
           "timeoutMs": 1800000,
           "argv": [
             "cargo",
@@ -1191,7 +1214,7 @@
             "--",
             "--test-threads=1"
           ],
-          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ 2468（ADR-036 那条）→ **2470**（补记五十一观察通道本体那两条）→ **2473**（补记六十六：意图入口的三条——写者侧谁提交、只读侧一个字节都不写、非递交平台的转发那一步落的是什么）→ **2474**（接线步骤②：`Persist::ViaHost` 的宿主桥取代宿主侧 `save_decided_records`，两条——桥按字节存下 core 的决定、只有递交写权的 context 才拿得到通往磁盘的门）→ **2477**（接线步骤②b：`launch_via_core` 入口先行，三条——解析不出项目就不寄存、执行器按名拒绝时落 failed 并收回 channel、只读实例拒绝启动且归还 channel）→ **2478**（②c `resume_via_core`：寄存**之后**被 core 的守卫拒掉时 channel 必须收回且一字节不写——与②b 那条“寄存之前就失败”正好是两种错误路径）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。**这一条改成串行（`--test-threads=1`）的理由**：并行时 `core_adapter_tests` 的 10 个场景会经由 `platform::install_scratch_home` 换掉进程全局的 `home_dir()`，任何在两次路径解析之间被换根的测试都会读到别的目录。这不是推测，是实测到的三个受害者——`app_settings::…wrapper_and_sidecar`（sidecar 写进 live `~/.aeroric`、读回时根已经换成 scratch）、`agent_scripts::…resets_codex_chat_bridge_wrappers_when_setting_is_off`，以及场景自己的状态断言；15 次并行跑红 4 次。串行 66s（并行 18s）换来的是这张安全网不再自己制造噪声。真正的修法是把数据根做成可注入的参数（Action 3），不是继续加锁。→ **2479**（接线 §12：观察者按 mode() 三分——writer 臂提交并宣布的新用例、只读臂宣布而不写的对照用例；净 +1）。→ **2476**（P3-01 切片二：subprocess.rs 连同 3 条真进程测试迁入 core 的 runtime::subprocess，宿主侧改薄 re-export；3 条＝argument_tests 1 条 + unix 真进程 2 条，搬家不是消失，core 侧 +3）。→ **2466**（P3-01 切片三：run_registry 的 8 条测试与 pty 的 2 条版本戳测试随 TaskRegistry 本体迁入 core——core 侧 +10，搬家不是消失）。→ **2467**（切片五：platform_adapter.rs 带 2 条纯函数测试入账，fs.rs 的剪贴板解析测试随体迁入 = 净 +1）。→ **2465**（P3-02 首片：agent_family_maps 的 2 条映射表测试随体迁入 core 的 agents::launch——core 侧 +3）。 G39 收口（P3-06，2026-09-30）：默认必选恢复——runner 为每条注入 AERORIC_HOME=<scratch>（宿主 `storage::aeroric_dir()` 单点认它），真实 `~/.aeroric` 不再被门禁触碰。 P7-05：notebook 业务随 core 上收，454 条既有单测（tests.rs＋import/*_tests）移入 aeroric-core（notebook --lib 442＋notebook_contract 12，进默认门禁），宿主地板 2465→2011。 → **1329**（P8-02 刀六：agent_ops 8 条纯状态单测随业务入 core operations::tests（core 刀三已有 9 条同语义），宿主薄壳化后删除；floor 2011 自 P7-06 起已过时——sync/rag/storage 545 条与 P8-02 刀二 app_settings 129 条上收 core 时漏更，本轮一次性对齐实测 1337−8=1329（无代理、--test-threads=1，2026-10-04 实测）） → **1293**（P8-03 刀一：remote 纯逻辑 8 文件上收 core，37 条内联测试随业务走，宿主补 1 条 golden capabilities 对账测试；1329−36=1293，2026-10-04 无代理实测） → **1285**（P8-03 刀三b 第一片：auth_stress_tests 8 条逐字迁 core tests/remote_headless.rs；1293−8，2026-10-05 无代理实测） → **1277**（P8-03 刀三b 二片：server/rpc/orca_rpc/注册表上收 core，host 任务校验合并 execute_task_request；1285−8=1277，2026-10-06 无代理实测） → **1222**（P8-04 刀二：analytics 23＋usage_index 21＋agent_usage 8＋usage 3 ＝ 55 条随 metrics 族迁入 core，宿主地板按实测下调；这 55 条现在跑在 core 侧 `--lib metrics` 门禁里） → **1215**（P8-04 刀三：notification.rs 的 11 条判定/记账用例随业务体上收 core（去掉 11、留 4 条宿主专属＝包工具/下载上限/helper 开关/平台探测）） → **1207**（P8-04 刀三续：`report.rs` 的 8 条渲染用例随渲染器进 core（core 侧 `tests/maintenance.rs` 同名覆盖），本文件只留 1 条通道契约用例） → **1225**（P8-05 切片三：host_client/supervisor 14 条＋placement 4 条） → **1232**（P8-05 切片六：host_dispatch 6 条） → **1213**（2026-10-08 P8-05切片十四：18条search内联用例随完整业务迁入core files::search；原fs fallback用例保留并调用同一个core实现；1231−18，不是删除覆盖）。 → **1219**（2026-10-08 P8-05切片十九：get_active_task_ids六条实际命令级mock-runtime/UDS用例；原1213全部保留）。 → **1226**（P8-05切片二十一：项目列表真实IPC边界7条；同步helper保留，External不得读取本地或修改权限，command套件实跑7/0＋1219 filtered）。 → **1234**（P8-05切片二十二：精确projectId任务列表真实IPC新8条；与二十一7条共跑15/0、1219 filtered，原同步helper及内部调用保留）。",
+          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ 2468（ADR-036 那条）→ **2470**（补记五十一观察通道本体那两条）→ **2473**（补记六十六：意图入口的三条——写者侧谁提交、只读侧一个字节都不写、非递交平台的转发那一步落的是什么）→ **2474**（接线步骤②：`Persist::ViaHost` 的宿主桥取代宿主侧 `save_decided_records`，两条——桥按字节存下 core 的决定、只有递交写权的 context 才拿得到通往磁盘的门）→ **2477**（接线步骤②b：`launch_via_core` 入口先行，三条——解析不出项目就不寄存、执行器按名拒绝时落 failed 并收回 channel、只读实例拒绝启动且归还 channel）→ **2478**（②c `resume_via_core`：寄存**之后**被 core 的守卫拒掉时 channel 必须收回且一字节不写——与②b 那条“寄存之前就失败”正好是两种错误路径）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。**这一条改成串行（`--test-threads=1`）的理由**：并行时 `core_adapter_tests` 的 10 个场景会经由 `platform::install_scratch_home` 换掉进程全局的 `home_dir()`，任何在两次路径解析之间被换根的测试都会读到别的目录。这不是推测，是实测到的三个受害者——`app_settings::…wrapper_and_sidecar`（sidecar 写进 live `~/.aeroric`、读回时根已经换成 scratch）、`agent_scripts::…resets_codex_chat_bridge_wrappers_when_setting_is_off`，以及场景自己的状态断言；15 次并行跑红 4 次。串行 66s（并行 18s）换来的是这张安全网不再自己制造噪声。真正的修法是把数据根做成可注入的参数（Action 3），不是继续加锁。→ **2479**（接线 §12：观察者按 mode() 三分——writer 臂提交并宣布的新用例、只读臂宣布而不写的对照用例；净 +1）。→ **2476**（P3-01 切片二：subprocess.rs 连同 3 条真进程测试迁入 core 的 runtime::subprocess，宿主侧改薄 re-export；3 条＝argument_tests 1 条 + unix 真进程 2 条，搬家不是消失，core 侧 +3）。→ **2466**（P3-01 切片三：run_registry 的 8 条测试与 pty 的 2 条版本戳测试随 TaskRegistry 本体迁入 core——core 侧 +10，搬家不是消失）。→ **2467**（切片五：platform_adapter.rs 带 2 条纯函数测试入账，fs.rs 的剪贴板解析测试随体迁入 = 净 +1）。→ **2465**（P3-02 首片：agent_family_maps 的 2 条映射表测试随体迁入 core 的 agents::launch——core 侧 +3）。 G39 收口（P3-06，2026-09-30）：默认必选恢复——runner 为每条注入 AERORIC_HOME=<scratch>（宿主 `storage::aeroric_dir()` 单点认它），真实 `~/.aeroric` 不再被门禁触碰。 P7-05：notebook 业务随 core 上收，454 条既有单测（tests.rs＋import/*_tests）移入 aeroric-core（notebook --lib 442＋notebook_contract 12，进默认门禁），宿主地板 2465→2011。 → **1329**（P8-02 刀六：agent_ops 8 条纯状态单测随业务入 core operations::tests（core 刀三已有 9 条同语义），宿主薄壳化后删除；floor 2011 自 P7-06 起已过时——sync/rag/storage 545 条与 P8-02 刀二 app_settings 129 条上收 core 时漏更，本轮一次性对齐实测 1337−8=1329（无代理、--test-threads=1，2026-10-04 实测）） → **1293**（P8-03 刀一：remote 纯逻辑 8 文件上收 core，37 条内联测试随业务走，宿主补 1 条 golden capabilities 对账测试；1329−36=1293，2026-10-04 无代理实测） → **1285**（P8-03 刀三b 第一片：auth_stress_tests 8 条逐字迁 core tests/remote_headless.rs；1293−8，2026-10-05 无代理实测） → **1277**（P8-03 刀三b 二片：server/rpc/orca_rpc/注册表上收 core，host 任务校验合并 execute_task_request；1285−8=1277，2026-10-06 无代理实测） → **1222**（P8-04 刀二：analytics 23＋usage_index 21＋agent_usage 8＋usage 3 ＝ 55 条随 metrics 族迁入 core，宿主地板按实测下调；这 55 条现在跑在 core 侧 `--lib metrics` 门禁里） → **1215**（P8-04 刀三：notification.rs 的 11 条判定/记账用例随业务体上收 core（去掉 11、留 4 条宿主专属＝包工具/下载上限/helper 开关/平台探测）） → **1207**（P8-04 刀三续：`report.rs` 的 8 条渲染用例随渲染器进 core（core 侧 `tests/maintenance.rs` 同名覆盖），本文件只留 1 条通道契约用例） → **1225**（P8-05 切片三：host_client/supervisor 14 条＋placement 4 条） → **1232**（P8-05 切片六：host_dispatch 6 条） → **1213**（2026-10-08 P8-05切片十四：18条search内联用例随完整业务迁入core files::search；原fs fallback用例保留并调用同一个core实现；1231−18，不是删除覆盖）。 → **1219**（2026-10-08 P8-05切片十九：get_active_task_ids六条实际命令级mock-runtime/UDS用例；原1213全部保留）。 → **1226**（P8-05切片二十一：项目列表真实IPC边界7条；同步helper保留，External不得读取本地或修改权限，command套件实跑7/0＋1219 filtered）。 → **1234**（P8-05切片二十二：精确projectId任务列表真实IPC新8条；与二十一7条共跑15/0、1219 filtered，原同步helper及内部调用保留）。 → **1297**（2026-10-11 P8-05切片一百零二按实测重锚：1345 自切片五十四（当时实测1358）后未随迁移轮更新——P7-05/P8-02 至 P8-05 切片九十五～一百零二把 database（connections/query/grid/import_export 等）业务与测试持续上收 core，宿主侧每片只跑模块过滤 case，全量计数未被任何门禁盯住；本轮导入导出 10 条上收后 Tauri 侧 7 条命令壳测试全量保留，gate 口径（--locked --lib -- --test-threads=1、AERORIC_HOME scratch、无代理）实测 **1297/0**，floor 1345→1297 双写；含本日修复的 secrets allowlist 补录与 command_test! 大栈宏的 7 条）。 → **1294**（2026-10-11 P8-05切片一百零三按实测重锚：transfer.rs 9 条旧测试随主体迁 core `transfer_face_tests`（8 迁移＋事件通道测试改为窗口 sink 语义钉）＋新增 transfer_command_tests 5 条＋transfer.rs 内 sink 语义钉 1 条；gate 口径实测 1294/0，floor 1297→1294 双写） → **1297**（2026-10-11 P8-05切片一百零四：事件泵适配层 3 条进 lib，floor 1294→1297 双写） → **1293**（2026-10-11 P8-05切片一百零五：载荷构造与字词 pin 上收 core（sink_tests 2→1 且 core +2），Tauri lib 净 −1；实测 1293/0 双写） → **1282**（2026-10-12 P8-05切片一百零八：运行面主体上收 core `ide::run_face`（进程注册表/棘轮/清理线程/读取观察线程），run_config.rs 内部 prune 测试随迁 core；Tauri lib 实测 1282/0，floor 1293→1282 双写）;flat 1282→1272 见下) → **1272**(2026-10-12 P8-05切片一百零九/一百一十:LSP 生命周期面与会话面上收 core(`ide::lsp_face`/`ide::lsp_session`),lsp.rs 内 parse/protocol/edit/注册表测试随主体迁 core(本地重复定义全删、按旧名 re-export);gate 口径实测 **1272/0**,floor 1282→1272 双写",
           "env": {
             "AERORIC_HOME": "<scratch>"
           }
@@ -1320,6 +1343,25 @@
           ],
           "$note": "ADR-027 决策 3：拿不到租约时**不得**退到临时目录——两份都看起来健康的数据集是分叉里最接近静默丢数据的一种。宿主唯一的那条退路是 `storage::resolve_data_dir`（以及它返回的 `DataDir`），所以它一旦出现在 adapter 里就是违规。两条正控：一条证明扫描真读到了 core_adapter.rs（不是路径写错才返回 1），一条证明接线真的在 lib.rs 里（否则这个文件可以整体消失而守卫仍绿）。行为侧的等价断言在 `a_refused_lease_is_reported_and_names_the_directory_it_will_not_write`：只读实例记录里的 fallback 必须逐字节等于那个真实目录，不是子串包含——包含关系在'悄悄搬走又把旧名字写进消息'时仍会通过。",
           "timeoutMs": 120000
+        },
+        {
+          "name": "event-pump-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "src-tauri/Cargo.toml",
+            "--locked",
+            "--lib",
+            "--",
+            "host_event_pump::",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 3,
+          "$note": "P8-05 slice104: the desktop event pump adapter - v1-topic-to-legacy-channel translation pinned against the authority table (dots are illegal Tauri window event names), plain-name passthrough, dotted-unknown drop; scripted UDS loop proves snapshot-cursor bootstrap, batch delivery and cursor advance over a real HostClient.",
+          "timeoutMs": 900000
         }
       ]
     },
@@ -3522,6 +3564,91 @@
           "timeoutMs": 900000
         },
         {
+          "name": "database-import-export-core-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "database::ie_face::tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 17,
+          "timeoutMs": 900000,
+          "$note": "P8-05 slice102: seven moved regressions plus bidirectional DBX reply projections, SQL BOM/path/encoding and ZIP boundaries; bounded export-stack worker preserves the live runtime and cancels when its caller is dropped. Scratch files only; no sibling DBX edits."
+        },
+        {
+          "name": "database-import-export-host-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "database_import_export_services",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 14,
+          "timeoutMs": 900000,
+          "$note": "P8-05 slice102: real authenticated UDS, five table formats, replayable SQLite database export, CSV import, BOM SQL, readonly and lost-writer refusal before effects, file-only preview and explicit UPDATE refusal. Two-connection production confirmation proves host approve/refuse only, not a desktop event pump; uses scratch SQLite and memory secrets."
+        },
+        {
+          "name": "database-import-export-cli-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-cli",
+            "--test",
+            "database_import_export_cli",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 3,
+          "timeoutMs": 900000,
+          "$note": "P8-05 slice102: actual CLI subprocesses attach to a memory-secrets host; SQL/CSV/JSON/database-export roundtrip checks rows and file bytes, readonly refusal and malformed/unsupported methods cannot initialize DBX. Never spawn production serve."
+        },
+        {
+          "name": "database-import-export-command-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "src-tauri/Cargo.toml",
+            "--locked",
+            "--lib",
+            "--",
+            "database::import_export_command_tests::",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 7,
+          "timeoutMs": 1800000,
+          "env": {
+            "AERORIC_HOME": "<scratch>"
+          },
+          "$note": "P8-05 slice102: ten actual desktop adapters with ScriptedHost and no local DbxState; exact wire, host refusal/disconnect and malformed typed/unit replies cannot fall back. Embedded preview and UPDATE refusal need no local state or credentials."
+        },
+        {
           "name": "database-dbx-core-rust",
           "kind": "test",
           "argv": [
@@ -3710,6 +3837,151 @@
             "AERORIC_HOME": "<scratch>"
           },
           "$note": "P8-05 slice95: real desktop command adapters with authenticated ScriptedHost; five exact payloads, refusal/disconnect/malformed-list no-fallback, empty Embedded control. No local DbxState installed in External tests, no OS secret-store operations."
+        },
+        {
+          "name": "database-transfer-core-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "database::transfer_face::tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 10,
+          "$note": "P8-05 slice103: Tauri transfer.rs 8 legacy unit tests moved verbatim with the business body (self-target rejection shapes, deferred-FK terminal folding) plus sink-wire and v1-topic pins; no real cross-DB server, engine-level transfer is covered by the host UDS case.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "database-transfer-host-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "database_transfer_services",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 10,
+          "$note": "P8-05 slice103: real authenticated UDS over scratch SQLite - sqlite-to-sqlite transfer moving rows with dbx.transfer_progress terminal events, pre-cancelled transfer reporting cancelled without copying, self-target and readonly-target refusals before effects, pure diff/plan faces on a read-only host, real backup round trip, data compare from two scratch connections, legacy db_read_sql_file shapes.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "database-transfer-command-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "src-tauri/Cargo.toml",
+            "--locked",
+            "--lib",
+            "--",
+            "database::transfer_command_tests::",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 5,
+          "$note": "P8-05 slice103: ten actual command adapters through MockApp + ScriptedHost - wire preservation, refusals never fall back, Embedded pure faces and real backup through a saved connection, unknown-connection start refusal without local state.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "event-pump-confirm-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "event_pump_confirm",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 1,
+          "$note": "P8-05 slice104: the External production-confirm loop closes end to end through the pump against the real host - execute (pending) -> host EventLog -> pump engine -> window-shaped sink -> respond -> execute returns; before the pump this loop failed closed at the 300s refusal.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "task-events-log-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "task_events_log",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 1,
+          "$note": "P8-05 slice105: a fake agent settling done announces task-status to the host EventLog with the exact Embedded window payload shape (core window_payload, snake_case task_id, no serviceUnwired key) - the desktop event pump passes it through to the frontend unchanged.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "ide-test-services-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "ide_test_services",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 5,
+          "$note": "P8-05 slice106-109: the tests, diagnostics, run-process and LSP lifecycle command families over live UDS - a real scratch cargo project is discovered, run and diagnosed (a real cargo check error parsed); a shell run-config process starts (status running), captures its echo output into the snapshot, and stops (status stopped); and the LSP lifecycle face is driven on a scratch .ts project (status shape, open/change/close open-document counts, shutdown idempotence, unsupported-extension and path-escape refusals). Malformed params refuse with InvalidArgument and missing roots keep their legacy refusal text.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "lsp-session-services-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "lsp_session_services",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 6,
+          "$note": "P8-05 slice110: the LSP session face over live UDS. A fake Content-Length language server is injected as the host's server program (this machine has no typescript-language-server, and the narrow wire table only answers ts/js), so a scratch .ts project drives hover/definition/completion/signature/document symbols/workspace symbols/code actions/rename/execute command end to end and the assertions are on the parsed typed DTO fields the React client consumes. Also pinned: the server's publishDiagnostics notification reaches the EventLog through the injected sink, a remote target is refused verbatim without falling back to a local server, a document outside the project root is refused before any process starts, and malformed params are InvalidArgument. Two further cases pin what the first cut got wrong: closing the last document tears the session down on the host side (the shutdown half is not allowed to live only in the Tauri Embedded closure, which an External placement never polls), and inlay hints send a document range rather than a position.",
+          "timeoutMs": 900000
         }
       ]
     },
@@ -4293,9 +4565,9 @@
           "kind": "gate",
           "argv": [
             "scripts/native/host-coverage.mjs",
-            "--floor=268"
+            "--floor=311"
           ],
-          "$note": "P8-05切片十四：60/641棘轮（56→58 本地text/structured；→60 文件名list/search）。两个replace假alias删除，由真实legacy handler保住原有两条覆盖。远端target未实现不计入；22处可静态识别dispatch均指向已注册父方法，target能力另外由UDS用例钉拒绝。 P8-05切片21：保留ADR-002冻结的project.load_projects并补真实裸数组handler，既有project.list对象wire不变；共享core读取，禁止用改映射或错shape alias虚抬覆盖。返工后真实新增注册上已重测61/641、31处dispatch（dualwire-final.M056zV），不是首版错误改名的暂态读数。 P8-05切片22：真实project.load_project_tasks直接复用core load_tasks，非task.list别名；定向实测62/641、32处dispatch，命令新8/0及真host3/0。 Slice27: measured70/641 and40 actual dispatches after real config init/write registration; read-only lease and no-local-fallback behavior tested. Slice28: measured71/641,41 actual dispatch sites after real sequential history-delete registration; floor71. Slice29: frozen ide.read_run_configs/write_run_configs real local handlers,73/641 and43 actual dispatches. Remote targets explicitly refused, not credited as SSH/WSL coverage. Slice31 measured75/641,45 dispatches: real debug-config definition read/write, not remote DAP support. P8-05切片58：+session.read_session_message_page 真实宿主注册（read-only 分页，codex/dsh/omp/family 分支），78/641、floor78、转发点 50→51。 P8-05切片80：git.git_branch_graph 真实宿主注册（worktree-root 探测→has_head 探测→log 的 legacy 三步机制逐字），101/641、floor101、转发点 73→74、git 缺口 18→17。 P8-05切片81：git.git_stash_list＋git.git_stash_diff 一对 stash 读侧孪生上收（core 旧 stash_list 四轴不等价就地改齐：四段 format/10s/回落文案/五字段 DTO），103/641、floor103、转发点 74→76、git 缺口 17→15。 P8-05切片82：git.git_stage_files＋git.git_unstage_files 复数孪生上收（HEAD 探测回落 reset 是契约、空列表静默成功、去重先校验后去重），105/641、floor105、转发点 76→78、git 缺口 15→13。 P8-05切片83：git.git_file_diff＋git.git_show_file_diff 上收（file_diff 补 validate_git_relative_path——legacy 的 --no-index 回落是任意文件读取原语，服务端权威校验优先），107/641、floor107、转发点 78→80、git 缺口 13→11。 P8-05切片84：git.git_commit_detail 上收（三段输出解析逐字、三次调用都不查退出码是 legacy 行为、wire 是 snake_case 无 rename），108/641、floor108、转发点 80→81、git 缺口 11→10。 P8-05切片85：discard 三件套上收（trash 进废纸篓不永久删除、保护路径跳过而非报错、unborn HEAD 走 rm --cached、幸存保护目录本身是 untracked），111/641、floor111、转发点 81→84、git 缺口 10→7。 P8-05切片86：git.git_conflict_preview＋git.git_resolve_conflict 上收（core 旧 conflict_preview/resolve_conflict 形状不同且测试在用，新函数 _result/_with_resolution 后缀保留旧入口；resolve 即 stage 是 legacy 语义），113/641、floor113、转发点 84→86、git 缺口 7→5。 P8-05切片87：网络三件套上收（core 新增 run_git_network 防挂死环境、legacy 三条的 trim 不对称逐字保留、--all/prune 轴、本地 bare remote 全程端状态断言），116/641、floor116、转发点 86→89、git 缺口 5→2。 P8-05切片88：git.git_clone 上收（URL 传输助手形态拒绝、clone 目标按定义不存在故用专用校验、--branch 轴、父目录执行），117/641、floor117、转发点 89→90、git 缺口 2→1。 P8-05切片89：git.generate_commit_message 上收（agent 孵化面——codex 一律策略逐字、超时改 kill 是泄漏修复、50_000 字节截断修 legacy panic 隐患；机器可测面只有无暂存拒绝），118/641、floor118、转发点 90→91、git 缺口 1→0（git 族全量闭合）。 P8-05切片90：notebook 族命名对账——修仪器盲区（host-coverage 扫描器此前不认 service!/service_ctx! 宏调用点，P7-05/06 的 71 条 notebook 注册全部不可见）＋70 条别名入表（台账双前缀 notebook.notebook_X ↔ 宿主 notebook.X；52 条带 Swift NotebookClient 字面证据、18 条 sync/rag 面证据为宿主注册＋P7-06 同一 core 实现），188/641、floor188；notebook 缺口 73→3（attachment_save_from_path/rag_index/rag_context 待查）。 P8-05切片92：files.read_image_preview＋files.read_clipboard_file_paths 上收（CoreContext 新增 platform 端口＋宿主 HostOsServices 适配器；帧上限预检回干净错误），190/641、floor190。 P8-05切片94（database刀零）：legacy_sqlite 八条上收（业务主体 core database::legacy_sqlite verbatim ~800行；连接文件 Value 直读直写防typed round-trip丢字段；SSH endpoint 显式 UnsupportedCapability；八条Tauri命令同批转发），198/641、floor198。 P8-05切片95：database 连接 CRUD 五条上收（dbx_list_connections/dbx_save_connection/dbx_delete_connection/dbx_test_connection/dbx_connect 五方法宿主注册＋Tauri 转发壳；dbx_disconnect/backup_sqlite 留 Tauri 本地态），203/641、floor203、转发点 99→104、database 缺口 87→82。 P8-05切片96（database刀二）：SQL builders／grid 预览纯函数族 20 条上收（16 条 dbx_build_*＋preview_grid_sql＋data_grid 三 builder；core database::sql_builders re-export dbx-core 为宿主单一依赖点＋DuckDB ATTACH 本地构造 verbatim 上收；Tauri 20 条转发壳），223/641、floor223、转发点 104→124、database 缺口 82→62。 P8-05切片97（database刀三）：执行面＋生产确认回路 11 条上收（execute_query/multi、cancel、close_session、query_table_data、grid save 三条、assess 两条、respond——core database::execution verbatim＋ConfirmEventSink 注入：宿主 EventLog append、Tauri 窗口 emit、超时参数化），234/641、floor234、转发点 124→135、database 缺口 62→51。 P8-05切片98（database收尾）：schema／驱动面 7 条上收（list_databases/schemas/objects、get_columns/get_table_ddl/get_object_source、driver_manifest——core database::schema_face verbatim；include_str 清单资产随迁），241/641、floor241、转发点 135→142、database 缺口 51→44。 P8-05切片99：notebook 缺口三条清零——attachment_save_from_path 别名对账（Swift NotebookClient 字面证据）＋rag_index/rag_context 上收（core notebook::rag::face verbatim；宿主 EventLog append v1 topic notebook.rag_index_progress；Tauri 窗口双发 Embedded 原样；NativeJobGuard 并发互斥），244/641、floor244、转发点 142→144、notebook 缺口 3→0。 P8-05切片100：redis 面 18 条上收（core database::redis_face verbatim——18 命令＋适配器/归一化/补充安全闸＋8 条随迁单测；无真 redis 服务，机器可测面＝参数 decode＋连接拒绝形状，真库 e2e 仍挂 P10-01），262/641、floor262、转发点 144→162、database 缺口 44→26。 P8-05切片101：mongo 面 6 条上收（core database::mongo_face verbatim——run_cancellable 取消登记/normalize；无真 mongo 服务，机器可测面＝参数 decode＋连接拒绝形状，真库 e2e 仍挂 P10-01），268/641、floor268、转发点 162→168、database 缺口 26→20。",
+          "$note": "P8-05切片110:299→311棘轮——ide 的 LSP 会话面 12 条本地方法真的注册上了;此前 6 条位置型经辅助函数传名注册,被脚本的调用点扫描漏掉(读数 305 是假的),现按字面量 set.register 注册后如实为 311。 P8-05切片十四：60/641棘轮（56→58 本地text/structured；→60 文件名list/search）。两个replace假alias删除，由真实legacy handler保住原有两条覆盖。远端target未实现不计入；22处可静态识别dispatch均指向已注册父方法，target能力另外由UDS用例钉拒绝。 P8-05切片21：保留ADR-002冻结的project.load_projects并补真实裸数组handler，既有project.list对象wire不变；共享core读取，禁止用改映射或错shape alias虚抬覆盖。返工后真实新增注册上已重测61/641、31处dispatch（dualwire-final.M056zV），不是首版错误改名的暂态读数。 P8-05切片22：真实project.load_project_tasks直接复用core load_tasks，非task.list别名；定向实测62/641、32处dispatch，命令新8/0及真host3/0。 Slice27: measured70/641 and40 actual dispatches after real config init/write registration; read-only lease and no-local-fallback behavior tested. Slice28: measured71/641,41 actual dispatch sites after real sequential history-delete registration; floor71. Slice29: frozen ide.read_run_configs/write_run_configs real local handlers,73/641 and43 actual dispatches. Remote targets explicitly refused, not credited as SSH/WSL coverage. Slice31 measured75/641,45 dispatches: real debug-config definition read/write, not remote DAP support. P8-05切片58：+session.read_session_message_page 真实宿主注册（read-only 分页，codex/dsh/omp/family 分支），78/641、floor78、转发点 50→51。 P8-05切片80：git.git_branch_graph 真实宿主注册（worktree-root 探测→has_head 探测→log 的 legacy 三步机制逐字），101/641、floor101、转发点 73→74、git 缺口 18→17。 P8-05切片81：git.git_stash_list＋git.git_stash_diff 一对 stash 读侧孪生上收（core 旧 stash_list 四轴不等价就地改齐：四段 format/10s/回落文案/五字段 DTO），103/641、floor103、转发点 74→76、git 缺口 17→15。 P8-05切片82：git.git_stage_files＋git.git_unstage_files 复数孪生上收（HEAD 探测回落 reset 是契约、空列表静默成功、去重先校验后去重），105/641、floor105、转发点 76→78、git 缺口 15→13。 P8-05切片83：git.git_file_diff＋git.git_show_file_diff 上收（file_diff 补 validate_git_relative_path——legacy 的 --no-index 回落是任意文件读取原语，服务端权威校验优先），107/641、floor107、转发点 78→80、git 缺口 13→11。 P8-05切片84：git.git_commit_detail 上收（三段输出解析逐字、三次调用都不查退出码是 legacy 行为、wire 是 snake_case 无 rename），108/641、floor108、转发点 80→81、git 缺口 11→10。 P8-05切片85：discard 三件套上收（trash 进废纸篓不永久删除、保护路径跳过而非报错、unborn HEAD 走 rm --cached、幸存保护目录本身是 untracked），111/641、floor111、转发点 81→84、git 缺口 10→7。 P8-05切片86：git.git_conflict_preview＋git.git_resolve_conflict 上收（core 旧 conflict_preview/resolve_conflict 形状不同且测试在用，新函数 _result/_with_resolution 后缀保留旧入口；resolve 即 stage 是 legacy 语义），113/641、floor113、转发点 84→86、git 缺口 7→5。 P8-05切片87：网络三件套上收（core 新增 run_git_network 防挂死环境、legacy 三条的 trim 不对称逐字保留、--all/prune 轴、本地 bare remote 全程端状态断言），116/641、floor116、转发点 86→89、git 缺口 5→2。 P8-05切片88：git.git_clone 上收（URL 传输助手形态拒绝、clone 目标按定义不存在故用专用校验、--branch 轴、父目录执行），117/641、floor117、转发点 89→90、git 缺口 2→1。 P8-05切片89：git.generate_commit_message 上收（agent 孵化面——codex 一律策略逐字、超时改 kill 是泄漏修复、50_000 字节截断修 legacy panic 隐患；机器可测面只有无暂存拒绝），118/641、floor118、转发点 90→91、git 缺口 1→0（git 族全量闭合）。 P8-05切片90：notebook 族命名对账——修仪器盲区（host-coverage 扫描器此前不认 service!/service_ctx! 宏调用点，P7-05/06 的 71 条 notebook 注册全部不可见）＋70 条别名入表（台账双前缀 notebook.notebook_X ↔ 宿主 notebook.X；52 条带 Swift NotebookClient 字面证据、18 条 sync/rag 面证据为宿主注册＋P7-06 同一 core 实现），188/641、floor188；notebook 缺口 73→3（attachment_save_from_path/rag_index/rag_context 待查）。 P8-05切片92：files.read_image_preview＋files.read_clipboard_file_paths 上收（CoreContext 新增 platform 端口＋宿主 HostOsServices 适配器；帧上限预检回干净错误），190/641、floor190。 P8-05切片94（database刀零）：legacy_sqlite 八条上收（业务主体 core database::legacy_sqlite verbatim ~800行；连接文件 Value 直读直写防typed round-trip丢字段；SSH endpoint 显式 UnsupportedCapability；八条Tauri命令同批转发），198/641、floor198。 P8-05切片95：database 连接 CRUD 五条上收（dbx_list_connections/dbx_save_connection/dbx_delete_connection/dbx_test_connection/dbx_connect 五方法宿主注册＋Tauri 转发壳；dbx_disconnect/backup_sqlite 留 Tauri 本地态），203/641、floor203、转发点 99→104、database 缺口 87→82。 P8-05切片96（database刀二）：SQL builders／grid 预览纯函数族 20 条上收（16 条 dbx_build_*＋preview_grid_sql＋data_grid 三 builder；core database::sql_builders re-export dbx-core 为宿主单一依赖点＋DuckDB ATTACH 本地构造 verbatim 上收；Tauri 20 条转发壳），223/641、floor223、转发点 104→124、database 缺口 82→62。 P8-05切片97（database刀三）：执行面＋生产确认回路 11 条上收（execute_query/multi、cancel、close_session、query_table_data、grid save 三条、assess 两条、respond——core database::execution verbatim＋ConfirmEventSink 注入：宿主 EventLog append、Tauri 窗口 emit、超时参数化），234/641、floor234、转发点 124→135、database 缺口 62→51。 P8-05切片98（database收尾）：schema／驱动面 7 条上收（list_databases/schemas/objects、get_columns/get_table_ddl/get_object_source、driver_manifest——core database::schema_face verbatim；include_str 清单资产随迁），241/641、floor241、转发点 135→142、database 缺口 51→44。 P8-05切片99：notebook 缺口三条清零——attachment_save_from_path 别名对账（Swift NotebookClient 字面证据）＋rag_index/rag_context 上收（core notebook::rag::face verbatim；宿主 EventLog append v1 topic notebook.rag_index_progress；Tauri 窗口双发 Embedded 原样；NativeJobGuard 并发互斥），244/641、floor244、转发点 142→144、notebook 缺口 3→0。 P8-05切片100：redis 面 18 条上收（core database::redis_face verbatim——18 命令＋适配器/归一化/补充安全闸＋8 条随迁单测；无真 redis 服务，机器可测面＝参数 decode＋连接拒绝形状，真库 e2e 仍挂 P10-01），262/641、floor262、转发点 144→162、database 缺口 44→26。 P8-05切片101：mongo 面 6 条上收（core database::mongo_face verbatim——run_cancellable 取消登记/normalize；无真 mongo 服务，机器可测面＝参数 decode＋连接拒绝形状，真库 e2e 仍挂 P10-01），268/641、floor268、转发点 162→168、database 缺口 26→20。 P8-05切片102：导入导出10个既有wire上收，含UPDATE SQL明确不支持而非虚假成功；core统一业务与双向DTO、host当前writer准入、file-only preview、Tauri延迟本地态。Scratch SQLite五格式/导入/SQL/数据库导出与CLI、actual command回归；278/641、floor278、转发点168→178、database缺口20→10。生产确认仍以host双连接证据为限，不代表External GUI事件泵已完成。 P8-05切片103：transfer／差异比较面7条＋连接生命周期2条（dbx_disconnect/backup_sqlite_database）＋legacy db_read_sql_file 1条上收（core database::transfer_face verbatim＋dbx_connections 两主体＋legacy_sqlite db_read_sql_file；进度经 TransferProgressSink 注入：宿主 EventLog append v1 topic dbx.transfer_progress、Tauri 窗口 legacy 通道——v1 topic 半边被 Tauri 事件名校验拒绝（点号非法，IllegalEventName），与切片九十九 rag 先例同实况，测试双钉）。sqlite→sqlite 真传输/预取消/自目标/只读拒绝/纯函数面/真备份/跨库比较全走 scratch SQLite 真链路。288/641、floor278→288、转发点178→188、database 缺口 10→0（database 族全量闭合）。 P8-05切片106：ide 刀一——tests 命令族本地面 2 条上收（ide.discover_tests/ide.run_tests；core ide::tests_face verbatim——DTO/发现/运行/三 parser/依赖 helpers；python 探测与 login env 注入、宿主 default_python_program；remote 孪生留 Tauri SSH 适配层），290/641、floor 288→290、转发点 188→190、ide 缺口 58→56。 P8-05切片107：ide 刀二——ide.run_diagnostics 同形上收（core ide::diagnostics_face verbatim——DTO/五剖析器/命令构建/运行主体；envs 注入同 tests_face；remote 孪生与 shell_command 留 Tauri SSH 适配层），291/641、floor 290→291、转发点 190→191、ide 缺口 56→55。 P8-05切片108：ide 刀三——运行面 3 条上收（ide.start_run_config/stop_run_config/read_run_process；core ide::run_face verbatim——RunProcessState 进程注册表/输出读取/退出观察/完成棘轮/清理线程；两处注入＝shell 启动器（宿主 sh -c／Tauri 平台 shell）与 login env；remote 孪生经 register_running_process 共享同一注册表），294/641、floor 291→294、转发点 191→194、ide 缺口 55→52。 P8-05切片109:ide 刀四——LSP 生命周期面 5 条上收(ide.lsp_server_status/open/change/close/shutdown_project;core ide::lsp_face verbatim——DTO 单一定义+文档注册表 LSP_DOCUMENTS+language_id/default_server_command/validate_document_path/local_lsp_lifecycle_context+簿记入口 lsp_open_document/lsp_change_document/lsp_close_document/lsp_shutdown_project+快照读取面 lsp_session_document_snapshots/lsp_session_open_document_snapshots;envs 注入=宿主空表/Tauri login shell env;Tauri 生命周期五命令改转发壳(close 的会话 shutdown 半边留闭包)、本地重复注册表/DTO/helper 删除、remote 孪生经 lsp_registry_* pub 访问器共享同一注册表),299/641、floor 294→299、转发点 194→199、ide 缺口 52→47。",
           "timeoutMs": 300000
         },
         {
@@ -4942,12 +5214,12 @@
             "--test-threads=1"
           ],
           "parse": "rust",
-          "minCases": 23,
+          "minCases": 12,
           "env": {
             "AERORIC_HOME": "<scratch>"
           },
           "timeoutMs": 1800000,
-          "$note": "Slice29: actual generic Runtime commands (8) plus all15 original local/remote/process pure regressions; External no fallback or local validation/IO."
+          "$note": "Slice29: actual generic Runtime commands (8) plus all15 original local/remote/process pure regressions; External no fallback or local validation/IO. P8-05切片108：运行面 3 条改宿主转发壳（core ide::run_face 进程注册表），本地注册表内部测试随主体迁 core（23→12 实测双写）。"
         },
         {
           "name": "run-config-ownership",
@@ -5995,6 +6267,91 @@
           "$note": "P8-05 slice99: rag_index/rag_context over live UDS with a real registered vault; no-index context shape without any network, cross-vault current note refuses, dead-endpoint index refuses at probe (embed client backoff -> slow read), NativeJobGuard deregisters so a retry is not already-running. Scratch vault only; no real embedding provider."
         },
         {
+          "name": "database-import-export-core-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "database::ie_face::tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 17,
+          "timeoutMs": 900000,
+          "$note": "P8-05 slice102: seven moved regressions plus bidirectional DBX reply projections, SQL BOM/path/encoding and ZIP boundaries; bounded export-stack worker preserves the live runtime and cancels when its caller is dropped. Scratch files only; no sibling DBX edits."
+        },
+        {
+          "name": "database-import-export-host-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "database_import_export_services",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 14,
+          "timeoutMs": 900000,
+          "$note": "P8-05 slice102: real authenticated UDS, five table formats, replayable SQLite database export, CSV import, BOM SQL, readonly and lost-writer refusal before effects, file-only preview and explicit UPDATE refusal. Two-connection production confirmation proves host approve/refuse only, not a desktop event pump; uses scratch SQLite and memory secrets."
+        },
+        {
+          "name": "database-import-export-cli-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-cli",
+            "--test",
+            "database_import_export_cli",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 3,
+          "timeoutMs": 900000,
+          "$note": "P8-05 slice102: actual CLI subprocesses attach to a memory-secrets host; SQL/CSV/JSON/database-export roundtrip checks rows and file bytes, readonly refusal and malformed/unsupported methods cannot initialize DBX. Never spawn production serve."
+        },
+        {
+          "name": "database-import-export-command-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "src-tauri/Cargo.toml",
+            "--locked",
+            "--lib",
+            "--",
+            "database::import_export_command_tests::",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 7,
+          "timeoutMs": 1800000,
+          "env": {
+            "AERORIC_HOME": "<scratch>"
+          },
+          "$note": "P8-05 slice102: ten actual desktop adapters with ScriptedHost and no local DbxState; exact wire, host refusal/disconnect and malformed typed/unit replies cannot fall back. Embedded preview and UPDATE refusal need no local state or credentials."
+        },
+        {
           "name": "database-dbx-core-rust",
           "kind": "test",
           "argv": [
@@ -6183,6 +6540,151 @@
             "AERORIC_HOME": "<scratch>"
           },
           "$note": "P8-05 slice95: real desktop command adapters with authenticated ScriptedHost; five exact payloads, refusal/disconnect/malformed-list no-fallback, empty Embedded control. No local DbxState installed in External tests, no OS secret-store operations."
+        },
+        {
+          "name": "database-transfer-core-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "database::transfer_face::tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 10,
+          "$note": "P8-05 slice103: Tauri transfer.rs 8 legacy unit tests moved verbatim with the business body (self-target rejection shapes, deferred-FK terminal folding) plus sink-wire and v1-topic pins; no real cross-DB server, engine-level transfer is covered by the host UDS case.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "database-transfer-host-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "database_transfer_services",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 10,
+          "$note": "P8-05 slice103: real authenticated UDS over scratch SQLite - sqlite-to-sqlite transfer moving rows with dbx.transfer_progress terminal events, pre-cancelled transfer reporting cancelled without copying, self-target and readonly-target refusals before effects, pure diff/plan faces on a read-only host, real backup round trip, data compare from two scratch connections, legacy db_read_sql_file shapes.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "database-transfer-command-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "src-tauri/Cargo.toml",
+            "--locked",
+            "--lib",
+            "--",
+            "database::transfer_command_tests::",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 5,
+          "$note": "P8-05 slice103: ten actual command adapters through MockApp + ScriptedHost - wire preservation, refusals never fall back, Embedded pure faces and real backup through a saved connection, unknown-connection start refusal without local state.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "event-pump-confirm-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "event_pump_confirm",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 1,
+          "$note": "P8-05 slice104: the External production-confirm loop closes end to end through the pump against the real host - execute (pending) -> host EventLog -> pump engine -> window-shaped sink -> respond -> execute returns; before the pump this loop failed closed at the 300s refusal.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "task-events-log-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "task_events_log",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 1,
+          "$note": "P8-05 slice105: a fake agent settling done announces task-status to the host EventLog with the exact Embedded window payload shape (core window_payload, snake_case task_id, no serviceUnwired key) - the desktop event pump passes it through to the frontend unchanged.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "ide-test-services-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "ide_test_services",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 5,
+          "$note": "P8-05 slice106-109: the tests, diagnostics, run-process and LSP lifecycle command families over live UDS - a real scratch cargo project is discovered, run and diagnosed (a real cargo check error parsed); a shell run-config process starts (status running), captures its echo output into the snapshot, and stops (status stopped); and the LSP lifecycle face is driven on a scratch .ts project (status shape, open/change/close open-document counts, shutdown idempotence, unsupported-extension and path-escape refusals). Malformed params refuse with InvalidArgument and missing roots keep their legacy refusal text.",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "lsp-session-services-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "lsp_session_services",
+            "--",
+            "--test-threads=1"
+          ],
+          "parse": "rust",
+          "minCases": 6,
+          "$note": "P8-05 slice110: the LSP session face over live UDS. A fake Content-Length language server is injected as the host's server program (this machine has no typescript-language-server, and the narrow wire table only answers ts/js), so a scratch .ts project drives hover/definition/completion/signature/document symbols/workspace symbols/code actions/rename/execute command end to end and the assertions are on the parsed typed DTO fields the React client consumes. Also pinned: the server's publishDiagnostics notification reaches the EventLog through the injected sink, a remote target is refused verbatim without falling back to a local server, a document outside the project root is refused before any process starts, and malformed params are InvalidArgument. Two further cases pin what the first cut got wrong: closing the last document tears the session down on the host side (the shutdown half is not allowed to live only in the Tauri Embedded closure, which an External placement never polls), and inlay hints send a document range rather than a position.",
+          "timeoutMs": 900000
         }
       ],
       "$note": "P8-05（切换同一宿主与生产数据迁移演练）的增量门禁。切片一=宿主仲裁与切换前检查；切片三=external gateway（客户端/监督层/Embedded|External 判决）；切片四=helper 打包脚本；切片五=迁移演练（合成数据）。**刻意不在门禁里的两条**：①打包后的 bundle 取证（`AERORIC_TAURI_BUNDLE=1 node scripts/native/tauri-host-smoke.mjs`）——它要先跑 `pnpm tauri build`（~5 分钟），而 G39 之后本仓**没有 opt-in 通道**（`check-runner.test.mjs` 钉着『任何 case 再挂 optInEnv 即门禁失牙』），所以它是**手动/发布前**步骤，证据记在 `docs/native/migration-rehearsal.md` §3 与计划补记里；②domain 命令转发覆盖率与 Action 5 的真实数据演练（后者需用户同意）。"

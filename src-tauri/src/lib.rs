@@ -47,6 +47,7 @@ mod host_client_tests;
 mod host_dispatch;
 #[cfg(test)]
 mod host_dispatch_tests;
+mod host_event_pump;
 mod host_supervisor;
 mod local_history;
 mod local_router;
@@ -474,7 +475,7 @@ pub fn run() {
         .manage(TaskManager::default())
         .manage(std::sync::Arc::new(platform_adapter::HostPlatformServices)
             as std::sync::Arc<dyn aeroric_core::runtime::PlatformServices>)
-        .manage(run_config::RunConfigState::default())
+        .manage(aeroric_core::ide::run_face::RunProcessState::default())
         .manage(dap::DebugState::default())
         .manage(std::sync::Arc::new(remote::RemoteState::new()))
         .manage(local_router_commands::LocalRouterManager::for_app())

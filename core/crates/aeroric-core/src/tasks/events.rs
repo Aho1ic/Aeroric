@@ -50,6 +50,44 @@ pub enum TaskNotification {
 }
 
 impl TaskNotification {
+    /// 切片一百零五：窗口事件的载荷构造（Tauri `task_status_payload`/
+    /// `task_session_payload` verbatim 上收——宿主 EventLog 与 Embedded 窗口
+    /// 必须逐字节同形，两个发射面共用这一份实现）。`status_word`/`family_word`
+    /// 与 serde 序列化的等价性由本模块 pin 测试钉住。
+    pub fn window_payload(&self) -> serde_json::Value {
+        match self {
+            TaskNotification::Status {
+                task_id,
+                status,
+                failure_reason,
+            } => {
+                let mut payload = serde_json::json!({
+                    "task_id": task_id,
+                    "status": status_word(*status),
+                });
+                if let Some(reason) = failure_reason {
+                    payload["failure_reason"] = serde_json::json!(reason);
+                }
+                payload
+            }
+            TaskNotification::Session(facts) => {
+                let mut payload = serde_json::json!({
+                    "task_id": facts.task_id,
+                    "session_id": facts.session_id,
+                    "session_path": facts.session_path,
+                    "codex_like": facts.codex_like,
+                });
+                if let Some(family) = facts.family {
+                    payload["family"] = serde_json::json!(family_word(family));
+                }
+                if let Some(preset) = &facts.agent_preset {
+                    payload["agent_preset"] = serde_json::json!(preset);
+                }
+                payload
+            }
+        }
+    }
+
     pub fn status(task_id: impl Into<String>, status: TaskStatus) -> Self {
         TaskNotification::Status {
             task_id: task_id.into(),
@@ -217,5 +255,69 @@ mod tests {
             TaskNotification::status("t1", TaskStatus::Running)
         );
         NullSink.notify(TaskNotification::status("t1", TaskStatus::Done));
+    }
+}
+
+/// 冻结的九个状态词与四个家族词（Tauri core_adapter verbatim 上收）：
+/// 手写全函数而非 serde 透传，是为了让新增变体在两侧 pin 测试处当场红掉。
+pub(crate) const fn status_word(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Todo => "todo",
+        TaskStatus::Pending => "pending",
+        TaskStatus::Running => "running",
+        TaskStatus::InputRequired => "input_required",
+        TaskStatus::Detached => "detached",
+        TaskStatus::Interrupted => "interrupted",
+        TaskStatus::Done => "done",
+        TaskStatus::Failed => "failed",
+        TaskStatus::Cancelled => "cancelled",
+    }
+}
+
+pub(crate) const fn family_word(family: ProtocolFamily) -> &'static str {
+    match family {
+        ProtocolFamily::Claude => "claude",
+        ProtocolFamily::Codex => "codex",
+        ProtocolFamily::Dsh => "dsh",
+        ProtocolFamily::Omp => "omp",
+    }
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    #[test]
+    fn the_event_words_match_their_serialized_forms() {
+        for status in TaskStatus::ALL {
+            let serialized = serde_json::to_value(status).expect("a status is a string");
+            assert_eq!(
+                serialized.as_str(),
+                Some(status_word(*status)),
+                "{status:?}"
+            );
+        }
+        for family in ProtocolFamily::ALL {
+            let serialized = serde_json::to_value(family).expect("a family is a string");
+            assert_eq!(
+                serialized.as_str(),
+                Some(family_word(*family)),
+                "{family:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_window_payload_matches_the_shipping_wire() {
+        let status = TaskNotification::status_with_reason("t1", TaskStatus::Failed, "boom");
+        assert_eq!(
+            status.window_payload(),
+            serde_json::json!({"task_id": "t1", "status": "failed", "failure_reason": "boom"})
+        );
+        let plain = TaskNotification::status("t1", TaskStatus::Running);
+        assert_eq!(
+            plain.window_payload(),
+            serde_json::json!({"task_id": "t1", "status": "running"})
+        );
     }
 }

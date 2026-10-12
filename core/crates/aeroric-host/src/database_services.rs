@@ -16,11 +16,13 @@ use aeroric_core::database::dbx_connections as dbx;
 use aeroric_core::database::dbx_state::DbxState;
 use aeroric_core::database::execution;
 use aeroric_core::database::grid as grid_biz;
+use aeroric_core::database::ie_face;
 use aeroric_core::database::legacy_sqlite as biz;
 use aeroric_core::database::mongo_face;
 use aeroric_core::database::redis_face;
 use aeroric_core::database::schema_face;
 use aeroric_core::database::sql_builders as builders;
+use aeroric_core::database::transfer_face;
 use aeroric_core::events::EventLog;
 use aeroric_core::maintenance::StartupDegradationLog;
 use aeroric_protocol::envelope::{Frame, Request};
@@ -54,6 +56,376 @@ impl HostedDbx {
             })
             .await
     }
+}
+
+/// Decode before IO. File previews and explicitly unsupported UPDATE exports
+/// never initialize DBX; stateful operations require the current writer first.
+/// Do not hold the operations mutex while waiting for production confirmation.
+async fn ie_dispatch(
+    request: Request,
+    context: Arc<CoreContext>,
+    log: Arc<EventLog>,
+    hosted: Arc<HostedDbx>,
+    method: &str,
+) -> Frame {
+    enum Operation {
+        ExportTable(ie_face::TableExportRequest),
+        ExportDatabase(ie_face::DatabaseExportRequest),
+        ImportTable(ie_face::TableImportRequest),
+        ExecuteSqlFile(ie_face::ExecuteSqlFileRequest),
+    }
+    if !request.params.is_object() {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params object",
+        );
+    }
+    let reply = |result: Result<Value, String>| match result {
+        Ok(value) => ok(&request, value),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    };
+    let operation =
+        match method {
+            "database.dbx_export_table_csv"
+            | "database.dbx_export_table_json"
+            | "database.dbx_export_table_markdown"
+            | "database.dbx_export_table_insert_sql"
+            | "database.dbx_export_table_update_sql"
+            | "database.dbx_export_table_xlsx" => {
+                let Ok(parsed) = serde_json::from_value::<ie_face::TableExportRequest>(
+                    param_value(&request.params, "request"),
+                ) else {
+                    return invalid(&request, "request: invalid TableExportRequest");
+                };
+                let format = match method {
+                    "database.dbx_export_table_csv" => "csv",
+                    "database.dbx_export_table_json" => "json",
+                    "database.dbx_export_table_markdown" => "markdown",
+                    "database.dbx_export_table_insert_sql" => "sql",
+                    "database.dbx_export_table_xlsx" => "xlsx",
+                    _ => {
+                        return failure(
+                            request.id.clone(),
+                            ErrorCode::InvalidArgument,
+                            &ie_face::unsupported_update_sql_export(),
+                        );
+                    }
+                };
+                Operation::ExportTable(ie_face::export_request_with_format(parsed, format))
+            }
+            "database.dbx_export_database" => {
+                let Ok(parsed) = serde_json::from_value::<ie_face::DatabaseExportRequest>(
+                    param_value(&request.params, "request"),
+                ) else {
+                    return invalid(&request, "request: invalid DatabaseExportRequest");
+                };
+                Operation::ExportDatabase(parsed)
+            }
+            "database.dbx_preview_table_import_file" => {
+                let Some(file_path) = str_param(&request.params, "filePath") else {
+                    return invalid(&request, "filePath (string)");
+                };
+                return reply(
+                    ie_face::preview_table_import_file(file_path)
+                        .await
+                        .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+                );
+            }
+            "database.dbx_import_table_file" => {
+                let Ok(parsed) = serde_json::from_value::<ie_face::TableImportRequest>(
+                    param_value(&request.params, "request"),
+                ) else {
+                    return invalid(&request, "request: invalid TableImportRequest");
+                };
+                Operation::ImportTable(parsed)
+            }
+            "database.dbx_execute_sql_file" => {
+                let Ok(parsed) = serde_json::from_value::<ie_face::ExecuteSqlFileRequest>(
+                    param_value(&request.params, "request"),
+                ) else {
+                    return invalid(&request, "request: invalid ExecuteSqlFileRequest");
+                };
+                Operation::ExecuteSqlFile(parsed)
+            }
+            _ => {
+                return failure(
+                    request.id.clone(),
+                    ErrorCode::InvalidArgument,
+                    &format!("unknown database import/export method {method}"),
+                );
+            }
+        };
+    // Recheck after queueing behind CRUD, then again after async initialization.
+    // Release this lock before the business call: a separate UDS connection must
+    // be able to answer a pending production confirmation or cancel a query.
+    let state = {
+        let _operation = hosted.operations.lock().await;
+        if let Some(refusal) = crate::file_access::write_refusal(&request, &context) {
+            return refusal;
+        }
+        hosted.state(&context).await
+    };
+    if let Some(refusal) = crate::file_access::write_refusal(&request, &context) {
+        return refusal;
+    }
+    let paths = dbx_paths(&context);
+    let store = dbx_store(&context);
+    let result = match operation {
+        Operation::ExportTable(parsed) => ie_face::export_table(state, &paths, &store, parsed)
+            .await
+            .map(|()| Value::Null),
+        Operation::ExportDatabase(parsed) => {
+            ie_face::export_database(state, &paths, &store, parsed)
+                .await
+                .map(|()| Value::Null)
+        }
+        Operation::ImportTable(parsed) => ie_face::import_table_file(state, &paths, &store, parsed)
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+        Operation::ExecuteSqlFile(parsed) => {
+            let sink = confirm_event_sink(&log);
+            ie_face::execute_sql_file(state, &paths, &store, &sink, parsed)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        }
+    };
+    reply(result)
+}
+
+/// 切片一百零三：transfer／差异比较面 7 条＋连接生命周期 2 条＋legacy
+/// `db_read_sql_file` 的统一 decode→call→reply。纯函数（diff/plan 四条）、
+/// 不碰宿主状态的 `cancel`/`db_read_sql_file` 在准入前直接回——只读宿主
+/// 也必须能比较结构与读脚本（102 的 file-only preview 同规）；有状态四条
+/// （start/disconnect/backup/from_tables）走「短初始化锁内核 writer → 出锁
+/// 重核」准入，传输进度经 `TransferProgressLogSink` append 进 EventLog。
+async fn transfer_dispatch(
+    request: Request,
+    context: Arc<CoreContext>,
+    log: Arc<EventLog>,
+    hosted: Arc<HostedDbx>,
+    method: &str,
+) -> Frame {
+    if !request.params.is_object() {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params object",
+        );
+    }
+    let params = request.params.clone();
+    let reply = |result: Result<Value, String>| match result {
+        Ok(value) => ok(&request, value),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    };
+    let str_field = |name: &str| -> Option<String> {
+        params
+            .get(name)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    };
+    let decode_field = |name: &str| -> Value { params.get(name).cloned().unwrap_or(Value::Null) };
+
+    match method {
+        // ── 无状态：不初始化 DBX，只读宿主也放行 ──
+        "database.dbx_prepare_schema_diff" => {
+            let Ok(options) = serde_json::from_value::<transfer_face::SchemaDiffPreparationOptions>(
+                decode_field("options"),
+            ) else {
+                return invalid(&request, "options: invalid SchemaDiffPreparationOptions");
+            };
+            let preparation = aeroric_core::database::transfer_face::prepare_schema_diff(options);
+            return reply(serde_json::to_value(preparation).map_err(|e| e.to_string()));
+        }
+        "database.dbx_generate_schema_sync_sql" => {
+            let Ok(diffs) =
+                serde_json::from_value::<Vec<transfer_face::TableDiff>>(decode_field("diffs"))
+            else {
+                return invalid(&request, "diffs: invalid Vec<TableDiff>");
+            };
+            let Ok(function_diffs) = serde_json::from_value::<
+                Option<Vec<transfer_face::FunctionDiff>>,
+            >(decode_field("functionDiffs")) else {
+                return invalid(&request, "functionDiffs: invalid Vec<FunctionDiff>");
+            };
+            let Ok(sequence_diffs) = serde_json::from_value::<
+                Option<Vec<transfer_face::SequenceDiff>>,
+            >(decode_field("sequenceDiffs")) else {
+                return invalid(&request, "sequenceDiffs: invalid Vec<SequenceDiff>");
+            };
+            let Ok(rule_diffs) = serde_json::from_value::<Option<Vec<transfer_face::RuleDiff>>>(
+                decode_field("ruleDiffs"),
+            ) else {
+                return invalid(&request, "ruleDiffs: invalid Vec<RuleDiff>");
+            };
+            let Ok(owner_diffs) = serde_json::from_value::<Option<Vec<transfer_face::OwnerDiff>>>(
+                decode_field("ownerDiffs"),
+            ) else {
+                return invalid(&request, "ownerDiffs: invalid Vec<OwnerDiff>");
+            };
+            let Ok(database_type) =
+                serde_json::from_value::<transfer_face::DatabaseType>(decode_field("databaseType"))
+            else {
+                return invalid(&request, "databaseType: invalid DatabaseType");
+            };
+            let target_schema = str_field("targetSchema");
+            let cascade_delete = params
+                .get("cascadeDelete")
+                .and_then(|value| value.as_bool());
+            return reply(
+                aeroric_core::database::transfer_face::generate_schema_sync_sql(
+                    diffs,
+                    function_diffs,
+                    sequence_diffs,
+                    rule_diffs,
+                    owner_diffs,
+                    database_type,
+                    target_schema,
+                    cascade_delete,
+                )
+                .map(Value::String),
+            );
+        }
+        "database.dbx_prepare_data_compare" => {
+            let Ok(options) = serde_json::from_value::<transfer_face::DataComparePreparationOptions>(
+                decode_field("options"),
+            ) else {
+                return invalid(&request, "options: invalid DataComparePreparationOptions");
+            };
+            return reply(
+                aeroric_core::database::transfer_face::prepare_data_compare(options)
+                    .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            );
+        }
+        "database.dbx_build_data_compare_sync_plan" => {
+            let Ok(options) = serde_json::from_value::<transfer_face::DataCompareSyncPlanOptions>(
+                decode_field("options"),
+            ) else {
+                return invalid(&request, "options: invalid DataCompareSyncPlanOptions");
+            };
+            let plan = aeroric_core::database::transfer_face::build_data_compare_sync_plan(options);
+            return reply(serde_json::to_value(plan).map_err(|e| e.to_string()));
+        }
+        "database.dbx_cancel_transfer" => {
+            let Some(transfer_id) = str_field("transferId") else {
+                return invalid(&request, "transferId (string)");
+            };
+            return reply(
+                aeroric_core::database::transfer_face::cancel_transfer(transfer_id)
+                    .await
+                    .map(|()| Value::Null),
+            );
+        }
+        "database.db_read_sql_file" => {
+            let Some(path) = str_field("path") else {
+                return invalid(&request, "path (string)");
+            };
+            return reply(biz::db_read_sql_file(path).await.map(Value::String));
+        }
+        // ── 有状态：decode 后走准入 ──
+        _ => {}
+    }
+
+    enum Operation {
+        StartTransfer(transfer_face::TransferRequest),
+        Disconnect(String),
+        BackupSqlite {
+            connection_id: String,
+            destination_path: String,
+        },
+        DataCompareFromTables(transfer_face::DataCompareFromTablesOptions),
+    }
+    let operation = match method {
+        "database.dbx_start_transfer" => {
+            let Ok(parsed) =
+                serde_json::from_value::<transfer_face::TransferRequest>(decode_field("request"))
+            else {
+                return invalid(&request, "request: invalid TransferRequest");
+            };
+            Operation::StartTransfer(parsed)
+        }
+        "database.dbx_disconnect" => {
+            let Some(connection_id) = str_field("connectionId") else {
+                return invalid(&request, "connectionId (string)");
+            };
+            Operation::Disconnect(connection_id)
+        }
+        "database.dbx_backup_sqlite_database" => {
+            let Some(connection_id) = str_field("connectionId") else {
+                return invalid(&request, "connectionId (string)");
+            };
+            let Some(destination_path) = str_field("destinationPath") else {
+                return invalid(&request, "destinationPath (string)");
+            };
+            Operation::BackupSqlite {
+                connection_id,
+                destination_path,
+            }
+        }
+        "database.dbx_prepare_data_compare_from_tables" => {
+            let Ok(parsed) = serde_json::from_value::<transfer_face::DataCompareFromTablesOptions>(
+                decode_field("options"),
+            ) else {
+                return invalid(&request, "options: invalid DataCompareFromTablesOptions");
+            };
+            Operation::DataCompareFromTables(parsed)
+        }
+        _ => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::InvalidArgument,
+                &format!("unknown database transfer method {method}"),
+            );
+        }
+    };
+    let state = {
+        let _operation = hosted.operations.lock().await;
+        if let Some(refusal) = crate::file_access::write_refusal(&request, &context) {
+            return refusal;
+        }
+        hosted.state(&context).await
+    };
+    if let Some(refusal) = crate::file_access::write_refusal(&request, &context) {
+        return refusal;
+    }
+    let paths = dbx_paths(&context);
+    let store = dbx_store(&context);
+    let result = match operation {
+        Operation::StartTransfer(parsed) => {
+            let sink: Arc<dyn aeroric_core::database::transfer_face::TransferProgressSink> =
+                Arc::new(TransferProgressLogSink { log });
+            aeroric_core::database::transfer_face::start_transfer(
+                state, &paths, &store, sink, parsed,
+            )
+            .await
+            .map(|()| Value::Null)
+        }
+        Operation::Disconnect(connection_id) => {
+            aeroric_core::database::dbx_connections::disconnect(state, &connection_id)
+                .await
+                .map(|()| Value::Null)
+        }
+        Operation::BackupSqlite {
+            connection_id,
+            destination_path,
+        } => aeroric_core::database::dbx_connections::backup_sqlite_database(
+            state,
+            &paths,
+            &store,
+            &connection_id,
+            &destination_path,
+        )
+        .await
+        .map(|()| Value::Null),
+        Operation::DataCompareFromTables(parsed) => {
+            aeroric_core::database::transfer_face::prepare_data_compare_from_tables(
+                state, &paths, &store, parsed,
+            )
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        }
+    };
+    reply(result)
 }
 
 /// 切片一百零一：mongo 面统一 decode→call→reply（注册逐条字面量——切片九
@@ -991,6 +1363,23 @@ fn confirm_event_sink(log: &Arc<EventLog>) -> execution::ConfirmEventSink {
             log.append(execution::PRODUCTION_CONFIRM_EVENT, payload);
         }
     })
+}
+
+/// 切片一百零三：传输进度 append 进 EventLog 的 v1 topic（rag 的
+/// RagProgressLogSink 同款）。发不出去也不能让传输停下，append 本身不失败。
+struct TransferProgressLogSink {
+    log: Arc<EventLog>,
+}
+
+impl aeroric_core::database::transfer_face::TransferProgressSink for TransferProgressLogSink {
+    fn report(&self, progress: &transfer_face::TransferProgress) {
+        if let Ok(payload) = serde_json::to_value(progress) {
+            self.log.append(
+                aeroric_core::database::transfer_face::TRANSFER_PROGRESS_TOPIC,
+                payload,
+            );
+        }
+    }
 }
 
 fn dbx_paths(context: &CoreContext) -> dbx::DbxConnectionPaths {
@@ -2010,6 +2399,401 @@ pub fn register_database_services(
                 Box::pin(async move {
                     mongo_dispatch(request, context, dbx, "database.dbx_mongo_delete_documents")
                         .await
+                })
+            }),
+        );
+    }
+    // ── 切片一百零二（database）：import/export 面 10 条 ──
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_export_table_csv",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    ie_dispatch(request, context, log, dbx, "database.dbx_export_table_csv").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_export_table_json",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    ie_dispatch(request, context, log, dbx, "database.dbx_export_table_json").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_export_table_markdown",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    ie_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_export_table_markdown",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_export_table_insert_sql",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    ie_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_export_table_insert_sql",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_export_table_update_sql",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    ie_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_export_table_update_sql",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_export_table_xlsx",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    ie_dispatch(request, context, log, dbx, "database.dbx_export_table_xlsx").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_export_database",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    ie_dispatch(request, context, log, dbx, "database.dbx_export_database").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_preview_table_import_file",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    ie_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_preview_table_import_file",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_import_table_file",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    ie_dispatch(request, context, log, dbx, "database.dbx_import_table_file").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_execute_sql_file",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    ie_dispatch(request, context, log, dbx, "database.dbx_execute_sql_file").await
+                })
+            }),
+        );
+    }
+    // ── 切片一百零三（database）：transfer／差异比较面 7 条＋连接生命周期
+    // 2 条＋legacy db_read_sql_file，database 族到此收口 ──
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_start_transfer",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    transfer_dispatch(request, context, log, dbx, "database.dbx_start_transfer")
+                        .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_cancel_transfer",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    transfer_dispatch(request, context, log, dbx, "database.dbx_cancel_transfer")
+                        .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_prepare_schema_diff",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    transfer_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_prepare_schema_diff",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_generate_schema_sync_sql",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    transfer_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_generate_schema_sync_sql",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_prepare_data_compare",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    transfer_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_prepare_data_compare",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_build_data_compare_sync_plan",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    transfer_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_build_data_compare_sync_plan",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_prepare_data_compare_from_tables",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    transfer_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_prepare_data_compare_from_tables",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_disconnect",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    transfer_dispatch(request, context, log, dbx, "database.dbx_disconnect").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.dbx_backup_sqlite_database",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    transfer_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_backup_sqlite_database",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        let log = Arc::clone(&log);
+        set.register(
+            "database.db_read_sql_file",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    transfer_dispatch(request, context, log, dbx, "database.db_read_sql_file").await
                 })
             }),
         );

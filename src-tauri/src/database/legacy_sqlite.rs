@@ -416,20 +416,25 @@ pub async fn db_save_connections<R: tauri::Runtime>(
     .map(|_| ())
 }
 
+/// 切片一百零三：主体上收 core `legacy_sqlite::db_read_sql_file`（绝对路径＋
+/// `.sql` 校验 verbatim）；此壳只做转发判定。
 #[tauri::command]
-pub async fn db_read_sql_file(path: String) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        let path = PathBuf::from(path);
-        if !path.is_absolute() {
-            return Err("SQL file path must be absolute".to_string());
-        }
-        if path.extension().and_then(|value| value.to_str()) != Some("sql") {
-            return Err("Only .sql files can be executed from this action".to_string());
-        }
-        fs::read_to_string(path).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub async fn db_read_sql_file<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    path: String,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.db_read_sql_file",
+        serde_json::json!({ "path": path }),
+        async {
+            aeroric_core::database::legacy_sqlite::db_read_sql_file(path)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 pub async fn local_db_inspect(

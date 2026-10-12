@@ -691,12 +691,14 @@ describe("the rules every client shares", () => {
 
   it("bridges every legacy channel to exactly one v1 topic (ADR-007)", () => {
     const topics = contract<TopicSurface>("event-topics.schema.json");
-    expect(topics.topics).toBe(39);
-    // P8-04 刀二/刀三：`usage.statistics_updated` 与 `weekly.report_progress` 双发接线，
-    // mapped 5 → 11（P8-02/03 的 9 条 ＋ 本轮 2 条）。
-    expect(topics.mapped).toBe(11);
-    // P8-04 刀三：两条 pending: P8-04 接线成 mapped，pending 33 → 27。
-    expect(topics.pending).toBe(27); // P8-03 刀二：remote.task_request 转 not-forwarded（RPC 应答即结果）
+expect(topics.topics).toBe(39);
+    // P8-04 刀二/刀三:`usage.statistics_updated` 与 `weekly.report_progress` 双发接线,
+    // mapped 5 → 11(P8-02/03 的 9 条 + 本轮 2 条)。P8-05 切片九十七/九十九/一百零三
+    // 再把 dbx.production_confirm_requested、notebook.rag_index_progress、
+    // dbx.transfer_progress 接线成 mapped(11 → 14),pending 27 → 24。
+    expect(topics.mapped).toBe(14);
+    // P8-04 刀三:两条 pending: P8-04 接线成 mapped,pending 33 → 27。
+    expect(topics.pending).toBe(24); // P8-03 刀二:remote.task_request 转 not-forwarded(RPC 应答即结果)
     expect(topics.reshapedPayloads).toBe(5); // P8-02 刀六起 agent 两条 mapped（reshaped payload）
     const claimed = new Map<string, number>();
     for (const row of topics.rows) {
@@ -737,6 +739,9 @@ describe("the rules every client shares", () => {
       "aeroric.app_settings_changed",
       "agent.operation_changed",
       "agent.tool_install_progress",
+      "dbx.production_confirm_requested",
+      "dbx.transfer_progress",
+      "notebook.rag_index_progress",
       "project.pinned_changed",
       "remote.device_paired",
       "remote.terminal_resized",

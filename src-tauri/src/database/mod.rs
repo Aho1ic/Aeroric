@@ -14,3 +14,9 @@ pub(crate) mod types;
 
 #[cfg(test)]
 mod connection_command_tests;
+
+#[cfg(test)]
+mod import_export_command_tests;
+
+#[cfg(test)]
+mod transfer_command_tests;

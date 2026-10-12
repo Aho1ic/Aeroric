@@ -1,11 +1,9 @@
 use parking_lot::Mutex;
-use std::collections::{BTreeMap, HashMap};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::Path;
+use std::process::Stdio;
 use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::State;
 use uuid::Uuid;
 
@@ -16,86 +14,15 @@ use crate::ssh::SshConnection;
 #[path = "run_config/command_tests.rs"]
 mod command_tests;
 
-const MAX_OUTPUT_CHARS: usize = 200_000;
-const MAX_RETAINED_FINISHED_PROCESSES: usize = 64;
-
-use aeroric_core::ide::run_config::{
-    legacy_cwd_candidate as cwd_candidate, validate_legacy_run_config as validate_run_config,
-    validate_legacy_run_config_identity as validate_run_config_identity,
-};
+use aeroric_core::ide::run_config::validate_legacy_run_config_identity as validate_run_config_identity;
 #[cfg(test)]
-use aeroric_core::ide::run_config::{read_run_configs_from_root, RunDebugConfigType};
+use aeroric_core::ide::run_config::RunDebugConfigType;
 pub use aeroric_core::ide::run_config::{
     RunConfig, RunConfigDocument, RunDebugBreakpoint, RunProcessSnapshot, RunProcessStatus,
     RUN_CONFIG_VERSION,
 };
 
 pub mod commands;
-
-#[derive(Clone)]
-struct RunProcessHandle {
-    child: Arc<Mutex<Child>>,
-    snapshot: Arc<Mutex<RunProcessSnapshot>>,
-}
-
-#[derive(Default)]
-pub struct RunConfigState {
-    processes: Arc<Mutex<HashMap<String, RunProcessHandle>>>,
-}
-
-fn finished_process_ids_to_remove(snapshots: &[(String, RunProcessSnapshot)]) -> Vec<String> {
-    let mut finished = snapshots
-        .iter()
-        .filter(|(_, snapshot)| snapshot.status != RunProcessStatus::Running)
-        .map(|(id, snapshot)| {
-            (
-                id.clone(),
-                snapshot.finished_at.unwrap_or(snapshot.started_at),
-            )
-        })
-        .collect::<Vec<_>>();
-    if finished.len() <= MAX_RETAINED_FINISHED_PROCESSES {
-        return Vec::new();
-    }
-    finished.sort_by_key(|(_, finished_at)| *finished_at);
-    let remove_count = finished.len() - MAX_RETAINED_FINISHED_PROCESSES;
-    finished
-        .into_iter()
-        .take(remove_count)
-        .map(|(id, _)| id)
-        .collect()
-}
-
-fn prune_finished_processes(processes: &mut HashMap<String, RunProcessHandle>) {
-    let snapshots = processes
-        .iter()
-        .map(|(id, handle)| (id.clone(), handle.snapshot.lock().clone()))
-        .collect::<Vec<_>>();
-    for id in finished_process_ids_to_remove(&snapshots) {
-        processes.remove(&id);
-    }
-}
-
-fn spawn_process_cleanup(
-    processes: Arc<Mutex<HashMap<String, RunProcessHandle>>>,
-    snapshot: Arc<Mutex<RunProcessSnapshot>>,
-) {
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_millis(250));
-        if snapshot.lock().status == RunProcessStatus::Running {
-            continue;
-        }
-        prune_finished_processes(&mut processes.lock());
-        break;
-    });
-}
-
-fn now_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0)
-}
 
 fn remote_run_path_has_relative_components(path: &str) -> bool {
     path.split('/')
@@ -242,23 +169,6 @@ fn validate_remote_run_configs(root: &str, document: &RunConfigDocument) -> Resu
     Ok(())
 }
 
-fn resolve_run_cwd(root: &Path, cwd: &str) -> Result<PathBuf, String> {
-    let root = root
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve project path: {e}"))?;
-    let candidate = cwd_candidate(&root, cwd)?;
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve run cwd: {e}"))?;
-    if !canonical.is_dir() {
-        return Err("Run cwd is not a directory".to_string());
-    }
-    if !canonical.starts_with(&root) {
-        return Err("Run cwd is outside project root".to_string());
-    }
-    Ok(canonical)
-}
-
 fn build_remote_run_read_configs_command(remote_root: &str) -> String {
     let config_path = remote_run_configs_path(remote_root);
     let script = "path=$1; if [ -f \"$path\" ]; then cat -- \"$path\"; fi";
@@ -356,99 +266,6 @@ fn write_remote_run_configs_from_root(
     Ok(document)
 }
 
-fn trim_output(output: &mut String) {
-    if output.len() <= MAX_OUTPUT_CHARS {
-        return;
-    }
-    let excess = output.len() - MAX_OUTPUT_CHARS;
-    let boundary = output
-        .char_indices()
-        .find_map(|(index, _)| (index >= excess).then_some(index))
-        .unwrap_or(excess);
-    output.drain(..boundary);
-}
-
-fn append_output(snapshot: &Arc<Mutex<RunProcessSnapshot>>, chunk: &str) {
-    let mut snapshot = snapshot.lock();
-    snapshot.output.push_str(chunk);
-    trim_output(&mut snapshot.output);
-}
-
-fn spawn_output_reader<R>(mut reader: R, snapshot: Arc<Mutex<RunProcessSnapshot>>)
-where
-    R: Read + Send + 'static,
-{
-    thread::spawn(move || {
-        let mut buffer = [0; 4096];
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(count) => {
-                    let chunk = String::from_utf8_lossy(&buffer[..count]);
-                    append_output(&snapshot, &chunk);
-                }
-                Err(error) => {
-                    append_output(&snapshot, &format!("\n[run output read failed: {error}]\n"));
-                    break;
-                }
-            }
-        }
-    });
-}
-
-fn spawn_exit_watcher(child: Arc<Mutex<Child>>, snapshot: Arc<Mutex<RunProcessSnapshot>>) {
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_millis(150));
-        let status = {
-            let mut child = child.lock();
-            match child.try_wait() {
-                Ok(Some(status)) => Some(Ok(status)),
-                Ok(None) => None,
-                Err(error) => Some(Err(error.to_string())),
-            }
-        };
-        let Some(status) = status else {
-            continue;
-        };
-        let mut snapshot = snapshot.lock();
-        if snapshot.status == RunProcessStatus::Stopped {
-            if snapshot.finished_at.is_none() {
-                snapshot.finished_at = Some(now_millis());
-            }
-            break;
-        }
-        match status {
-            Ok(status) => {
-                snapshot.exit_code = status.code();
-                snapshot.status = if status.success() {
-                    RunProcessStatus::Exited
-                } else {
-                    RunProcessStatus::Failed
-                };
-            }
-            Err(error) => {
-                snapshot.status = RunProcessStatus::Failed;
-                snapshot
-                    .output
-                    .push_str(&format!("\n[run wait failed: {error}]\n"));
-                trim_output(&mut snapshot.output);
-            }
-        }
-        snapshot.finished_at = Some(now_millis());
-        break;
-    });
-}
-
-fn shell_command(command: &str) -> Command {
-    let shell = crate::platform::shell_command(command);
-    let mut cmd = Command::new(shell.program);
-    // 运行配置的 stdout/stderr 都是 piped 后回显到应用内面板的,不需要真实控制台;
-    // 不压窗口的话每次运行都会闪一个 cmd。
-    crate::subprocess::configure_background_command(&mut cmd);
-    cmd.args(shell.args);
-    cmd
-}
-
 fn build_remote_shell_run_command(
     cwd: &str,
     command: &str,
@@ -500,71 +317,51 @@ pub async fn remote_write_run_configs(
     .map_err(|err| err.to_string())?
 }
 
+// ── 切片一百零八：运行面改宿主转发壳。进程注册表在 core `ide::run_face`
+// （宿主每实例一份；Embedded 闭包传平台 shell 适配与 login env，External
+// 绝不本地回退）；remote 孪生留本文件 SSH 适配层。──
+
 #[tauri::command]
-pub fn start_run_config(
+pub async fn start_run_config<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     project_path: String,
     config: RunConfig,
-    state: State<'_, RunConfigState>,
 ) -> Result<RunProcessSnapshot, String> {
-    let root = validate_project_root(&project_path)?;
-    validate_run_config(&root, &config)?;
-    let RunConfig::Shell {
-        id,
-        name,
-        command,
-        cwd,
-        env,
-    } = config
-    else {
-        return Err("Debug run configs must be started with the debug launcher".to_string());
-    };
-    let cwd = resolve_run_cwd(&root, &cwd)?;
-    let run_id = format!("run-{}", Uuid::new_v4());
-    let started_at = now_millis();
-    let mut shell = shell_command(&command);
-    crate::subprocess::configure_terminable_process_tree(&mut shell);
-    let mut child = shell
-        .current_dir(&cwd)
-        .envs(crate::app_settings::get_login_shell_env().iter().cloned())
-        .envs(env.iter())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to start run config: {e}"))?;
-
-    let snapshot = Arc::new(Mutex::new(RunProcessSnapshot {
-        run_id: run_id.clone(),
-        config_id: id,
-        name,
-        command,
-        cwd: cwd.to_string_lossy().into_owned(),
-        status: RunProcessStatus::Running,
-        output: String::new(),
-        exit_code: None,
-        started_at,
-        finished_at: None,
-    }));
-
-    if let Some(stdout) = child.stdout.take() {
-        spawn_output_reader(stdout, Arc::clone(&snapshot));
-    }
-    if let Some(stderr) = child.stderr.take() {
-        spawn_output_reader(stderr, Arc::clone(&snapshot));
-    }
-
-    let child = Arc::new(Mutex::new(child));
-    spawn_exit_watcher(Arc::clone(&child), Arc::clone(&snapshot));
-    state.processes.lock().insert(
-        run_id.clone(),
-        RunProcessHandle {
-            child,
-            snapshot: Arc::clone(&snapshot),
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "ide.start_run_config",
+        serde_json::json!({ "projectPath": project_path, "config": config }),
+        async {
+            let root = validate_project_root(&project_path)?;
+            aeroric_core::ide::run_face::start_run_config(
+                Path::new(&root),
+                config,
+                &run_state(&app),
+                &|command| {
+                    let shell = crate::platform::shell_command(command);
+                    (shell.program, shell.args)
+                },
+                crate::app_settings::get_login_shell_env(),
+            )
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
         },
-    );
-    spawn_process_cleanup(Arc::clone(&state.processes), Arc::clone(&snapshot));
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
 
-    let snapshot = snapshot.lock().clone();
-    Ok(snapshot)
+/// Embedded 的进程注册表：core 状态挂 AppHandle（首用时 manage，三次调用
+/// 共享同一张表——与旧 Tauri RunConfigState 语义一致）。
+pub fn run_state<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> aeroric_core::ide::run_face::RunProcessState {
+    use tauri::Manager;
+    if let Some(state) = app.try_state::<aeroric_core::ide::run_face::RunProcessState>() {
+        return state.inner().clone();
+    }
+    let state = aeroric_core::ide::run_face::RunProcessState::default();
+    app.manage(state.clone());
+    state
 }
 
 #[tauri::command]
@@ -572,7 +369,7 @@ pub fn remote_start_run_config(
     connection: SshConnection,
     remote_project_path: String,
     config: RunConfig,
-    state: State<'_, RunConfigState>,
+    state: State<'_, aeroric_core::ide::run_face::RunProcessState>,
 ) -> Result<RunProcessSnapshot, String> {
     let remote_root = normalize_remote_run_root(&remote_project_path)?;
     validate_remote_run_config(&remote_root, &config)?;
@@ -588,7 +385,7 @@ pub fn remote_start_run_config(
     };
     let cwd = join_remote_run_path(&remote_root, &cwd, "Run config cwd")?;
     let run_id = format!("run-{}", Uuid::new_v4());
-    let started_at = now_millis();
+    let started_at = aeroric_core::ide::run_face::now_millis();
     let remote_command = build_remote_shell_run_command(&cwd, &command, &env);
     let mut shell = crate::ssh::std_ssh_command_for_remote_command(&connection, remote_command);
     crate::subprocess::configure_terminable_process_tree(&mut shell);
@@ -612,62 +409,59 @@ pub fn remote_start_run_config(
     }));
 
     if let Some(stdout) = child.stdout.take() {
-        spawn_output_reader(stdout, Arc::clone(&snapshot));
+        aeroric_core::ide::run_face::spawn_output_reader(stdout, Arc::clone(&snapshot));
     }
     if let Some(stderr) = child.stderr.take() {
-        spawn_output_reader(stderr, Arc::clone(&snapshot));
+        aeroric_core::ide::run_face::spawn_output_reader(stderr, Arc::clone(&snapshot));
     }
 
     let child = Arc::new(Mutex::new(child));
-    spawn_exit_watcher(Arc::clone(&child), Arc::clone(&snapshot));
-    state.processes.lock().insert(
-        run_id.clone(),
-        RunProcessHandle {
-            child,
-            snapshot: Arc::clone(&snapshot),
-        },
+    aeroric_core::ide::run_face::spawn_exit_watcher(Arc::clone(&child), Arc::clone(&snapshot));
+    aeroric_core::ide::run_face::register_running_process(
+        &state,
+        run_id,
+        child,
+        Arc::clone(&snapshot),
     );
-    spawn_process_cleanup(Arc::clone(&state.processes), Arc::clone(&snapshot));
 
     let snapshot = snapshot.lock().clone();
     Ok(snapshot)
 }
 
 #[tauri::command]
-pub fn stop_run_config(
+pub async fn stop_run_config<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     run_id: String,
-    state: State<'_, RunConfigState>,
 ) -> Result<RunProcessSnapshot, String> {
-    let handle = state
-        .processes
-        .lock()
-        .get(&run_id)
-        .cloned()
-        .ok_or_else(|| "Run process not found".to_string())?;
-    {
-        let mut child = handle.child.lock();
-        crate::subprocess::terminate_process_tree(&mut child)
-            .map_err(|error| format!("Failed to stop run process tree: {error}"))?;
-    }
-    let mut snapshot = handle.snapshot.lock();
-    snapshot.status = RunProcessStatus::Stopped;
-    snapshot.finished_at = Some(now_millis());
-    Ok(snapshot.clone())
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "ide.stop_run_config",
+        serde_json::json!({ "runId": run_id }),
+        async {
+            aeroric_core::ide::run_face::stop_run_config(run_id.clone(), &run_state(&app))
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn read_run_process(
+pub async fn read_run_process<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     run_id: String,
-    state: State<'_, RunConfigState>,
 ) -> Result<RunProcessSnapshot, String> {
-    let handle = state
-        .processes
-        .lock()
-        .get(&run_id)
-        .cloned()
-        .ok_or_else(|| "Run process not found".to_string())?;
-    let snapshot = handle.snapshot.lock().clone();
-    Ok(snapshot)
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "ide.read_run_process",
+        serde_json::json!({ "runId": run_id }),
+        async {
+            aeroric_core::ide::run_face::read_run_process(run_id.clone(), &run_state(&app))
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -684,283 +478,6 @@ mod tests {
             .as_nanos();
         std::env::temp_dir().join(format!("aeroric-run-config-test-{name}-{suffix}"))
     }
-
-    fn process_snapshot(id: usize, status: RunProcessStatus) -> (String, RunProcessSnapshot) {
-        let timestamp = id as u128;
-        (
-            format!("run-{id}"),
-            RunProcessSnapshot {
-                run_id: format!("run-{id}"),
-                config_id: "config".to_string(),
-                name: "Run".to_string(),
-                command: "true".to_string(),
-                cwd: "/tmp".to_string(),
-                status,
-                output: String::new(),
-                exit_code: Some(0),
-                started_at: timestamp,
-                finished_at: Some(timestamp),
-            },
-        )
-    }
-
-    #[test]
-    fn prunes_only_the_oldest_finished_run_processes() {
-        let mut snapshots = (0..MAX_RETAINED_FINISHED_PROCESSES + 3)
-            .map(|id| process_snapshot(id, RunProcessStatus::Exited))
-            .collect::<Vec<_>>();
-        snapshots.push(process_snapshot(999, RunProcessStatus::Running));
-
-        let removed = finished_process_ids_to_remove(&snapshots);
-
-        assert_eq!(removed, vec!["run-0", "run-1", "run-2"]);
-        assert!(!removed.contains(&"run-999".to_string()));
-    }
-
-    #[test]
-    fn builds_remote_run_config_file_commands() {
-        assert_eq!(
-            build_remote_run_read_configs_command("/srv/app"),
-            "sh -c 'path=$1; if [ -f \"$path\" ]; then cat -- \"$path\"; fi' sh '/srv/app/.aeroric/run-configs.json'"
-        );
-        assert_eq!(
-            build_remote_run_write_configs_command("/srv/app"),
-            "mkdir -p -- '/srv/app/.aeroric' && cat > '/srv/app/.aeroric/run-configs.json'"
-        );
-        assert_eq!(
-            build_remote_run_write_configs_command("/"),
-            "mkdir -p -- '/.aeroric' && cat > '/.aeroric/run-configs.json'"
-        );
-    }
-
-    #[test]
-    fn builds_remote_shell_run_command_with_env_and_login_shell() {
-        let mut env = BTreeMap::new();
-        env.insert("PORT".to_string(), "5173".to_string());
-
-        let command =
-            build_remote_shell_run_command("/srv/app", "pnpm dev -- --host 0.0.0.0", &env);
-
-        assert_eq!(
-            command,
-            "cd -- '/srv/app' && env 'PORT=5173' \"${SHELL:-/bin/sh}\" -lc 'pnpm dev -- --host 0.0.0.0'"
-        );
-    }
-
-    #[test]
-    fn normalizes_remote_run_root_and_joins_inside_paths() {
-        let root = normalize_remote_run_root(" /srv/app/ ").unwrap();
-
-        assert_eq!(root, "/srv/app");
-        assert_eq!(
-            join_remote_run_path(&root, ".", "Run config cwd").unwrap(),
-            "/srv/app"
-        );
-        assert_eq!(
-            join_remote_run_path(&root, "scripts/dev", "Run config cwd").unwrap(),
-            "/srv/app/scripts/dev"
-        );
-        assert_eq!(
-            join_remote_run_path(&root, "/srv/app/tools", "Run config cwd").unwrap(),
-            "/srv/app/tools"
-        );
-    }
-
-    #[test]
-    fn rejects_remote_run_paths_outside_project_root() {
-        let root = normalize_remote_run_root("/srv/app").unwrap();
-
-        assert!(normalize_remote_run_root("/srv/../app").is_err());
-        assert!(join_remote_run_path(&root, "../outside", "Run config cwd").is_err());
-        assert!(join_remote_run_path(&root, "/srv/other", "Run config cwd").is_err());
-    }
-
-    #[test]
-    fn validates_remote_run_config_document() {
-        let document = RunConfigDocument {
-            version: 0,
-            configs: vec![
-                RunConfig::Shell {
-                    id: "dev".to_string(),
-                    name: "Dev".to_string(),
-                    command: "pnpm dev".to_string(),
-                    cwd: ".".to_string(),
-                    env: Default::default(),
-                },
-                RunConfig::Debug {
-                    id: "debug".to_string(),
-                    name: "Debug".to_string(),
-                    debug_type: RunDebugConfigType::Node,
-                    program: "src/index.js".to_string(),
-                    cwd: ".".to_string(),
-                    args: Vec::new(),
-                    env: Default::default(),
-                    breakpoints: vec![RunDebugBreakpoint {
-                        file: "src/index.js".to_string(),
-                        line: 12,
-                        column: 1,
-                    }],
-                },
-            ],
-        };
-
-        validate_remote_run_configs("/srv/app", &document).unwrap();
-    }
-
-    #[test]
-    fn rejects_remote_run_config_cwd_outside_project_root() {
-        let config = RunConfig::Shell {
-            id: "bad".to_string(),
-            name: "Bad".to_string(),
-            command: "echo bad".to_string(),
-            cwd: "/tmp".to_string(),
-            env: Default::default(),
-        };
-
-        let error = validate_remote_run_config("/srv/app", &config).unwrap_err();
-
-        assert!(error.contains("outside project root"));
-    }
-
-    #[test]
-    fn reads_missing_run_configs_as_empty_document() {
-        let root = unique_test_dir("missing");
-        fs::create_dir_all(&root).unwrap();
-
-        let document = read_run_configs_from_root(&root).unwrap();
-
-        assert_eq!(document.version, 1);
-        assert!(document.configs.is_empty());
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn reads_run_configs_from_aeroric_directory() {
-        let root = unique_test_dir("read");
-        fs::create_dir_all(root.join(".aeroric")).unwrap();
-        fs::write(
-            root.join(".aeroric").join("run-configs.json"),
-            r#"{
-              "version": 1,
-              "configs": [
-                {
-                  "id": "dev",
-                  "name": "Dev Server",
-                  "type": "shell",
-                  "command": "pnpm dev",
-                  "cwd": ".",
-                  "env": { "PORT": "5173" }
-                }
-              ]
-            }"#,
-        )
-        .unwrap();
-
-        let document = read_run_configs_from_root(&root).unwrap();
-
-        assert_eq!(document.configs.len(), 1);
-        match &document.configs[0] {
-            RunConfig::Shell { id, env, .. } => {
-                assert_eq!(id, "dev");
-                assert_eq!(env.get("PORT").map(String::as_str), Some("5173"));
-            }
-            RunConfig::Debug { .. } => panic!("expected shell run config"),
-        }
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn reads_debug_run_config_from_aeroric_directory() {
-        let root = unique_test_dir("read-debug");
-        fs::create_dir_all(root.join(".aeroric")).unwrap();
-        fs::write(
-            root.join(".aeroric").join("run-configs.json"),
-            r#"{
-              "version": 1,
-              "configs": [
-                {
-                  "id": "debug-app",
-                  "name": "Debug App",
-                  "type": "debug",
-                  "debugType": "node",
-                  "program": "src/index.js",
-                  "cwd": ".",
-                  "args": ["--flag"],
-                  "env": { "NODE_ENV": "test" },
-                  "breakpoints": [
-                    { "file": "src/index.js", "line": 12, "column": 1 }
-                  ]
-                }
-              ]
-            }"#,
-        )
-        .unwrap();
-
-        let document = read_run_configs_from_root(&root).unwrap();
-
-        assert_eq!(document.configs.len(), 1);
-        match &document.configs[0] {
-            RunConfig::Debug {
-                id,
-                debug_type,
-                program,
-                args,
-                breakpoints,
-                ..
-            } => {
-                assert_eq!(id, "debug-app");
-                assert_eq!(*debug_type, RunDebugConfigType::Node);
-                assert_eq!(program, "src/index.js");
-                assert_eq!(args, &vec!["--flag".to_string()]);
-                assert_eq!(breakpoints[0].line, 12);
-            }
-            RunConfig::Shell { .. } => panic!("expected debug run config"),
-        }
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn reads_python_debug_run_config_from_aeroric_directory() {
-        let root = unique_test_dir("read-python-debug");
-        fs::create_dir_all(root.join(".aeroric")).unwrap();
-        fs::write(
-            root.join(".aeroric").join("run-configs.json"),
-            r#"{
-              "version": 1,
-              "configs": [
-                {
-                  "id": "debug-python",
-                  "name": "Debug Python",
-                  "type": "debug",
-                  "debugType": "python",
-                  "program": "app/main.py",
-                  "cwd": "."
-                }
-              ]
-            }"#,
-        )
-        .unwrap();
-
-        let document = read_run_configs_from_root(&root).unwrap();
-
-        match &document.configs[0] {
-            RunConfig::Debug {
-                debug_type,
-                program,
-                ..
-            } => {
-                assert_eq!(*debug_type, RunDebugConfigType::Python);
-                assert_eq!(program, "app/main.py");
-            }
-            RunConfig::Shell { .. } => panic!("expected python debug run config"),
-        }
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
     #[test]
     fn rejects_config_cwd_outside_project_root() {
         let root = Path::new("/repo");
@@ -972,7 +489,8 @@ mod tests {
             env: Default::default(),
         };
 
-        let error = validate_run_config(root, &config).unwrap_err();
+        let error =
+            aeroric_core::ide::run_config::validate_legacy_run_config(root, &config).unwrap_err();
 
         assert!(error.contains("outside project root"));
     }
@@ -991,7 +509,8 @@ mod tests {
             breakpoints: Vec::new(),
         };
 
-        let error = validate_run_config(root, &config).unwrap_err();
+        let error =
+            aeroric_core::ide::run_config::validate_legacy_run_config(root, &config).unwrap_err();
 
         assert!(error.contains("outside project root"));
     }
@@ -1014,7 +533,8 @@ mod tests {
             }],
         };
 
-        let error = validate_run_config(root, &config).unwrap_err();
+        let error =
+            aeroric_core::ide::run_config::validate_legacy_run_config(root, &config).unwrap_err();
 
         assert!(error.contains("outside project root"));
     }
@@ -1024,7 +544,7 @@ mod tests {
         let root = unique_test_dir("cwd");
         fs::create_dir_all(root.join("app")).unwrap();
 
-        let cwd = resolve_run_cwd(&root, "app").unwrap();
+        let cwd = aeroric_core::ide::run_face::resolve_run_cwd(&root, "app").unwrap();
 
         assert_eq!(cwd, root.join("app").canonicalize().unwrap());
 

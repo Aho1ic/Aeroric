@@ -349,7 +349,10 @@ impl CliPtyExecutor {
             let service = ctx.service.lock().expect("lock").upgrade();
             match service {
                 Some(service) => {
-                    let _ = service.observe(
+                    // 切片一百零五：公告与决策同源（ADR-035——admitted 即公告）。
+                    // 载荷经 core 共享构造，与 Embedded 窗口逐字节同形；桌面泵
+                    // （切片一百零四）原样透传给前端。
+                    match service.observe(
                         &project_id,
                         TaskEvent::Status {
                             task_id: task_id.clone(),
@@ -359,9 +362,22 @@ impl CliPtyExecutor {
                             failure_reason,
                             origin: aeroric_core::tasks::executor::ObservationOrigin::Runtime,
                         },
-                    );
+                    ) {
+                        Ok((outcome, _)) => {
+                            if let Some(notification) = outcome.notification_for(&task_id) {
+                                ctx.log.append("task-status", notification.window_payload());
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[aeroric-host] core observer refused an event for {task_id}: {error}"
+                            );
+                        }
+                    }
                 }
                 None => {
+                    // 诊断事件（服务未装配）：camelCase 形状不进前端契约，
+                    // 桌面泵透传后前端按 task_id 解析不到即忽略。
                     ctx.log.append(
                         "task-status",
                         json!({

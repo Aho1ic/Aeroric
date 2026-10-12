@@ -741,6 +741,28 @@ pub(crate) struct TauriEventSink<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
 }
 
+/// 切片一百零四：事件泵的窗口出口。泵已经把 v1 topic 翻译成 legacy 通道名
+/// （点号是非法 Tauri 窗口事件名），这里只做一次 `emit`——发不出去也不能让
+/// 泵停下（消费者可能不在线，事件已由宿主 EventLog 留底）。
+struct WindowEventSink<R: tauri::Runtime> {
+    app: tauri::AppHandle<R>,
+}
+
+impl<R: tauri::Runtime> crate::host_event_pump::EventSink for WindowEventSink<R> {
+    fn emit(&self, channel: &str, payload: &serde_json::Value) {
+        use tauri::Emitter;
+        let _ = self.app.emit(channel, payload);
+    }
+
+    fn skipped(&self, event: &str) {
+        startup_diagnostics::record(
+            "event-pump",
+            format!("事件泵丢弃无法投递的事件：{event}"),
+            String::new(),
+        );
+    }
+}
+
 impl<R: tauri::Runtime> TauriEventSink<R> {
     pub(crate) fn new(app: tauri::AppHandle<R>) -> Self {
         Self { app }
@@ -750,19 +772,13 @@ impl<R: tauri::Runtime> TauriEventSink<R> {
 impl<R: tauri::Runtime> TaskEventSink for TauriEventSink<R> {
     fn notify(&self, notification: TaskNotification) {
         use tauri::Emitter;
+        // 切片一百零五：载荷构造上收 core（宿主 EventLog 与本窗口共用一份）。
         match &notification {
-            TaskNotification::Status {
-                task_id,
-                status,
-                failure_reason,
-            } => {
-                let _ = self.app.emit(
-                    "task-status",
-                    task_status_payload(task_id, *status, failure_reason.as_deref()),
-                );
+            TaskNotification::Status { .. } => {
+                let _ = self.app.emit("task-status", notification.window_payload());
             }
-            TaskNotification::Session(facts) => {
-                let _ = self.app.emit("task-session", task_session_payload(facts));
+            TaskNotification::Session(_) => {
+                let _ = self.app.emit("task-session", notification.window_payload());
             }
         }
     }
@@ -1012,6 +1028,30 @@ pub(crate) fn install_core_services<R: tauri::Runtime>(
     let context = gateway.context().clone();
     let mode = gateway.mode();
     let owns_business_plane = gateway.owns_business_plane();
+    // 切片一百零四：External 模式拉起事件泵（自有第二条连接，不占转发锁）。
+    // Embedded 的窗口事件由本进程各发射点直接发，不需要泵。
+    if gateway.placement() == CorePlacement::External {
+        let data_dir = gateway.data_dir().to_path_buf();
+        let sink: std::sync::Arc<dyn crate::host_event_pump::EventSink> =
+            std::sync::Arc::new(WindowEventSink { app: app.clone() });
+        tauri::async_runtime::spawn(async move {
+            match crate::host_client::HostClient::connect(&data_dir, "event-pump").await {
+                Ok(client) => {
+                    let source =
+                        crate::host_event_pump::HostPumpSource::connected(client, &data_dir);
+                    crate::host_event_pump::run(source, sink).await
+                }
+                Err(error) => {
+                    // 泵连不上不阻塞启动：宿主可能还没起，窗口事件断路如实记录。
+                    startup_diagnostics::record(
+                        "event-pump",
+                        format!("事件泵未能连接宿主：{error}"),
+                        data_dir.display().to_string(),
+                    );
+                }
+            }
+        });
+    }
     app.manage(gateway);
 
     let mailbox = Arc::new(crate::legacy_task_executor::OutputSinkMailbox::new());
@@ -1098,161 +1138,22 @@ const fn family_word(family: aeroric_core::tasks::ProtocolFamily) -> &'static st
     dead_code,
     reason = "随 TauriEventSink 接线；键集与拼写由 core_adapter_tests 与 src/test/native-core-adapter.test.ts 双侧钉住"
 )]
-pub(crate) fn task_status_payload(
-    task_id: &str,
-    status: aeroric_core::tasks::TaskStatus,
-    failure_reason: Option<&str>,
-) -> serde_json::Value {
-    let mut payload = serde_json::json!({
-        "task_id": task_id,
-        "status": status_word(status),
-    });
-    if let Some(reason) = failure_reason {
-        payload["failure_reason"] = serde_json::json!(reason);
-    }
-    payload
-}
-
-/// Builds a `task-session` payload, adding the per-family extras only where the shipping
-/// events add them. Emitting `"family": null` for a claude transcript would be a new key on
-/// a wire the frontend already parses, which is the opposite of what ADR-023 permits.
-#[allow(dead_code, reason = "同上")]
-pub(crate) fn task_session_payload(facts: &TaskSessionFacts) -> serde_json::Value {
-    let mut payload = serde_json::json!({
-        "task_id": facts.task_id,
-        "session_id": facts.session_id,
-        "session_path": facts.session_path,
-        "codex_like": facts.codex_like,
-    });
-    if let Some(family) = facts.family {
-        payload["family"] = serde_json::json!(family_word(family));
-    }
-    if let Some(preset) = &facts.agent_preset {
-        payload["agent_preset"] = serde_json::json!(preset);
-    }
-    payload
-}
-
 #[cfg(test)]
 mod sink_tests {
-    use super::{family_word, status_word, task_session_payload, task_status_payload};
-    use aeroric_core::tasks::{ProtocolFamily, TaskSessionFacts, TaskStatus};
+    // 切片一百零五：载荷构造与字词 pin 随实现上收 core `tasks::events`
+    // （payload_tests）；这里只保留 wire 形状对账——Tauri 发射面发出的
+    // JSON 与 core 构造逐字节同形，防两侧漂移。
 
     #[test]
-    fn the_event_words_match_their_serialized_forms() {
-        // `status_word`/`family_word` are hand-written totals, so this is the guard that they
-        // stay the words the contract publishes. Without it a tenth status could be added on
-        // one side only and every task event would carry a stale spelling.
-        for status in TaskStatus::ALL {
-            let serialized = serde_json::to_value(status).expect("a status is a string");
-            assert_eq!(
-                serialized.as_str(),
-                Some(status_word(*status)),
-                "{status:?}"
-            );
-        }
-        for family in ProtocolFamily::ALL {
-            let serialized = serde_json::to_value(family).expect("a family is a string");
-            assert_eq!(
-                serialized.as_str(),
-                Some(family_word(*family)),
-                "{family:?}"
-            );
-        }
-    }
-    use serde_json::json;
-
-    #[test]
-    fn the_status_payload_is_the_shape_the_frontend_already_reads() {
+    fn the_tauri_sink_shape_is_the_core_shape() {
+        use aeroric_core::tasks::{TaskNotification, TaskStatus};
         assert_eq!(
-            task_status_payload("t1", TaskStatus::InputRequired, None),
-            json!({ "task_id": "t1", "status": "input_required" }),
-            "snake_case, two keys, no extras"
+            TaskNotification::status("t1", TaskStatus::InputRequired).window_payload(),
+            serde_json::json!({"task_id": "t1", "status": "input_required"})
         );
         assert_eq!(
-            task_status_payload("t1", TaskStatus::Running, None),
-            json!({ "task_id": "t1", "status": "running" })
-        );
-    }
-
-    /// The reason is the third key the frontend destructures, and only the failed path has it.
-    /// Both halves matter: without the `Some` arm the UI loses its failure text, and without the
-    /// `None` arm every event grows a key the shipping client never sees today.
-    #[test]
-    fn a_failure_carries_its_reason_and_a_non_failure_does_not() {
-        assert_eq!(
-            task_status_payload(
-                "t1",
-                TaskStatus::Failed,
-                Some("Remote process exited with code 1"),
-            ),
-            json!({
-                "task_id": "t1",
-                "status": "failed",
-                "failure_reason": "Remote process exited with code 1",
-            })
-        );
-        assert_eq!(
-            task_status_payload("t1", TaskStatus::Failed, None),
-            json!({ "task_id": "t1", "status": "failed" }),
-            "a failure core has no text for sends no key, not an empty one"
-        );
-        assert!(
-            !task_status_payload("t1", TaskStatus::Done, None)
-                .as_object()
-                .expect("an object")
-                .contains_key("failure_reason"),
-            "the key must be absent rather than null"
-        );
-    }
-
-    #[test]
-    fn claude_and_codex_payloads_carry_exactly_four_keys() {
-        let facts = TaskSessionFacts {
-            task_id: "t1".into(),
-            session_id: "s1".into(),
-            session_path: "/p.jsonl".into(),
-            codex_like: true,
-            family: None,
-            agent_preset: None,
-        };
-        assert_eq!(
-            task_session_payload(&facts),
-            json!({
-                "task_id": "t1", "session_id": "s1", "session_path": "/p.jsonl", "codex_like": true
-            }),
-            "adding a null `family` here would be a wire change, not a refactor"
-        );
-    }
-
-    #[test]
-    fn omp_adds_only_the_family_and_dsh_adds_the_preset_too() {
-        let base = TaskSessionFacts {
-            task_id: "t2".into(),
-            session_id: "s2".into(),
-            session_path: "/o.jsonl".into(),
-            codex_like: false,
-            family: Some(ProtocolFamily::Omp),
-            agent_preset: None,
-        };
-        assert_eq!(
-            task_session_payload(&base),
-            json!({
-                "task_id": "t2", "session_id": "s2", "session_path": "/o.jsonl",
-                "codex_like": false, "family": "omp"
-            })
-        );
-        let dsh = TaskSessionFacts {
-            family: Some(ProtocolFamily::Dsh),
-            agent_preset: Some("standard".into()),
-            ..base
-        };
-        assert_eq!(
-            task_session_payload(&dsh),
-            json!({
-                "task_id": "t2", "session_id": "s2", "session_path": "/o.jsonl",
-                "codex_like": false, "family": "dsh", "agent_preset": "standard"
-            })
+            TaskNotification::status("t1", TaskStatus::Running).window_payload(),
+            serde_json::json!({"task_id": "t1", "status": "running"})
         );
     }
 }

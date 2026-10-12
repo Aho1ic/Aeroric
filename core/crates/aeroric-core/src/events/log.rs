@@ -1,9 +1,11 @@
 //! 环形事件日志：seq 分配与入环同一临界区（补记二百七十五，P3-06 第一片）。
 //!
-//! 语义面逐字对齐行为参考 `remote/event_log.rs`：seq 从 1 起、0 是「无
-//! watermark」哨兵、环上限 512、`since` 的三分支（首连不补/已最新空/窗口
-//! 被挤穿 reset）。差别只有一处、也是本模块存在的理由：**分配与发布不再
-//! 跨锁域**（模块头有完整论证）。
+//! 语义面逐字对齐行为参考 `remote/event_log.rs`:seq 从 1 起、0 是「无
+//! watermark」哨兵、环上限 512、`since` 的三分支(自举补全/已最新空/窗口
+//! 被挤穿 reset)。**两处刻意偏差**:1 分配与发布不再跨锁域(本模块存在的
+//! 理由,见下方完整论证);2 `after == 0` 由参考实现的「首连不补发」改成
+//! 「环内全部」——切片一百零四为轮询型消费者(桌面事件泵)修正,详见
+//! [`EventLog::since`] 的文档。
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -66,16 +68,21 @@ impl EventLog {
     }
 
     /// `after` 之后的全部事件。
-    /// - `after == 0`：客户端没有 watermark（首连），不补发；
     /// - `after >= latest`：已是最新，空；
     /// - `after + 1` 落在曾被挤出的区间：`reset = true`，客户端应全量刷新。
+    /// - `after == 0`：环内全部事件（切片一百零四语义修正）。原语义是「首连
+    ///   不补发」，为**推送型**消费者设计——快照之后有直播帧兜底。轮询型
+    ///   消费者（桌面事件泵）没有直播帧：若 0 只给游标不给事件，落在空日志
+    ///   自举窗口里的事件对这条连接**永久不可达**（poll since(0)→latest=N 的
+    ///   那一刻批次为空，游标跳到 N，1..N 再也取不到）。推送方的取数路径
+    ///   不受影响（apply_backfill 本就处理补发/重置）。
     ///
     /// 三个判据在同一临界区里读（`evicted`/环/`latest` 快照一致），
     /// 这是「snapshot 与 seq 顺序一致」的机器形状。
     pub fn since(&self, after: u64) -> (Vec<LoggedEvent>, u64, bool) {
         let inner = self.inner.lock();
         let latest = inner.next_seq;
-        if after == 0 || after >= latest {
+        if after >= latest {
             return (Vec::new(), latest, false);
         }
         // 窗口起点：曾被挤出的最高 seq + 1。判据逐字回参考（`after + 1 < oldest`
@@ -121,9 +128,15 @@ mod tests {
         let (missed, _, reset) = log.since(2);
         assert!(missed.is_empty() && !reset);
 
+        // 切片一百零四语义修正：after==0 是「环内全部」——轮询型消费者（桌面
+        // 事件泵）靠它自举空日志，推送型消费者的直播帧兜底不受影响。
         let (missed, latest, reset) = log.since(0);
-        assert!(missed.is_empty() && !reset);
+        assert!(!reset);
         assert_eq!(latest, 2);
+        assert_eq!(
+            missed.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
     }
 
     #[test]
@@ -178,7 +191,8 @@ mod tests {
         let (missed, latest, reset) = log.since(0);
         assert_eq!(latest, 104);
         assert!(!reset);
-        assert!(missed.is_empty(), "首连不补发");
+        // 切片一百零四起 after==0 补发环内全部（轮询型消费者的自举语义）。
+        assert_eq!(missed.len(), 104, "after==0 replays the whole ring");
         // 发布序：`since(1)` 的补发列表必须严格递增且恰为 2..=104——
         // 分配与发布跨锁域的实现（参考形状）在这里会以概率性乱序红掉。
         let (tail, latest, reset) = log.since(1);

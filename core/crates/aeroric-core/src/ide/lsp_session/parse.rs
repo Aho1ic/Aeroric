@@ -5,12 +5,22 @@
 //!
 //! 每个函数都在**解析别的进程(语言服务器)吐出来的东西**,形状不受我们控制 ——
 //! 所以一律走 `?` 短路 + 逐字段 `get()`,少一个字段就整条跳过,不 panic 也不报错。
-//! `lsp/protocol.rs` 里那批(`parse_position` / `parse_range` / `parse_hover` 等)
-//! 是同一层的更基础件,这里直接靠 `use super::*;` 拿到。
+//! `protocol.rs` 里那批(`file_uri` / `path_from_file_uri` / 基础位置解析)是同一层的
+//! 更基础件,本模块直接复用它。
 
-use super::*;
+use std::collections::BTreeMap;
 
-pub(super) fn parse_signature_help(value: Option<&Value>) -> Option<LspSignatureHelp> {
+use serde_json::Value;
+
+use crate::ide::lsp_session::protocol::{
+    markdown_text, parse_position, parse_range, path_from_file_uri,
+};
+use crate::ide::lsp_session::{
+    LspCodeAction, LspCommand, LspFileEdit, LspInlayHint, LspParameterInformation,
+    LspSignatureHelp, LspSignatureInformation, LspSymbol, LspTextEdit, LspWorkspaceEdit,
+};
+
+pub fn parse_signature_help(value: Option<&Value>) -> Option<LspSignatureHelp> {
     let value = value?;
     if value.is_null() {
         return None;
@@ -37,7 +47,7 @@ pub(super) fn parse_signature_help(value: Option<&Value>) -> Option<LspSignature
     })
 }
 
-pub(super) fn parse_signature_information(value: &Value) -> Option<LspSignatureInformation> {
+pub fn parse_signature_information(value: &Value) -> Option<LspSignatureInformation> {
     let label = value.get("label")?.as_str()?.to_string();
     let parameters = value
         .get("parameters")
@@ -56,7 +66,7 @@ pub(super) fn parse_signature_information(value: &Value) -> Option<LspSignatureI
     })
 }
 
-pub(super) fn parse_parameter_information(
+pub fn parse_parameter_information(
     value: &Value,
     signature_label: &str,
 ) -> Option<LspParameterInformation> {
@@ -75,7 +85,7 @@ pub(super) fn parse_parameter_information(
     })
 }
 
-pub(super) fn parse_code_actions(value: Option<&Value>) -> Vec<LspCodeAction> {
+pub fn parse_code_actions(value: Option<&Value>) -> Vec<LspCodeAction> {
     let Some(Value::Array(items)) = value else {
         return Vec::new();
     };
@@ -93,7 +103,7 @@ pub(super) fn parse_code_actions(value: Option<&Value>) -> Vec<LspCodeAction> {
         .collect()
 }
 
-pub(super) fn parse_lsp_command(value: Option<&Value>) -> Option<LspCommand> {
+pub fn parse_lsp_command(value: Option<&Value>) -> Option<LspCommand> {
     let value = value?;
     let command = value.get("command")?.as_str()?.to_string();
     Some(LspCommand {
@@ -110,7 +120,7 @@ pub(super) fn parse_lsp_command(value: Option<&Value>) -> Option<LspCommand> {
     })
 }
 
-pub(super) fn parse_inlay_hints(value: Option<&Value>) -> Vec<LspInlayHint> {
+pub fn parse_inlay_hints(value: Option<&Value>) -> Vec<LspInlayHint> {
     let Some(Value::Array(items)) = value else {
         return Vec::new();
     };
@@ -142,7 +152,7 @@ pub(super) fn parse_inlay_hints(value: Option<&Value>) -> Vec<LspInlayHint> {
         .collect()
 }
 
-pub(super) fn inlay_hint_label(value: &Value) -> Option<String> {
+pub fn inlay_hint_label(value: &Value) -> Option<String> {
     match value {
         Value::String(label) => Some(label.clone()),
         Value::Array(parts) => {
@@ -156,7 +166,7 @@ pub(super) fn inlay_hint_label(value: &Value) -> Option<String> {
     }
 }
 
-pub(super) fn parse_document_symbols(value: Option<&Value>, document_uri: &str) -> Vec<LspSymbol> {
+pub fn parse_document_symbols(value: Option<&Value>, document_uri: &str) -> Vec<LspSymbol> {
     let Some(Value::Array(items)) = value else {
         return Vec::new();
     };
@@ -167,7 +177,7 @@ pub(super) fn parse_document_symbols(value: Option<&Value>, document_uri: &str) 
     symbols
 }
 
-pub(super) fn collect_document_symbol(
+pub fn collect_document_symbol(
     value: &Value,
     document_uri: &str,
     container_name: Option<&str>,
@@ -186,7 +196,7 @@ pub(super) fn collect_document_symbol(
     }
 }
 
-pub(super) fn parse_document_symbol(
+pub fn parse_document_symbol(
     value: &Value,
     document_uri: &str,
     container_name: Option<&str>,
@@ -210,14 +220,14 @@ pub(super) fn parse_document_symbol(
     })
 }
 
-pub(super) fn parse_workspace_symbols(value: Option<&Value>) -> Vec<LspSymbol> {
+pub fn parse_workspace_symbols(value: Option<&Value>) -> Vec<LspSymbol> {
     let Some(Value::Array(items)) = value else {
         return Vec::new();
     };
     items.iter().filter_map(parse_symbol_information).collect()
 }
 
-pub(super) fn parse_symbol_information(value: &Value) -> Option<LspSymbol> {
+pub fn parse_symbol_information(value: &Value) -> Option<LspSymbol> {
     let name = value.get("name")?.as_str()?.to_string();
     let location = value.get("location")?;
     let uri = location.get("uri")?.as_str()?.to_string();
@@ -240,7 +250,7 @@ pub(super) fn parse_symbol_information(value: &Value) -> Option<LspSymbol> {
     })
 }
 
-pub(super) fn parse_workspace_edit(value: Option<&Value>) -> Option<LspWorkspaceEdit> {
+pub fn parse_workspace_edit(value: Option<&Value>) -> Option<LspWorkspaceEdit> {
     let value = value?;
     if value.is_null() {
         return None;
@@ -297,7 +307,7 @@ pub(super) fn parse_workspace_edit(value: Option<&Value>) -> Option<LspWorkspace
     (!files.is_empty()).then_some(LspWorkspaceEdit { files })
 }
 
-pub(super) fn parse_text_edits(value: &Value) -> Option<Vec<LspTextEdit>> {
+pub fn parse_text_edits(value: &Value) -> Option<Vec<LspTextEdit>> {
     let edits = value.as_array()?;
     let parsed: Vec<_> = edits
         .iter()
@@ -314,6 +324,8 @@ pub(super) fn parse_text_edits(value: &Value) -> Option<Vec<LspTextEdit>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ide::lsp_session::*;
+    use serde_json::json;
     #[test]
     fn parses_signature_help_with_parameter_ranges() {
         let help = parse_signature_help(Some(&json!({

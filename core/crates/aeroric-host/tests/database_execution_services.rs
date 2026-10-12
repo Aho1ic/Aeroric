@@ -304,11 +304,9 @@ async fn unregistered_database_methods_stay_unsupported() {
     let host = Harness::start("execution-boundary").await;
     let (mut reader, mut writer) = authenticated(&host).await;
 
-    // 切片九十八上收了 schema／驱动面 7 条；仍未上收的驱动专属面必须保持
-    // 不可达：宿主不虚报能力。
-    for method in [
-        "database.dbx_start_transfer",
-    ] {
+    // 切片一百零三上收了 transfer／生命周期面——database 族缺口清零；此后
+    // 这条控制组守的是「未知方法名必须保持不可达」：宿主不虚报能力。
+    for method in ["database.dbx_not_a_registered_method"] {
         let reply = call(&mut reader, &mut writer, method, json!({})).await;
         assert_eq!(
             failure(reply, ErrorCode::UnsupportedCapability),

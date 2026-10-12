@@ -159,6 +159,10 @@ pub struct HostWiring {
     /// None uses the context home. Managed roots always remain context-owned;
     /// this must not rebind unrelated metrics/session discovery roots.
     pub agent_config_external_home: Option<std::path::PathBuf>,
+    /// P8-05 切片一百一十:LSP 语言服务器的启动方式与 login env。给了 `program`
+    /// 才注册会话面(没有 server 就没有 `ide.lsp_hover` 这类能力,而不是一个
+    /// 起不来进程的空壳);测试用 `program` 指向 fake server 脚本。
+    pub lsp_server: Option<crate::lsp_services::LspServerInjection>,
 }
 
 pub struct HostServices {
@@ -299,6 +303,12 @@ impl HostServices {
             wiring.agent_config_external_home.take(),
         );
         crate::ide_services::register_ide_services(&mut set, Arc::clone(&context));
+        crate::lsp_services::register_lsp_services(
+            &mut set,
+            Arc::clone(&context),
+            Arc::clone(&log),
+            wiring.lsp_server.take(),
+        );
         // P8-05 切片九十四（database 刀零）：legacy SQLite 文件命令的宿主服务面。
         crate::database_services::register_database_services(
             &mut set,

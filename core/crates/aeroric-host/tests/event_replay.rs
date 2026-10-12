@@ -108,14 +108,29 @@ async fn reconnect_backfill_then_live_frames_never_double_apply() {
     };
     assert_eq!(
         success.result["events"].as_array().expect("array").len(),
-        0,
-        "首连不补发"
+        2,
+        "切片一百零四语义:after=0 自举补发环内全部(推送型消费者靠 apply_backfill 兜底)"
     );
-    // 模拟「首连后收到 live 1、2，再重连补发」：watermark=2 时 since(2) 空，
-    // 直播里 seq<=2 的重复帧被 SnapshotDecision 丢弃。
-    let mut decision = aeroric_core::events::snapshot::SnapshotDecision::at(0);
-    assert!(decision.apply_live(1));
-    assert!(decision.apply_live(2));
+    assert_eq!(success.result["reset"], false);
+    // 切片一百零四语义:after=0 自举补发环内全部——推送型消费者把这一批
+    // 经 apply_backfill 应用后,watermark 抬到 latest;随后重连窗口里的
+    // 重复直播帧(seq<=watermark)必须被 SnapshotDecision 丢弃。
+    let batch: Vec<aeroric_core::events::log::LoggedEvent> = success.result["events"]
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|event| aeroric_core::events::log::LoggedEvent {
+            seq: event["seq"].as_u64().expect("seq"),
+            event: event["event"].as_str().expect("event").to_string(),
+            data: event["data"].clone(),
+        })
+        .collect();
+    let latest = success.result["latestSeq"].as_u64().expect("latest");
+    let mut decision = aeroric_core::events::snapshot::SnapshotDecision::at(0)
+        .apply_backfill(&batch, latest, false);
+    assert_eq!(decision.watermark, 2, "自举把 watermark 抬到 latest");
+    assert!(!decision.apply_live(1), "自举已含的重复帧必须丢");
+    assert!(!decision.apply_live(2), "自举已含的重复帧必须丢");
     let frame = Harness::call(
         &mut reader,
         &mut writer,

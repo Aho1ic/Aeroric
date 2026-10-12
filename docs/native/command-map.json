@@ -903,7 +903,7 @@
       "rust_path": "hide_main_window",
       "registered_at": "src-tauri/src/lib.rs:480",
       "definition_candidates": [
-        "src-tauri/src/lib.rs:305"
+        "src-tauri/src/lib.rs:306"
       ],
       "definition_unique": true,
       "category": "host_local_os_ui",
@@ -915,7 +915,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:305",
+      "definition_resolved": "src-tauri/src/lib.rs:306",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -936,7 +936,7 @@
       "rust_path": "exit_app_after_task_flush",
       "registered_at": "src-tauri/src/lib.rs:481",
       "definition_candidates": [
-        "src-tauri/src/lib.rs:313"
+        "src-tauri/src/lib.rs:314"
       ],
       "definition_unique": true,
       "category": "host_local_os_ui",
@@ -948,7 +948,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:313",
+      "definition_resolved": "src-tauri/src/lib.rs:314",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -969,7 +969,7 @@
       "rust_path": "restart_app_after_task_flush",
       "registered_at": "src-tauri/src/lib.rs:482",
       "definition_candidates": [
-        "src-tauri/src/lib.rs:319"
+        "src-tauri/src/lib.rs:320"
       ],
       "definition_unique": true,
       "category": "host_local_os_ui",
@@ -981,7 +981,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:319",
+      "definition_resolved": "src-tauri/src/lib.rs:320",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1002,7 +1002,7 @@
       "rust_path": "app_exit_listener_ready",
       "registered_at": "src-tauri/src/lib.rs:483",
       "definition_candidates": [
-        "src-tauri/src/lib.rs:325"
+        "src-tauri/src/lib.rs:326"
       ],
       "definition_unique": true,
       "category": "host_local_os_ui",
@@ -1014,7 +1014,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:325",
+      "definition_resolved": "src-tauri/src/lib.rs:326",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -2826,7 +2826,7 @@
       "rust_path": "lsp::lsp_server_status",
       "registered_at": "src-tauri/src/lib.rs:534",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:796"
+        "src-tauri/src/lsp.rs:548"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -2838,12 +2838,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:796",
+      "definition_resolved": "src-tauri/src/lsp.rs:548",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -2851,6 +2851,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "project_path: String",
         "file_path: String"
       ]
@@ -2860,7 +2861,7 @@
       "rust_path": "lsp::remote_lsp_server_status",
       "registered_at": "src-tauri/src/lib.rs:535",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:896"
+        "src-tauri/src/lsp.rs:681"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -2872,7 +2873,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:896",
+      "definition_resolved": "src-tauri/src/lsp.rs:681",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -2895,7 +2896,7 @@
       "rust_path": "lsp::lsp_open_document",
       "registered_at": "src-tauri/src/lib.rs:536",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:822"
+        "src-tauri/src/lsp.rs:571"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -2907,12 +2908,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:822",
+      "definition_resolved": "src-tauri/src/lsp.rs:571",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 6,
+        "rust_internal_refs": 8,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -2920,6 +2921,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "project_path: String",
         "file_path: String",
         "content: String",
@@ -2931,7 +2933,7 @@
       "rust_path": "lsp::remote_lsp_open_document",
       "registered_at": "src-tauri/src/lib.rs:537",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:940"
+        "src-tauri/src/lsp.rs:725"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -2943,7 +2945,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:940",
+      "definition_resolved": "src-tauri/src/lsp.rs:725",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -2968,7 +2970,7 @@
       "rust_path": "lsp::lsp_change_document",
       "registered_at": "src-tauri/src/lib.rs:538",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:841"
+        "src-tauri/src/lsp.rs:597"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -2980,12 +2982,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:841",
+      "definition_resolved": "src-tauri/src/lsp.rs:597",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 1,
+        "rust_internal_refs": 3,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -2993,6 +2995,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "project_path: String",
         "file_path: String",
         "content: String",
@@ -3004,7 +3007,7 @@
       "rust_path": "lsp::remote_lsp_change_document",
       "registered_at": "src-tauri/src/lib.rs:539",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:960"
+        "src-tauri/src/lsp.rs:745"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3016,7 +3019,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:960",
+      "definition_resolved": "src-tauri/src/lsp.rs:745",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -3041,7 +3044,7 @@
       "rust_path": "lsp::lsp_close_document",
       "registered_at": "src-tauri/src/lib.rs:540",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:860"
+        "src-tauri/src/lsp.rs:623"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3053,12 +3056,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:860",
+      "definition_resolved": "src-tauri/src/lsp.rs:623",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 1,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3066,6 +3069,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "project_path: String",
         "file_path: String"
       ]
@@ -3075,7 +3079,7 @@
       "rust_path": "lsp::remote_lsp_close_document",
       "registered_at": "src-tauri/src/lib.rs:541",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:980"
+        "src-tauri/src/lsp.rs:765"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3087,7 +3091,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:980",
+      "definition_resolved": "src-tauri/src/lsp.rs:765",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -3110,7 +3114,7 @@
       "rust_path": "lsp::lsp_shutdown_project",
       "registered_at": "src-tauri/src/lib.rs:542",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:882"
+        "src-tauri/src/lsp.rs:656"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3122,12 +3126,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:882",
+      "definition_resolved": "src-tauri/src/lsp.rs:656",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
         "other_package_literal": false,
-        "rust_internal_refs": 2,
+        "rust_internal_refs": 4,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3135,6 +3139,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "project_path: String"
       ]
     },
@@ -3143,7 +3148,7 @@
       "rust_path": "lsp::remote_lsp_shutdown_project",
       "registered_at": "src-tauri/src/lib.rs:543",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1003"
+        "src-tauri/src/lsp.rs:788"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3155,7 +3160,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1003",
+      "definition_resolved": "src-tauri/src/lsp.rs:788",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3177,7 +3182,7 @@
       "rust_path": "lsp::lsp_hover",
       "registered_at": "src-tauri/src/lib.rs:544",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1017"
+        "src-tauri/src/lsp.rs:802"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3189,12 +3194,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1017",
+      "definition_resolved": "src-tauri/src/lsp.rs:802",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3211,7 +3216,7 @@
       "rust_path": "lsp::remote_lsp_hover",
       "registered_at": "src-tauri/src/lib.rs:545",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1026"
+        "src-tauri/src/lsp.rs:826"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3223,7 +3228,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1026",
+      "definition_resolved": "src-tauri/src/lsp.rs:826",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3247,7 +3252,7 @@
       "rust_path": "lsp::lsp_definition",
       "registered_at": "src-tauri/src/lib.rs:546",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1044"
+        "src-tauri/src/lsp.rs:844"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3259,12 +3264,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1044",
+      "definition_resolved": "src-tauri/src/lsp.rs:844",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3281,7 +3286,7 @@
       "rust_path": "lsp::remote_lsp_definition",
       "registered_at": "src-tauri/src/lib.rs:547",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1053"
+        "src-tauri/src/lsp.rs:868"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3293,7 +3298,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1053",
+      "definition_resolved": "src-tauri/src/lsp.rs:868",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3317,7 +3322,7 @@
       "rust_path": "lsp::lsp_references",
       "registered_at": "src-tauri/src/lib.rs:548",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1071"
+        "src-tauri/src/lsp.rs:886"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3329,12 +3334,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1071",
+      "definition_resolved": "src-tauri/src/lsp.rs:886",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3351,7 +3356,7 @@
       "rust_path": "lsp::remote_lsp_references",
       "registered_at": "src-tauri/src/lib.rs:549",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1080"
+        "src-tauri/src/lsp.rs:910"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3363,7 +3368,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1080",
+      "definition_resolved": "src-tauri/src/lsp.rs:910",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3387,7 +3392,7 @@
       "rust_path": "lsp::lsp_rename",
       "registered_at": "src-tauri/src/lib.rs:550",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1098"
+        "src-tauri/src/lsp.rs:928"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3399,12 +3404,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1098",
+      "definition_resolved": "src-tauri/src/lsp.rs:928",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3422,7 +3427,7 @@
       "rust_path": "lsp::remote_lsp_rename",
       "registered_at": "src-tauri/src/lib.rs:551",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1114"
+        "src-tauri/src/lsp.rs:962"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3434,7 +3439,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1114",
+      "definition_resolved": "src-tauri/src/lsp.rs:962",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3459,7 +3464,7 @@
       "rust_path": "lsp::lsp_apply_workspace_edit",
       "registered_at": "src-tauri/src/lib.rs:552",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1134"
+        "src-tauri/src/lsp.rs:982"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3471,12 +3476,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1134",
+      "definition_resolved": "src-tauri/src/lsp.rs:982",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3484,6 +3489,7 @@
       },
       "reachable": true,
       "params": [
+        "app: AppHandle!",
         "project_path: String",
         "edit: LspWorkspaceEdit"
       ]
@@ -3493,7 +3499,7 @@
       "rust_path": "lsp::remote_lsp_apply_workspace_edit",
       "registered_at": "src-tauri/src/lib.rs:553",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1146"
+        "src-tauri/src/lsp.rs:1005"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3505,7 +3511,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1146",
+      "definition_resolved": "src-tauri/src/lsp.rs:1005",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3528,7 +3534,7 @@
       "rust_path": "lsp::lsp_completion",
       "registered_at": "src-tauri/src/lib.rs:554",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1159"
+        "src-tauri/src/lsp.rs:1045"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3540,12 +3546,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1159",
+      "definition_resolved": "src-tauri/src/lsp.rs:1045",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3562,7 +3568,7 @@
       "rust_path": "lsp::remote_lsp_completion",
       "registered_at": "src-tauri/src/lib.rs:555",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1168"
+        "src-tauri/src/lsp.rs:1069"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3574,7 +3580,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1168",
+      "definition_resolved": "src-tauri/src/lsp.rs:1069",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3598,7 +3604,7 @@
       "rust_path": "lsp::lsp_signature_help",
       "registered_at": "src-tauri/src/lib.rs:556",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1186"
+        "src-tauri/src/lsp.rs:1087"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3610,12 +3616,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1186",
+      "definition_resolved": "src-tauri/src/lsp.rs:1087",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3632,7 +3638,7 @@
       "rust_path": "lsp::remote_lsp_signature_help",
       "registered_at": "src-tauri/src/lib.rs:557",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1195"
+        "src-tauri/src/lsp.rs:1111"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3644,7 +3650,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1195",
+      "definition_resolved": "src-tauri/src/lsp.rs:1111",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3668,7 +3674,7 @@
       "rust_path": "lsp::lsp_code_actions",
       "registered_at": "src-tauri/src/lib.rs:558",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1213"
+        "src-tauri/src/lsp.rs:1129"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3680,12 +3686,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1213",
+      "definition_resolved": "src-tauri/src/lsp.rs:1129",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3703,7 +3709,7 @@
       "rust_path": "lsp::remote_lsp_code_actions",
       "registered_at": "src-tauri/src/lib.rs:559",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1244"
+        "src-tauri/src/lsp.rs:1176"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3715,7 +3721,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1244",
+      "definition_resolved": "src-tauri/src/lsp.rs:1176",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3740,7 +3746,7 @@
       "rust_path": "lsp::lsp_execute_command",
       "registered_at": "src-tauri/src/lib.rs:560",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1279"
+        "src-tauri/src/lsp.rs:1211"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3752,12 +3758,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1279",
+      "definition_resolved": "src-tauri/src/lsp.rs:1211",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3775,7 +3781,7 @@
       "rust_path": "lsp::remote_lsp_execute_command",
       "registered_at": "src-tauri/src/lib.rs:561",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1298"
+        "src-tauri/src/lsp.rs:1246"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3787,7 +3793,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1298",
+      "definition_resolved": "src-tauri/src/lsp.rs:1246",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3812,7 +3818,7 @@
       "rust_path": "lsp::lsp_document_symbols",
       "registered_at": "src-tauri/src/lib.rs:562",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1321"
+        "src-tauri/src/lsp.rs:1269"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3824,12 +3830,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1321",
+      "definition_resolved": "src-tauri/src/lsp.rs:1269",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3846,7 +3852,7 @@
       "rust_path": "lsp::remote_lsp_document_symbols",
       "registered_at": "src-tauri/src/lib.rs:563",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1331"
+        "src-tauri/src/lsp.rs:1295"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3858,7 +3864,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1331",
+      "definition_resolved": "src-tauri/src/lsp.rs:1295",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3882,7 +3888,7 @@
       "rust_path": "lsp::lsp_inlay_hints",
       "registered_at": "src-tauri/src/lib.rs:564",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1352"
+        "src-tauri/src/lsp.rs:1316"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3894,12 +3900,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1352",
+      "definition_resolved": "src-tauri/src/lsp.rs:1316",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3916,7 +3922,7 @@
       "rust_path": "lsp::remote_lsp_inlay_hints",
       "registered_at": "src-tauri/src/lib.rs:565",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1362"
+        "src-tauri/src/lsp.rs:1342"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3928,7 +3934,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1362",
+      "definition_resolved": "src-tauri/src/lsp.rs:1342",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -3952,7 +3958,7 @@
       "rust_path": "lsp::lsp_workspace_symbols",
       "registered_at": "src-tauri/src/lib.rs:566",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1380"
+        "src-tauri/src/lsp.rs:1360"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3964,12 +3970,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1380",
+      "definition_resolved": "src-tauri/src/lsp.rs:1360",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -3987,7 +3993,7 @@
       "rust_path": "lsp::remote_lsp_workspace_symbols",
       "registered_at": "src-tauri/src/lib.rs:567",
       "definition_candidates": [
-        "src-tauri/src/lsp.rs:1395"
+        "src-tauri/src/lsp.rs:1386"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -3999,7 +4005,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/lsp.rs:1395",
+      "definition_resolved": "src-tauri/src/lsp.rs:1386",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -4092,7 +4098,7 @@
       "rust_path": "run_config::remote_read_run_configs",
       "registered_at": "src-tauri/src/lib.rs:597",
       "definition_candidates": [
-        "src-tauri/src/run_config.rs:477"
+        "src-tauri/src/run_config.rs:294"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -4104,7 +4110,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/run_config.rs:477",
+      "definition_resolved": "src-tauri/src/run_config.rs:294",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -4126,7 +4132,7 @@
       "rust_path": "run_config::remote_write_run_configs",
       "registered_at": "src-tauri/src/lib.rs:598",
       "definition_candidates": [
-        "src-tauri/src/run_config.rs:490"
+        "src-tauri/src/run_config.rs:307"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -4138,7 +4144,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/run_config.rs:490",
+      "definition_resolved": "src-tauri/src/run_config.rs:307",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -4161,7 +4167,7 @@
       "rust_path": "run_config::start_run_config",
       "registered_at": "src-tauri/src/lib.rs:599",
       "definition_candidates": [
-        "src-tauri/src/run_config.rs:504"
+        "src-tauri/src/run_config.rs:325"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -4173,12 +4179,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/run_config.rs:504",
+      "definition_resolved": "src-tauri/src/run_config.rs:325",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -4186,9 +4192,9 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "project_path: String",
-        "config: RunConfig",
-        "state: State<'_, RunConfigState>!"
+        "config: RunConfig"
       ]
     },
     {
@@ -4196,7 +4202,7 @@
       "rust_path": "run_config::remote_start_run_config",
       "registered_at": "src-tauri/src/lib.rs:600",
       "definition_candidates": [
-        "src-tauri/src/run_config.rs:571"
+        "src-tauri/src/run_config.rs:368"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -4208,7 +4214,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/run_config.rs:571",
+      "definition_resolved": "src-tauri/src/run_config.rs:368",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -4224,7 +4230,7 @@
         "connection: SshConnection",
         "remote_project_path: String",
         "config: RunConfig",
-        "state: State<'_, RunConfigState>!"
+        "state: State<'_, aeroric_core::ide::run_face::RunProcessState>!"
       ]
     },
     {
@@ -4232,7 +4238,7 @@
       "rust_path": "run_config::stop_run_config",
       "registered_at": "src-tauri/src/lib.rs:601",
       "definition_candidates": [
-        "src-tauri/src/run_config.rs:637"
+        "src-tauri/src/run_config.rs:432"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -4244,12 +4250,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/run_config.rs:637",
+      "definition_resolved": "src-tauri/src/run_config.rs:432",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -4257,8 +4263,8 @@
       },
       "reachable": true,
       "params": [
-        "run_id: String",
-        "state: State<'_, RunConfigState>!"
+        "app: tauri::AppHandle<R>!",
+        "run_id: String"
       ]
     },
     {
@@ -4266,7 +4272,7 @@
       "rust_path": "run_config::read_run_process",
       "registered_at": "src-tauri/src/lib.rs:602",
       "definition_candidates": [
-        "src-tauri/src/run_config.rs:659"
+        "src-tauri/src/run_config.rs:450"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -4278,12 +4284,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/run_config.rs:659",
+      "definition_resolved": "src-tauri/src/run_config.rs:450",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -4291,8 +4297,8 @@
       },
       "reachable": true,
       "params": [
-        "run_id: String",
-        "state: State<'_, RunConfigState>!"
+        "app: tauri::AppHandle<R>!",
+        "run_id: String"
       ]
     },
     {
@@ -4300,7 +4306,7 @@
       "rust_path": "tests::discover_tests",
       "registered_at": "src-tauri/src/lib.rs:576",
       "definition_candidates": [
-        "src-tauri/src/tests.rs:1190"
+        "src-tauri/src/tests.rs:286"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -4313,7 +4319,7 @@
         "F08"
       ],
       "notes": "由 internal 改判为 F08 run/test 能力",
-      "definition_resolved": "src-tauri/src/tests.rs:1190",
+      "definition_resolved": "src-tauri/src/tests.rs:286",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -4326,6 +4332,7 @@
       },
       "reachable": false,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "project_path: String"
       ],
       "caller_evidence": "pending: P6-03 — 全仓无调用方（非 DSH 之外的 ADR-005 同口径）：该命令属于 P6-03 的场景，由它在迁移时决定接线还是删除"
@@ -4335,7 +4342,7 @@
       "rust_path": "tests::run_tests",
       "registered_at": "src-tauri/src/lib.rs:577",
       "definition_candidates": [
-        "src-tauri/src/tests.rs:1202"
+        "src-tauri/src/tests.rs:307"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -4348,7 +4355,7 @@
         "F08"
       ],
       "notes": "由 internal 改判为 F08 run/test 能力",
-      "definition_resolved": "src-tauri/src/tests.rs:1202",
+      "definition_resolved": "src-tauri/src/tests.rs:307",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -4361,6 +4368,7 @@
       },
       "reachable": false,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "project_path: String",
         "profile: String",
         "target: Option<TestRunTarget>",
@@ -4373,7 +4381,7 @@
       "rust_path": "tests::remote_discover_tests",
       "registered_at": "src-tauri/src/lib.rs:578",
       "definition_candidates": [
-        "src-tauri/src/tests.rs:1222"
+        "src-tauri/src/tests.rs:346"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -4386,7 +4394,7 @@
         "F08"
       ],
       "notes": "由 internal 改判为 F08 run/test 能力",
-      "definition_resolved": "src-tauri/src/tests.rs:1222",
+      "definition_resolved": "src-tauri/src/tests.rs:346",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -4409,7 +4417,7 @@
       "rust_path": "tests::remote_run_tests",
       "registered_at": "src-tauri/src/lib.rs:579",
       "definition_candidates": [
-        "src-tauri/src/tests.rs:1251"
+        "src-tauri/src/tests.rs:375"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -4422,7 +4430,7 @@
         "F08"
       ],
       "notes": "由 internal 改判为 F08 run/test 能力",
-      "definition_resolved": "src-tauri/src/tests.rs:1251",
+      "definition_resolved": "src-tauri/src/tests.rs:375",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -8219,7 +8227,7 @@
       "rust_path": "diagnostics::run_diagnostics",
       "registered_at": "src-tauri/src/lib.rs:687",
       "definition_candidates": [
-        "src-tauri/src/diagnostics.rs:447"
+        "src-tauri/src/diagnostics.rs:96"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -8231,12 +8239,12 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/diagnostics.rs:447",
+      "definition_resolved": "src-tauri/src/diagnostics.rs:96",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -8244,6 +8252,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "project_path: String",
         "profile: String"
       ]
@@ -8253,7 +8262,7 @@
       "rust_path": "diagnostics::remote_run_diagnostics",
       "registered_at": "src-tauri/src/lib.rs:688",
       "definition_candidates": [
-        "src-tauri/src/diagnostics.rs:467"
+        "src-tauri/src/diagnostics.rs:127"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -8265,7 +8274,7 @@
       "feature_ids": [
         "F08"
       ],
-      "definition_resolved": "src-tauri/src/diagnostics.rs:467",
+      "definition_resolved": "src-tauri/src/diagnostics.rs:127",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9029,7 +9038,7 @@
       "rust_path": "core_adapter::apply_task_intent",
       "registered_at": "src-tauri/src/lib.rs:1053",
       "definition_candidates": [
-        "src-tauri/src/core_adapter.rs:1329"
+        "src-tauri/src/core_adapter.rs:1230"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9042,7 +9051,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/core_adapter.rs:1329",
+      "definition_resolved": "src-tauri/src/core_adapter.rs:1230",
       "resolution": "module-subtree-unique",
       "params": [
         "app: tauri::AppHandle!",
@@ -16750,7 +16759,7 @@
       "rust_path": "database::legacy_sqlite::db_read_sql_file",
       "registered_at": "src-tauri/src/lib.rs:941",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:420"
+        "src-tauri/src/database/legacy_sqlite.rs:422"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16762,12 +16771,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:420",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:422",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -16775,6 +16784,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "path: String"
       ]
     },
@@ -16783,7 +16793,7 @@
       "rust_path": "database::legacy_sqlite::db_inspect",
       "registered_at": "src-tauri/src/lib.rs:942",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:445"
+        "src-tauri/src/database/legacy_sqlite.rs:450"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16795,7 +16805,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:445",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:450",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16818,7 +16828,7 @@
       "rust_path": "database::legacy_sqlite::db_query_table",
       "registered_at": "src-tauri/src/lib.rs:943",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:481"
+        "src-tauri/src/database/legacy_sqlite.rs:486"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16830,7 +16840,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:481",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:486",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16856,7 +16866,7 @@
       "rust_path": "database::legacy_sqlite::db_update_cell",
       "registered_at": "src-tauri/src/lib.rs:944",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:524"
+        "src-tauri/src/database/legacy_sqlite.rs:529"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16868,7 +16878,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:524",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:529",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16897,7 +16907,7 @@
       "rust_path": "database::legacy_sqlite::db_insert_row",
       "registered_at": "src-tauri/src/lib.rs:945",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:568"
+        "src-tauri/src/database/legacy_sqlite.rs:573"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16909,7 +16919,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:568",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:573",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16936,7 +16946,7 @@
       "rust_path": "database::legacy_sqlite::db_delete_row",
       "registered_at": "src-tauri/src/lib.rs:946",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:610"
+        "src-tauri/src/database/legacy_sqlite.rs:615"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16948,7 +16958,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:610",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:615",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16975,7 +16985,7 @@
       "rust_path": "database::legacy_sqlite::db_execute_sql",
       "registered_at": "src-tauri/src/lib.rs:947",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:656"
+        "src-tauri/src/database/legacy_sqlite.rs:661"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16987,7 +16997,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:656",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:661",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17015,7 +17025,7 @@
       "rust_path": "database::connections::dbx_list_connections",
       "registered_at": "src-tauri/src/lib.rs:948",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:37"
+        "src-tauri/src/database/connections.rs:15"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17027,7 +17037,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:37",
+      "definition_resolved": "src-tauri/src/database/connections.rs:15",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17048,7 +17058,7 @@
       "rust_path": "database::connections::dbx_save_connection",
       "registered_at": "src-tauri/src/lib.rs:949",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:57"
+        "src-tauri/src/database/connections.rs:35"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17060,7 +17070,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:57",
+      "definition_resolved": "src-tauri/src/database/connections.rs:35",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17082,7 +17092,7 @@
       "rust_path": "database::connections::dbx_delete_connection",
       "registered_at": "src-tauri/src/lib.rs:950",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:78"
+        "src-tauri/src/database/connections.rs:56"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17094,7 +17104,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:78",
+      "definition_resolved": "src-tauri/src/database/connections.rs:56",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17116,7 +17126,7 @@
       "rust_path": "database::connections::dbx_test_connection",
       "registered_at": "src-tauri/src/lib.rs:951",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:104"
+        "src-tauri/src/database/connections.rs:82"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17128,7 +17138,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:104",
+      "definition_resolved": "src-tauri/src/database/connections.rs:82",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17150,7 +17160,7 @@
       "rust_path": "database::connections::dbx_connect",
       "registered_at": "src-tauri/src/lib.rs:952",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:125"
+        "src-tauri/src/database/connections.rs:103"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17162,7 +17172,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:125",
+      "definition_resolved": "src-tauri/src/database/connections.rs:103",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17184,7 +17194,7 @@
       "rust_path": "database::connections::dbx_disconnect",
       "registered_at": "src-tauri/src/lib.rs:953",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:151"
+        "src-tauri/src/database/connections.rs:131"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17196,12 +17206,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:151",
+      "definition_resolved": "src-tauri/src/database/connections.rs:131",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -17209,7 +17219,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "connection_id: String"
       ]
     },
@@ -17218,7 +17228,7 @@
       "rust_path": "database::connections::dbx_backup_sqlite_database",
       "registered_at": "src-tauri/src/lib.rs:954",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:167"
+        "src-tauri/src/database/connections.rs:153"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17230,12 +17240,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:167",
+      "definition_resolved": "src-tauri/src/database/connections.rs:153",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -17243,7 +17253,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "connection_id: String",
         "destination_path: String"
       ]
@@ -18550,7 +18560,7 @@
       "rust_path": "database::import_export::dbx_export_table_csv",
       "registered_at": "src-tauri/src/lib.rs:992",
       "definition_candidates": [
-        "src-tauri/src/database/import_export.rs:184"
+        "src-tauri/src/database/import_export.rs:41"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18562,12 +18572,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/import_export.rs:184",
+      "definition_resolved": "src-tauri/src/database/import_export.rs:41",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18575,7 +18585,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "request: TableExportRequest"
       ]
     },
@@ -18584,7 +18594,7 @@
       "rust_path": "database::import_export::dbx_export_table_json",
       "registered_at": "src-tauri/src/lib.rs:993",
       "definition_candidates": [
-        "src-tauri/src/database/import_export.rs:192"
+        "src-tauri/src/database/import_export.rs:67"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18596,12 +18606,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/import_export.rs:192",
+      "definition_resolved": "src-tauri/src/database/import_export.rs:67",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18609,7 +18619,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "request: TableExportRequest"
       ]
     },
@@ -18618,7 +18628,7 @@
       "rust_path": "database::import_export::dbx_export_table_markdown",
       "registered_at": "src-tauri/src/lib.rs:994",
       "definition_candidates": [
-        "src-tauri/src/database/import_export.rs:200"
+        "src-tauri/src/database/import_export.rs:93"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18630,12 +18640,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/import_export.rs:200",
+      "definition_resolved": "src-tauri/src/database/import_export.rs:93",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18643,7 +18653,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "request: TableExportRequest"
       ]
     },
@@ -18652,7 +18662,7 @@
       "rust_path": "database::import_export::dbx_export_table_insert_sql",
       "registered_at": "src-tauri/src/lib.rs:995",
       "definition_candidates": [
-        "src-tauri/src/database/import_export.rs:208"
+        "src-tauri/src/database/import_export.rs:119"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18664,12 +18674,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/import_export.rs:208",
+      "definition_resolved": "src-tauri/src/database/import_export.rs:119",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18677,7 +18687,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "request: TableExportRequest"
       ]
     },
@@ -18686,7 +18696,7 @@
       "rust_path": "database::import_export::dbx_export_table_update_sql",
       "registered_at": "src-tauri/src/lib.rs:996",
       "definition_candidates": [
-        "src-tauri/src/database/import_export.rs:216"
+        "src-tauri/src/database/import_export.rs:145"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18698,12 +18708,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/import_export.rs:216",
+      "definition_resolved": "src-tauri/src/database/import_export.rs:145",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18711,7 +18721,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "request: TableExportRequest"
       ]
     },
@@ -18720,7 +18730,7 @@
       "rust_path": "database::import_export::dbx_export_table_xlsx",
       "registered_at": "src-tauri/src/lib.rs:997",
       "definition_candidates": [
-        "src-tauri/src/database/import_export.rs:225"
+        "src-tauri/src/database/import_export.rs:160"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18732,12 +18742,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/import_export.rs:225",
+      "definition_resolved": "src-tauri/src/database/import_export.rs:160",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18745,7 +18755,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "request: TableExportRequest"
       ]
     },
@@ -18754,7 +18764,7 @@
       "rust_path": "database::import_export::dbx_preview_table_import_file",
       "registered_at": "src-tauri/src/lib.rs:998",
       "definition_candidates": [
-        "src-tauri/src/database/import_export.rs:246"
+        "src-tauri/src/database/import_export.rs:207"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18766,12 +18776,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/import_export.rs:246",
+      "definition_resolved": "src-tauri/src/database/import_export.rs:207",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18779,6 +18789,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "file_path: String"
       ]
     },
@@ -18787,7 +18798,7 @@
       "rust_path": "database::import_export::dbx_import_table_file",
       "registered_at": "src-tauri/src/lib.rs:999",
       "definition_candidates": [
-        "src-tauri/src/database/import_export.rs:254"
+        "src-tauri/src/database/import_export.rs:226"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18799,12 +18810,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/import_export.rs:254",
+      "definition_resolved": "src-tauri/src/database/import_export.rs:226",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18812,7 +18823,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "request: TableImportRequest"
       ]
     },
@@ -18821,7 +18832,7 @@
       "rust_path": "database::import_export::dbx_export_database",
       "registered_at": "src-tauri/src/lib.rs:1000",
       "definition_candidates": [
-        "src-tauri/src/database/import_export.rs:233"
+        "src-tauri/src/database/import_export.rs:186"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18833,12 +18844,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/import_export.rs:233",
+      "definition_resolved": "src-tauri/src/database/import_export.rs:186",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18846,8 +18857,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
-        "request: dbx_core::database_export::DatabaseExportRequest"
+        "app: tauri::AppHandle<R>!",
+        "request: DatabaseExportRequest"
       ]
     },
     {
@@ -18855,7 +18866,7 @@
       "rust_path": "database::import_export::dbx_execute_sql_file",
       "registered_at": "src-tauri/src/lib.rs:1001",
       "definition_candidates": [
-        "src-tauri/src/database/import_export.rs:290"
+        "src-tauri/src/database/import_export.rs:247"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18867,12 +18878,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/import_export.rs:290",
+      "definition_resolved": "src-tauri/src/database/import_export.rs:247",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18880,9 +18891,8 @@
       },
       "reachable": true,
       "params": [
-        "app: AppHandle!",
-        "state: State<'_, DbxState>!",
-        "request: ExecuteSqlFileRequest"
+        "app: tauri::AppHandle<R>!",
+        "request: ie_face::ExecuteSqlFileRequest"
       ]
     },
     {
@@ -19842,7 +19852,7 @@
       "rust_path": "database::transfer::dbx_start_transfer",
       "registered_at": "src-tauri/src/lib.rs:1027",
       "definition_candidates": [
-        "src-tauri/src/database/transfer.rs:138"
+        "src-tauri/src/database/transfer.rs:42"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19854,12 +19864,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/transfer.rs:138",
+      "definition_resolved": "src-tauri/src/database/transfer.rs:42",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19867,9 +19877,8 @@
       },
       "reachable": true,
       "params": [
-        "app: AppHandle!",
-        "state: State<'_, DbxState>!",
-        "request: dbx_core::transfer::TransferRequest"
+        "app: tauri::AppHandle<R>!",
+        "request: transfer_face::TransferRequest"
       ]
     },
     {
@@ -19877,7 +19886,7 @@
       "rust_path": "database::transfer::dbx_cancel_transfer",
       "registered_at": "src-tauri/src/lib.rs:1028",
       "definition_candidates": [
-        "src-tauri/src/database/transfer.rs:327"
+        "src-tauri/src/database/transfer.rs:71"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19889,12 +19898,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/transfer.rs:327",
+      "definition_resolved": "src-tauri/src/database/transfer.rs:71",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19902,6 +19911,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "transfer_id: String"
       ]
     },
@@ -19910,7 +19920,7 @@
       "rust_path": "database::transfer::dbx_prepare_schema_diff",
       "registered_at": "src-tauri/src/lib.rs:1029",
       "definition_candidates": [
-        "src-tauri/src/database/transfer.rs:333"
+        "src-tauri/src/database/transfer.rs:90"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19922,12 +19932,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/transfer.rs:333",
+      "definition_resolved": "src-tauri/src/database/transfer.rs:90",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19935,7 +19945,8 @@
       },
       "reachable": true,
       "params": [
-        "options: dbx_core::schema_diff::SchemaDiffPreparationOptions"
+        "app: tauri::AppHandle<R>!",
+        "options: transfer_face::SchemaDiffPreparationOptions"
       ]
     },
     {
@@ -19943,7 +19954,7 @@
       "rust_path": "database::transfer::dbx_generate_schema_sync_sql",
       "registered_at": "src-tauri/src/lib.rs:1030",
       "definition_candidates": [
-        "src-tauri/src/database/transfer.rs:341"
+        "src-tauri/src/database/transfer.rs:109"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19955,12 +19966,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/transfer.rs:341",
+      "definition_resolved": "src-tauri/src/database/transfer.rs:109",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19968,11 +19979,12 @@
       },
       "reachable": true,
       "params": [
-        "diffs: Vec<dbx_core::schema_diff::TableDiff>",
-        "function_diffs: Option<Vec<dbx_core::schema_diff::FunctionDiff>>",
-        "sequence_diffs: Option<Vec<dbx_core::schema_diff::SequenceDiff>>",
-        "rule_diffs: Option<Vec<dbx_core::schema_diff::RuleDiff>>",
-        "owner_diffs: Option<Vec<dbx_core::schema_diff::OwnerDiff>>",
+        "app: tauri::AppHandle<R>!",
+        "diffs: Vec<transfer_face::TableDiff>",
+        "function_diffs: Option<Vec<transfer_face::FunctionDiff>>",
+        "sequence_diffs: Option<Vec<transfer_face::SequenceDiff>>",
+        "rule_diffs: Option<Vec<transfer_face::RuleDiff>>",
+        "owner_diffs: Option<Vec<transfer_face::OwnerDiff>>",
         "database_type: DatabaseType",
         "target_schema: Option<String>",
         "cascade_delete: Option<bool>"
@@ -19983,7 +19995,7 @@
       "rust_path": "database::transfer::dbx_prepare_data_compare",
       "registered_at": "src-tauri/src/lib.rs:1031",
       "definition_candidates": [
-        "src-tauri/src/database/transfer.rs:366"
+        "src-tauri/src/database/transfer.rs:152"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19995,12 +20007,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/transfer.rs:366",
+      "definition_resolved": "src-tauri/src/database/transfer.rs:152",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -20008,7 +20020,8 @@
       },
       "reachable": true,
       "params": [
-        "options: dbx_core::data_compare::DataComparePreparationOptions"
+        "app: tauri::AppHandle<R>!",
+        "options: transfer_face::DataComparePreparationOptions"
       ]
     },
     {
@@ -20016,7 +20029,7 @@
       "rust_path": "database::transfer::dbx_build_data_compare_sync_plan",
       "registered_at": "src-tauri/src/lib.rs:1032",
       "definition_candidates": [
-        "src-tauri/src/database/transfer.rs:373"
+        "src-tauri/src/database/transfer.rs:170"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -20028,12 +20041,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/transfer.rs:373",
+      "definition_resolved": "src-tauri/src/database/transfer.rs:170",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -20041,7 +20054,8 @@
       },
       "reachable": true,
       "params": [
-        "options: dbx_core::data_compare::DataCompareSyncPlanOptions"
+        "app: tauri::AppHandle<R>!",
+        "options: transfer_face::DataCompareSyncPlanOptions"
       ]
     },
     {
@@ -20049,7 +20063,7 @@
       "rust_path": "database::transfer::dbx_prepare_data_compare_from_tables",
       "registered_at": "src-tauri/src/lib.rs:1033",
       "definition_candidates": [
-        "src-tauri/src/database/transfer.rs:382"
+        "src-tauri/src/database/transfer.rs:188"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -20061,12 +20075,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/transfer.rs:382",
+      "definition_resolved": "src-tauri/src/database/transfer.rs:188",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -20074,8 +20088,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
-        "options: dbx_core::data_compare::DataCompareFromTablesOptions"
+        "app: tauri::AppHandle<R>!",
+        "options: transfer_face::DataCompareFromTablesOptions"
       ]
     },
     {
@@ -24336,15 +24350,13 @@
       "name": "dbx-transfer-progress",
       "rust_consts": [],
       "ts_consts": [],
-      "emitters": [
-        "src-tauri/src/database/transfer.rs:24"
-      ],
+      "emitters": [],
       "listeners": [
         "src/lib/databaseApi.ts:107"
       ],
       "disposition": "in-use",
       "gap_id": null,
-      "orphan": null,
+      "orphan": "listened-without-emitter",
       "target": null,
       "note": null
     },
@@ -24796,7 +24808,7 @@
       "rust_consts": [],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/lsp.rs:2161"
+        "src-tauri/src/lsp.rs:41"
       ],
       "listeners": [
         "src/components/ProjectPage.tsx:481"
@@ -24950,7 +24962,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/core_adapter.rs:765"
+        "src-tauri/src/core_adapter.rs:781"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:53"
@@ -24971,7 +24983,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/core_adapter.rs:759"
+        "src-tauri/src/core_adapter.rs:778"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:43"
@@ -25057,12 +25069,12 @@
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:485",
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:494",
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:500",
-    "aeroric_core::database::execution::PRODUCTION_CONFIRM_EVENT @ src-tauri/src/database/import_export.rs:308",
+    "channel @ src-tauri/src/core_adapter.rs:754",
     "aeroric_core::database::execution::PRODUCTION_CONFIRM_EVENT @ src-tauri/src/database/query.rs:28",
     "event_name @ src-tauri/src/dsh_webui.rs:1857",
     "event_name @ src-tauri/src/dsh_webui.rs:1905",
     "event_name @ src-tauri/src/dsh_webui.rs:1922",
-    "action.event_name() @ src-tauri/src/lib.rs:238",
+    "action.event_name() @ src-tauri/src/lib.rs:239",
     "super::RAG_INDEX_PROGRESS_TOPIC @ src-tauri/src/notebook/rag/commands.rs:128",
     "daemon_core::SYNC_UPDATED_TOPIC @ src-tauri/src/notebook/sync/daemon.rs:44",
     "event_name @ src-tauri/src/pty.rs:462",

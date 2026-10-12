@@ -17,6 +17,7 @@
 //! 本模块不筛。
 
 pub mod log;
+pub mod pump;
 pub mod snapshot;
 
 pub use log::{EventLog, LoggedEvent};

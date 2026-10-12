@@ -29,9 +29,10 @@ for (const type of ["RunConfig", "RunConfigDocument", "RunDebugConfigType", "Run
 }
 assert.match(core, /#\[serde\(rename_all = "lowercase"\)\]\s*pub enum RunDebugConfigType/);
 assert.match(legacy, /pub use aeroric_core::ide::run_config::/);
-assert.match(legacy, /validate_legacy_run_config as validate_run_config/);
-assert.match(legacy, /legacy_cwd_candidate as cwd_candidate/);
-assert.doesNotMatch(legacy, /fn (?:read_run_configs|write_run_configs|validate_run_config|normalize_path_lexically)\b/);
+// 切片一百零八：validate/cwd 的别名进口随本地面主体上收消失——调用点改全
+// 路径（与 tests/diagnostics 两刀同款）；不变量的本意（legacy 读 core、不
+// 自定义）改由"不得本地定义"的负控单独承担。
+assert.doesNotMatch(legacy, /fn (?:read_run_configs|write_run_configs|validate_run_config|validate_legacy_run_config|resolve_run_cwd|normalize_path_lexically)\b/);
 assert.doesNotMatch(core, /tauri::|std::env::|home_dir\(|load_settings|Command::/);
 
 const nativePolicy = body(core, "validate_document");

@@ -138,16 +138,41 @@ function literalEmitSites(event: string): EmitSite[] {
   return sites;
 }
 
-/** Keys core's own payload builders put on the wire, including subscript additions. */
-function corePayloadKeys(functionName: string): string[] {
-  const text = source("src-tauri/src/core_adapter.rs");
-  const at = text.indexOf(`fn ${functionName}`);
-  expect(at, `${functionName} must exist in core_adapter.rs`).toBeGreaterThan(-1);
+/**
+ * Keys core's own payload builder puts on the wire for one notification variant, including
+ * subscript additions.
+ *
+ * 切片一百零五 moved the payload construction from two `core_adapter.rs` functions into one
+ * `TaskNotification::window_payload` in core (`core/crates/aeroric-core/src/tasks/events.rs`) so
+ * the host EventLog and the Embedded window share a single implementation. The builder is one
+ * match over both notification variants, so the scanner slices the requested arm (Status or
+ * Session) and extracts the `json!({...})` object keys from that arm only — the naive whole-body
+ * scan mispairs the `json!(reason)` subscript with the next arm's brace and loses the session
+ * keys (observed, not hypothetical).
+ */
+function corePayloadKeys(functionName: string, variant: "Status" | "Session"): string[] {
+  const text = source("core/crates/aeroric-core/src/tasks/events.rs");
+  const at = text.indexOf("fn window_payload");
+  expect(at, "window_payload must exist in core tasks/events.rs").toBeGreaterThan(-1);
   const brace = text.indexOf("{", text.indexOf(")", at));
   const end = matchBrackets(text, brace);
   const body = text.slice(brace, end);
-  const keys = new Set(keysOfJsonMacros(body));
-  for (const m of body.matchAll(/payload\s*\[\s*"([^"]+)"\s*\]/g)) keys.add(m[1]);
+  const armStart = body.indexOf(`TaskNotification::${variant}`);
+  const armEnd =
+    variant === "Status"
+      ? body.indexOf("TaskNotification::Session(facts)")
+      : body.length;
+  expect(armStart, `${variant} arm must exist in window_payload`).toBeGreaterThan(-1);
+  const arm = body.slice(armStart, armEnd);
+  const keys = new Set<string>();
+  for (const m of arm.matchAll(/json!\s*\(\s*\{/g)) {
+    const brace = m.index! + m[0].length - 1;
+    const end = matchBrackets(arm, brace);
+    if (end < 0) continue;
+    for (const key of topLevelKeys(arm.slice(brace, end))) keys.add(key);
+  }
+  for (const m of arm.matchAll(/payload\s*\[\s*"([^"]+)"\s*\]/g)) keys.add(m[1]);
+  void functionName;
   return [...keys];
 }
 
@@ -243,21 +268,21 @@ describe("P2-05 adapter contract: task-status / task-session survive the handove
       ).toEqual([]);
       expect(sink.length, `${event} must still be emitted from core_adapter.rs`).toBe(1);
     }
-    expect(corePayloadKeys("task_status_payload")).toContain("task_id");
-    expect(corePayloadKeys("task_session_payload")).toContain("session_path");
+    expect(corePayloadKeys("task_status_payload", "Status")).toContain("task_id");
+    expect(corePayloadKeys("task_session_payload", "Session")).toContain("session_path");
     expect(clientKeys("TASK_STATUS_EVENT").required).toContain("status");
     expect(clientKeys("TASK_SESSION_EVENT").required).toContain("session_id");
-    expect(corePayloadKeys("task_status_payload")).not.toContain("approval");
+    expect(corePayloadKeys("task_status_payload", "Status")).not.toContain("approval");
   });
 
   it("core sends every key the client requires, so no listener reads undefined", () => {
-    const cases: [string, string][] = [
-      ["TASK_STATUS_EVENT", "task_status_payload"],
-      ["TASK_SESSION_EVENT", "task_session_payload"],
+    const cases: [string, string, "Status" | "Session"][] = [
+      ["TASK_STATUS_EVENT", "task_status_payload", "Status"],
+      ["TASK_SESSION_EVENT", "task_session_payload", "Session"],
     ];
-    for (const [constant, builder] of cases) {
+    for (const [constant, builder, variant] of cases) {
       const { required } = clientKeys(constant);
-      const emitted = corePayloadKeys(builder);
+      const emitted = corePayloadKeys(builder, variant);
       const missing = required.filter((key) => !emitted.includes(key));
       expect(missing, `${builder} must carry the required keys ${required.join(", ")}`).toEqual([]);
     }
@@ -269,18 +294,18 @@ describe("P2-05 adapter contract: task-status / task-session survive the handove
     // here instead, one line each, with where they came from: ADR-023 promises payloads do not
     // change during the handover, so a key core emits without a shipping source is a new wire
     // field, and a key core drops is a silent regression.
-    const cases: [string, string][] = [
-      [TASK_STATUS, "task_status_payload"],
-      [TASK_SESSION, "task_session_payload"],
+    const cases: [string, string, "Status" | "Session"][] = [
+      [TASK_STATUS, "task_status_payload", "Status"],
+      [TASK_SESSION, "task_session_payload", "Session"],
     ];
-    for (const [event, builder] of cases) {
+    for (const [event, builder, variant] of cases) {
       const legacy = new Set<string>([
         ...literalEmitSites(event)
           .filter((site) => !site.file.endsWith("_tests.rs"))
           .flatMap((site) => site.keys),
         ...(carriedOver[event] ?? []),
       ]);
-      const emitted = new Set(corePayloadKeys(builder));
+      const emitted = new Set(corePayloadKeys(builder, variant));
       const dropped = [...legacy].filter((key) => !emitted.has(key));
       expect(
         dropped,
@@ -290,11 +315,11 @@ describe("P2-05 adapter contract: task-status / task-session survive the handove
   });
 
   it("core invents no key that neither the client nor today's wire has", () => {
-    const cases: [string, string][] = [
-      [TASK_STATUS, "task_status_payload"],
-      [TASK_SESSION, "task_session_payload"],
+    const cases: [string, string, "Status" | "Session"][] = [
+      [TASK_STATUS, "task_status_payload", "Status"],
+      [TASK_SESSION, "task_session_payload", "Session"],
     ];
-    for (const [event, builder] of cases) {
+    for (const [event, builder, variant] of cases) {
       const constant = event === TASK_STATUS ? "TASK_STATUS_EVENT" : "TASK_SESSION_EVENT";
       const declared = new Set([
         ...clientKeys(constant).required,
@@ -314,7 +339,7 @@ describe("P2-05 adapter contract: task-status / task-session survive the handove
         ...declared,
         ...carried,
       ]);
-      const invented = corePayloadKeys(builder).filter((key) => !known.has(key));
+      const invented = corePayloadKeys(builder, variant).filter((key) => !known.has(key));
       expect(
         invented,
         `${builder} adds ${invented.join(", ")} that no shipping event carries`,

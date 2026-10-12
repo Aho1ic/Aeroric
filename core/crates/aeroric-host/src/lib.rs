@@ -13,6 +13,7 @@ pub mod file_access;
 pub mod file_services2;
 pub mod ide_services;
 pub(crate) mod local_targets;
+pub mod lsp_services;
 pub mod maintenance_services;
 pub mod notebook_services;
 pub mod platform_adapter;

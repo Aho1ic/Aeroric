@@ -58,10 +58,10 @@
     },
     {
       "disposition": "in-use",
-      "emitters": 1,
+      "emitters": 0,
       "listeners": 1,
       "name": "dbx-transfer-progress",
-      "orphan": null
+      "orphan": "listened-without-emitter"
     },
     {
       "disposition": "in-use",

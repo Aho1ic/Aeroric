@@ -205,12 +205,9 @@ async fn malformed_params_refuse_and_unregistered_family_stays_unsupported() {
     );
     assert!(message.contains("connectionId"));
 
-    // 尚未上收的驱动专属面必须保持不可达：宿主不虚报能力。
-    for method in [
-        "database.dbx_start_transfer",
-        "database.dbx_import_table_file",
-        "database.dbx_execute_sql_file",
-    ] {
+    // 切片一百零三上收 transfer／生命周期面——database 族缺口清零；此后这
+    // 条控制组守「未知方法名必须保持不可达」：宿主不虚报能力。
+    for method in ["database.dbx_not_a_registered_method"] {
         let reply = call(&mut reader, &mut writer, method, json!({})).await;
         assert_eq!(
             failure(reply, ErrorCode::UnsupportedCapability),

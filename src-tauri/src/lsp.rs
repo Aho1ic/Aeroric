@@ -1,347 +1,97 @@
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::collections::BTreeMap;
-use std::fs;
-use std::io::Write as StdWrite;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::{Arc, LazyLock, Mutex};
-use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::Mutex as AsyncMutex;
-use tokio::time::{timeout, Duration};
+//! LSP 命令壳(切片一百一十后):会话引擎、响应解析、DTO 与 uri 编码的
+//! **单一定义全在 core**(`ide::lsp_session` / `ide::lsp_face`),本文件只剩
+//! 三件 Tauri 侧的事:**SSH 适配**(remote 孪生的命令构建与字符路径守卫)、
+//! **窗口 emit 端口**(diagnostics 出口)与**命令转发壳**。
 
-use crate::diagnostics::{DiagnosticItem, DiagnosticSeverity};
+use std::path::Path;
+
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter};
+
 use crate::path_guard::remote_path_has_relative_components;
 use crate::ssh::SshConnection;
+use aeroric_core::ide::lsp_face;
+use aeroric_core::ide::lsp_session::engine;
+use aeroric_core::ide::lsp_session::{feature_request_params, LspDocumentRequest, RequestParams};
 
-mod edit;
-mod parse;
-mod protocol;
-
-use protocol::{
-    file_uri, markdown_text, parse_completion_items, parse_hover, parse_locations, parse_position,
-    parse_range, path_from_file_uri,
+// 单一定义在 core:DTO 与两簇纯函数全按旧名 re-export,调用点零漂移。
+pub use aeroric_core::ide::lsp_face::{
+    default_server_command, language_id_for_path, LspDocumentLifecycleSummary, LspServerCommand,
+    LspServerStatus,
+};
+pub use aeroric_core::ide::lsp_session::engine::{
+    close_local_lsp_session_document, close_remote_lsp_session_document,
+    shutdown_local_lsp_session, take_local_lsp_sessions_with_prefix, take_remote_lsp_session,
+    take_remote_lsp_sessions_with_prefix, CommandSpec, DiagnosticsSink, ServerLauncher,
+};
+pub use aeroric_core::ide::lsp_session::{
+    apply_remote_workspace_edit_for_root, apply_workspace_edit_for_root, file_uri,
+    parse_code_actions, parse_completion_items, parse_document_symbols, parse_hover,
+    parse_inlay_hints, parse_locations, parse_signature_help, parse_workspace_edit,
+    parse_workspace_symbols, LspApplyWorkspaceEditSummary, LspCodeAction, LspCommand,
+    LspCompletionItem, LspDocumentSnapshot, LspHover, LspInlayHint, LspLocation, LspSignatureHelp,
+    LspSymbol, LspWorkspaceEdit, RemoteEditIo,
 };
 
-// 两段实现搬进了子模块,它们都以 `use super::*;` 开头直接拿本文件的 import 和私有类型;
-// 这里反过来把它们的项拉回本作用域,于是原有调用点一处都不用改。
-// 两段内**都没有** `pub` / `pub(crate)` 项(脚本加了断言),所以不需要额外 re-export。
-use edit::*;
-use parse::*;
-
-const LSP_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_REMOTE_LSP_EDIT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
-static LSP_DOCUMENTS: LazyLock<Mutex<BTreeMap<String, BTreeMap<String, LspOpenDocument>>>> =
-    LazyLock::new(|| Mutex::new(BTreeMap::new()));
-static LOCAL_LSP_SESSIONS: LazyLock<Mutex<BTreeMap<String, Arc<AsyncMutex<LocalLspSession>>>>> =
-    LazyLock::new(|| Mutex::new(BTreeMap::new()));
-static REMOTE_LSP_SESSIONS: LazyLock<Mutex<BTreeMap<String, Arc<AsyncMutex<LocalLspSession>>>>> =
-    LazyLock::new(|| Mutex::new(BTreeMap::new()));
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspServerCommand {
-    pub program: String,
-    pub args: Vec<String>,
+fn window_diagnostics_sink(app: &AppHandle) -> DiagnosticsSink {
+    let app = app.clone();
+    std::sync::Arc::new(move |event: engine::LspDiagnosticsEvent| {
+        let _ = app.emit("lsp://diagnostics", event);
+    })
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspServerStatus {
-    pub supported: bool,
-    pub available: bool,
-    pub language_id: Option<String>,
-    pub command: Option<LspServerCommand>,
-    pub install_hint: Option<String>,
-}
+struct TauriLocalLauncher;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspPosition {
-    pub line: u32,
-    pub character: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspRange {
-    pub start: LspPosition,
-    pub end: LspPosition,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspLocation {
-    pub uri: String,
-    pub path: String,
-    pub range: LspRange,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspHover {
-    pub contents: String,
-    pub range: Option<LspRange>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspCompletionItem {
-    pub label: String,
-    pub detail: Option<String>,
-    pub documentation: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspParameterInformation {
-    pub label: String,
-    pub documentation: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspSignatureInformation {
-    pub label: String,
-    pub documentation: Option<String>,
-    pub parameters: Vec<LspParameterInformation>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspSignatureHelp {
-    pub signatures: Vec<LspSignatureInformation>,
-    pub active_signature: Option<u32>,
-    pub active_parameter: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspCommand {
-    pub title: Option<String>,
-    pub command: String,
-    #[serde(default)]
-    pub arguments: Vec<Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspCodeAction {
-    pub title: String,
-    pub kind: Option<String>,
-    pub edit: Option<LspWorkspaceEdit>,
-    pub command: Option<LspCommand>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspInlayHint {
-    pub label: String,
-    pub position: LspPosition,
-    pub kind: Option<u32>,
-    pub tooltip: Option<String>,
-    pub padding_left: bool,
-    pub padding_right: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspSymbol {
-    pub name: String,
-    pub kind: u32,
-    pub detail: Option<String>,
-    pub container_name: Option<String>,
-    pub uri: String,
-    pub path: String,
-    pub range: LspRange,
-    pub selection_range: LspRange,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspTextEdit {
-    pub range: LspRange,
-    pub new_text: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspFileEdit {
-    pub uri: String,
-    pub path: String,
-    pub edits: Vec<LspTextEdit>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspWorkspaceEdit {
-    pub files: Vec<LspFileEdit>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspApplyWorkspaceEditSummary {
-    pub files_changed: usize,
-    pub edits_applied: usize,
-    pub edits_skipped: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LspDocumentRequest {
-    pub project_path: String,
-    pub file_path: String,
-    pub content: String,
-    pub line: u32,
-    pub character: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspDocumentLifecycleSummary {
-    pub project_path: String,
-    pub file_path: String,
-    pub language_id: String,
-    pub version: u32,
-    pub open_documents: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LspDiagnosticsEvent {
-    pub project_path: String,
-    pub file_path: String,
-    pub diagnostics: Vec<DiagnosticItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LspOpenDocument {
-    language_id: String,
-    version: u32,
-    content: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LspDocumentSnapshot {
-    path: String,
-    language_id: String,
-    version: u32,
-    content: String,
-}
-
-struct LspDiagnosticEmitter {
-    app: AppHandle,
-    project_path: String,
-}
-
-struct LocalLspSession {
-    stdin: ChildStdin,
-    stdout: ChildStdout,
-    child: Child,
-    next_id: i64,
-    open_documents: BTreeMap<String, u32>,
-}
-
-impl LocalLspSession {
-    fn next_request_id(&mut self) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
-    }
-
-    async fn sync_documents(&mut self, documents: Vec<LspDocumentSnapshot>) -> Result<(), String> {
-        for document in documents {
-            let current_version = self.open_documents.get(&document.path).copied();
-            if current_version == Some(document.version) {
-                continue;
-            }
-            let uri = file_uri(Path::new(&document.path));
-            if current_version.is_some() {
-                write_message(
-                    &mut self.stdin,
-                    &json!({
-                        "jsonrpc": "2.0",
-                        "method": "textDocument/didChange",
-                        "params": {
-                            "textDocument": {
-                                "uri": uri,
-                                "version": document.version
-                            },
-                            "contentChanges": [{ "text": document.content }]
-                        }
-                    }),
-                )
-                .await?;
-            } else {
-                write_message(
-                    &mut self.stdin,
-                    &json!({
-                        "jsonrpc": "2.0",
-                        "method": "textDocument/didOpen",
-                        "params": {
-                            "textDocument": {
-                                "uri": uri,
-                                "languageId": document.language_id,
-                                "version": document.version,
-                                "text": document.content
-                            }
-                        }
-                    }),
-                )
-                .await?;
-            }
-            self.open_documents.insert(document.path, document.version);
+impl ServerLauncher for TauriLocalLauncher {
+    fn local(&self, project_root: &Path, server: &LspServerCommand) -> CommandSpec {
+        CommandSpec {
+            program: server.program.clone(),
+            args: server.args.clone(),
+            current_dir: Some(project_root.to_path_buf()),
+            envs: crate::app_settings::get_login_shell_env().to_vec(),
         }
-        Ok(())
     }
 
-    async fn shutdown(&mut self) {
-        let shutdown_id = self.next_request_id();
-        let _ = write_message(
-            &mut self.stdin,
-            &json!({
-                "jsonrpc": "2.0",
-                "id": shutdown_id,
-                "method": "shutdown",
-                "params": null
-            }),
-        )
-        .await;
-        let _ = write_message(
-            &mut self.stdin,
-            &json!({
-                "jsonrpc": "2.0",
-                "method": "exit"
-            }),
-        )
-        .await;
-        let _ = crate::subprocess::terminate_tokio_process_tree(&mut self.child).await;
+    fn remote(
+        &self,
+        _root_uri: &str,
+        _remote_root: &str,
+        _server: &LspServerCommand,
+    ) -> CommandSpec {
+        unreachable!("local launcher has no remote server command")
     }
 }
 
-pub fn language_id_for_path(path: impl AsRef<Path>) -> Option<&'static str> {
-    let ext = path.as_ref().extension()?.to_str()?.to_ascii_lowercase();
-    match ext.as_str() {
-        "ts" => Some("typescript"),
-        "tsx" => Some("typescriptreact"),
-        "js" | "mjs" | "cjs" => Some("javascript"),
-        "jsx" => Some("javascriptreact"),
-        _ => None,
-    }
+/// 远端 server 的启动命令:仍是本文件原来的 ssh 包装(`cd -- '<root>' &&
+/// exec <server>` 经 `ssh_command_spec_for_remote_command`),只是把「怎么拉
+/// 进程」交给 core 的会话引擎。core 看不到 `SshConnection`,所以适配器持住它。
+struct TauriRemoteLauncher<'a> {
+    connection: &'a SshConnection,
 }
 
-pub fn default_server_command(language_id: &str) -> Option<LspServerCommand> {
-    match language_id {
-        "typescript" | "typescriptreact" | "javascript" | "javascriptreact" => {
-            Some(LspServerCommand {
-                program: "typescript-language-server".to_string(),
-                args: vec!["--stdio".to_string()],
-            })
+impl ServerLauncher for TauriRemoteLauncher<'_> {
+    fn local(&self, _project_root: &Path, _server: &LspServerCommand) -> CommandSpec {
+        unreachable!("remote launcher has no local server command")
+    }
+
+    fn remote(&self, _root_uri: &str, remote_root: &str, server: &LspServerCommand) -> CommandSpec {
+        let spec = crate::ssh::ssh_command_spec_for_remote_command(
+            self.connection,
+            build_remote_lsp_server_command(remote_root, server),
+        );
+        let mut envs = spec.env;
+        envs.push((
+            "PATH".to_string(),
+            crate::app_settings::get_login_shell_path().to_string(),
+        ));
+        CommandSpec {
+            program: spec.program,
+            args: spec.args,
+            current_dir: None,
+            envs,
         }
-        _ => None,
     }
 }
 
@@ -355,6 +105,54 @@ fn lsp_server_invocation(server: &LspServerCommand) -> String {
         )
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// 远端读文件:走 ssh 执行 `wc -c` 上限判定 + `cat`(上限 2 MiB)。
+fn run_remote_lsp_output(
+    connection: &SshConnection,
+    remote_command: String,
+) -> Result<Vec<u8>, String> {
+    let mut cmd = crate::ssh::std_ssh_command_for_remote_command(connection, remote_command);
+    crate::subprocess::configure_background_command(&mut cmd);
+    let output = cmd.output().map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(output.stdout)
+}
+
+/// 远端写文件:ssh 把内容经 stdin 管道灌进去。
+fn write_remote_lsp_text_file(
+    connection: &SshConnection,
+    remote_path: &str,
+    content: &str,
+) -> Result<(), String> {
+    let mut cmd = crate::ssh::std_ssh_command_for_remote_command(
+        connection,
+        remote_write_text_command(remote_path),
+    );
+    crate::subprocess::configure_background_command(&mut cmd);
+    let mut child = cmd
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|err| err.to_string())?;
+    {
+        use std::io::Write as _;
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "Failed to open ssh stdin".to_string())?;
+        stdin
+            .write_all(content.as_bytes())
+            .map_err(|err| err.to_string())?;
+    }
+    let output = child.wait_with_output().map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(())
 }
 
 fn build_remote_lsp_server_command(remote_project_path: &str, server: &LspServerCommand) -> String {
@@ -439,31 +237,6 @@ fn remote_workspace_name(remote_root: &str) -> String {
         .to_string()
 }
 
-fn local_workspace_name(project_root: &Path) -> String {
-    project_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("workspace")
-        .to_string()
-}
-
-fn local_lsp_lifecycle_context(
-    project_path: &str,
-    file_path: &str,
-) -> Result<(String, String, String, String), String> {
-    let project_root = Path::new(project_path)
-        .canonicalize()
-        .map_err(|err| format!("failed to resolve project root: {err}"))?;
-    let document_path = validate_document_path(&project_root, Path::new(file_path))?;
-    let language_id = language_id_for_path(&document_path)
-        .ok_or_else(|| "language server is not supported for this file type".to_string())?
-        .to_string();
-    let project_key = project_root.to_string_lossy().to_string();
-    let file_key = document_path.to_string_lossy().to_string();
-    let session_key = format!("local:{project_key}:{language_id}");
-    Ok((session_key, project_key, file_key, language_id))
-}
-
 fn remote_lsp_lifecycle_context(
     connection: &SshConnection,
     remote_project_path: &str,
@@ -478,418 +251,430 @@ fn remote_lsp_lifecycle_context(
     Ok((session_key, remote_root, document_path, language_id))
 }
 
-fn upsert_lsp_document(
-    session_key: String,
-    project_path: String,
-    file_path: String,
-    language_id: String,
-    content: String,
-    version: u32,
-) -> Result<LspDocumentLifecycleSummary, String> {
-    let mut registry = LSP_DOCUMENTS
-        .lock()
-        .map_err(|_| "language server document registry is poisoned".to_string())?;
-    let documents = registry.entry(session_key).or_default();
-    documents.insert(
-        file_path.clone(),
-        LspOpenDocument {
-            language_id: language_id.clone(),
-            version,
-            content,
-        },
-    );
-    Ok(LspDocumentLifecycleSummary {
-        project_path,
-        file_path,
-        language_id,
-        version,
-        open_documents: documents.len(),
-    })
-}
-
-fn close_lsp_document(
-    session_key: String,
-    project_path: String,
-    file_path: String,
-    language_id: String,
-) -> Result<LspDocumentLifecycleSummary, String> {
-    let mut registry = LSP_DOCUMENTS
-        .lock()
-        .map_err(|_| "language server document registry is poisoned".to_string())?;
-    let mut version = 0;
-    let mut open_documents = 0;
-    let mut remove_session = false;
-    if let Some(documents) = registry.get_mut(&session_key) {
-        if let Some(document) = documents.remove(&file_path) {
-            version = document.version;
-        }
-        open_documents = documents.len();
-        remove_session = documents.is_empty();
-    }
-    if remove_session {
-        registry.remove(&session_key);
-    }
-    Ok(LspDocumentLifecycleSummary {
-        project_path,
-        file_path,
-        language_id,
-        version,
-        open_documents,
-    })
-}
-
-fn shutdown_lsp_project_sessions(session_prefix: &str) -> Result<usize, String> {
-    let mut registry = LSP_DOCUMENTS
-        .lock()
-        .map_err(|_| "language server document registry is poisoned".to_string())?;
-    let session_keys = registry
-        .keys()
-        .filter(|key| key.starts_with(session_prefix))
-        .cloned()
-        .collect::<Vec<_>>();
-    let closed_documents = session_keys
-        .iter()
-        .filter_map(|key| registry.get(key))
-        .map(BTreeMap::len)
-        .sum();
-    for key in session_keys {
-        registry.remove(&key);
-    }
-    Ok(closed_documents)
-}
-
-fn lsp_session_document_snapshots(
-    session_key: &str,
-    request_path: String,
-    request_language_id: String,
-    request_content: String,
-) -> Result<Vec<LspDocumentSnapshot>, String> {
-    let registry = LSP_DOCUMENTS
-        .lock()
-        .map_err(|_| "language server document registry is poisoned".to_string())?;
-    let mut snapshots = registry
-        .get(session_key)
-        .map(|documents| {
-            documents
-                .iter()
-                .map(|(path, document)| LspDocumentSnapshot {
-                    path: path.clone(),
-                    language_id: document.language_id.clone(),
-                    version: document.version,
-                    content: document.content.clone(),
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    if !snapshots
-        .iter()
-        .any(|snapshot| snapshot.path == request_path)
-    {
-        snapshots.push(LspDocumentSnapshot {
-            path: request_path,
-            language_id: request_language_id,
-            version: 1,
-            content: request_content,
-        });
-    }
-    snapshots.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(snapshots)
-}
-
-fn lsp_session_open_document_snapshots(
-    session_key: &str,
-) -> Result<Vec<LspDocumentSnapshot>, String> {
-    let registry = LSP_DOCUMENTS
-        .lock()
-        .map_err(|_| "language server document registry is poisoned".to_string())?;
-    let mut snapshots = registry
-        .get(session_key)
-        .map(|documents| {
-            documents
-                .iter()
-                .map(|(path, document)| LspDocumentSnapshot {
-                    path: path.clone(),
-                    language_id: document.language_id.clone(),
-                    version: document.version,
-                    content: document.content.clone(),
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    snapshots.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(snapshots)
-}
-
-fn local_lsp_session_handle(session_key: &str) -> Option<Arc<AsyncMutex<LocalLspSession>>> {
-    LOCAL_LSP_SESSIONS
-        .lock()
-        .ok()
-        .and_then(|sessions| sessions.get(session_key).cloned())
-}
-
-fn insert_local_lsp_session(session_key: String, session: LocalLspSession) {
-    if let Ok(mut sessions) = LOCAL_LSP_SESSIONS.lock() {
-        sessions.insert(session_key, Arc::new(AsyncMutex::new(session)));
-    }
-}
-
-fn take_local_lsp_session(session_key: &str) -> Option<Arc<AsyncMutex<LocalLspSession>>> {
-    LOCAL_LSP_SESSIONS
-        .lock()
-        .ok()
-        .and_then(|mut sessions| sessions.remove(session_key))
-}
-
-async fn shutdown_lsp_handle(handle: Arc<AsyncMutex<LocalLspSession>>) {
-    let mut session = handle.lock().await;
-    session.shutdown().await;
-}
-
-async fn shutdown_local_lsp_session(session_key: &str) {
-    if let Some(handle) = take_local_lsp_session(session_key) {
-        shutdown_lsp_handle(handle).await;
-    }
-}
-
-fn take_local_lsp_sessions_with_prefix(
-    session_prefix: &str,
-) -> Vec<Arc<AsyncMutex<LocalLspSession>>> {
-    let Ok(mut sessions) = LOCAL_LSP_SESSIONS.lock() else {
-        return Vec::new();
-    };
-    let keys = sessions
-        .keys()
-        .filter(|key| key.starts_with(session_prefix))
-        .cloned()
-        .collect::<Vec<_>>();
-    keys.into_iter()
-        .filter_map(|key| sessions.remove(&key))
-        .collect()
-}
-
-fn remote_lsp_session_handle(session_key: &str) -> Option<Arc<AsyncMutex<LocalLspSession>>> {
-    REMOTE_LSP_SESSIONS
-        .lock()
-        .ok()
-        .and_then(|sessions| sessions.get(session_key).cloned())
-}
-
-fn insert_remote_lsp_session(session_key: String, session: LocalLspSession) {
-    if let Ok(mut sessions) = REMOTE_LSP_SESSIONS.lock() {
-        sessions.insert(session_key, Arc::new(AsyncMutex::new(session)));
-    }
-}
-
-fn take_remote_lsp_session(session_key: &str) -> Option<Arc<AsyncMutex<LocalLspSession>>> {
-    REMOTE_LSP_SESSIONS
-        .lock()
-        .ok()
-        .and_then(|mut sessions| sessions.remove(session_key))
-}
-
-async fn shutdown_remote_lsp_session(session_key: &str) {
-    if let Some(handle) = take_remote_lsp_session(session_key) {
-        shutdown_lsp_handle(handle).await;
-    }
-}
-
-fn take_remote_lsp_sessions_with_prefix(
-    session_prefix: &str,
-) -> Vec<Arc<AsyncMutex<LocalLspSession>>> {
-    let Ok(mut sessions) = REMOTE_LSP_SESSIONS.lock() else {
-        return Vec::new();
-    };
-    let keys = sessions
-        .keys()
-        .filter(|key| key.starts_with(session_prefix))
-        .cloned()
-        .collect::<Vec<_>>();
-    keys.into_iter()
-        .filter_map(|key| sessions.remove(&key))
-        .collect()
-}
-
-#[cfg(test)]
-fn local_lsp_session_count() -> usize {
-    LOCAL_LSP_SESSIONS
-        .lock()
-        .map(|sessions| sessions.len())
-        .unwrap_or_default()
-}
-
-async fn close_lsp_session_document(
-    handle: Option<Arc<AsyncMutex<LocalLspSession>>>,
-    file_path: &str,
-) {
-    let Some(handle) = handle else { return };
-    let mut session = handle.lock().await;
-    if session.open_documents.remove(file_path).is_none() {
-        return;
-    }
-    let _ = write_message(
-        &mut session.stdin,
-        &json!({
-            "jsonrpc": "2.0",
-            "method": "textDocument/didClose",
-            "params": {
-                "textDocument": {
-                    "uri": file_uri(Path::new(file_path))
-                }
-            }
-        }),
-    )
-    .await;
-}
-
-async fn close_local_lsp_session_document(session_key: &str, file_path: &str) {
-    close_lsp_session_document(local_lsp_session_handle(session_key), file_path).await;
-}
-
-async fn close_remote_lsp_session_document(session_key: &str, file_path: &str) {
-    close_lsp_session_document(remote_lsp_session_handle(session_key), file_path).await;
-}
-
-fn tokio_ssh_command_for_remote_command(
-    connection: &SshConnection,
-    remote_command: String,
-) -> Command {
-    let spec = crate::ssh::ssh_command_spec_for_remote_command(connection, remote_command);
-    let mut command = Command::new(spec.program);
-    crate::subprocess::configure_terminable_tokio_process_tree(&mut command);
-    command.args(spec.args);
-    for (key, value) in spec.env {
-        command.env(key, value);
-    }
-    command.env("PATH", crate::app_settings::get_login_shell_path());
-    command
-}
-
-fn build_remote_lsp_read_text_command(remote_path: &str) -> String {
+fn remote_read_text_command(remote_path: &str) -> String {
     let path = crate::ssh::shell_quote_posix(remote_path);
     format!(
         "size=$(wc -c < {path}) && [ \"$size\" -le {MAX_REMOTE_LSP_EDIT_FILE_BYTES} ] && cat -- {path}"
     )
 }
 
-fn build_remote_lsp_write_text_command(remote_path: &str) -> String {
+fn remote_write_text_command(remote_path: &str) -> String {
     format!("cat > {}", crate::ssh::shell_quote_posix(remote_path))
 }
 
-pub fn validate_document_path(project_path: &Path, file_path: &Path) -> Result<PathBuf, String> {
-    let project_root = project_path
-        .canonicalize()
-        .map_err(|err| format!("failed to resolve project root: {err}"))?;
-    let document_path = file_path
-        .canonicalize()
-        .map_err(|err| format!("failed to resolve document path: {err}"))?;
-    if !document_path.starts_with(&project_root) {
-        return Err("document path is outside project root".to_string());
-    }
-    if language_id_for_path(&document_path).is_none() {
-        return Err("language server is not supported for this file type".to_string());
-    }
-    Ok(document_path)
+/// 一次 LSP 请求的参数形态别名(位置型/整文档范围型/原始值)。
+type Params = RequestParams;
+
+async fn request_lsp_feature(
+    app: &tauri::AppHandle,
+    request: &LspDocumentRequest,
+    method: &str,
+) -> Result<Value, String> {
+    request_lsp_feature_with_params(app, request, method, None).await
 }
 
+/// 本地面命令的转发入口:External 走宿主(方法名与宿主注册逐字一致),
+/// Embedded 在进程内直接跑同一份 core 引擎。
+async fn dispatch_local(
+    app: &tauri::AppHandle,
+    method: &str,
+    params: Value,
+    embedded: impl std::future::Future<Output = Result<Value, String>>,
+) -> Result<Value, String> {
+    crate::host_dispatch::dispatch(app, method, params, embedded).await
+}
+
+async fn request_lsp_feature_with_params(
+    app: &tauri::AppHandle,
+    request: &LspDocumentRequest,
+    method: &str,
+    extra_params: Option<Value>,
+) -> Result<Value, String> {
+    request_with_mode(app, request, method, Params::Position { extra_params }).await
+}
+
+async fn request_lsp_document_range_feature(
+    app: &tauri::AppHandle,
+    request: &LspDocumentRequest,
+    method: &str,
+) -> Result<Value, String> {
+    request_with_mode(app, request, method, Params::DocumentRange).await
+}
+
+async fn request_with_mode(
+    app: &tauri::AppHandle,
+    request: &LspDocumentRequest,
+    method: &str,
+    params: Params,
+) -> Result<Value, String> {
+    let project_root = Path::new(&request.project_path)
+        .canonicalize()
+        .map_err(|err| format!("failed to resolve project root: {err}"))?;
+    let document_path =
+        lsp_face::validate_document_path(&project_root, Path::new(&request.file_path))?;
+    let language_id = lsp_face::language_id_for_path(&document_path)
+        .ok_or_else(|| "language server is not supported for this file type".to_string())?;
+    let server = lsp_face::default_server_command(language_id)
+        .ok_or_else(|| "language server is not configured for this file type".to_string())?;
+    let session_key = format!("local:{}:{language_id}", project_root.to_string_lossy());
+    let documents = lsp_face::lsp_session_document_snapshots(
+        &session_key,
+        document_path.to_string_lossy().to_string(),
+        language_id.to_string(),
+        request.content.clone(),
+    )?;
+    engine::run_lsp_session_request(
+        true,
+        &TauriLocalLauncher,
+        Some(&window_diagnostics_sink(app)),
+        session_key,
+        &project_root,
+        &server,
+        file_uri(&project_root),
+        display_name(&project_root),
+        file_uri(&document_path),
+        documents,
+        request,
+        method,
+        params,
+        "typescript-language-server is not installed. Run: pnpm add -D typescript-language-server typescript",
+    )
+    .await
+}
+
+async fn request_remote_lsp_feature(
+    app: &tauri::AppHandle,
+    connection: &SshConnection,
+    remote_project_path: &str,
+    request: &LspDocumentRequest,
+    method: &str,
+) -> Result<Value, String> {
+    request_remote_lsp_feature_with_params(
+        app,
+        connection,
+        remote_project_path,
+        request,
+        method,
+        None,
+    )
+    .await
+}
+
+async fn request_remote_lsp_feature_with_params(
+    app: &tauri::AppHandle,
+    connection: &SshConnection,
+    remote_project_path: &str,
+    request: &LspDocumentRequest,
+    method: &str,
+    extra_params: Option<Value>,
+) -> Result<Value, String> {
+    request_remote_with_mode(
+        app,
+        connection,
+        remote_project_path,
+        request,
+        method,
+        Params::Position { extra_params },
+    )
+    .await
+}
+
+async fn request_remote_lsp_document_range_feature(
+    app: &tauri::AppHandle,
+    connection: &SshConnection,
+    remote_project_path: &str,
+    request: &LspDocumentRequest,
+    method: &str,
+) -> Result<Value, String> {
+    request_remote_with_mode(
+        app,
+        connection,
+        remote_project_path,
+        request,
+        method,
+        Params::DocumentRange,
+    )
+    .await
+}
+
+async fn request_remote_with_mode(
+    app: &tauri::AppHandle,
+    connection: &SshConnection,
+    remote_project_path: &str,
+    request: &LspDocumentRequest,
+    method: &str,
+    params: Params,
+) -> Result<Value, String> {
+    let remote_root = normalize_remote_lsp_path(remote_project_path, "Remote project path")?;
+    let document_path = validate_remote_lsp_document_path(&remote_root, &request.file_path)?;
+    let language_id = lsp_face::language_id_for_path(Path::new(&document_path))
+        .ok_or_else(|| "language server is not supported for this file type".to_string())?;
+    let server = lsp_face::default_server_command(language_id)
+        .ok_or_else(|| "language server is not configured for this file type".to_string())?;
+    let session_key = format!("ssh:{}:{remote_root}:{language_id}", connection.id);
+    let documents = lsp_face::lsp_session_document_snapshots(
+        &session_key,
+        document_path.clone(),
+        language_id.to_string(),
+        request.content.clone(),
+    )?;
+    let launcher = TauriRemoteLauncher { connection };
+    engine::run_lsp_session_request(
+        false,
+        &launcher,
+        Some(&window_diagnostics_sink(app)),
+        session_key,
+        Path::new(&remote_root),
+        &server,
+        file_uri(Path::new(&remote_root)),
+        remote_workspace_name(&remote_root),
+        file_uri(Path::new(&document_path)),
+        documents,
+        request,
+        method,
+        params,
+        "failed to start remote language server over SSH",
+    )
+    .await
+}
+
+async fn run_lsp_workspace_symbol_request(
+    app: &tauri::AppHandle,
+    project_root: &Path,
+    server: &LspServerCommand,
+    query: &str,
+) -> Result<Value, String> {
+    let session_key = format!("local:{}:typescript", project_root.to_string_lossy());
+    let documents = lsp_face::lsp_session_open_document_snapshots(&session_key)?;
+    run_workspace_symbol_session_request(
+        app,
+        &TauriLocalLauncher,
+        true,
+        session_key,
+        project_root,
+        server,
+        documents,
+        query,
+        "typescript-language-server is not installed. Run: pnpm add -D typescript-language-server typescript",
+    )
+    .await
+}
+
+async fn run_remote_lsp_workspace_symbol_request(
+    app: &tauri::AppHandle,
+    connection: &SshConnection,
+    remote_root: &str,
+    server: &LspServerCommand,
+    query: &str,
+) -> Result<Value, String> {
+    let session_key = format!("ssh:{}:{remote_root}:typescript", connection.id);
+    let documents = lsp_face::lsp_session_open_document_snapshots(&session_key)?;
+    let launcher = TauriRemoteLauncher { connection };
+    run_workspace_symbol_session_request(
+        app,
+        &launcher,
+        false,
+        session_key,
+        Path::new(remote_root),
+        server,
+        documents,
+        query,
+        "failed to start remote language server over SSH",
+    )
+    .await
+}
+
+/// 工作区符号请求:`workspace/symbol` 的参数形态与文档请求不同(只有 query),
+/// 所以不复用 `run_lsp_session_request` 的 `feature_request_params`,而是把
+/// 参数直接以 `RequestParams::Raw` 交给同一引擎(超时/settle/diagnostics 语义
+/// 与其它请求逐字相同)。
+async fn run_workspace_symbol_session_request(
+    app: &tauri::AppHandle,
+    launcher: &dyn engine::ServerLauncher,
+    local: bool,
+    session_key: String,
+    project_root: &Path,
+    server: &LspServerCommand,
+    documents: Vec<LspDocumentSnapshot>,
+    query: &str,
+    not_found_message: &str,
+) -> Result<Value, String> {
+    let request = LspDocumentRequest {
+        project_path: project_root.to_string_lossy().to_string(),
+        file_path: project_root.to_string_lossy().to_string(),
+        content: String::new(),
+        line: 0,
+        character: 0,
+    };
+    let root_uri = file_uri(project_root);
+    let workspace_name = if local {
+        display_name(project_root)
+    } else {
+        remote_workspace_name(&project_root.to_string_lossy())
+    };
+    let params = RequestParams::Raw(serde_json::json!({ "query": query }));
+    let _ = feature_request_params; // 参数构造在 core,这里显式声明走 Raw 分支
+    engine::run_lsp_session_request(
+        local,
+        launcher,
+        Some(&window_diagnostics_sink(app)),
+        session_key,
+        project_root,
+        server,
+        root_uri,
+        workspace_name,
+        file_uri(project_root),
+        documents,
+        &request,
+        "workspace/symbol",
+        params,
+        not_found_message,
+    )
+    .await
+}
+
+fn display_name(root: &Path) -> String {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("workspace")
+        .to_string()
+}
+
+// ── 切片一百零九:LSP 生命周期面改宿主转发壳。注册表簿记在 core
+// `ide::lsp_face`;close 的会话 shutdown 半边留本闭包;remote 孪生留本文件
+// SSH 适配层(注册表经 core pub 访问器共享)。──
+
 #[tauri::command]
-pub fn lsp_server_status(
+pub async fn lsp_server_status<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     project_path: String,
     file_path: String,
 ) -> Result<LspServerStatus, String> {
-    let document_path = validate_document_path(Path::new(&project_path), Path::new(&file_path))?;
-    let language_id = language_id_for_path(&document_path).map(str::to_string);
-    let command = language_id.as_deref().and_then(default_server_command);
-    let available = command
-        .as_ref()
-        .map(|command| command_available(&command.program))
-        .unwrap_or(false);
-
-    Ok(LspServerStatus {
-        supported: language_id.is_some() && command.is_some(),
-        available,
-        language_id,
-        command,
-        install_hint: if available {
-            None
-        } else {
-            Some("pnpm add -D typescript-language-server typescript".to_string())
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "ide.lsp_server_status",
+        serde_json::json!({ "projectPath": project_path, "filePath": file_path }),
+        async {
+            lsp_face::lsp_server_status(
+                project_path,
+                file_path,
+                crate::app_settings::get_login_shell_env(),
+            )
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
         },
-    })
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn lsp_open_document(
+pub async fn lsp_open_document<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     project_path: String,
     file_path: String,
     content: String,
     version: u32,
 ) -> Result<LspDocumentLifecycleSummary, String> {
-    let (session_key, project_key, file_key, language_id) =
-        local_lsp_lifecycle_context(&project_path, &file_path)?;
-    upsert_lsp_document(
-        session_key,
-        project_key,
-        file_key,
-        language_id,
-        content,
-        version,
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "ide.lsp_open_document",
+        serde_json::json!({
+            "projectPath": project_path,
+            "filePath": file_path,
+            "content": content,
+            "version": version
+        }),
+        async {
+            lsp_face::lsp_open_document(&project_path, &file_path, content, version)
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn lsp_change_document(
+pub async fn lsp_change_document<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     project_path: String,
     file_path: String,
     content: String,
     version: u32,
 ) -> Result<LspDocumentLifecycleSummary, String> {
-    let (session_key, project_key, file_key, language_id) =
-        local_lsp_lifecycle_context(&project_path, &file_path)?;
-    upsert_lsp_document(
-        session_key,
-        project_key,
-        file_key,
-        language_id,
-        content,
-        version,
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "ide.lsp_change_document",
+        serde_json::json!({
+            "projectPath": project_path,
+            "filePath": file_path,
+            "content": content,
+            "version": version
+        }),
+        async {
+            lsp_face::lsp_change_document(&project_path, &file_path, content, version)
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn lsp_close_document(
+pub async fn lsp_close_document<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     project_path: String,
     file_path: String,
 ) -> Result<LspDocumentLifecycleSummary, String> {
-    let (session_key, project_key, file_key, language_id) =
-        local_lsp_lifecycle_context(&project_path, &file_path)?;
-    let summary = close_lsp_document(
-        session_key.clone(),
-        project_key,
-        file_key.clone(),
-        language_id,
-    )?;
-    close_local_lsp_session_document(&session_key, &file_key).await;
-    if summary.open_documents == 0 {
-        if let Some(handle) = take_local_lsp_session(&session_key) {
-            handle.lock().await.shutdown().await;
-        }
-    }
-    Ok(summary)
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "ide.lsp_close_document",
+        serde_json::json!({ "projectPath": project_path, "filePath": file_path }),
+        // Embedded 与宿主走同一份实现(切片一百一十):注册表簿记**和**会话
+        // 回收都在此。External 判决下这个 future 不会被 poll,所以宿主那份
+        // 才是 External 模式的承重实现(见 host `ide_services.rs`)。
+        async {
+            let (session_key, project_key, file_key, language_id) =
+                lsp_face::local_lsp_lifecycle_context(&project_path, &file_path)?;
+            let summary = lsp_face::lsp_registry_close(
+                session_key.clone(),
+                project_key,
+                file_key.clone(),
+                language_id,
+            )?;
+            close_local_lsp_session_document(&session_key, &file_key).await;
+            if summary.open_documents == 0 {
+                shutdown_local_lsp_session(&session_key).await;
+            }
+            serde_json::to_value(summary).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn lsp_shutdown_project(project_path: String) -> Result<usize, String> {
-    let project_root = Path::new(&project_path)
-        .canonicalize()
-        .map_err(|err| format!("failed to resolve project root: {err}"))?;
-    let project_key = project_root.to_string_lossy();
-    let session_prefix = format!("local:{project_key}:");
-    let closed_documents = shutdown_lsp_project_sessions(&session_prefix)?;
-    for handle in take_local_lsp_sessions_with_prefix(&session_prefix) {
-        handle.lock().await.shutdown().await;
-    }
-    Ok(closed_documents)
+pub async fn lsp_shutdown_project<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+) -> Result<usize, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "ide.lsp_shutdown_project",
+        serde_json::json!({ "projectPath": project_path }),
+        async {
+            let project_root = std::path::Path::new(&project_path)
+                .canonicalize()
+                .map_err(|err| format!("failed to resolve project root: {err}"))?;
+            let closed = lsp_face::lsp_shutdown_project(&project_path)?;
+            let session_prefix = format!("local:{}:", project_root.to_string_lossy());
+            for handle in take_local_lsp_sessions_with_prefix(&session_prefix) {
+                engine::shutdown_lsp_handle(handle).await;
+            }
+            serde_json::to_value(closed).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -946,7 +731,7 @@ pub fn remote_lsp_open_document(
 ) -> Result<LspDocumentLifecycleSummary, String> {
     let (session_key, remote_root, document_path, language_id) =
         remote_lsp_lifecycle_context(&connection, &remote_project_path, &file_path)?;
-    upsert_lsp_document(
+    lsp_face::lsp_registry_upsert(
         session_key,
         remote_root,
         document_path,
@@ -966,7 +751,7 @@ pub fn remote_lsp_change_document(
 ) -> Result<LspDocumentLifecycleSummary, String> {
     let (session_key, remote_root, document_path, language_id) =
         remote_lsp_lifecycle_context(&connection, &remote_project_path, &file_path)?;
-    upsert_lsp_document(
+    lsp_face::lsp_registry_upsert(
         session_key,
         remote_root,
         document_path,
@@ -984,7 +769,7 @@ pub async fn remote_lsp_close_document(
 ) -> Result<LspDocumentLifecycleSummary, String> {
     let (session_key, remote_root, document_path, language_id) =
         remote_lsp_lifecycle_context(&connection, &remote_project_path, &file_path)?;
-    let summary = close_lsp_document(
+    let summary = lsp_face::lsp_registry_close(
         session_key.clone(),
         remote_root,
         document_path.clone(),
@@ -1006,7 +791,7 @@ pub async fn remote_lsp_shutdown_project(
 ) -> Result<usize, String> {
     let remote_root = normalize_remote_lsp_path(&remote_project_path, "Remote project path")?;
     let session_prefix = format!("ssh:{}:{remote_root}:", connection.id);
-    let closed_documents = shutdown_lsp_project_sessions(&session_prefix)?;
+    let closed_documents = lsp_face::lsp_registry_shutdown(&session_prefix)?;
     for handle in take_remote_lsp_sessions_with_prefix(&session_prefix) {
         handle.lock().await.shutdown().await;
     }
@@ -1018,8 +803,23 @@ pub async fn lsp_hover(
     app: AppHandle,
     request: LspDocumentRequest,
 ) -> Result<Option<LspHover>, String> {
-    let result = request_lsp_feature(&app, &request, "textDocument/hover").await?;
-    Ok(parse_hover(Some(&result)))
+    let value = dispatch_local(
+        &app,
+        "ide.lsp_hover",
+        serde_json::json!({
+            "projectPath": request.project_path,
+            "filePath": request.file_path,
+            "content": request.content,
+            "line": request.line,
+            "character": request.character
+        }),
+        async {
+            let result = request_lsp_feature(&app, &request, "textDocument/hover").await?;
+            serde_json::to_value(parse_hover(Some(&result))).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1045,8 +845,23 @@ pub async fn lsp_definition(
     app: AppHandle,
     request: LspDocumentRequest,
 ) -> Result<Vec<LspLocation>, String> {
-    let result = request_lsp_feature(&app, &request, "textDocument/definition").await?;
-    Ok(parse_locations(Some(&result)))
+    let value = dispatch_local(
+        &app,
+        "ide.lsp_definition",
+        serde_json::json!({
+            "projectPath": request.project_path,
+            "filePath": request.file_path,
+            "content": request.content,
+            "line": request.line,
+            "character": request.character
+        }),
+        async {
+            let result = request_lsp_feature(&app, &request, "textDocument/definition").await?;
+            serde_json::to_value(parse_locations(Some(&result))).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1072,8 +887,23 @@ pub async fn lsp_references(
     app: AppHandle,
     request: LspDocumentRequest,
 ) -> Result<Vec<LspLocation>, String> {
-    let result = request_lsp_feature(&app, &request, "textDocument/references").await?;
-    Ok(parse_locations(Some(&result)))
+    let value = dispatch_local(
+        &app,
+        "ide.lsp_references",
+        serde_json::json!({
+            "projectPath": request.project_path,
+            "filePath": request.file_path,
+            "content": request.content,
+            "line": request.line,
+            "character": request.character
+        }),
+        async {
+            let result = request_lsp_feature(&app, &request, "textDocument/references").await?;
+            serde_json::to_value(parse_locations(Some(&result))).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1100,14 +930,32 @@ pub async fn lsp_rename(
     request: LspDocumentRequest,
     new_name: String,
 ) -> Result<LspWorkspaceEdit, String> {
-    let result = request_lsp_feature_with_params(
+    let value = dispatch_local(
         &app,
-        &request,
-        "textDocument/rename",
-        Some(json!({ "newName": new_name })),
+        "ide.lsp_rename",
+        serde_json::json!({
+            "projectPath": request.project_path,
+            "filePath": request.file_path,
+            "content": request.content,
+            "line": request.line,
+            "character": request.character,
+            "newName": new_name
+        }),
+        async {
+            let result = request_lsp_feature_with_params(
+                &app,
+                &request,
+                "textDocument/rename",
+                Some(json!({ "newName": new_name })),
+            )
+            .await?;
+            parse_workspace_edit(Some(&result))
+                .ok_or_else(|| "rename returned no edits".to_string())
+                .and_then(|edit| serde_json::to_value(edit).map_err(|e| e.to_string()))
+        },
     )
     .await?;
-    parse_workspace_edit(Some(&result)).ok_or_else(|| "rename returned no edits".to_string())
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1132,14 +980,25 @@ pub async fn remote_lsp_rename(
 
 #[tauri::command]
 pub async fn lsp_apply_workspace_edit(
+    app: AppHandle,
     project_path: String,
     edit: LspWorkspaceEdit,
 ) -> Result<LspApplyWorkspaceEditSummary, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        apply_workspace_edit_for_root(Path::new(&project_path), &edit)
-    })
-    .await
-    .map_err(|err| err.to_string())?
+    let value = dispatch_local(
+        &app,
+        "ide.lsp_apply_workspace_edit",
+        serde_json::json!({ "projectPath": project_path, "edit": edit }),
+        async {
+            tauri::async_runtime::spawn_blocking(move || {
+                apply_workspace_edit_for_root(Path::new(&project_path), &edit)
+            })
+            .await
+            .map_err(|err| err.to_string())?
+            .and_then(|summary| serde_json::to_value(summary).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1149,10 +1008,37 @@ pub async fn remote_lsp_apply_workspace_edit(
     edit: LspWorkspaceEdit,
 ) -> Result<LspApplyWorkspaceEditSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        apply_remote_workspace_edit_for_root(&connection, &remote_project_path, &edit)
+        // 远端 IO 端口由本适配层实现(ssh 命令);core 负责路径守卫调用点、
+        // 文本区间算法与失败回滚,不依赖连接类型。
+        let io = SshRemoteEditIo {
+            connection: &connection,
+        };
+        apply_remote_workspace_edit_for_root(
+            &io,
+            &remote_project_path,
+            validate_remote_lsp_edit_path,
+            &edit,
+        )
     })
     .await
     .map_err(|err| err.to_string())?
+}
+
+/// 远端文件的读/写:仍是本文件原来的 ssh 命令(stderr 非零即错、写入走
+/// stdin 管道),只是把它封成 core 的 `RemoteEditIo` 端口。
+struct SshRemoteEditIo<'a> {
+    connection: &'a SshConnection,
+}
+
+impl RemoteEditIo for SshRemoteEditIo<'_> {
+    fn read_file(&self, remote_path: &str) -> Result<String, String> {
+        let output = run_remote_lsp_output(self.connection, remote_read_text_command(remote_path))?;
+        String::from_utf8(output).map_err(|err| err.to_string())
+    }
+
+    fn write_file(&self, remote_path: &str, content: &str) -> Result<(), String> {
+        write_remote_lsp_text_file(self.connection, remote_path, content)
+    }
 }
 
 #[tauri::command]
@@ -1160,8 +1046,23 @@ pub async fn lsp_completion(
     app: AppHandle,
     request: LspDocumentRequest,
 ) -> Result<Vec<LspCompletionItem>, String> {
-    let result = request_lsp_feature(&app, &request, "textDocument/completion").await?;
-    Ok(parse_completion_items(Some(&result)))
+    let value = dispatch_local(
+        &app,
+        "ide.lsp_completion",
+        serde_json::json!({
+            "projectPath": request.project_path,
+            "filePath": request.file_path,
+            "content": request.content,
+            "line": request.line,
+            "character": request.character
+        }),
+        async {
+            let result = request_lsp_feature(&app, &request, "textDocument/completion").await?;
+            serde_json::to_value(parse_completion_items(Some(&result))).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1187,8 +1088,23 @@ pub async fn lsp_signature_help(
     app: AppHandle,
     request: LspDocumentRequest,
 ) -> Result<Option<LspSignatureHelp>, String> {
-    let result = request_lsp_feature(&app, &request, "textDocument/signatureHelp").await?;
-    Ok(parse_signature_help(Some(&result)))
+    let value = dispatch_local(
+        &app,
+        "ide.lsp_signature_help",
+        serde_json::json!({
+            "projectPath": request.project_path,
+            "filePath": request.file_path,
+            "content": request.content,
+            "line": request.line,
+            "character": request.character
+        }),
+        async {
+            let result = request_lsp_feature(&app, &request, "textDocument/signatureHelp").await?;
+            serde_json::to_value(parse_signature_help(Some(&result))).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1215,29 +1131,45 @@ pub async fn lsp_code_actions(
     request: LspDocumentRequest,
     diagnostics: Vec<Value>,
 ) -> Result<Vec<LspCodeAction>, String> {
-    let range = json!({
-        "start": {
-            "line": request.line,
-            "character": request.character
-        },
-        "end": {
-            "line": request.line,
-            "character": request.character
-        }
-    });
-    let result = request_lsp_feature_with_params(
+    let value = dispatch_local(
         &app,
-        &request,
-        "textDocument/codeAction",
-        Some(json!({
-            "range": range,
-            "context": {
-                "diagnostics": diagnostics
+        "ide.lsp_code_actions",
+        serde_json::json!({
+            "projectPath": request.project_path,
+            "filePath": request.file_path,
+            "content": request.content,
+            "line": request.line,
+            "character": request.character,
+            "diagnostics": diagnostics
+        }),
+        async {
+            let range = json!({
+            "start": {
+                "line": request.line,
+                "character": request.character
+            },
+            "end": {
+                "line": request.line,
+                "character": request.character
             }
-        })),
+                });
+            let result = request_lsp_feature_with_params(
+                &app,
+                &request,
+                "textDocument/codeAction",
+                Some(json!({
+                    "range": range,
+                    "context": {
+                        "diagnostics": diagnostics
+                    }
+                })),
+            )
+            .await?;
+            serde_json::to_value(parse_code_actions(Some(&result))).map_err(|e| e.to_string())
+        },
     )
     .await?;
-    Ok(parse_code_actions(Some(&result)))
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1281,14 +1213,30 @@ pub async fn lsp_execute_command(
     request: LspDocumentRequest,
     command: LspCommand,
 ) -> Result<(), String> {
-    request_lsp_feature_with_param_mode(
+    dispatch_local(
         &app,
-        &request,
-        "workspace/executeCommand",
-        LspFeatureParams::Raw(json!({
-            "command": command.command,
-            "arguments": command.arguments
-        })),
+        "ide.lsp_execute_command",
+        serde_json::json!({
+            "projectPath": request.project_path,
+            "filePath": request.file_path,
+            "content": request.content,
+            "line": request.line,
+            "character": request.character,
+            "command": { "title": command.title, "command": command.command, "arguments": command.arguments }
+        }),
+        async {
+            request_with_mode(
+                &app,
+                &request,
+                "workspace/executeCommand",
+                RequestParams::Raw(json!({
+                    "command": command.command,
+                    "arguments": command.arguments
+                })),
+            )
+            .await?;
+            Ok(Value::Null)
+        },
     )
     .await?;
     Ok(())
@@ -1302,13 +1250,13 @@ pub async fn remote_lsp_execute_command(
     request: LspDocumentRequest,
     command: LspCommand,
 ) -> Result<(), String> {
-    request_remote_lsp_feature_with_param_mode(
+    request_remote_with_mode(
         &app,
         &connection,
         &remote_project_path,
         &request,
         "workspace/executeCommand",
-        LspFeatureParams::Raw(json!({
+        RequestParams::Raw(json!({
             "command": command.command,
             "arguments": command.arguments
         })),
@@ -1322,9 +1270,25 @@ pub async fn lsp_document_symbols(
     app: AppHandle,
     request: LspDocumentRequest,
 ) -> Result<Vec<LspSymbol>, String> {
-    let uri = file_uri(Path::new(&request.file_path));
-    let result = request_lsp_feature(&app, &request, "textDocument/documentSymbol").await?;
-    Ok(parse_document_symbols(Some(&result), &uri))
+    let value = dispatch_local(
+        &app,
+        "ide.lsp_document_symbols",
+        serde_json::json!({
+            "projectPath": request.project_path,
+            "filePath": request.file_path,
+            "content": request.content,
+            "line": request.line,
+            "character": request.character
+        }),
+        async {
+            let uri = file_uri(Path::new(&request.file_path));
+            let result = request_lsp_feature(&app, &request, "textDocument/documentSymbol").await?;
+            serde_json::to_value(parse_document_symbols(Some(&result), &uri))
+                .map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1353,9 +1317,25 @@ pub async fn lsp_inlay_hints(
     app: AppHandle,
     request: LspDocumentRequest,
 ) -> Result<Vec<LspInlayHint>, String> {
-    let result =
-        request_lsp_document_range_feature(&app, &request, "textDocument/inlayHint").await?;
-    Ok(parse_inlay_hints(Some(&result)))
+    let value = dispatch_local(
+        &app,
+        "ide.lsp_inlay_hints",
+        serde_json::json!({
+            "projectPath": request.project_path,
+            "filePath": request.file_path,
+            "content": request.content,
+            "line": request.line,
+            "character": request.character
+        }),
+        async {
+            let result =
+                request_lsp_document_range_feature(&app, &request, "textDocument/inlayHint")
+                    .await?;
+            serde_json::to_value(parse_inlay_hints(Some(&result))).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1382,13 +1362,24 @@ pub async fn lsp_workspace_symbols(
     project_path: String,
     query: String,
 ) -> Result<Vec<LspSymbol>, String> {
-    let project_root = Path::new(&project_path)
-        .canonicalize()
-        .map_err(|err| format!("failed to resolve project root: {err}"))?;
-    let server = default_server_command("typescript")
-        .ok_or_else(|| "language server is not configured for workspace symbols".to_string())?;
-    let result = run_lsp_workspace_symbol_request(&app, &project_root, &server, &query).await?;
-    Ok(parse_workspace_symbols(Some(&result)))
+    let value = dispatch_local(
+        &app,
+        "ide.lsp_workspace_symbols",
+        serde_json::json!({ "projectPath": project_path, "query": query }),
+        async {
+            let project_root = Path::new(&project_path)
+                .canonicalize()
+                .map_err(|err| format!("failed to resolve project root: {err}"))?;
+            let server = default_server_command("typescript").ok_or_else(|| {
+                "language server is not configured for workspace symbols".to_string()
+            })?;
+            let result =
+                run_lsp_workspace_symbol_request(&app, &project_root, &server, &query).await?;
+            serde_json::to_value(parse_workspace_symbols(Some(&result))).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1407,838 +1398,22 @@ pub async fn remote_lsp_workspace_symbols(
     Ok(parse_workspace_symbols(Some(&result)))
 }
 
-async fn request_lsp_feature(
-    app: &AppHandle,
-    request: &LspDocumentRequest,
-    method: &str,
-) -> Result<Value, String> {
-    request_lsp_feature_with_params(app, request, method, None).await
-}
-
-async fn request_remote_lsp_feature(
-    app: &AppHandle,
-    connection: &SshConnection,
-    remote_project_path: &str,
-    request: &LspDocumentRequest,
-    method: &str,
-) -> Result<Value, String> {
-    request_remote_lsp_feature_with_params(
-        app,
-        connection,
-        remote_project_path,
-        request,
-        method,
-        None,
-    )
-    .await
-}
-
-async fn request_lsp_feature_with_params(
-    app: &AppHandle,
-    request: &LspDocumentRequest,
-    method: &str,
-    extra_params: Option<Value>,
-) -> Result<Value, String> {
-    request_lsp_feature_with_param_mode(
-        app,
-        request,
-        method,
-        LspFeatureParams::Position { extra_params },
-    )
-    .await
-}
-
-async fn request_remote_lsp_feature_with_params(
-    app: &AppHandle,
-    connection: &SshConnection,
-    remote_project_path: &str,
-    request: &LspDocumentRequest,
-    method: &str,
-    extra_params: Option<Value>,
-) -> Result<Value, String> {
-    request_remote_lsp_feature_with_param_mode(
-        app,
-        connection,
-        remote_project_path,
-        request,
-        method,
-        LspFeatureParams::Position { extra_params },
-    )
-    .await
-}
-
-async fn request_lsp_document_range_feature(
-    app: &AppHandle,
-    request: &LspDocumentRequest,
-    method: &str,
-) -> Result<Value, String> {
-    request_lsp_feature_with_param_mode(app, request, method, LspFeatureParams::DocumentRange).await
-}
-
-async fn request_remote_lsp_document_range_feature(
-    app: &AppHandle,
-    connection: &SshConnection,
-    remote_project_path: &str,
-    request: &LspDocumentRequest,
-    method: &str,
-) -> Result<Value, String> {
-    request_remote_lsp_feature_with_param_mode(
-        app,
-        connection,
-        remote_project_path,
-        request,
-        method,
-        LspFeatureParams::DocumentRange,
-    )
-    .await
-}
-
-enum LspFeatureParams {
-    Position { extra_params: Option<Value> },
-    DocumentRange,
-    Raw(Value),
-}
-
-async fn request_lsp_feature_with_param_mode(
-    app: &AppHandle,
-    request: &LspDocumentRequest,
-    method: &str,
-    params: LspFeatureParams,
-) -> Result<Value, String> {
-    let project_root = Path::new(&request.project_path)
-        .canonicalize()
-        .map_err(|err| format!("failed to resolve project root: {err}"))?;
-    let document_path = validate_document_path(&project_root, Path::new(&request.file_path))?;
-    let language_id = language_id_for_path(&document_path)
-        .ok_or_else(|| "language server is not supported for this file type".to_string())?;
-    let server = default_server_command(language_id)
-        .ok_or_else(|| "language server is not configured for this file type".to_string())?;
-    let session_key = format!("local:{}:{language_id}", project_root.to_string_lossy());
-    let documents = lsp_session_document_snapshots(
-        &session_key,
-        document_path.to_string_lossy().to_string(),
-        language_id.to_string(),
-        request.content.clone(),
-    )?;
-    run_lsp_request(
-        app,
-        &project_root,
-        &document_path,
-        &server,
-        documents,
-        request,
-        method,
-        params,
-    )
-    .await
-}
-
-async fn request_remote_lsp_feature_with_param_mode(
-    app: &AppHandle,
-    connection: &SshConnection,
-    remote_project_path: &str,
-    request: &LspDocumentRequest,
-    method: &str,
-    params: LspFeatureParams,
-) -> Result<Value, String> {
-    let remote_root = normalize_remote_lsp_path(remote_project_path, "Remote project path")?;
-    let document_path = validate_remote_lsp_document_path(&remote_root, &request.file_path)?;
-    let language_id = language_id_for_path(Path::new(&document_path))
-        .ok_or_else(|| "language server is not supported for this file type".to_string())?;
-    let server = default_server_command(language_id)
-        .ok_or_else(|| "language server is not configured for this file type".to_string())?;
-    let session_key = format!("ssh:{}:{remote_root}:{language_id}", connection.id);
-    let documents = lsp_session_document_snapshots(
-        &session_key,
-        document_path.clone(),
-        language_id.to_string(),
-        request.content.clone(),
-    )?;
-    run_remote_lsp_request(
-        app,
-        connection,
-        &remote_root,
-        &document_path,
-        &server,
-        documents,
-        request,
-        method,
-        params,
-    )
-    .await
-}
-
-async fn run_lsp_request(
-    app: &AppHandle,
-    project_root: &Path,
-    document_path: &Path,
-    server: &LspServerCommand,
-    documents: Vec<LspDocumentSnapshot>,
-    request: &LspDocumentRequest,
-    method: &str,
-    params: LspFeatureParams,
-) -> Result<Value, String> {
-    let language_id = language_id_for_path(document_path)
-        .ok_or_else(|| "language server is not supported for this file type".to_string())?;
-    let session_key = format!("local:{}:{language_id}", project_root.to_string_lossy());
-    run_local_lsp_session_request(
-        app,
-        session_key,
-        project_root,
-        server,
-        file_uri(document_path),
-        documents,
-        request,
-        method,
-        params,
-        "typescript-language-server is not installed. Run: pnpm add -D typescript-language-server typescript",
-    )
-    .await
-}
-
-async fn run_local_lsp_session_request(
-    app: &AppHandle,
-    session_key: String,
-    project_root: &Path,
-    server: &LspServerCommand,
-    document_uri: String,
-    documents: Vec<LspDocumentSnapshot>,
-    request: &LspDocumentRequest,
-    method: &str,
-    params: LspFeatureParams,
-    not_found_message: &str,
-) -> Result<Value, String> {
-    let run = async {
-        let handle =
-            get_or_start_local_lsp_session(&session_key, project_root, server, not_found_message)
-                .await?;
-        let mut session = handle.lock().await;
-        session.sync_documents(documents).await?;
-        let request_id = session.next_request_id();
-        let request_params = lsp_feature_request_params(&document_uri, request, params);
-
-        write_message(
-            &mut session.stdin,
-            &json!({
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": method,
-                "params": request_params
-            }),
-        )
-        .await?;
-
-        let diagnostics = LspDiagnosticEmitter {
-            app: app.clone(),
-            project_path: project_root.to_string_lossy().to_string(),
-        };
-        let response =
-            read_response_with_id(&mut session.stdout, request_id, Some(&diagnostics)).await?;
-        if let Some(error) = response.get("error") {
-            return Err(format!("language server request failed: {error}"));
-        }
-        Ok(response.get("result").cloned().unwrap_or(Value::Null))
-    };
-
-    match timeout(LSP_TIMEOUT, run).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => {
-            shutdown_local_lsp_session(&session_key).await;
-            Err(err)
-        }
-        Err(_) => {
-            shutdown_local_lsp_session(&session_key).await;
-            Err("language server request timed out".to_string())
-        }
-    }
-}
-
-async fn get_or_start_local_lsp_session(
-    session_key: &str,
-    project_root: &Path,
-    server: &LspServerCommand,
-    not_found_message: &str,
-) -> Result<Arc<AsyncMutex<LocalLspSession>>, String> {
-    if let Some(handle) = local_lsp_session_handle(session_key) {
-        return Ok(handle);
-    }
-
-    let mut command = Command::new(&server.program);
-    command
-        .args(&server.args)
-        .current_dir(project_root)
-        .envs(crate::app_settings::get_login_shell_env().iter().cloned());
-    let session = start_local_lsp_session(
-        command,
-        file_uri(project_root),
-        local_workspace_name(project_root),
-        not_found_message,
-    )
-    .await?;
-    insert_local_lsp_session(session_key.to_string(), session);
-    local_lsp_session_handle(session_key)
-        .ok_or_else(|| "failed to store language server session".to_string())
-}
-
-async fn start_local_lsp_session(
-    mut command: Command,
-    root_uri: String,
-    workspace_name: String,
-    not_found_message: &str,
-) -> Result<LocalLspSession, String> {
-    crate::subprocess::configure_terminable_tokio_process_tree(&mut command);
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    let mut child = command.spawn().map_err(|err| {
-        if err.kind() == std::io::ErrorKind::NotFound {
-            not_found_message.to_string()
-        } else {
-            format!("failed to start language server: {err}")
-        }
-    })?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "failed to open language server stdin".to_string())?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "failed to open language server stdout".to_string())?;
-
-    write_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "processId": std::process::id(),
-                "rootUri": root_uri.clone(),
-                "capabilities": {},
-                "workspaceFolders": [{
-                    "uri": root_uri,
-                    "name": workspace_name
-                }]
-            }
-        }),
-    )
-    .await?;
-    let response = read_response_with_id(&mut stdout, 1, None).await?;
-    if let Some(error) = response.get("error") {
-        return Err(format!("language server initialize failed: {error}"));
-    }
-
-    write_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc": "2.0",
-            "method": "initialized",
-            "params": {}
-        }),
-    )
-    .await?;
-
-    Ok(LocalLspSession {
-        stdin,
-        stdout,
-        child,
-        next_id: 2,
-        open_documents: BTreeMap::new(),
-    })
-}
-
-async fn run_remote_lsp_request(
-    app: &AppHandle,
-    connection: &SshConnection,
-    remote_root: &str,
-    document_path: &str,
-    server: &LspServerCommand,
-    documents: Vec<LspDocumentSnapshot>,
-    request: &LspDocumentRequest,
-    method: &str,
-    params: LspFeatureParams,
-) -> Result<Value, String> {
-    let language_id = language_id_for_path(Path::new(document_path))
-        .ok_or_else(|| "language server is not supported for this file type".to_string())?;
-    let session_key = format!("ssh:{}:{remote_root}:{language_id}", connection.id);
-    run_remote_lsp_session_request(
-        app,
-        connection,
-        session_key,
-        remote_root,
-        server,
-        file_uri(Path::new(document_path)),
-        documents,
-        request,
-        method,
-        params,
-        "failed to start remote language server over SSH",
-    )
-    .await
-}
-
-async fn run_remote_lsp_session_request(
-    app: &AppHandle,
-    connection: &SshConnection,
-    session_key: String,
-    remote_root: &str,
-    server: &LspServerCommand,
-    document_uri: String,
-    documents: Vec<LspDocumentSnapshot>,
-    request: &LspDocumentRequest,
-    method: &str,
-    params: LspFeatureParams,
-    not_found_message: &str,
-) -> Result<Value, String> {
-    let run = async {
-        let handle = get_or_start_remote_lsp_session(
-            connection,
-            &session_key,
-            remote_root,
-            server,
-            not_found_message,
-        )
-        .await?;
-        let mut session = handle.lock().await;
-        session.sync_documents(documents).await?;
-        let request_id = session.next_request_id();
-        let request_params = lsp_feature_request_params(&document_uri, request, params);
-
-        write_message(
-            &mut session.stdin,
-            &json!({
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": method,
-                "params": request_params
-            }),
-        )
-        .await?;
-
-        let diagnostics = LspDiagnosticEmitter {
-            app: app.clone(),
-            project_path: remote_root.to_string(),
-        };
-        let response =
-            read_response_with_id(&mut session.stdout, request_id, Some(&diagnostics)).await?;
-        if let Some(error) = response.get("error") {
-            return Err(format!("language server request failed: {error}"));
-        }
-        Ok(response.get("result").cloned().unwrap_or(Value::Null))
-    };
-
-    match timeout(LSP_TIMEOUT, run).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => {
-            shutdown_remote_lsp_session(&session_key).await;
-            Err(err)
-        }
-        Err(_) => {
-            shutdown_remote_lsp_session(&session_key).await;
-            Err("language server request timed out".to_string())
-        }
-    }
-}
-
-async fn get_or_start_remote_lsp_session(
-    connection: &SshConnection,
-    session_key: &str,
-    remote_root: &str,
-    server: &LspServerCommand,
-    not_found_message: &str,
-) -> Result<Arc<AsyncMutex<LocalLspSession>>, String> {
-    if let Some(handle) = remote_lsp_session_handle(session_key) {
-        return Ok(handle);
-    }
-    let command = tokio_ssh_command_for_remote_command(
-        connection,
-        build_remote_lsp_server_command(remote_root, server),
-    );
-    let session = start_local_lsp_session(
-        command,
-        file_uri(Path::new(remote_root)),
-        remote_workspace_name(remote_root),
-        not_found_message,
-    )
-    .await?;
-    insert_remote_lsp_session(session_key.to_string(), session);
-    remote_lsp_session_handle(session_key)
-        .ok_or_else(|| "failed to store remote language server session".to_string())
-}
-
-fn lsp_feature_request_params(
-    document_uri: &str,
-    request: &LspDocumentRequest,
-    params: LspFeatureParams,
-) -> Value {
-    match params {
-        LspFeatureParams::Position { extra_params } => {
-            let mut request_params = json!({
-                "textDocument": { "uri": document_uri },
-                "position": {
-                    "line": request.line,
-                    "character": request.character
-                }
-            });
-            if let (Some(params), Some(object)) = (extra_params, request_params.as_object_mut()) {
-                if let Some(extra) = params.as_object() {
-                    for (key, value) in extra {
-                        object.insert(key.clone(), value.clone());
-                    }
-                }
-            }
-            request_params
-        }
-        LspFeatureParams::DocumentRange => {
-            let range = full_document_range(&request.content);
-            json!({
-                "textDocument": { "uri": document_uri },
-                "range": range
-            })
-        }
-        LspFeatureParams::Raw(value) => value,
-    }
-}
-
-fn full_document_range(content: &str) -> LspRange {
-    let mut end_line = 0_u32;
-    let mut last_line = "";
-    for (index, line) in content.split('\n').enumerate() {
-        end_line = index as u32;
-        last_line = line;
-    }
-    let last_line = last_line.strip_suffix('\r').unwrap_or(last_line);
-    LspRange {
-        start: LspPosition {
-            line: 0,
-            character: 0,
-        },
-        end: LspPosition {
-            line: end_line,
-            character: last_line.chars().map(|ch| ch.len_utf16() as u32).sum(),
-        },
-    }
-}
-
-async fn run_lsp_workspace_symbol_request(
-    app: &AppHandle,
-    project_root: &Path,
-    server: &LspServerCommand,
-    query: &str,
-) -> Result<Value, String> {
-    let session_key = format!("local:{}:typescript", project_root.to_string_lossy());
-    let documents = lsp_session_open_document_snapshots(&session_key)?;
-    run_local_lsp_workspace_symbol_session_request(
-        app,
-        session_key,
-        project_root,
-        server,
-        documents,
-        query,
-        "typescript-language-server is not installed. Run: pnpm add -D typescript-language-server typescript",
-    )
-    .await
-}
-
-async fn run_local_lsp_workspace_symbol_session_request(
-    app: &AppHandle,
-    session_key: String,
-    project_root: &Path,
-    server: &LspServerCommand,
-    documents: Vec<LspDocumentSnapshot>,
-    query: &str,
-    not_found_message: &str,
-) -> Result<Value, String> {
-    let run = async {
-        let handle =
-            get_or_start_local_lsp_session(&session_key, project_root, server, not_found_message)
-                .await?;
-        let mut session = handle.lock().await;
-        session.sync_documents(documents).await?;
-        let request_id = session.next_request_id();
-        write_message(
-            &mut session.stdin,
-            &json!({
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": "workspace/symbol",
-                "params": { "query": query }
-            }),
-        )
-        .await?;
-
-        let diagnostics = LspDiagnosticEmitter {
-            app: app.clone(),
-            project_path: project_root.to_string_lossy().to_string(),
-        };
-        let response =
-            read_response_with_id(&mut session.stdout, request_id, Some(&diagnostics)).await?;
-        if let Some(error) = response.get("error") {
-            return Err(format!("language server request failed: {error}"));
-        }
-        Ok(response.get("result").cloned().unwrap_or(Value::Null))
-    };
-
-    match timeout(LSP_TIMEOUT, run).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => {
-            shutdown_local_lsp_session(&session_key).await;
-            Err(err)
-        }
-        Err(_) => {
-            shutdown_local_lsp_session(&session_key).await;
-            Err("language server request timed out".to_string())
-        }
-    }
-}
-
-async fn run_remote_lsp_workspace_symbol_request(
-    app: &AppHandle,
-    connection: &SshConnection,
-    remote_root: &str,
-    server: &LspServerCommand,
-    query: &str,
-) -> Result<Value, String> {
-    let session_key = format!("ssh:{}:{remote_root}:typescript", connection.id);
-    let documents = lsp_session_open_document_snapshots(&session_key)?;
-    run_remote_lsp_workspace_symbol_session_request(
-        app,
-        connection,
-        session_key,
-        remote_root,
-        server,
-        documents,
-        query,
-        "failed to start remote language server over SSH",
-    )
-    .await
-}
-
-async fn run_remote_lsp_workspace_symbol_session_request(
-    app: &AppHandle,
-    connection: &SshConnection,
-    session_key: String,
-    remote_root: &str,
-    server: &LspServerCommand,
-    documents: Vec<LspDocumentSnapshot>,
-    query: &str,
-    not_found_message: &str,
-) -> Result<Value, String> {
-    let run = async {
-        let handle = get_or_start_remote_lsp_session(
-            connection,
-            &session_key,
-            remote_root,
-            server,
-            not_found_message,
-        )
-        .await?;
-        let mut session = handle.lock().await;
-        session.sync_documents(documents).await?;
-        let request_id = session.next_request_id();
-        write_message(
-            &mut session.stdin,
-            &json!({
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": "workspace/symbol",
-                "params": { "query": query }
-            }),
-        )
-        .await?;
-
-        let diagnostics = LspDiagnosticEmitter {
-            app: app.clone(),
-            project_path: remote_root.to_string(),
-        };
-        let response =
-            read_response_with_id(&mut session.stdout, request_id, Some(&diagnostics)).await?;
-        if let Some(error) = response.get("error") {
-            return Err(format!("language server request failed: {error}"));
-        }
-        Ok(response.get("result").cloned().unwrap_or(Value::Null))
-    };
-
-    match timeout(LSP_TIMEOUT, run).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => {
-            shutdown_remote_lsp_session(&session_key).await;
-            Err(err)
-        }
-        Err(_) => {
-            shutdown_remote_lsp_session(&session_key).await;
-            Err("language server request timed out".to_string())
-        }
-    }
-}
-
-async fn write_message<W: AsyncWriteExt + Unpin>(
-    writer: &mut W,
-    value: &Value,
-) -> Result<(), String> {
-    let body = serde_json::to_vec(value).map_err(|err| err.to_string())?;
-    let header = format!("Content-Length: {}\r\n\r\n", body.len());
-    writer
-        .write_all(header.as_bytes())
-        .await
-        .map_err(|err| err.to_string())?;
-    writer
-        .write_all(&body)
-        .await
-        .map_err(|err| err.to_string())?;
-    writer.flush().await.map_err(|err| err.to_string())
-}
-
-async fn read_response_with_id<R: AsyncReadExt + Unpin>(
-    reader: &mut R,
-    id: i64,
-    diagnostics: Option<&LspDiagnosticEmitter>,
-) -> Result<Value, String> {
-    loop {
-        let value = read_message(reader).await?;
-        if let Some(emitter) = diagnostics {
-            emit_lsp_diagnostics_if_present(emitter, &value);
-        }
-        if value.get("id").and_then(Value::as_i64) == Some(id) {
-            return Ok(value);
-        }
-    }
-}
-
-async fn read_message<R: AsyncReadExt + Unpin>(reader: &mut R) -> Result<Value, String> {
-    let mut header = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        reader
-            .read_exact(&mut byte)
-            .await
-            .map_err(|err| format!("failed to read language server header: {err}"))?;
-        header.push(byte[0]);
-        if header.ends_with(b"\r\n\r\n") {
-            break;
-        }
-        if header.len() > 8192 {
-            return Err("language server header is too large".to_string());
-        }
-    }
-
-    let header = String::from_utf8(header).map_err(|err| err.to_string())?;
-    let content_length = header
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            if name.eq_ignore_ascii_case("content-length") {
-                value.trim().parse::<usize>().ok()
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| "language server response missing Content-Length".to_string())?;
-    let mut body = vec![0u8; content_length];
-    reader
-        .read_exact(&mut body)
-        .await
-        .map_err(|err| format!("failed to read language server body: {err}"))?;
-    serde_json::from_slice(&body).map_err(|err| err.to_string())
-}
-
-fn emit_lsp_diagnostics_if_present(emitter: &LspDiagnosticEmitter, value: &Value) {
-    let Some(params) = value
-        .get("method")
-        .and_then(Value::as_str)
-        .filter(|method| *method == "textDocument/publishDiagnostics")
-        .and_then(|_| value.get("params"))
-    else {
-        return;
-    };
-    let Some(event) = parse_lsp_diagnostics_event(&emitter.project_path, params) else {
-        return;
-    };
-    let _ = emitter.app.emit("lsp://diagnostics", event);
-}
-
-fn parse_lsp_diagnostics_event(project_path: &str, params: &Value) -> Option<LspDiagnosticsEvent> {
-    let uri = params.get("uri").and_then(Value::as_str)?;
-    let file_path = path_from_file_uri(uri);
-    let diagnostics = params
-        .get("diagnostics")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| parse_lsp_diagnostic_item(&file_path, item))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    Some(LspDiagnosticsEvent {
-        project_path: project_path.to_string(),
-        file_path,
-        diagnostics,
-    })
-}
-
-fn parse_lsp_diagnostic_item(file_path: &str, value: &Value) -> Option<DiagnosticItem> {
-    let range = value.get("range")?;
-    let start = parse_position(range.get("start")?)?;
-    let severity = match value.get("severity").and_then(Value::as_u64).unwrap_or(3) {
-        1 => DiagnosticSeverity::Error,
-        2 => DiagnosticSeverity::Warning,
-        _ => DiagnosticSeverity::Info,
-    };
-    let code = value.get("code").and_then(|code| {
-        code.as_str()
-            .map(str::to_string)
-            .or_else(|| code.as_i64().map(|number| number.to_string()))
-            .or_else(|| code.as_u64().map(|number| number.to_string()))
-    });
-    let source = value
-        .get("source")
-        .and_then(Value::as_str)
-        .filter(|source| !source.trim().is_empty())
-        .unwrap_or("language-server");
-    Some(DiagnosticItem {
-        source: format!("lsp:{source}"),
-        severity,
-        message: value.get("message")?.as_str()?.to_string(),
-        file: file_path.to_string(),
-        line: start.line as usize + 1,
-        column: start.character as usize + 1,
-        code,
-    })
-}
-
-fn command_available(program: &str) -> bool {
-    let mut command = std::process::Command::new(program);
-    crate::subprocess::configure_background_command(&mut command);
-    command
-        .arg("--version")
-        .envs(crate::app_settings::get_login_shell_env().iter().cloned())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-/// 测试用的一次性临时项目根。**放在模块层而不是 `tests` 里**:`lsp/edit.rs` 搬走的
-/// 两个 apply-workspace-edit 用例也要用它,提上来让两边共用一份定义(和本仓库
-/// `dap/paths.rs` 的 `unique_test_dir` 同一手法)。
+/// 测试用的一次性临时项目根(与 core `ide::lsp_session` 同形;这里保留一份
+/// 供本文件剩余的命令级用例使用)。
 #[cfg(test)]
 fn temp_project(name: &str) -> std::path::PathBuf {
     let root =
         std::env::temp_dir().join(format!("aeroric-lsp-test-{}-{}", name, std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
     root
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lsp::lsp_face::validate_document_path;
+    use aeroric_core::ide::lsp_session::{LspPosition, LspRange};
     use std::fs;
 
     fn test_ssh_connection(id: &str) -> SshConnection {
@@ -2335,9 +1510,9 @@ mod tests {
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, "const value = 1;\n").unwrap();
 
-        let open = lsp_open_document(
-            project.to_string_lossy().to_string(),
-            file.to_string_lossy().to_string(),
+        let open = lsp_face::lsp_open_document(
+            project.to_string_lossy().as_ref(),
+            file.to_string_lossy().as_ref(),
             "const value = 1;\n".to_string(),
             1,
         )
@@ -2346,9 +1521,9 @@ mod tests {
         assert_eq!(open.version, 1);
         assert_eq!(open.open_documents, 1);
 
-        let changed = lsp_change_document(
-            project.to_string_lossy().to_string(),
-            file.to_string_lossy().to_string(),
+        let changed = lsp_face::lsp_change_document(
+            project.to_string_lossy().as_ref(),
+            file.to_string_lossy().as_ref(),
             "const value = 2;\n".to_string(),
             2,
         )
@@ -2356,11 +1531,10 @@ mod tests {
         assert_eq!(changed.version, 2);
         assert_eq!(changed.open_documents, 1);
 
-        let closed = lsp_close_document(
-            project.to_string_lossy().to_string(),
-            file.to_string_lossy().to_string(),
+        let closed = lsp_face::lsp_close_document(
+            project.to_string_lossy().as_ref(),
+            file.to_string_lossy().as_ref(),
         )
-        .await
         .unwrap();
         assert_eq!(closed.version, 2);
         assert_eq!(closed.open_documents, 0);
@@ -2375,34 +1549,32 @@ mod tests {
         fs::write(&ts_file, "const value: number = 1;\n").unwrap();
         fs::write(&js_file, "export const helper = 1;\n").unwrap();
 
-        lsp_open_document(
-            project.to_string_lossy().to_string(),
-            ts_file.to_string_lossy().to_string(),
+        lsp_face::lsp_open_document(
+            project.to_string_lossy().as_ref(),
+            ts_file.to_string_lossy().as_ref(),
             "const value: number = 1;\n".to_string(),
             1,
         )
         .unwrap();
-        lsp_open_document(
-            project.to_string_lossy().to_string(),
-            js_file.to_string_lossy().to_string(),
+        lsp_face::lsp_open_document(
+            project.to_string_lossy().as_ref(),
+            js_file.to_string_lossy().as_ref(),
             "export const helper = 1;\n".to_string(),
             1,
         )
         .unwrap();
 
         assert_eq!(
-            lsp_shutdown_project(project.to_string_lossy().to_string())
-                .await
-                .unwrap(),
+            lsp_face::lsp_shutdown_project(project.to_string_lossy().as_ref()).unwrap(),
             2
         );
         assert_eq!(
-            lsp_shutdown_project(project.to_string_lossy().to_string())
-                .await
-                .unwrap(),
+            lsp_face::lsp_shutdown_project(project.to_string_lossy().as_ref()).unwrap(),
             0
         );
-        assert_eq!(local_lsp_session_count(), 0);
+        // 会话表清空的可观察形状:按前缀取不到任何句柄(计数口是 core 内部
+        // 测试专用,跨 crate 不可见——这里钉同一个事实)。
+        assert!(engine::take_local_lsp_sessions_with_prefix("local:").is_empty());
     }
 
     #[test]
@@ -2425,16 +1597,16 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .to_string();
-        lsp_open_document(
-            project_path.clone(),
-            app_path.clone(),
+        lsp_face::lsp_open_document(
+            project_path.as_str(),
+            app_path.as_str(),
             "const app = 2;\n".to_string(),
             7,
         )
         .unwrap();
-        lsp_open_document(
-            project_path.clone(),
-            helper_path.clone(),
+        lsp_face::lsp_open_document(
+            project_path.as_str(),
+            helper_path.as_str(),
             "export const helper = 2;\n".to_string(),
             3,
         )
@@ -2446,7 +1618,7 @@ mod tests {
             .to_string_lossy()
             .to_string();
         let session_key = format!("local:{canonical_project_path}:typescript");
-        let snapshots = lsp_session_document_snapshots(
+        let snapshots = lsp_face::lsp_session_document_snapshots(
             &session_key,
             app_path,
             "typescript".to_string(),
@@ -2467,7 +1639,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_request_content_when_document_is_not_open() {
-        let snapshots = lsp_session_document_snapshots(
+        let snapshots = lsp_face::lsp_session_document_snapshots(
             "local:/missing:typescript",
             "/missing/src/App.ts".to_string(),
             "typescript".to_string(),
@@ -2499,9 +1671,9 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .to_string();
-        lsp_open_document(
-            project_path.clone(),
-            app_path.clone(),
+        lsp_face::lsp_open_document(
+            project_path.as_str(),
+            app_path.as_str(),
             "export const app = 2;\n".to_string(),
             4,
         )
@@ -2512,7 +1684,7 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .to_string();
-        let snapshots = lsp_session_open_document_snapshots(&format!(
+        let snapshots = lsp_face::lsp_session_open_document_snapshots(&format!(
             "local:{canonical_project_path}:typescript"
         ))
         .unwrap();
@@ -2526,7 +1698,7 @@ mod tests {
             }]
         );
         assert!(
-            lsp_session_open_document_snapshots("local:/missing:typescript")
+            lsp_face::lsp_session_open_document_snapshots("local:/missing:typescript")
                 .unwrap()
                 .is_empty()
         );
@@ -2545,7 +1717,7 @@ mod tests {
         .unwrap();
 
         let snapshots =
-            lsp_session_open_document_snapshots("ssh:ssh-1:/srv/app:typescript").unwrap();
+            lsp_face::lsp_session_open_document_snapshots("ssh:ssh-1:/srv/app:typescript").unwrap();
         assert_eq!(
             snapshots,
             vec![LspDocumentSnapshot {
@@ -2562,38 +1734,6 @@ mod tests {
                 .unwrap(),
             1
         );
-    }
-
-    #[test]
-    fn parses_lsp_publish_diagnostics_event() {
-        let event = parse_lsp_diagnostics_event(
-            "/repo",
-            &json!({
-                "uri": "file:///repo/src/App.ts",
-                "diagnostics": [
-                    {
-                        "range": {
-                            "start": { "line": 2, "character": 4 },
-                            "end": { "line": 2, "character": 9 }
-                        },
-                        "severity": 1,
-                        "source": "typescript",
-                        "code": 2322,
-                        "message": "Type 'string' is not assignable to type 'number'."
-                    }
-                ]
-            }),
-        )
-        .unwrap();
-
-        assert_eq!(event.project_path, "/repo");
-        assert_eq!(event.file_path, "/repo/src/App.ts");
-        assert_eq!(event.diagnostics.len(), 1);
-        assert_eq!(event.diagnostics[0].source, "lsp:typescript");
-        assert_eq!(event.diagnostics[0].severity, DiagnosticSeverity::Error);
-        assert_eq!(event.diagnostics[0].line, 3);
-        assert_eq!(event.diagnostics[0].column, 5);
-        assert_eq!(event.diagnostics[0].code.as_deref(), Some("2322"));
     }
 
     #[test]
@@ -2696,10 +1836,10 @@ mod tests {
             character: 3,
         };
 
-        let params = lsp_feature_request_params(
+        let params = feature_request_params(
             "file:///repo/src/App.tsx",
             &request,
-            LspFeatureParams::DocumentRange,
+            RequestParams::DocumentRange,
         );
 
         assert_eq!(

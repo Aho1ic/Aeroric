@@ -15,9 +15,9 @@
   },
   "legacyChannels": 38,
   "legacyDirectionUnproven": 11,
-  "mapped": 13,
+  "mapped": 14,
   "notForwarded": 0,
-  "pending": 25,
+  "pending": 24,
   "protocolVersion": 1,
   "reshapedPayloads": 5,
   "rows": [
@@ -121,9 +121,10 @@
         "dbx-transfer-progress"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P7-04",
-      "plannedDirection": "pending: P7-04",
-      "status": "pending: P7-04",
+      "payload": "verbatim: legacy payload is the TransferProgress object (camelCase, status/terminal folded by `isTerminalDbxTransferProgress`); the host transfer start (P8-05 切片一百零三) appends the same object to the EventLog under this v1 topic — the Tauri Embedded path fires the legacy channel and attempts this topic, which Tauri's event-name validation rejects (dots are illegal window event names, IllegalEventName) exactly like the rag progress topic since 切片九十九",
+      "plannedDirection": "core-to-client",
+      "source": "MIGRATION_PLAN.md 切片一百零三开工锚点 §103；core `database::transfer_face` 只认注入的 TransferProgressSink，宿主 `TransferProgressLogSink` append 进 EventLog、Tauri `WindowTransferProgressSink` 窗口发 legacy 通道（v1 topic 半边被 Tauri 事件名校验拒绝，与 rag 先例同实况——测试双钉）",
+      "status": "mapped",
       "topic": "dbx.transfer_progress"
     },
     {

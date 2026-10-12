@@ -469,6 +469,24 @@ pub fn query_table(
     Ok(result)
 }
 
+/// 切片一百零三：legacy SQL 文件读取（Tauri `db_read_sql_file` verbatim——
+/// 绝对路径＋`.sql` 后缀校验后整读；与 `ie_face::read_sql_file` 的 BOM 剥离
+/// 版本是两条并存的历史语义，各自服务各自的调用面，不在此合并）。
+pub async fn db_read_sql_file(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = PathBuf::from(path);
+        if !path.is_absolute() {
+            return Err("SQL file path must be absolute".to_string());
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("sql") {
+            return Err("Only .sql files can be executed from this action".to_string());
+        }
+        fs::read_to_string(path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 pub fn build_row_where_clause(row_key: DbRowKey) -> Result<(String, Vec<SqlValue>), String> {
     if let Some(row_id) = row_key.row_id {
         return Ok((

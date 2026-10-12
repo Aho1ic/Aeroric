@@ -600,10 +600,12 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
         "38 channels plus the synthesised terminal.gap"
     );
     assert_eq!(topics["legacyChannels"], json!(38));
-    // P8-02 agent + P8-03 remote mapped3→9; P8-04 usage/weekly mapped9→11.
-    // remote.task_request remains not-forwarded, leaving27 pending topics.
-    assert_eq!(topics["mapped"], json!(11));
-    assert_eq!(topics["pending"], json!(27));
+    // P8-02 agent + P8-03 remote mapped3→9; P8-04 usage/weekly mapped9→11;
+    // P8-05 切片九十七/九十九/一百零三 把 dbx.production_confirm_requested、
+    // notebook.rag_index_progress、dbx.transfer_progress 接线成 mapped(11→14),
+    // pending 27→24。
+    assert_eq!(topics["mapped"], json!(14));
+    assert_eq!(topics["pending"], json!(24));
     assert_eq!(topics["reshapedPayloads"], json!(5));
     assert_eq!(topics["legacyDirectionUnproven"], json!(11));
     let rows = topics["rows"].as_array().unwrap();
@@ -617,6 +619,9 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
             "aeroric.app_settings_changed",
             "agent.operation_changed",
             "agent.tool_install_progress",
+            "dbx.production_confirm_requested",
+            "dbx.transfer_progress",
+            "notebook.rag_index_progress",
             "project.pinned_changed",
             "remote.device_paired",
             "remote.terminal_resized",

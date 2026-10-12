@@ -264,10 +264,21 @@ mod tests {
             files.len()
         );
 
-        let allowlist: BTreeSet<(String, String)> = [("notebook/rag/commands.rs", "resolve_key")]
-            .into_iter()
-            .map(|(file, name)| (file.to_owned(), name.to_owned()))
-            .collect();
+        let allowlist: BTreeSet<(String, String)> = [
+            // 检索/探测路径的钥匙串读者（首个读者，形状见 `resolve_key`）。
+            ("notebook/rag/commands.rs", "resolve_key"),
+            // 切片九十九新增：index/context 路径的同步读者，形状与 `resolve_key`
+            // 完全一致（同一 EMBEDDING_KEY_ACCOUNT、同一 `with_stored_key`，只去
+            // 掉 spawn_blocking——调用方已在专用 rag 线程上）。明文 key 只进 core
+            // `face::rag_index`／`face::rag_context`，两条 command 分别返回
+            // `IndexOutcome`（纯计数）与 `ContextBundle`，key 不回前端。
+            // 清单漂移是切片九十九的遗留（当时漏更），切片一百零二按本测试
+            // 自述的 review 流程补录。
+            ("notebook/rag/commands.rs", "rag_key_from_keyring"),
+        ]
+        .into_iter()
+        .map(|(file, name)| (file.to_owned(), name.to_owned()))
+        .collect();
 
         let mut found = BTreeSet::new();
         for file in &files {

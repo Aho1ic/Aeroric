@@ -3,8 +3,13 @@
 //! 不让 Swift 各组件自行换算）。
 pub mod dap;
 pub mod diagnostics;
+pub mod diagnostics_face;
 pub mod lsp;
+pub mod lsp_face;
+pub mod lsp_session;
 pub mod run_config;
+pub mod run_face;
+pub mod tests_face;
 
 /// P6-03 Action 1：projectTarget（run/debug/preview 用 projectTarget 而非仅
 /// 本地 path——远程/WSL 目标形态）。

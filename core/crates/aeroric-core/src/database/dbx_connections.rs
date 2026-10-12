@@ -768,6 +768,74 @@ pub fn merge_sensitive_json(incoming: &mut Value, existing: &Value) {
     }
 }
 
+/// 切片一百零三：连接生命周期——释放某连接的全部连接池与传输层（Tauri
+/// `dbx_disconnect` verbatim；池与传输都挂在 state 的 app_state 上，宿主与
+/// Embedded 调同一份）。未知 id 是 no-op，与旧客户端行为一致。
+pub async fn disconnect(state: &DbxState, connection_id: &str) -> Result<(), String> {
+    state.app_state.remove_connection_pools(connection_id).await;
+    state
+        .app_state
+        .reset_connection_transport(connection_id)
+        .await;
+    Ok(())
+}
+
+/// 切片一百零三：SQLite 文件级备份（Tauri `dbx_backup_sqlite_database`
+/// verbatim：ensure_loaded → 注册表找连接 → 仅 SQLite → 拒 `:memory:`/空路径
+/// → 只读打开源库 → rusqlite backup）。旧客户端的 async_runtime 阻塞池调用
+/// 换成等价的 `tokio::task::spawn_blocking`（调度语义相同，core 无 GUI 依赖）。
+pub async fn backup_sqlite_database(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: &str,
+    destination_path: &str,
+) -> Result<(), String> {
+    ensure_loaded(state, paths, store).await?;
+    let connection = state
+        .connections
+        .read()
+        .await
+        .get(connection_id)
+        .cloned()
+        .ok_or_else(|| "Connection not found".to_string())?;
+    let config = parse_core_config(&connection)?;
+    if config.db_type != DatabaseType::Sqlite {
+        return Err("Only SQLite connections can be backed up".to_string());
+    }
+    let source_path = config.host.trim().to_string();
+    if source_path.is_empty() || source_path.eq_ignore_ascii_case(":memory:") {
+        return Err("SQLite backup requires a file-backed database".to_string());
+    }
+    let destination_path = destination_path.trim().to_string();
+    if destination_path.is_empty() {
+        return Err("Backup destination path is required".to_string());
+    }
+
+    tokio::task::spawn_blocking(move || {
+        let source = PathBuf::from(&source_path);
+        if !source.exists() {
+            return Err("SQLite database file not found".to_string());
+        }
+        let destination = PathBuf::from(&destination_path);
+        if let Some(parent) = destination.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+        }
+        let source_connection = rusqlite::Connection::open_with_flags(
+            &source,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|e| e.to_string())?;
+        source_connection
+            .backup(rusqlite::DatabaseName::Main, &destination, None)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -460,11 +460,13 @@ final class ProtocolGoldenTests: XCTestCase {
         let topics = try document("event-topics.schema.json")
         let rows = topics["rows"]?.arrayValue ?? []
         XCTAssertEqual(rows.count, 39)
-        // P8-02 刀六 agent 两条＋P8-03 刀六 remote 四条 mapped（3→9）
-        // ＋P8-04 刀二/刀三两条（usage.statistics_updated / weekly.report_progress，9→11）；
-        // remote.task_request not-forwarded（pending 36→29→27）。
-        XCTAssertEqual(number(topics["mapped"]), 11)
-        XCTAssertEqual(number(topics["pending"]), 27)
+// P8-02 刀六 agent 两条+P8-03 刀六 remote 四条 mapped(3→9)
+        // +P8-04 刀二/刀三两条(usage.statistics_updated / weekly.report_progress,9→11);
+        // P8-05 切片九十七/九十九/一百零三 三条(dbx.production_confirm_requested /
+        // notebook.rag_index_progress / dbx.transfer_progress,11→14),pending 27→24;
+        // remote.task_request not-forwarded。
+        XCTAssertEqual(number(topics["mapped"]), 14)
+        XCTAssertEqual(number(topics["pending"]), 24)
         var claimed: [String: Int] = [:]
         for row in rows {
             let fields = row.fields
