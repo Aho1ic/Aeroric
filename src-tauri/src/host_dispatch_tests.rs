@@ -176,8 +176,12 @@ async fn external_without_a_session_refuses_rather_than_running_locally() {
 }
 
 /// 说"有活宿主"但连不上的探针（`attach` 失败 ⇒ `External` + 无 session）。
+// 只被下面那条 macOS-only 用例使用(ADR-039 §4 S2);不 gate 会在 non-macOS 上成
+// `struct is never constructed`(clippy `-D warnings`)。
+#[cfg(target_os = "macos")]
 struct RefusingProbe;
 
+#[cfg(target_os = "macos")]
 impl PlacementProbe for RefusingProbe {
     fn availability(&self, _data_dir: &std::path::Path) -> HostAvailability {
         HostAvailability::Live

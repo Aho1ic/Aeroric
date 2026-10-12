@@ -95,6 +95,9 @@ impl StorageLocationProbe for PlatformLocationProbe {
 
 #[cfg(test)]
 mod tests {
+    // `use super::*` 会随下面那条 macOS-only 用例一起变成 non-macOS 上的 unused import
+    // (clippy `-D warnings`)。只在真正需要的 cfg 下引入。
+    #[cfg(any(windows, target_os = "macos"))]
     use super::*;
 
     #[cfg(windows)]

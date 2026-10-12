@@ -1752,6 +1752,10 @@ mod tests {
 
     /// Each test gets its own throwaway directory — nothing here may touch `~/.aeroric`,
     /// which the shipping app is writing on this very machine.
+    ///
+    /// Its only caller asserts `Writer`, which non-macOS never reaches (ADR-039 §4 S2) —
+    /// so leaving this ungated makes it dead code there (clippy `-D warnings`).
+    #[cfg(target_os = "macos")]
     fn writer_on_temp(tag: &str) -> (AppPaths, CoreGateway) {
         let paths = temp_paths(tag);
         let gateway = CoreGateway::startup(paths.clone(), "test");
