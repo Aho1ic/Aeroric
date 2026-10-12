@@ -743,10 +743,11 @@ fn launch_update_helper() -> Result<(String, bool), String> {
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         command.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
     }
-    update_pending_helper_status(UPDATE_HELPER_RUNNING, None)?;
+    // 同 P8-04 上收:`service().set_helper_status`(本文件 :699/:886 已是 qualified/form 形态)。
+    service().set_helper_status(UPDATE_HELPER_RUNNING, None)?;
     if let Err(error) = command.spawn() {
         let message = format!("Start update helper failed: {error}");
-        let _ = update_pending_helper_status(UPDATE_HELPER_FAILED, Some(message.clone()));
+        let _ = service().set_helper_status(UPDATE_HELPER_FAILED, Some(message.clone()));
         return Err(message);
     }
     Ok((original_exe.to_string_lossy().into_owned(), true))
