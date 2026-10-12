@@ -113,3 +113,21 @@ resolution/remote/process不视为已经迁移。详见
 
 **未达成交叉理解的部分**:Q1 未回答原问题,故「宿主是否最终接管远端 LSP」在 G43 关闭前仍是
 **悬置决策**,不得记作已定。Q2–Q4 已定且与实施一致,无返工。
+
+## 9. grill-me 续问(2026-10-12,ADR-039 两轮)
+
+§8 的 Q1 未答原题,转为一次项目转型声明。按 `grilling` 的「轮次」纪律续跑两轮,决策树:
+
+- **第 1 轮 = 策略(§2 表格逐行)**:R1 删 Windows/Linux 客户端+CI 矩阵 / R2 删 wsl 模块与
+  P7-02 验收 / R3 删 ubuntu+windows job / R4 改写 INV-11 转 SwiftUI / R5 改写 INV-09 转商店
+  签名 / R6 保留 remote 协议并把 iOS 接入。**用户逐题作答,全部取「彻底」档**。
+- **第 2 轮 = 执行排序**(依赖已定,才可问):S1 **冻结 React、等 SwiftUI 客户端能跑再删**
+  (R4 原句即「逐步」;声明与「无可用客户端」的时间窗冲突,取冻结) / S2 六条平台语义用例
+  gate 到 macOS / S3 先登记 rollback+task-status 再动手 / S4 第一个动可逆的 CI。
+
+**Q1 原问题仍悬置**:「宿主是否最终接管远端 LSP」归 G43,两轮都未回答它——**不得**因为
+ADR-039 已经确认就把它当成已定。
+
+**证据**:`docs/native/adr/039-distribution-pivot-macos-ios.md`(§4 六行表、§6 排序);
+`docs/native/rollback.md` Switch inventory 的 ADR-039 行;`docs/native/task-status.json`
+的 P8-05 note。**未执行任何删除**:R1–R6 与 S1–S4 是决定,落地排在 SwiftUI 客户端可用之后。
