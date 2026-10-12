@@ -198,7 +198,13 @@ jobs:
           set -euo pipefail
           HOST_TRIPLE="$(rustc -vV | awk '/^host: /{print $2}')"
           echo "preparing host helper for $HOST_TRIPLE"
-          AERORIC_TAURI_TARGET="$HOST_TRIPLE" pnpm native:prepare-tauri-host
+          # `AERORIC_TAURI_PROFILE=debug` on purpose: this job only needs a file at the
+          # path Tauri's build script resolves — it is never bundled. A release build of
+          # `aeroric-cli` (the script's default) costs ~20 minutes of runner time for a
+          # binary whose contents this job never uses. Real releases keep the default
+          # (release) in release-desktop.yml.
+          AERORIC_TAURI_TARGET="$HOST_TRIPLE" AERORIC_TAURI_PROFILE=debug \
+            pnpm native:prepare-tauri-host
           ls -l src-tauri/binaries
 
       - name: Run Clippy
