@@ -82,3 +82,34 @@ breakpoint校验及文档IO才在本片上收。原DAP29测试保留，live cano
 resolution/remote/process不视为已经迁移。详见
 `docs/native/extraction/debug-config.md`及主计划切片三十一的实际验证记录；
 不改写此前用户验收，也不声称新的独立评审或真实调试器验证。
+
+## 8. grill-me [ide/slice110](2026-10-12,P8-05 切片一百一十**
+
+**工具来源与调用入口**:`grill-me` skill(`~/.claude/skills/grill-me/SKILL.md`,revision
+同仓库既有记录)委托 `grilling` skill(`~/.claude/skills/grilling/SKILL.md`);本次以
+`ask` 一次性提交 frontier 四问(§4.2 的模块追问口径:数据/任务 owner、反例、边界、
+回滚、旧客户端回归)。
+
+**首轮(4 问,用户逐条作答)**:
+
+1. **远端孪生边界**:`remote_lsp_*` 21 条留 Tauri 只共用 core 引擎,宿主对远端 target
+   逐字拒绝(切片94 先例)——长期正确,还是宿主该经注入的 SSH executor 也接管远端 LSP?
+   **用户答**:超出了本问范围——「彻底舍弃 windows 和 Linux 客户端,只做 macOS 和 iOS 端,
+   前端只使用 SwiftUI,删除 wsl 等 windows 独占的功能,买了 Apple developer,将当前项目
+   转型成纯 macOS 原生项目,后面要上架 Apple store」。⇒ **这不是 slice110 的边界选择,
+   而是一次项目转型声明**;与本模块其余问题无关,单独按 ADR 流程处理(见
+   `docs/native/adr/039-distribution-pivot-macos-ios.md`,状态 **proposed**,不与已冻结的
+   INV-10 / §6.1 冲突判定混写)。
+2. **diagnostics topic 处置**:**用户答「维持现状」**——宿主 append legacy 字面量
+   `lsp://diagnostics`,事件泵按设计丢弃带点号名,v1 topic `lsp.diagnostics` **保持
+   `pending: P6-03`**,不写没有发射点的 mapped。与切片110 实施一致,无需改动。
+3. **会话 teardown 形态**:**用户答「fire-and-forget spawn(现状)」**——注册表簿记同步、
+   RPC 立即应答;回归用例以会话表(而非进程存在性)为判据。与实施一致。
+4. **假语言服务器作为证据是否充分**:**用户答「够——会话面证据以宿主投影的 DTO 形状为准」**
+   ——本机无 `typescript-language-server`、窄表只认 ts/js;断言对象是宿主交付给客户端的强类型
+   字段。真 server 端到端归 P10-01。**本评审如实记下它证明与不证明什么**:证明「帧协议/握手/
+   超时/响应投影/错误码/拒绝路径」;不证明真 server 的 capability 协商、workspace folder、
+   增量语义。
+
+**未达成交叉理解的部分**:Q1 未回答原问题,故「宿主是否最终接管远端 LSP」在 G43 关闭前仍是
+**悬置决策**,不得记作已定。Q2–Q4 已定且与实施一致,无返工。
