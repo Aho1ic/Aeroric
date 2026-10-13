@@ -294,6 +294,30 @@ pub async fn revoke_device(
             );
         }
     }
+    // 撤销必须连带停掉推送给这台设备 —— 否则被撤销的设备仍然会收到「任务完成」
+    // 之类的内容提醒(Q7/§D AP6「撤销后停止新增推送」)。core 只负责**说清楚**
+    // 哪台设备失去了权限,真正的解绑(本地绑定表 + 自托管发送端)归宿主。
+    match handle.device_revoked(device_id).await {
+        Ok(detail) => {
+            if state.audit_enabled {
+                handle.audit_log(
+                    "device-push-revoked",
+                    json!({ "deviceId": device_id, "detail": detail }),
+                );
+            }
+        }
+        Err(error) => {
+            // 推送没停成不阻断撤销(权限已经收回,连接已断开),但必须留痕:
+            // 「撤销了但还会收到通知」是用户有权知道的状态。
+            eprintln!("[remote] could not stop push for the revoked device {device_id}: {error}");
+            if state.audit_enabled {
+                handle.audit_log(
+                    "device-push-revoke-failed",
+                    json!({ "deviceId": device_id, "error": error }),
+                );
+            }
+        }
+    }
     if state.audit_enabled {
         handle.audit_log("device-revoked", json!({ "deviceId": device_id }));
     }

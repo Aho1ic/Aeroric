@@ -22,6 +22,7 @@ use crate::remote::config::{load_config, RemoteConfig};
 use crate::remote::crypto;
 use crate::remote::event_log::EventLog;
 use crate::remote::protocol::{push_json, RpcVersion};
+use crate::remote::push::PushBindings;
 use crate::remote::services::RemoteHostHandle;
 
 // ── 在线客户端注册表（自宿主 server.rs） ─────────────────────────────────────
@@ -40,7 +41,7 @@ pub struct OutboundSender {
 pub use tokio_tungstenite::tungstenite::protocol::Message;
 
 impl OutboundSender {
-    pub(crate) fn new(sender: mpsc::Sender<Message>, disconnect: watch::Sender<bool>) -> Self {
+    pub fn new(sender: mpsc::Sender<Message>, disconnect: watch::Sender<bool>) -> Self {
         Self { sender, disconnect }
     }
 
@@ -501,6 +502,9 @@ pub struct RemoteState {
     pub terminal_leases: Arc<TerminalLeaseRegistry>,
     pub approvals: Arc<ApprovalRegistry>,
     pub task_requests: Arc<TaskRequestBroker>,
+    /// AP6:推送绑定表(哪些设备登记了后台推送)。**不含** APNs device token ——
+    /// 那在自托管发送端;这里只有设备 id/平台/是否被判失效。
+    pub push_bindings: Arc<PushBindings>,
     /// 推送事件日志:重连 watermark 补发源。
     pub event_log: Arc<EventLog>,
     pub config: Mutex<RemoteConfig>,
@@ -541,6 +545,7 @@ impl RemoteState {
             terminal_leases: Arc::new(TerminalLeaseRegistry::default()),
             approvals: Arc::new(ApprovalRegistry::default()),
             task_requests: Arc::new(TaskRequestBroker::default()),
+            push_bindings: Arc::new(PushBindings::new()),
             event_log: Arc::new(EventLog::default()),
             config: Mutex::new(load_config()),
             keys,
@@ -565,6 +570,7 @@ impl RemoteState {
             terminal_leases: Arc::new(TerminalLeaseRegistry::default()),
             approvals: Arc::new(ApprovalRegistry::default()),
             task_requests: Arc::new(TaskRequestBroker::default()),
+            push_bindings: Arc::new(PushBindings::new()),
             event_log: Arc::new(EventLog::default()),
             config: Mutex::new(RemoteConfig::default()),
             keys: crypto::StaticKeys::ephemeral().expect("CSPRNG unavailable"),

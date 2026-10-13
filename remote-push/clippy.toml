@@ -1,0 +1,13 @@
+# clippy 配置。与本文件配套的是 Cargo.toml 的 `[lints.clippy]` 里那三条
+# `unwrap_used` / `expect_used` / `panic`。
+
+# 为什么需要这三个豁免：本 crate 的 `unwrap()` / `expect()` 绝大多数在测试里
+# （`main.rs` 的 `#[cfg(test)]` 模块与 `rate_limit.rs` 的 `stress_tests`，含并发压力用例）。
+# 测试里 `unwrap()` 是**正确**写法 —— 它让断言失败带上位置信息。
+# 没有这三个键，那三条 lint 会被测试代码淹没，等于没开。
+#
+# 让 clippy 自己判定「什么算测试代码」，而不是我们自己写脚本猜：它能正确识别
+# `#[test]` / `#[tokio::test]` / `#[cfg(test)]` 模块，以及**被 `#[cfg(test)]` 修饰的单个函数**。
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

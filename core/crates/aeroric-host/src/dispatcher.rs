@@ -159,10 +159,27 @@ pub struct HostWiring {
     /// None uses the context home. Managed roots always remain context-owned;
     /// this must not rebind unrelated metrics/session discovery roots.
     pub agent_config_external_home: Option<std::path::PathBuf>,
+    /// Trusted local Conda executable/environment policy; never request input.
+    /// Default preserves discovery of installed tools, including the [] fallback.
+    pub conda: aeroric_core::infrastructure::conda_face::CondaProbe,
     /// P8-05 切片一百一十:LSP 语言服务器的启动方式与 login env。给了 `program`
     /// 才注册会话面(没有 server 就没有 `ide.lsp_hover` 这类能力,而不是一个
     /// 起不来进程的空壳);测试用 `program` 指向 fake server 脚本。
     pub lsp_server: Option<crate::lsp_services::LspServerInjection>,
+    /// P8-03/AP6:remote plane 的注册参数(`remote.*` 九个方法 + AP6 的
+    /// `remote.push*`/`remote.relayDiagnostics`)。给了才注册 —— 没给意味着
+    /// 「这个宿主形态不提供远程面」,客户端拿到 method-not-found 而不是空壳。
+    ///
+    /// 为什么必须并进 `assemble` 而不是事后往 `Arc<ServiceSet>` 上挂:方法表在
+    /// `Arc` 之后就不可变了,而且 `handshake` 与 remote 面必须落在**同一个**
+    /// 集合里,否则认证过的连接看不到这些方法。
+    pub remote: Option<RemotePlaneInjection>,
+}
+
+/// remote plane 的装配参数(持有 core 的 `RemoteState` 与宿主 handle)。
+pub struct RemotePlaneInjection {
+    pub state: Arc<aeroric_core::remote::state::RemoteState>,
+    pub handle: Arc<dyn aeroric_core::remote::services::RemoteHostHandle>,
 }
 
 pub struct HostServices {
@@ -271,6 +288,11 @@ impl HostServices {
         let mut set = ServiceSet::new();
         let mut capabilities: Vec<aeroric_protocol::capability::Capability> = Vec::new();
         crate::services::register_read_services(&mut set, Arc::clone(&context));
+        crate::connection_services::register_connection_services(&mut set, Arc::clone(&context));
+        crate::infrastructure_services::register_infrastructure_services(
+            &mut set,
+            wiring.conda.clone(),
+        );
         let approvals = Arc::new(std::sync::Mutex::new(
             crate::services::HostApprovals::default(),
         ));
@@ -386,6 +408,9 @@ impl HostServices {
                     Box::pin(async move { events_since(request, &log) })
                 }),
             );
+        }
+        if let Some(remote) = wiring.remote.take() {
+            crate::remote_headless::register_remote_services(&mut set, remote.state, remote.handle);
         }
         Arc::new(Self {
             token,

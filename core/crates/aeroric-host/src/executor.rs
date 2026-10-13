@@ -22,7 +22,7 @@
 use std::io::Read as _;
 use std::sync::{Arc, Mutex, Weak};
 
-use aeroric_core::agents::launch::{claude_plan, codex_plan, omp_plan, LaunchInput};
+use aeroric_core::agents::launch::{claude_plan, codex_plan, dsh_plan, omp_plan, LaunchInput};
 use aeroric_core::context::CoreContext;
 use aeroric_core::events::EventLog;
 use aeroric_core::runtime::manager::WatcherSupervisor;
@@ -224,6 +224,7 @@ fn to_command_builder(plan: aeroric_core::agents::launch::LaunchPlan) -> Command
     for key in &plan.unset_env {
         c.env_remove(key);
     }
+    c.set_controlling_tty(false);
     c
 }
 
@@ -392,53 +393,201 @@ impl CliPtyExecutor {
         });
         Ok(())
     }
+    fn managed_agent_home(&self, family_dir: &str) -> Result<std::path::PathBuf, ExecutorFailure> {
+        let dir = self
+            .context
+            .paths
+            .data_dir()
+            .join("agent-homes")
+            .join(family_dir);
+        std::fs::create_dir_all(&dir).map_err(|e| ExecutorFailure::Spawn {
+            reason: format!("cannot prepare managed agent home {}: {e}", dir.display()),
+        })?;
+        Ok(dir)
+    }
+
+    fn ssh_program(&self) -> String {
+        aeroric_core::storage::load_settings(&self.context)
+            .ok()
+            .and_then(|outcome| outcome.found())
+            .and_then(|fields| {
+                fields
+                    .get("ssh_program")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "ssh".to_string())
+    }
+
+    fn resolve_ssh_connection(
+        &self,
+        connection_id: &str,
+    ) -> Result<aeroric_core::connections::ssh::SshConnection, ExecutorFailure> {
+        let path = self.context.paths.data_dir().join("ssh-connections.json");
+        let raw = std::fs::read_to_string(&path).map_err(|e| ExecutorFailure::Spawn {
+            reason: format!("ssh connection {connection_id} is unavailable: {e}"),
+        })?;
+        let list: Vec<aeroric_core::connections::ssh::SshConnection> =
+            serde_json::from_str(&raw).map_err(|e| ExecutorFailure::Spawn {
+                reason: format!("ssh connection {connection_id} is unavailable: {e}"),
+            })?;
+        list.into_iter()
+            .find(|c| c.id == connection_id)
+            .ok_or_else(|| ExecutorFailure::Spawn {
+                reason: format!(
+                    "ssh connection {connection_id} is unavailable: connection not found"
+                ),
+            })
+    }
+
+    fn build_ssh_launch_plan(
+        &self,
+        connection_id: &str,
+        remote_path: &str,
+        inner: &aeroric_core::agents::launch::LaunchPlan,
+    ) -> Result<aeroric_core::agents::launch::LaunchPlan, ExecutorFailure> {
+        aeroric_core::connections::ssh::validate_remote_path(remote_path).map_err(|reason| {
+            ExecutorFailure::Spawn {
+                reason: format!("invalid remote path: {reason}"),
+            }
+        })?;
+        let conn = self.resolve_ssh_connection(connection_id)?;
+        let mut ssh_plan = aeroric_core::agents::launch::LaunchPlan::new(self.ssh_program())
+            .arg("-tt")
+            .arg("-p")
+            .arg(conn.port.to_string());
+        if let Some(id_file) = conn
+            .identity_file
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+        {
+            ssh_plan = ssh_plan.arg("-i").arg(id_file);
+        }
+        let escaped_path = remote_path.replace('\'', "'\\''");
+        let mut cmd_parts = vec![format!(
+            "cd '{escaped_path}' && '{}'",
+            inner.program.replace('\'', "'\\''")
+        )];
+        for arg in &inner.args {
+            cmd_parts.push(format!("'{}'", arg.replace('\'', "'\\''")));
+        }
+        let remote_cmd = cmd_parts.join(" ");
+        ssh_plan = ssh_plan
+            .arg(format!("{}@{}", conn.username, conn.host))
+            .arg(remote_cmd);
+        Ok(ssh_plan)
+    }
 }
 
 impl TaskExecutor for CliPtyExecutor {
     fn launch(&self, request: &LaunchRequest) -> Execution<()> {
-        let WorkingDirectory::Local { path } = request.working_directory.clone() else {
-            return Err(ExecutorFailure::Unsupported {
-                reason: "the headless host runs local workspaces only; SSH/WSL land in P7-01/02"
-                    .to_string(),
-            });
+        let workspace_path = match &request.working_directory {
+            WorkingDirectory::Wsl { distribution, .. } => {
+                return Err(ExecutorFailure::Unsupported {
+                    reason: format!(
+                        "WSL workspaces ({distribution}) are retired on the Apple-only platform; record preserved as read-only"
+                    ),
+                });
+            }
+            WorkingDirectory::Ssh { remote_path, .. } => {
+                if request.family == ProtocolFamily::Dsh {
+                    return Err(ExecutorFailure::Unsupported {
+                        reason: "a dsh task runs on a local workspace, and this launch request carried a remote one; \
+                                 the webui launch body cannot address a remote path"
+                            .to_string(),
+                    });
+                }
+                remote_path.clone()
+            }
+            WorkingDirectory::Local { path } => path.clone(),
         };
-        if request.family == ProtocolFamily::Dsh {
-            return Err(ExecutorFailure::Unsupported {
-                reason: "dsh launch is a desktop-host path (dsh_host::executor); the headless \
-                         host exposes the approval surface via approval.list/respond instead"
-                    .to_string(),
-            });
-        }
+        let prompt = request
+            .prompt_override
+            .clone()
+            .unwrap_or_else(|| request.prompt.clone());
+        let positional_prompt = if prompt.is_empty() {
+            Vec::new()
+        } else {
+            vec!["--".to_string(), prompt.clone()]
+        };
         let input = self.resolve_launch(&request.agent);
         let mut plan = match request.family {
-            ProtocolFamily::Claude => claude_plan(
-                &input,
-                &request.permission_mode_wire,
-                &request.agent,
-                request.selected_model.as_deref(),
-                request.reasoning_effort.as_deref(),
-            ),
-            ProtocolFamily::Codex => codex_plan(
-                &input,
-                &request.permission_mode_wire,
-                &path,
-                request.selected_model.as_deref(),
-                request.reasoning_effort.as_deref(),
-                request.speed.as_deref(),
-            ),
-            ProtocolFamily::Omp => omp_plan(
-                &input,
-                &request.permission_mode_wire,
-                &[],
-                &path,
-                request.selected_model.as_deref(),
-                request.reasoning_effort.as_deref(),
-                request.session_id.as_deref(),
-                &[],
-            ),
-            ProtocolFamily::Dsh => unreachable!("rejected above"),
+            ProtocolFamily::Claude => {
+                let mut p = claude_plan(
+                    &input,
+                    &request.permission_mode_wire,
+                    &request.agent,
+                    request.selected_model.as_deref(),
+                    request.reasoning_effort.as_deref(),
+                );
+                if !request.inject_prompt_into_terminal {
+                    for arg in &positional_prompt {
+                        p = p.arg(arg.clone());
+                    }
+                }
+                p
+            }
+            ProtocolFamily::Codex => {
+                let mut p = codex_plan(
+                    &input,
+                    &request.permission_mode_wire,
+                    &workspace_path,
+                    request.selected_model.as_deref(),
+                    request.reasoning_effort.as_deref(),
+                    request.speed.as_deref(),
+                );
+                if !request.inject_prompt_into_terminal {
+                    for arg in &positional_prompt {
+                        p = p.arg(arg.clone());
+                    }
+                }
+                p
+            }
+            ProtocolFamily::Omp => {
+                let omp_home = self.managed_agent_home("omp")?;
+                let agent_env = vec![(
+                    "PI_CODING_AGENT_DIR".to_string(),
+                    omp_home.to_string_lossy().into_owned(),
+                )];
+                let mut p = omp_plan(
+                    &input,
+                    &request.permission_mode_wire,
+                    &agent_env,
+                    &workspace_path,
+                    request.selected_model.as_deref(),
+                    request.reasoning_effort.as_deref(),
+                    request.session_id.as_deref(),
+                    &positional_prompt,
+                );
+                for key in aeroric_core::agents::environment::OMP_PROFILE_KEYS {
+                    p = p.unset_env(*key);
+                }
+                p
+            }
+            ProtocolFamily::Dsh => {
+                let dsh_home = self.managed_agent_home("dsh")?;
+                let mut p = dsh_plan(
+                    &input,
+                    &request.permission_mode_wire,
+                    prompt.is_empty(),
+                    &dsh_home,
+                    &[],
+                );
+                for arg in &positional_prompt {
+                    p = p.arg(arg.clone());
+                }
+                p
+            }
         };
-        plan = plan.cwd(path);
+        plan = match &request.working_directory {
+            WorkingDirectory::Local { path } => plan.cwd(path),
+            WorkingDirectory::Ssh {
+                connection_id,
+                remote_path,
+            } => self.build_ssh_launch_plan(connection_id, remote_path, &plan)?,
+            WorkingDirectory::Wsl { .. } => unreachable!("handled above"),
+        };
         self.spawn_plan_core(
             plan,
             &request.task_id,
@@ -460,11 +609,16 @@ impl TaskExecutor for CliPtyExecutor {
                     .to_string(),
             });
         }
-        let WorkingDirectory::Local { path } = request.working_directory.clone() else {
-            return Err(ExecutorFailure::Unsupported {
-                reason: "the headless host runs local workspaces only; SSH/WSL land in P7-01/02"
-                    .to_string(),
-            });
+        let workspace_path = match &request.working_directory {
+            WorkingDirectory::Wsl { distribution, .. } => {
+                return Err(ExecutorFailure::Unsupported {
+                    reason: format!(
+                        "WSL workspaces ({distribution}) are retired on the Apple-only platform; record preserved as read-only"
+                    ),
+                });
+            }
+            WorkingDirectory::Ssh { remote_path, .. } => remote_path.clone(),
+            WorkingDirectory::Local { path } => path.clone(),
         };
         let input = self.resolve_launch(&request.agent);
         let mut plan = match request.family {
@@ -483,7 +637,7 @@ impl TaskExecutor for CliPtyExecutor {
                 let mut p = codex_plan(
                     &input,
                     &request.permission_mode_wire,
-                    &path,
+                    &workspace_path,
                     request.selected_model.as_deref(),
                     request.reasoning_effort.as_deref(),
                     request.speed.as_deref(),
@@ -491,19 +645,37 @@ impl TaskExecutor for CliPtyExecutor {
                 p = p.arg("resume").arg(&request.session_id);
                 p
             }
-            ProtocolFamily::Omp => omp_plan(
-                &input,
-                &request.permission_mode_wire,
-                &[],
-                &path,
-                request.selected_model.as_deref(),
-                request.reasoning_effort.as_deref(),
-                Some(&request.session_id),
-                &[],
-            ),
+            ProtocolFamily::Omp => {
+                let omp_home = self.managed_agent_home("omp")?;
+                let agent_env = vec![(
+                    "PI_CODING_AGENT_DIR".to_string(),
+                    omp_home.to_string_lossy().into_owned(),
+                )];
+                let mut p = omp_plan(
+                    &input,
+                    &request.permission_mode_wire,
+                    &agent_env,
+                    &workspace_path,
+                    request.selected_model.as_deref(),
+                    request.reasoning_effort.as_deref(),
+                    Some(&request.session_id),
+                    &[],
+                );
+                for key in aeroric_core::agents::environment::OMP_PROFILE_KEYS {
+                    p = p.unset_env(*key);
+                }
+                p
+            }
             ProtocolFamily::Dsh => unreachable!("rejected above"),
         };
-        plan = plan.cwd(path);
+        plan = match &request.working_directory {
+            WorkingDirectory::Local { path } => plan.cwd(path),
+            WorkingDirectory::Ssh {
+                connection_id,
+                remote_path,
+            } => self.build_ssh_launch_plan(connection_id, remote_path, &plan)?,
+            WorkingDirectory::Wsl { .. } => unreachable!("handled above"),
+        };
         self.spawn_plan_core(
             plan,
             &request.task_id,

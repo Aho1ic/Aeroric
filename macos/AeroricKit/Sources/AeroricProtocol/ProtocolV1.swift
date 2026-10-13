@@ -44,7 +44,9 @@ public enum JSONValue: Equatable, Sendable {
     /// reads as empty rather than failing the frame.
     public var fields: [String: JSONValue] { objectValue ?? [:] }
 
-    static func from(_ object: Any) -> JSONValue {
+    /// 由 `JSONSerialization` 的产物构造。测试需要造 wire 形状来钉解析规则,
+    /// 所以它是公开的;生产路径只有 `Frame.parse` 一处使用。
+    public static func from(_ object: Any) -> JSONValue {
         if object is NSNull { return .null }
         if let text = object as? String { return .string(text) }
         if let number = object as? NSNumber {

@@ -1,0 +1,63 @@
+[package]
+name = "aeroric-remote-push"
+version = "0.1.0"
+edition = "2021"
+description = "Self-hosted APNs sender for Aeroric: device-token binding, authenticated push requests and privacy-limited payloads (AP6)"
+
+[[bin]]
+name = "aeroric-remote-push"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+hex = "0.4"
+getrandom = "0.3"
+uuid = { version = "1", features = ["v4"] }
+# APNs 要求 HTTP/2 + TLS1.2+。用 hyper 直接控制 `:method`/`:path`/逐请求头:
+# `:path` 必须是 `/3/device/<token>` 而不是 URL 路径,通用 HTTP 客户端封装拿不到。
+hyper = { version = "1", features = ["client", "http2"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http2", "tokio"] }
+http-body-util = "0.1"
+# hyper-rustls 提供 HTTPS connector(webpki 根证书 + tls12 + http2)。
+hyper-rustls = { version = "0.27", default-features = false, features = ["webpki-tokio", "http2", "tls12", "ring"] }
+# 显式给 provider 一个直连依赖:`apns::install_tls_provider` 在构造连接器前
+# 必须能引用 `rustls::crypto::ring`。不这么做时,同进程里 ring/aws-lc-rs 同时
+# 可用会让 rustls 在首次 TLS 时 panic(见该函数的文档)。
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# APNs provider JWT 是 ES256(.p8 = PKCS#8 EC 私钥)。签名走 p256/ecdsa 的
+# RFC6979 实现,不自研 ECDSA、不引入 openssl。
+p256 = { version = "0.14", features = ["ecdsa", "pem"] }
+remote-protocol = { path = "../remote-protocol" }
+
+[dev-dependencies]
+# 集成测试要起一个**真实 h2** 的假 APNs:发送端走 hyper 客户端,假服务端走
+# hyper 的 http2 server(同一 HTTP/2 栈,不引入第二个实现)。
+hyper = { version = "1", features = ["server", "client", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "http2"] }
+http-body-util = "0.1"
+axum = "0.8"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+p256 = { version = "0.14", features = ["ecdsa", "pem"] }
+remote-protocol = { path = "../remote-protocol" }
+
+[lints.clippy]
+# 与 remote-protocol / remote-relay 同口径:生产代码不许裸 unwrap/expect/panic。
+# `clippy.toml` 的 allow-*-in-tests 只覆盖 crate 内的测试;**集成测试文件**
+# (`tests/push_plane.rs`)的辅助函数不在 `#[cfg(test)]` 之外也识别不到,所以那里
+# 单独挂一条带 reason 的 allow(与 src-tauri 处理同类问题的做法一致)。
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+too_many_arguments = "allow"
+
+[profile.release]
+strip = true
+lto = true

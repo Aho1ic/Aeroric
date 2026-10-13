@@ -1,10 +1,10 @@
 //! P7-03 Action 1/4：Conda（core 独占；环境发现与校验——与
 //! `src-tauri/src/conda.rs` 同源语义上收；spawn 复用 Agent environment
 //! policy，不能污染全局 shell rc）。
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Conda 环境。
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CondaEnvironment {
     pub name: String,
@@ -12,27 +12,12 @@ pub struct CondaEnvironment {
     pub python_path: String,
 }
 
-/// conda 候选路径（按 cfg 分支；verbatim 上收）。
+/// Native callers share the legacy discovery candidate list; no second list.
 pub fn conda_candidates() -> Vec<String> {
-    let mut candidates = Vec::new();
-    #[cfg(windows)]
-    {
-        candidates.push(r"C:\ProgramData\miniconda3\Scripts\conda.exe".to_string());
-        candidates.push(r"C:\ProgramData\anaconda3\Scripts\conda.exe".to_string());
-        candidates.push("conda.exe".to_string());
-    }
-    #[cfg(not(windows))]
-    {
-        candidates.push("/opt/miniconda3/bin/conda".to_string());
-        candidates.push("/opt/homebrew/bin/conda".to_string());
-        candidates.push("/usr/local/bin/conda".to_string());
-        candidates.push("conda".to_string());
-        if let Ok(home) = std::env::var("HOME") {
-            candidates.push(format!("{home}/miniconda3/bin/conda"));
-            candidates.push(format!("{home}/anaconda3/bin/conda"));
-        }
-    }
-    candidates
+    super::conda_face::conda_candidates()
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// 环境名从路径推导（verbatim；`.../envs/<name>/bin/conda` → <name>）。

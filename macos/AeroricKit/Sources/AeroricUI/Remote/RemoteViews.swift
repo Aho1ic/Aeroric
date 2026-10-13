@@ -17,8 +17,14 @@ public final class RemoteStore: ObservableObject {
     @Published public private(set) var devices: [RemoteClient.DeviceView]
     @Published public private(set) var pairing: RemoteClient.PairingInvite?
     @Published public private(set) var lastError: String?
-    /// 审计行（`<ts>\t<event>\t<payload>` 的原始文本；只读展示）。
+/// 审计行(`<ts>\t<event>\t<payload>` 的原始文本;只读展示)。
     @Published public private(set) var auditLines: [String]
+    /// AP6:推送登记状态(设备表 + 计数 + 退避窗口)。
+    @Published public private(set) var pushStatus: RemoteClient.PushStatus = .unavailable()
+    /// AP6:自托管 relay 的最近一次诊断结果。
+    @Published public private(set) var relayDiagnostics: RemoteClient.RelayDiagnostics?
+    /// 产品方关于 relay 责任的原话(不提供默认 relay);由宿主给出,这里不改写。
+    @Published public private(set) var relayDisclosure: String = ""
 
     private let client: RemoteClient?
     /// 审计文件读取钩子（生产=DataDir/remote/audit.log；测试注入内存行）。
@@ -46,17 +52,60 @@ public final class RemoteStore: ObservableObject {
         self.auditReader = auditReader
     }
 
-    /// 刷新状态＋设备表。
+/// 刷新状态+设备表(+AP6 推送状态)。
     public func refresh() async {
         guard let client = clientForWrite() else { return }
         do {
             status = try await client.status()
             devices = try await client.listDevices()
+            // 推送状态与远程面同批读:RPC 失败不该让整个面板空白,所以单独兜住。
+            pushStatus = (try? await client.pushStatus()) ?? pushStatus
             lastError = nil
         } catch {
             lastError = String(describing: error)
         }
         auditLines = auditReader()
+    }
+
+    // MARK: - AP6: push plane and relay diagnostics
+
+    /// 注销某台设备的推送。
+    ///
+    /// 与「撤销设备」是两件事:撤销会断连并收窄 listener,注销只是不再给它推
+    /// 通知。分开做,不借撤销的语义。
+    public func unregisterPush(deviceID: String) async {
+        guard let client = clientForWrite() else { return }
+        do {
+            try await client.pushRegister(deviceID: deviceID, platform: "ios", token: "")
+            pushStatus = try await client.pushStatus()
+            lastError = nil
+        } catch {
+            lastError = String(describing: error)
+        }
+    }
+
+    /// 立刻推一条,验证「宿主 → 发送端 → APNs → 这台手机」整条链路。
+    public func sendTestNotification() async {
+        guard let client = clientForWrite() else { return }
+        do {
+            _ = try await client.pushTest()
+            pushStatus = try await client.pushStatus()
+            lastError = nil
+        } catch {
+            lastError = String(describing: error)
+        }
+    }
+
+    /// 跑一次自托管 relay 诊断(真发一次 WS 注册)。
+    public func diagnoseRelay() async {
+        guard let client = clientForWrite() else { return }
+        do {
+            relayDiagnostics = try await client.relayDiagnostics()
+            relayDisclosure = try await client.relayDisclosure().note
+            lastError = nil
+        } catch {
+            lastError = String(describing: error)
+        }
     }
 
     /// 启动服务（可选端口）。
@@ -145,6 +194,8 @@ public struct RemoteAccessSettingsView: View {
     @State private var relayURL: String = ""
     @State private var relayToken: String = ""
     @State private var showPairing = false
+    /// 最近一次推送动作的结果提示(`store.lastError` 负责失败;这里只说成功)。
+    @State private var pushNotice: String?
 
     public init(store: RemoteStore) {
         self.store = store
@@ -212,6 +263,121 @@ public struct RemoteAccessSettingsView: View {
         .sheet(isPresented: $showPairing) {
             PairingView(store: store)
         }
+    }
+
+    // MARK: - AP6: push section
+
+    /// 推送分区。三条要点都在界面上说清楚,因为它们决定用户会不会误以为
+    /// 「没收到通知 = 没发生事情」:
+    /// * 通知是提醒,不是审批入口;审批永远回连接里做。
+    /// * APNs 尽力投递,不承诺必达。
+    /// * 发送端是用户自己部署的,私钥不经过本机。
+    @ViewBuilder
+    private var pushSection: some View {
+        HStack {
+            Text(store.pushStatus.wired ? "推送可用" : "此宿主未装配推送出口")
+                .font(.caption)
+                .foregroundStyle(store.pushStatus.wired ? Color.dsSuccess : Color.dsWarning)
+            Spacer()
+            Text(store.pushStatus.enabled ? "已配置发送端" : "未配置发送端")
+                .font(.caption)
+                .foregroundStyle(Color.dsTextSecondary)
+        }
+        .accessibilityIdentifier("push.summary")
+
+        if let senderURL = store.pushStatus.senderURL {
+            LabeledContent("发送端", value: senderURL)
+                .accessibilityIdentifier("push.sender-url")
+        }
+        Text(store.pushStatus.detail)
+            .font(.caption)
+            .foregroundStyle(Color.dsTextSecondary)
+            .accessibilityIdentifier("push.detail")
+
+        if let suppressed = store.pushStatus.suppressedForMs {
+            Text("发送端要求退避,约 \(suppressed / 1000) 秒内不再推送(APNs 限流/不可用)")
+                .font(.caption)
+                .foregroundStyle(Color.dsWarning)
+                .accessibilityIdentifier("push.backoff")
+        }
+
+        if store.pushStatus.devices.isEmpty {
+            Text("还没有设备登记推送;在手机上打开伴随端并允许通知后即可上报。")
+                .font(.caption)
+                .foregroundStyle(Color.dsTextSecondary)
+                .accessibilityIdentifier("push.no-devices")
+        } else {
+            ForEach(store.pushStatus.devices, id: \.deviceID) { device in
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text(device.deviceID)
+                            .accessibilityIdentifier("push.device.\(device.deviceID)")
+                        Text(device.invalidated
+                             ? "APNs 已判该令牌失效,需在手机上重新允许通知"
+                             : "已登记(\(device.platform))")
+                            .font(.caption)
+                            .foregroundStyle(device.invalidated ? Color.dsWarning : Color.dsTextSecondary)
+                    }
+                    Spacer()
+                    Button("取消推送") {
+                        Task { await store.unregisterPush(deviceID: device.deviceID) }
+                    }
+                    .accessibilityIdentifier("push.unregister.\(device.deviceID)")
+                }
+            }
+        }
+
+        Button("发送测试通知") {
+            Task {
+                await store.sendTestNotification()
+                pushNotice = "已请求发送端投递;通知不承诺必达,以连接内的状态为准"
+            }
+        }
+        .disabled(!store.pushStatus.wired || store.pushStatus.devices.isEmpty)
+        .accessibilityIdentifier("push.test")
+
+        let stats = store.pushStatus.stats
+        Text("本机计数:判定 \(stats.decisions) · 尝试 \(stats.attempts) · 已投递 \(stats.accepted) · 失效 \(stats.invalidatedDevices) · 失败 \(stats.failures) · 无设备 \(stats.skippedNoDevices)")
+            .font(.caption.monospaced())
+            .foregroundStyle(Color.dsTextSecondary)
+            .accessibilityIdentifier("push.stats")
+
+        Text("通知只提示「任务完成/失败/等待审批」,不含标题、路径或命令;它不是审批授权,请回到已连接的会话确认。")
+            .font(.caption)
+            .foregroundStyle(Color.dsTextSecondary)
+
+        if let notice = pushNotice {
+            Text(notice)
+                .font(.caption)
+                .foregroundStyle(Color.dsTextSecondary)
+                .accessibilityIdentifier("push.notice")
+        }
+        if let error = store.lastError {
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(Color.dsDanger)
+                .accessibilityIdentifier("push.error")
+        }
+    }
+
+    // MARK: - AP6: relay diagnostics
+
+    /// 诊断结果行。四项分开显示而不是只给一句成败:用户要据此判断是
+    /// 「地址/口令写错了」还是「网络到不了」还是「反向代理没升级 WebSocket」。
+    @ViewBuilder
+    private func relayDiagnosticsRow(_ diagnostics: RemoteClient.RelayDiagnostics) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            LabeledContent("方案", value: diagnostics.schemeOK ? "合法(wss:// 或本机 ws://)" : "不合法")
+            LabeledContent("可达", value: diagnostics.reachable ? "是" : "否")
+            LabeledContent("口令被接受", value: diagnostics.authenticated ? "是" : "否")
+            if let latency = diagnostics.latencyMs {
+                LabeledContent("耗时", value: "\(latency) ms")
+            }
+            Text(diagnostics.detail)
+                .font(.caption)
+                .foregroundStyle(diagnostics.authenticated ? Color.dsSuccess : Color.dsWarning)
+        }
+        .accessibilityIdentifier("remote.relay-result")
     }
 }
 

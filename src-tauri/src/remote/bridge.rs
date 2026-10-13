@@ -154,6 +154,50 @@ impl<R: Runtime> RemoteHostHandle for RemoteHostBridge<R> {
             outbound,
         ))
     }
+
+    // ── AP6 推送平面 ──
+    //
+    // 这是**待退休**的 Tauri 宿主(AP10 才清退),而 AP6 的推送面是 Apple-only
+    // 原生的能力。这里不给「假装能推」的空实现:四个方法都明确报「本宿主形态不
+    // 提供推送」,客户端拿到的是能力不存在而不是静默失败。桌面端要配置推送时走
+    // macOS 原生客户端的 `remote.push*`(与这里同一份 core 实现)。
+    async fn push_register(&self, _params: Value) -> Result<Value, String> {
+        Err("the Tauri host does not expose the AP6 push plane; use the native macOS client"
+            .to_string())
+    }
+
+    async fn push_status(&self) -> Result<Value, String> {
+        Ok(json!({
+            "enabled": false,
+            "wired": false,
+            "devices": [],
+            "detail": "the Tauri host does not expose the AP6 push plane",
+        }))
+    }
+
+    async fn push_test(&self) -> Result<Value, String> {
+        Err("the Tauri host does not expose the AP6 push plane; use the native macOS client"
+            .to_string())
+    }
+
+    async fn relay_diagnostics(&self) -> Result<Value, String> {
+        Ok(json!({
+            "relay": {
+                "url": "",
+                "schemeOk": true,
+                "reachable": false,
+                "authenticated": false,
+                "detail": "relay diagnostics are only wired in the native macOS client",
+            },
+            "defaultRelay": Value::Null,
+            "note": "Aeroric ships no default relay; your Mac and phone must use your own relay or a trusted direct network",
+        }))
+    }
+
+    /// 撤销时停推:这台宿主没有推送面,所以只需如实回报,不假装做过。
+    async fn device_revoked(&self, _device_id: &str) -> Result<Value, String> {
+        Ok(json!({ "push": "the Tauri host does not expose the AP6 push plane" }))
+    }
 }
 
 /// 宿主启动 wrapper：挂事件桥（listen_any）→ core start_with_scope →

@@ -527,6 +527,31 @@ impl RemoteHostHandle for HeadlessHandle {
         }
         Box::new(NoStreams)
     }
+
+    // AP6:本套件的 handle 是「没有推送面」的宿主形态。三个 push 方法与
+    // relay 诊断**明确拒绝**,因为这里要验证的正是「未装配的宿主不会假装能推」。
+    async fn push_register(&self, _params: Value) -> Result<Value, String> {
+        Err("test handle has no push plane wired".to_string())
+    }
+
+    async fn push_status(&self) -> Result<Value, String> {
+        Ok(json!({ "enabled": false, "wired": false, "devices": [] }))
+    }
+
+    async fn push_test(&self) -> Result<Value, String> {
+        Err("test handle has no push plane wired".to_string())
+    }
+
+    async fn device_revoked(&self, _device_id: &str) -> Result<Value, String> {
+        Ok(json!({ "push": "test handle has no push plane wired" }))
+    }
+
+    async fn relay_diagnostics(&self) -> Result<Value, String> {
+        Ok(json!({
+            "relay": { "url": "", "schemeOk": true, "reachable": false, "authenticated": false },
+            "defaultRelay": Value::Null,
+        }))
+    }
 }
 
 const HEADLESS_WAIT: Duration = Duration::from_secs(5);

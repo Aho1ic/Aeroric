@@ -77,3 +77,68 @@ volume, and it can drop or delay traffic. TLS protects relay credentials and
 transport metadata from network observers; E2EE protects application payloads
 from the relay itself. Neither layer makes an already paired phone
 untrusted—device revocation is the boundary for removing that authority.
+
+## Push notifications (AP6)
+
+Aeroric ships **no notifications service**. Reminders are delivered by a
+sender that you deploy yourself, which is the only place the APNs auth key
+(`.p8`) exists. The Mac app and the phone never hold it.
+
+### What leaves your Mac
+
+Only routing information: which kind of event happened (task done, task
+failed, or an approval is pending), an event sequence number, and a
+collapse key. There is no task title, project name, file path, command,
+prompt or credential in the payload — the visible text is a key that the
+phone app resolves to a localised string. A notification also never
+authorizes anything: tapping it makes the phone re-check against the
+authenticated session, and the notification itself cannot approve or run
+work.
+
+### Deploying the sender
+
+```bash
+export APNS_KEY_PEM="$(cat AuthKey_XXXXXXXXXX.p8)"
+export APNS_KEY_ID=XXXXXXXXXX          # Apple Key ID
+export APNS_TEAM_ID=YYYYYYYYYY         # Apple Team ID
+export APNS_TOPIC=com.aeroric.ios.companion
+export APNS_ENVIRONMENT=production     # sandbox for development builds
+export PUSH_PORT=6792
+export PUSH_CREDENTIALS_FILE=/var/lib/aeroric/push/credentials.json
+export PUSH_BINDINGS_FILE=/var/lib/aeroric/push/bindings.json
+cargo run --release --manifest-path remote-push/Cargo.toml
+```
+
+Mint one credential for the Mac that will drive notifications, then store the
+printed secret in that Mac's Keychain:
+
+```bash
+cargo run --release --manifest-path remote-push/Cargo.toml -- enroll home-mac
+```
+
+The sender refuses to start if the key cannot be parsed, so a mistyped or
+wrong-format `.p8` fails loudly instead of silently never delivering. It
+requires a per-user HMAC signature on every request (`/v1/bind`, `/v1/push`),
+rejects replayed nonces and stale timestamps, rate-limits per credential, and
+drops a device binding as soon as APNs reports its token as unregistered.
+`--help`, `check` and `enroll` are available without a running server.
+
+Test the chain from the Mac's Remote settings: "Send test notification" goes
+through the same minimal payload as a real reminder, and the panel shows the
+host's counters (decisions, attempts, delivered, invalidated, failures) so
+"notifications are on but nothing arrives" is diagnosable.
+
+### Relay guidance and diagnostics
+
+Relay use is unchanged: self-host it (above) or connect over a trusted direct
+network. The Mac's Remote settings has a "Diagnose relay connectivity" action
+that reports four separate facts — whether the URL scheme is acceptable,
+whether the host is reachable, whether the relay accepted the registration
+(that is what proves the shared token is right), and how long the exchange
+took. A URL that is reachable but rejected is not "working", and a non-loopback
+plaintext `ws://` URL is dropped at configuration load rather than used.
+
+APNs delivery is best effort by Apple's own definition. Aeroric does not promise
+that a reminder arrives, and it does not queue or retry reminders on your
+behalf; when the sender reports back-pressure, the Mac simply stops sending for
+a while.

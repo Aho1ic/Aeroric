@@ -57,7 +57,11 @@ toml = "0.8" # 与宿主同 crate 同版本（app_settings 配置解析——P8-
 regex = "1" # 与宿主同 crate 同版本（settings/transforms 的正则——P8-02）
 sqlite-vec = "0.1" # 与宿主同 crate 同版本（rag/db 的 vec0 虚表，链接进二进制——P7-06）
 dbx-core = { path = "../../../../dbx/crates/dbx-core", default-features = false } # 与宿主同 path（database/sql_risk 纯函数——P7-04）
-serde_yaml_ng = "0.10" # 与宿主同 crate 同版本（dsh_host/client 的插件 patch/dump 线数据解析，P3-05 第十一片；纯解析零 I/O）
+serde_yaml_ng = "0.10" # 与宿主同 crate 同版本(dsh_host/client 的插件 patch/dump 线数据解析,P3-05 第十一片;纯解析零 I/O)
+# AP6 推送平面:宿主 → 自托管发送端的请求签名(HMAC-SHA256)。两 crate 锁文件里
+# 本来就有,按同版本加成直接依赖,不新增供应链面。
+hmac = "0.12"
+hex = "0.4"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "socks", "stream", "query", "form", "multipart"] } # grill [dsh] D1（补记二百六十四，2026-09-30 用户决策）：core 自此持网络出口，`DshApiClient` 上收用；feature 集与宿主 `src-tauri/Cargo.toml:46` 逐字一致，不造第二套传输
 uuid = { version = "1", features = ["v4"] } # 与宿主 src-tauri/Cargo.toml:64 逐字一致——dsh transport 的 rpcId 铸造（`DshApiClient::call`，方法群片补记二百六十五 §3）
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] } # 与宿主 :68 逐字一致——remote_mux 的 WS 传输（方法群片随 DshApiClient 上收，D1 同类：网络出口）

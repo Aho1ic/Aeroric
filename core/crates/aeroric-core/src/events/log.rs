@@ -9,11 +9,12 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde_json::Value;
 
-/// 环容量，与宿主参考逐字同值（512）。重立的是原子边界，不是容量语义。
+/// 环容量,与宿主参考逐字同值(512)。重立的是原子边界,不是容量语义。
 pub const MAX_ENTRIES: usize = 512;
 
 #[derive(Clone)]
@@ -23,10 +24,26 @@ pub struct LoggedEvent {
     pub data: Value,
 }
 
-/// 锁内状态：`next_seq` 与环同生共死，`evicted` 是**曾被挤出的显式记账**——
-/// 环满时最旧条目被 pop，但「seq 1..=evicted 存在过」不能丢，否则第 513 条
-/// 之后 `since(1)` 会因 `front().seq == 2` 误判可精确补发（参考实现的洞，
-/// 见 `oldest_after`）。
+/// 每次成功 `append` 后的**只读**通知面(AP6 推送平面)。
+///
+/// 为什么要挂在 `EventLog` 而不是另起一条事件总线:本模块的存在理由就是
+/// 「seq 分配与入环同一临界区」,任何**另取一处**观察事件的机制都会拿到与环
+/// 不一致的顺序(这正是 `remote/event_log.rs` 被替换掉的原因)。挂在 append
+/// 的临界区之后,观察者看到的 seq 顺序与环内顺序一致。
+///
+/// 契约:
+/// * 观察者**必须**立即返回,不得阻塞(在 append 的调用者线程上被调用);
+///   需要做 IO 的实现自己丢进队列/任务。
+/// * 观察者**不得**回调 `EventLog` 的写方法(会自锁)。只读方法安全。
+/// * 没有观察者时零额外开销(`Option` 检查)。
+pub trait EventObserver: Send + Sync {
+    fn observed(&self, event: &LoggedEvent);
+}
+
+/// 锁内状态:`next_seq` 与环同生共死,`evicted` 是**曾被挤出的显式记账**——
+/// 环满时最旧条目被 pop,但「seq 1..=evicted 存在过」不能丢,否则第 513 条
+/// 之后 `since(1)` 会因 `front().seq == 2` 误判可精确补发(参考实现的洞,
+/// 见 `oldest_after`)。
 #[derive(Default)]
 struct Inner {
     next_seq: u64,
@@ -36,28 +53,56 @@ struct Inner {
 
 #[derive(Default)]
 pub struct EventLog {
-    /// `latest` 是锁内分配、锁释放前 store 的无锁镜像（见模块头的方向性论证）。
+    /// `latest` 是锁内分配、锁释放前 store 的无锁镜像(见模块头的方向性论证)。
     latest: AtomicU64,
     inner: Mutex<Inner>,
+    /// AP6:可选的 append 观察者(宿主用它把任务事件转发到推送发送端)。
+    /// `None` 时 append 路径与从前逐字节等形。
+    observer: Mutex<Option<Arc<dyn EventObserver>>>,
 }
 
 impl EventLog {
-    /// 记录一条推送事件，返回其 seq。分配、入环、镜像更新在同一临界区。
+    /// 装一个观察者。宿主在启动时调用一次;重复调用会替换(便于测试复位)。
+    pub fn with_observer(self, observer: Arc<dyn EventObserver>) -> Self {
+        *self.observer.lock() = Some(observer);
+        self
+    }
+
+    pub fn set_observer(&self, observer: Option<Arc<dyn EventObserver>>) {
+        *self.observer.lock() = observer;
+    }
+
+    /// 当前观察者(测试用)。
+    pub fn has_observer(&self) -> bool {
+        self.observer.lock().is_some()
+    }
+
+    /// 记录一条推送事件,返回其 seq。分配、入环、镜像更新在同一临界区。
     pub fn append(&self, event: &str, data: Value) -> u64 {
-        let mut inner = self.inner.lock();
-        inner.next_seq += 1;
-        let seq = inner.next_seq;
-        if inner.entries.len() >= MAX_ENTRIES {
-            inner.entries.pop_front();
-            inner.evicted += 1;
+        let (seq, observed) = {
+            let mut inner = self.inner.lock();
+            inner.next_seq += 1;
+            let seq = inner.next_seq;
+            if inner.entries.len() >= MAX_ENTRIES {
+                inner.entries.pop_front();
+                inner.evicted += 1;
+            }
+            let observed = LoggedEvent {
+                seq,
+                event: event.to_string(),
+                data,
+            };
+            inner.entries.push_back(observed.clone());
+            // 锁内 store:外部观察到 latest==N 时,N 必已在环里。
+            self.latest.store(seq, Ordering::Release);
+            (seq, observed)
+        };
+        // 观察者在锁**外**调用:它不该阻塞 append 的临界区,也不该有机会自锁。
+        // 顺序性不受影响 —— seq 已在环里,观察者拿到的是同一个 seq。
+        let observer = self.observer.lock().clone();
+        if let Some(observer) = observer {
+            observer.observed(&observed);
         }
-        inner.entries.push_back(LoggedEvent {
-            seq,
-            event: event.to_string(),
-            data,
-        });
-        // 锁内 store：外部观察到 latest==N 时，N 必已在环里。
-        self.latest.store(seq, Ordering::Release);
         seq
     }
 
@@ -106,6 +151,55 @@ impl EventLog {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn observer_sees_every_event_in_seq_order_and_is_optional() {
+        use std::sync::Mutex as StdMutex;
+
+        struct Recorder(StdMutex<Vec<(u64, String)>>);
+        impl EventObserver for Recorder {
+            fn observed(&self, event: &LoggedEvent) {
+                self.0
+                    .lock()
+                    .expect("recorder")
+                    .push((event.seq, event.event.clone()));
+            }
+        }
+
+        // 无观察者时 append 行为不变(seq 仍从 1 起)。
+        let plain = EventLog::default();
+        assert!(!plain.has_observer());
+        assert_eq!(plain.append("task-status", json!({"a": 1})), 1);
+
+        let recorder = Arc::new(Recorder(StdMutex::new(Vec::new())));
+        let log = EventLog::default().with_observer(recorder.clone());
+        assert!(log.has_observer());
+        log.append("task-status", json!({"status": "done"}));
+        log.append("other-event", json!({}));
+        log.append("task-status", json!({"status": "failed"}));
+        assert_eq!(
+            *recorder.0.lock().expect("recorder"),
+            vec![
+                (1, "task-status".to_string()),
+                (2, "other-event".to_string()),
+                (3, "task-status".to_string()),
+            ],
+            "the observer must see the same seq and order as the ring"
+        );
+
+        // 观察者不改变环语义:补发仍按 seq。
+        assert_eq!(log.latest_seq(), 3);
+        let (missed, _, reset) = log.since(1);
+        assert!(!reset);
+        assert_eq!(missed.len(), 2);
+        assert_eq!(missed[0].seq, 2);
+
+        // 观察者可摘除(宿主停用推送时)。
+        log.set_observer(None);
+        assert!(!log.has_observer());
+        log.append("task-status", json!({"status": "running"}));
+        assert_eq!(recorder.0.lock().expect("recorder").len(), 3);
+    }
 
     #[test]
     fn append_assigns_monotonic_seq_and_since_replays_missed() {

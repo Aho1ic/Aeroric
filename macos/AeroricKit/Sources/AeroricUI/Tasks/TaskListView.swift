@@ -30,15 +30,18 @@ public struct ProjectListView: View {
 public struct TaskListView: View {
     @Binding var visibleTasks: [TaskStore.TaskEntry]
     @Binding var filterText: String
+    @Binding var selectedTaskID: String?
     var onOpenDraft: (() -> Void)?
 
     public init(
         visibleTasks: Binding<[TaskStore.TaskEntry]>,
         filterText: Binding<String>,
+        selectedTaskID: Binding<String?> = .constant(nil),
         onOpenDraft: (() -> Void)? = nil
     ) {
         self._visibleTasks = visibleTasks
         self._filterText = filterText
+        self._selectedTaskID = selectedTaskID
         self.onOpenDraft = onOpenDraft
     }
 
@@ -52,9 +55,10 @@ public struct TaskListView: View {
                     .accessibilityIdentifier("tasks.new")
             }
             .padding(8)
-            List {
+            List(selection: $selectedTaskID) {
                 ForEach(visibleTasks) { task in
                     TaskRow(task: task)
+                        .tag(Optional(task.id))
                 }
             }
             .listStyle(.plain)

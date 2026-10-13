@@ -1,3 +1,274 @@
+# Aeroric Apple-only 迁移执行计划
+
+<!-- APPLE_ONLY_BASELINE_BEGIN -->
+
+> **当前有效基线：2026-10-12，grill-me Q1–Q12 与规划总评审已获用户确认。**
+> 本次授权仅为计划修订；**未授权产品实施、删除代码、修改 CI/签名、操作真实数据、商店提交、commit/push/tag 或发布**。下一步是另获 AP0 实施批准，而不是按旧记录自动续跑切片112。
+> 本节至 `APPLE_ONLY_BASELINE_END` 是当前范围、顺序和验收的规范源。文末折叠区是原迁移记录：保留证据与工具读取面，**不再决定新产品范围、签名、平台支持、删除门槛或当前执行入口**。
+
+## A. 目标、证据与规划载体
+
+交付 **SwiftUI 原生 macOS 工作台＋iOS/iPadOS 任务伴随客户端**，两端均以上架 App Store 为硬目标。Mac 必须不依赖另一台机器完成本地 Agent 编码闭环；复用 Rust core/host/CLI，不重写外部 Agent 的推理内核。
+
+- 已确认的用户选择及历史策略衔接：[ADR-039](docs/native/adr/039-distribution-pivot-macos-ios.md)。Trellis 复用 `.trellis/tasks/09-21-native-macos/{prd,design,implement}.md`，不在本轮新建任务目录或运行 `task.py start`。
+- 本轮证据来自定向源码/配置核对、两项独立只读调查、既有任务工件及 Apple 官方资料；**没有把静态调查、历史测试或文档批准记成新的产品运行验收**。
+- 当前实际仍是无沙箱的 Mac 预览配置（`macos/project.yml:39-49`）；CLI executor 明确拒绝部分家族/远端启动（`core/crates/aeroric-host/src/executor.rs:398-410`），headless remote 的审批/终端/文件等还未等价于旧桌面（`core/crates/aeroric-host/src/remote_headless.rs:295-363`）。
+- `mobile/` 是有实际远控业务的 Expo/React Native 客户端，不是原生 iOS 空壳；`AeroricKit` 中的 AppKit、进程监管和 UDS 客户端也不是现成的 iOS 网络实现。
+- `docs/native/task-status.json` 的旧 Task 状态仅证明旧基线的历史阶段记录。**AP0–AP10 全部尚未实施**；旧 `accepted`、方法注册数、View 文件存在或 `native:check all` 绿灯均不能替代新产品交付证据。
+
+## B. 已确认的产品边界
+
+| 决策 | 当前有效要求 |
+|---|---|
+| Q1=C：分发 | macOS 与 iOS 都走 App Store；不默认增加站外完整版，不借外装 helper 绕审。不兼容能力逐项裁决，不能批量删功能。 |
+| Q2=A：本地执行 | 一台 Mac 即可完成授权项目修改、工具执行、结果与审批；远程执行只是补充。四族及自定义 Agent 的既有目标不因只跑通一个探针而缩减。 |
+| Q3=A：手机拓扑 | iOS 依赖在线 Aeroric Mac，远端工作区也由 Mac 接入；Mac 不可用时不提交执行或审批，relay 不能代替宿主。 |
+| Q4=A：退出与保留 | 退出 Windows/Linux 桌面、WSL、Android；保留 Mac 到 Linux/Unix、macOS、Windows 的既有 SSH/SFTP 能力及支持边界，保留 Linux relay。 |
+| Q5=B：首发范围 | 现有保留业务、原生 iOS、双商店适配、**原 Phase 9 全部新增高级能力**共同构成首发门槛，不自行拆成后续版本。 |
+| Q6=B：后台宿主 | 用户显式开启后，退出主界面仍能运行任务并服务 iOS；有可见状态和停止入口。不默认驻留/登录自启，不承诺防睡眠、关机可达或崩溃无损续跑。 |
+| Q7=A：通知 | 首发包含任务完成/失败/待审批的 APNs 提醒及发送端；通知不是审批授权，不带业务敏感内容，不承诺必达。 |
+| Q8=A：iOS 功能 | 完整任务伴随：配对、项目/任务、会话、审批、终端、文件查看/编辑、Git 查看及 Phase 9 的任务/会话操作；不等量复制桌面全部复杂工作区。 |
+| Q9：原生 Liquid Glass | 最低系统必须原生支持 Liquid Glass，不用旧系统仿玻璃兜底；具体 OS/架构矩阵如下。系统可访问性与经典外观仍保留。 |
+| Q10=B：服务责任 | relay 用户自托管或使用可信直连网络；产品方只维护 APNs 发送端。没有官方默认 relay、云端 Agent，也不向用户分发开发者推送私钥。 |
+| Q11=A：旧数据 | 接受停任务、一致性备份、保留原数据、授权导入与核对；权限/凭据/配对可重新授权，不接管旧存活 PTY。真实迁移另获授权。 |
+| Q12=B：删除门槛 | 全部首发工程验收、双端真实用户旅程、迁移/回退演练与**双商店审核通过后**才删除旧前端。审核通过不自动授权发布。 |
+
+### 系统与架构矩阵
+
+| 客户端 | 最低系统 | 本次最新验证目标 | 必须保留的架构/形态 |
+|---|---|---|---|
+| macOS / Apple Silicon | macOS 26 | macOS 27 | 原生 arm64，不以 Rosetta 代替 |
+| macOS / Intel | macOS 26 | macOS 26 | 原生 x86_64，仅 Apple 官方兼容机型 |
+| iPhone | iOS 26 | iOS 27 | 真机触控、键盘/IME、后台通知 |
+| iPad | iPadOS 26 | iPadOS 27 | 真机自适应布局、键盘/触控与窗口场景 |
+
+Apple `glassEffect` availability 从 26 开始；macOS 26 是最后支持 Intel 的大版本，**不建立 Intel/macOS 27 测试格**。构建 SDK 与最低部署系统是两回事；交叉编译成功不算 Intel 真机运行通过。支持组合以官方机型清单为边界，不能把所有 Intel Mac 都算在内。
+
+### 功能追踪：保留、迁移与退休分开记账
+
+原 F 编号保留为追踪身份，不因换基线重编号。下表是首发目标，不是完成状态；旧 Task 细则作为 AP1 对照输入，逐条登记保留/替代/退休，不能只比较功能组标题。
+
+| ID | Mac 首发能力/处置 | iOS 首发范围 | 主验收阶段 |
+|---|---|---|---|
+| F01 | 项目、分组、固定、排序、隐藏、最近访问 | 既有项目远控与任务上下文 | AP2/AP4/AP5 |
+| F02 | 任务创建、排队、状态、归档、恢复/取消 | 完整任务远控 | AP2/AP4/AP5 |
+| F03 | 四族/自定义 Agent、模型、权限、配置与合规安装升级 | 既有任务 Agent/模型/权限选择 | AP0/AP2/AP4/AP5 |
+| F04 | 原始 PTY、IME、输入/resize、回放、控制租约 | 原生终端与同一宿主租约 | AP2/AP4/AP5 |
+| F05 | 会话发现、分页、导出、恢复/handoff、用量 | 会话与任务相关查看/操作 | AP2/AP4/AP5 |
+| F06 | DSH 消息、工具、审批、问题、附件、队列、轨迹等 | 可用的任务/会话交互，不能假称全部已支持 | AP2/AP4/AP5 |
+| F07 | 文件树、搜索替换、编辑/预览、冲突、本地历史 | 既有文件查看/编辑 | AP2/AP4/AP5 |
+| F08 | LSP、诊断、运行/测试、DAP、预览 | 不要求完整桌面 IDE/DAP | AP2/AP4 |
+| F09 | Git status/diff/stage/commit/push/history 等 | Git 查看与既有移动操作 | AP2/AP4/AP5 |
+| F10 | worktree 与任务生命周期 | 任务关联状态，不复制完整管理 UI | AP2/AP4 |
+| F11 | SSH/SFTP、远端文件/Git/终端、恢复 | 经 Mac 使用既有远端任务能力 | AP2/AP4/AP5 |
+| F12 | **WSL 功能退休**；旧记录保留、明确拒绝，不能误作本地路径 | 不提供 WSL 功能 | AP1/AP8/AP10 |
+| F13 | Docker、端口、Conda | 不要求完整管理工作区 | AP0/AP2/AP4 |
+| F14 | DBX SQL/Redis/Mongo、结构/数据、导入导出、生产确认 | 不要求完整数据库管理网格 | AP0/AP2/AP4 |
+| F15 | notebook/quick notes、附件、模板、标签/双链、回收站等 | 不要求完整笔记工作区 | AP2/AP4 |
+| F16 | 笔记同步、RAG、存储后端与凭据保护 | 不新增全量笔记/RAG 手机工作区 | AP2/AP4 |
+| F17 | Skills、MCP、hooks、plugins、provider/proxy/router | 既有任务相关设置/操作 | AP0/AP2/AP4/AP5 |
+| F18 | 配对、E2EE、完整 remote bridge、replay、撤销 | 原生直连/自托管 relay 远控 | AP2/AP5/AP6 |
+| F19 | 通知、统计、清理、周报、权限、商店更新说明 | 状态、审批与后台推送；不保留旧自更新器 | AP3/AP4/AP6/AP9 |
+| F20 | plan/compact/fork/revert/share/export | 相关会话控制 | AP7/AP5 |
+| F21 | memory/checkpoint、任务树、goal/subagents | 相关任务/会话操作与状态 | AP7/AP5 |
+| F22 | compose/workflow、受控重试、Dream/Distill | 相关运行状态/控制与确认 | AP7/AP5 |
+| F23 | ACP/OAuth/sandbox、browser/media/voice | 任务相关交互及显式支持边界 | AP7/AP5 |
+| F24 | native/advanced 无损切换 | 对应原生/终端呈现与明确 unsupported | AP4/AP5 |
+| F25 | 原生 Liquid Glass/classic、系统交互、a11y、多窗口 | 原生手机/平板交互与 a11y | AP4/AP5/AP8 |
+| F26 | 无 GUI 的核心/CLI、后台与重连 | 不在手机运行本地 Agent 内核 | AP0/AP2/AP3 |
+
+“退出 Windows/Linux”只指客户端/指定平台功能；不删除 `cfg(unix)`、Linux relay 或 Windows SSH 对端适配。停止支持的用户记录可以保留/导出，但不能继续显示为可执行能力。iOS 范围不反向削减 Mac 的功能要求。
+
+## C. 架构与修订后的不变量
+
+```mermaid
+flowchart LR
+    Mac[SwiftUI Mac] --> IPC[认证本地 IPC]
+    IPC --> Host[Mac host / Rust core]
+    Phone[SwiftUI iOS / iPadOS] --> Net[E2EE 直连或自托管 relay]
+    Net --> Remote[Mac remote bridge]
+    Remote --> Host
+    Host --> Local[本地 Agent / PTY / 工具]
+    Host --> SSH[SSH / SFTP 远端]
+    Host --> Push[受控 APNs 发送端]
+    Push --> APNs[Apple APNs]
+    APNs --> Phone
+```
+
+复用 `core/` 四 crate 与 `macos/AeroricKit` 的纯协议/状态资产；新增 iOS 原生入口时拆开 AppKit/进程监管/UDS 与手机网络层，不另写一套任务业务。SwiftUI 可以使用必要 AppKit/UIKit 原生桥接，不允许用整个 React/WebView 页面冒充原生；原有受限 Web 预览不等于重新引入 Web 前端。
+
+| 编号 | Apple-only 当前约束 |
+|---|---|
+| INV-01 | 仍只在 main 工作，不创建 worktree/分支；本计划不授权提交、推送、tag、商店提交或发布。 |
+| INV-02 | Rust 业务不依赖 Tauri/窗口/React/Swift；SwiftUI 不构造 Agent argv、不解析原始会话 JSONL、不直接写共享业务数据。不以重写 Agent 内核解决商店问题。 |
+| INV-03 | 同一管理数据根单 writer；UI、CLI、手机通过宿主 mutation，保留锁、revision/idempotency、epoch/generation 和失败不回落旁路 writer。 |
+| INV-04 | native/advanced 仅改变呈现，不能重启任务或改 session、模型、权限、cwd、PTY generation；IME 与输入租约切换有真实证据。 |
+| INV-05 | OMP 保留原始交互 PTY；不传交互 --mode、不恢复 omp_rpc.rs。现有一次性模型探测例外不扩张。 |
+| INV-06 | OMP 使用显式注入的 managed agent-homes/omp；sandbox 管理根变化须同步路径/授权/测试，不自动扫描用户 ~/.omp。setup_env 后清 PI_PROFILE/OMP_PROFILE；旧 Tauri 既有历史读取在退出前不被偷偷改写。 |
+| INV-07 | 保持 POSIX -- 前 flags/后 prompt、.js/.ts hook、willContinue 不终结、懒会话不新增超时等既有四族约束。 |
+| INV-08 | Claude/Codex/DSH/OMP 与自定义配置的身份、别名、真实 family 保留；受支持能力依真实版本/运行证据，不能折叠成布尔值或凭空新增第五族。 |
+| INV-09 | **目标改为双商店签名与适用 sandbox/entitlement。** Developer ID、公证、开发签名和商店分发明确区分；无发布凭据时失败，不降为 ad-hoc 发布。本轮不改旧 Tauri ad-hoc 配置；过渡开发/测试签名不能冒充商店完成。 |
+| INV-10 | **退出非 Apple 客户端、Android、WSL；保留数据安全、DBX、MCP/hooks、配对/E2EE、远端系统与 relay。** 不能按 platform_specific、Windows、Linux 字样整类删除。 |
+| INV-11 | **正式前端为 SwiftUI 原生。** 邻接互斥控件使用系统选择状态，共用 NativeSelection；语义色、Liquid Glass/classic 和 interactionMode 独立。冻结期必要 React 修复仍经原工具链，不新造旁路 UI。 |
+| INV-12 | 不从 ANSI 猜工具/审批/答案；未知内容保留来源，unsupported 显式拒绝或由用户切到同一 PTY，绝不自动批准。 |
+| INV-13 | 全部首发范围与双商店审核完成前不删除旧前端；共享 Rust/vendor/远端业务先迁出。历史 accepted 与本次发布 gate 分开。 |
+| INV-14 | 真实数据、凭据、设备配对、签名资产和上线操作需另外授权；不自动删原数据、不恢复旧内存 snapshot、不用硬重置或删锁当回滚。 |
+
+本地协议 v1 与远程 v2/v3/终端二进制帧保持各自版本边界；默认复用认证 UDS，不因 Apple-only 先换协议或引入 FFI。sandbox 书签/跨进程授权确有需要时，用 AP0 实证选择最小系统适配并记录 ADR，不能把路径字符串当权限。
+
+保留既有认证超时、帧/队列/replay 上限、慢消费者重同步、错误语义与单一发布点；有业务需求改变时必须显式版本/能力协商和负例验证，不能为某个大附件静默调大上限。请求取消、任务取消、断线、UI 退出、停止宿主分别建模；不承诺重新取得丢失的 PTY master。
+
+## D. AP0–AP10 执行任务
+
+以下均为**待实施任务**，不是现有命令或通过记录。每项必须有 owner、真实输入、变更文件清单、可观察结果、失败停止条件与独立的模块 grill 记录。先批准规划，再批准实施；跨文件并行仅在明确契约/写入权后安排，不能跨越真实依赖。
+
+### AP0 — 双商店与本地执行可行性
+
+- **Owner / 前置**：发布/安全＋Mac runtime；另获本阶段实施批准。
+- **Input**：本计划 B/C、当前 Xcode/Cargo 配置、四族/自定义启动与安装器、MCP/hooks、LSP/DAP、DBX native 库、Apple 官方规则、LICENSE/NOTICE 与来源登记。
+- **Action**：在隔离数据与工具上做真实 sandbox/签名探针：包内 helper、外部 Agent/PTY/进程树、授权目录/附件、工具安装升级、运行/测试、动态库、Keychain、独立 CLI 和后台宿主。按实际版本/架构登记可用、拒绝原因和许可条件，不使用真实 HOME/凭据/生产数据库。
+- **Action**：核对 GPL 与第三方工具/资源的再分发和商店条件、App ID/entitlement/证书/设备条件；不删除许可证或假设拥有再许可权，不把“开发者账号已购买”当作可上架证明。
+- **Acceptance Criteria**：可复现的最小真实任务链证明商店沙箱形态与本地闭环可同时满足；四族/工具矩阵逐项有证据或具名阻塞。签名成功不等于审核通过。两项硬目标冲突、许可不明或必要工具不兼容时停止相关迁移并再次 grill，**不先删平台、不偷偷远端化、不绕审**。
+
+### AP1 — 规则、任务、清单与工具重定基线
+
+- **Owner / 前置**：迁移集成 owner；AP0 的架构/许可前置已闭合。
+- **Input**：旧 F01–F26/P1–P10、未完成 P8-05 工件、ADR/rollback、command/event/host 表、task-status、inventory/extraction、checks/floors、项目规则与 CI。
+- **Action**：逐条映射旧需求到新阶段，保留历史验收但重新判定真实 UI/集成/商店证据；F12 登记退休而非功能完成。区分 capability、方法注册、实际转发、用户旅程和发布门禁的分母。
+- **Action**：一起更新受影响的项目规则、Trellis 规格、协议生成器、测试/清单消费者与签名/发布约束；移交仅 Linux runner 上的安全检查，保留 relay 验证。不得只删除断言/调低 floor 使裁剪变绿；不保留只验证源码字面/计数副本的测试。
+- **Acceptance Criteria**：每项保留/替代/退休都有 owner、来源与结果门禁，G43 等 gap 有真实承接；新旧载体一致。完成消费者迁移后才把折叠历史移出主文件，原文与哈希可追溯。不得把删除未覆盖方法导致的覆盖率上涨记作新增交付。
+
+### AP2 — 完整 Mac 宿主与远端执行 owner
+
+- **Owner / 前置**：core/host＋各 domain owner；AP1。
+- **Input**：现有 core、Tauri domain/SSH/凭据/DSH/remote 实现、host-coverage 缺口、G43、逐命令/事件/能力契约。
+- **Action**：按业务闭环迁移共享实现与必要适配，不再只按方法数补注册。补齐 DSH、四族实际执行、PTY/审批/事件、文件/Git/工具服务以及完整 remote bridge；SSH/SFTP、远端 LSP/工具与凭据由 Mac 宿主平台适配负责，不能永久留在将删除的 Tauri。
+- **Action**：移除生产 NoStreams/空成功/假 capability 等行为缺口；保持未认证/只读/权限不足/未知能力拒绝先于副作用，External 不触发本地 fallback。
+- **Acceptance Criteria**：无 GUI 的真实生命周期、四族受控集成、远端工作区与手机协议闭环可验证；单 writer、幂等、旧语义与安全负例成立。G43 仅在对应运行证据完整后关闭，不能因设计 owner 已明确就关账。
+
+### AP3 — Sandbox 授权、数据根与后台生命周期
+
+- **Owner / 前置**：Mac 平台/宿主；AP0/AP1，完成验收依赖 AP2。
+- **Input**：AP0 探针结论、AppPaths/SecretStore、HostSupervisor、single-writer/IPC 与现有生命周期。
+- **Action**：落地批准的 sandbox/App Group 管理根、security-scoped bookmark 持久化/失效/跨进程传递、Keychain 与签名身份、helper/CLI 冷启动仲裁；路径来源和授权生命周期明确，不只让文件选择器返回 path。
+- **Action**：后台模式显式 opt-in，提供状态/停止入口；与 remote enabled、登录自启、防睡眠分离。界面退出不误杀获准保活的任务，停止服务明确提示影响；睡眠、断网、崩溃与重启不自动重复 spawn。
+- **Acceptance Criteria**：真实 sandbox 中重启后授权、撤销/过期书签、只读拒绝、并发冷启动、缺 helper、版本不匹配及后台开关分别成立；未授权时不驻留/不监听公网。不能用无沙箱开发包替代证据。
+
+### AP4 — Mac 全业务可见原生接线
+
+- **Owner / 前置**：Mac frontend＋domain owner；AP2/AP3。
+- **Input**：F01–F26 的 Mac 保留面、已有 AeroricUI/AppServices/TaskWorkspace、设计与选择控件规范。
+- **Action**：从 App 可见入口逐项完成项目/任务选择、新建编辑、会话/审批、终端及所有保留工作区/设置；消除只存在于库目录、空菜单、空选项、未绑定 selection/事件的断链。
+- **Action**：使用系统 Liquid Glass、Picker/List/Menu/Toggle 等原生状态及必要原生 renderer 桥接；外观不干扰任务模式，复杂内容不过度叠玻璃，尊重 a11y。
+- **Acceptance Criteria**：真实窗口完成任务→审批/工具→文件修改/结果/恢复/取消，覆盖设置、文件/IDE/Git、SSH、DBX、笔记/同步/RAG、基础设施、扩展/provider、维护等保留面；UI 演示与宿主状态一致。两种 CPU 架构与相应 OS 的运行证据独立记录。
+
+### AP5 — iOS/iPadOS 原生任务伴随端
+
+- **Owner / 前置**：iOS frontend＋remote contracts；AP1，端到端验收依赖 AP2/AP3。
+- **Input**：现有 mobile 功能/测试/配对数据、E2EE/RPC v2/v3/终端帧、纯 Swift DTO/状态资产与 Q8 边界。
+- **Action**：新增独立 SwiftUI iOS 入口（新工程/目录是本任务产物，不声称已存在），复用纯层，替换 Expo/WebView 终端与界面而非包装 JS；在真实网络层实现配对/撤销、任务/会话/审批、终端/IME/租约、文件/Git 及高级操作入口。
+- **Action**：Mac 是权威执行者；手机离线不排队审批/终端输入，不把 relay 当计算服务。重连按 epoch/游标/快照恢复，过时审批不能执行；iPhone/iPad 分别适配触控、键盘与布局。
+- **Acceptance Criteria**：真机直连与自托管 relay 的完整操作链、断网/重连、撤销、重复/乱序/过期状态成立；明确 Mac 离线，不宣称 iOS 独立运行 Agent。旧配对可按 Q11 重新建立，不能静默复制不可访问的 Keychain 内容。
+
+### AP6 — APNs 与自托管公网使用闭环
+
+- **Owner / 前置**：remote/security＋推送发送端 owner；AP3/AP5。
+- **Input**：后台任务事件、设备配对/撤销、正式 APNs 身份、现有自托管 relay 及网络安全规则。
+- **Action**：实现产品方控制的发送端、设备 token 绑定/失效、合法事件来源认证、重放/滥用防护与撤销；APNs 私钥仅在发送端。优先复用设备信任关系，不默认增加账号、付费或云任务产品。
+- **Action**：仅发送最少路由/状态提示，不含源码、命令、提示词、目录/项目敏感名或凭据；应用回到 E2EE 连接重新核对业务。披露发送端/Apple 所见元数据，区分通知送达与业务执行。
+- **Acceptance Criteria**：真机前后台/锁屏提醒、权限拒绝、无效 token、断网延迟、重复/乱序、发送失败及设备撤销实证；撤销后停止新增推送，已在途通知也不能授权操作。使用自托管 relay 的引导/诊断和 LAN/可信网络路径可用；没有官方默认 relay 或必达承诺。
+
+### AP7 — 原 Phase 9 全部高级能力
+
+- **Owner / 前置**：external adapters＋Mac/iOS frontend；AP2/AP3；界面验收与 AP4/AP5 汇合。
+- **Input**：原 P9-01～04 的完整行为/安全要求及来源证据；现有四族 capability 与受支持上游版本。
+- **Action**：交付 session controls；memory/checkpoint/task tree/goal/subagents；workflow/有界重试/Dream/Distill；ACP/OAuth/effective sandbox/browser/media/voice 四组，iOS 提供 Q8 指定操作。每一 advertised 能力绑定具体 adapter/version/边界，不能抓 TUI 文本伪造协议。
+- **Action**：保留原计划的入队时权限固定、revert 预览确认、分享默认本地脱敏、跨会话节点隔离、终态不复活、goal 不自动续跑、上游 subagent 不重复 spawn、有副作用 workflow 不自动重试、Dream 默认关闭且先 review、OAuth token 原 owner、voice 先草稿后显式提交等安全语义。
+- **Acceptance Criteria**：每组都完成请求→真实上游→宿主→原生 UI 及相应反例，记录版本/授权/成本与不支持项。mock 只证明适配逻辑；无稳定上游接口、许可或有效 sandbox 就具名阻塞，不能移出首发清单或改成占位按钮。
+
+### AP8 — 全量用户旅程、故障与迁移验收
+
+- **Owner / 前置**：集成/安全/QA＋数据 owner；AP4/AP5/AP6/AP7。
+- **Input**：全量能力/权限矩阵、真实运行证据、旧协议/数据 fixtures、迁移/rollback 方案、两端可安装产物。
+- **Action**：在隔离副本演练停写、DB/WAL/附件一致性备份、授权导入、逐项核对和失败恢复；保留源数据与旧平台不可执行记录，不以覆盖新写入或回退数据格式作为回滚。真实数据操作每步另获授权。
+- **Action**：覆盖写入/spawn/订阅/审批边界、磁盘/锁失败、host 退出/崩溃、手机断线/重连/撤销、IME/多窗口/VoiceOver/低动态与性能；生产确认或权限不明一律 fail closed。
+- **Acceptance Criteria**：各支持 OS/架构/设备有真实证据，无丢数据、重复副作用、越权、伪能力或必要旧 UI 依赖。沿用旧 P10-01 的可量测负载/预算，需变更须基准与评审；不能靠组件测试或降低 test floor 验收完整产品。
+
+### AP9 — 双端商店构建、材料与审核
+
+- **Owner / 前置**：发布 owner＋安全/QA；AP8。账户、提交、发布动作另外授权。
+- **Input**：正式 App ID/签名/entitlement、全部受支持架构产物、依赖许可清单、隐私/权限/审核说明、隔离审核环境。
+- **Action**：通过项目 Xcode/Cargo/原生工具链生成 Mac/iOS archive 与正确嵌套签名；核对 app/helper/库架构与版本、隐私声明、权限用途、商店更新机制和分发条件。Developer ID＋公证不能替代 Mac App Store 路径，缺凭据不能回退 ad-hoc 发布。
+- **Action**：提供真实可审的隔离 Mac/配对/网络场景与清楚的自托管前置；不把生产主机、真实密钥或伪造演示响应交给审核。记录 TestFlight/真机与两端真实审核结果，必要修正重过相关 gate。
+- **Acceptance Criteria**：两端完整工程/材料、受支持架构、实际商店审核均通过；未授权上线则保持待发布。旧八种 GitHub 安装包规则由本次目标取代，实际 CI/发布改动必须与项目规则/验证器同改，不能误触旧 tag 自动发布。
+
+### AP10 — 旧前端、平台与过时契约清退
+
+- **Owner / 前置**：迁移集成 owner＋各调用方 owner；AP9 两端审核通过、AP8 迁移/回退验收成立并获实际清退授权。
+- **Input**：旧前端/平台/CI/发布资产影响清单、共享 Rust/vendor/资源依赖、旧客户端回退证据、数据保留清单。
+- **Action**：先迁出仍由 core 引用的 vendor、纯业务、SSH/远端与必要数据读取，再删 Tauri/React/Expo、Windows/Linux 客户端与 WSL/Android 面；迁移所有调用方，移除失效 aliases/flags/脚本/测试/配置/文档承诺，不永久保留兼容空壳。
+- **Action**：旧客户端矩阵、安装源检查、八产物/签名状态文件、版本校验与平台计数一起清理；保留 Unix/macOS 共同代码、Windows SSH 对端、Linux relay、安全审计及历史数据的安全读取/导出。
+- **Acceptance Criteria**：从干净环境分别构建/运行两端，Mac 无旧前端亦可完成完整任务、远控/后台/推送可用；没有悬空依赖/死调用或静默丢数据。旧前端删除后回退依靠经验证的新版本恢复策略，不能再声称依靠已经删除的 Tauri。
+
+## E. 执行与停止纪律
+
+1. AP0 是先决条件；不能继续旧 P8-05 方法计数流水线来回避 sandbox/商店可行性。保留切片111等既有 WIP、用户改动与旧证据，不重跑已验收历史，也不自动替其他工作收尾。
+2. 子任务使用现有 Trellis 父/子任务体系；实施前读取对应规格，写清依赖、契约、文件 owner、可观察 AC 与风险。schema、锁文件、AppServices、project 配置等共享写点需要单一集成 owner。
+3. 业务迁移保持单一定义、真实入口与全调用方切换；安全拒绝先于副作用。编译成功、DTO 往返、fake/mock、UI 可操作、真实外部集成、商店审核分别记账。
+4. 非平凡变化必须实际运行变更路径；UI 必须启动交互。保留能抓真实用户错误的回归用例，不用源码字面、转发回显、固定行数或存在性冒充行为证明。
+5. 沿用现有项目入口：`pnpm native:doctor`、`pnpm native:check <已实现模块>`、`pnpm native:inventory --check`/`--freeze-check`、`pnpm native:contracts`、`node scripts/native/digest.mjs --check`、Cargo/Swift/Xcode 检查。先读当前配置确认参数；本节没有声称 iOS/APNs/商店新 gate 已存在。
+6. 任何两条硬目标冲突、许可/权限/数据兼容不明、生产写未经授权、伪 capability、丢数据、重复副作用或越权为阻塞；回到对应模块 grill，不压异常、不暗减范围、不把未运行标绿。
+7. 每项记录实际命令、退出码、环境/版本、测试对象、证据路径与未覆盖项；用户/grill 接受与代码 reviewer 结论不同。未批准新的具体边界时，Phase 9 或某 Agent 不可用仍然阻塞首发。
+
+### 可以宣布 Apple-only 首发完成的必要条件
+
+- [ ] AP0 的双硬目标、许可与平台前置已闭合；不是凭签名或账号推断。
+- [ ] Mac 本地四族/自定义支持范围与全部保留业务、Phase 9 有真实版本/运行/用户旅程证据。
+- [ ] iPhone/iPad 完整伴随、E2EE、终端/审批/文件、重连/撤销与自托管网络通过。
+- [ ] 显式后台驻留及退出/停止/睡眠/崩溃语义通过；手机推送与失败补同步通过。
+- [ ] Liquid Glass、系统选择/a11y、Mac 双架构及官方 OS/设备组合有独立运行证据。
+- [ ] 单 writer、权限/生产确认、数据迁移/回退与源数据保留证明成立。
+- [ ] 两端商店审核通过；公开发布是否执行与批准记录分开，未执行不能说已经上架。
+- [ ] AP10 清退完成且完整变更路径重新验证；所有保留调用方、测试、工具、规格/README/发布文档已对齐。
+
+## F. 历史任务与工具载体的衔接
+
+| 旧任务/载体 | 当前用途与新 owner |
+|---|---|
+| P1/P2、契约/存储/任务状态机 | 复用既有投资；AP0/AP1/AP3 重新核验 sandbox/容器/授权，不重新声称全部未做。 |
+| P3/P8-05、host/CLI/cutover、G43 | AP2/AP3 完整运行时与远端 owner；旧 accepted 或局部切片不替代新执行证据。 |
+| P4/P5/P6、SwiftUI 与工作区 | AP4 真实可见闭环；共享纯层进入 AP5，不把已有组件当 iOS 已实现。 |
+| P7-01/03～06、P8-01～04 | AP2/AP4 保留业务；AP5/AP6 承接选定移动能力与新通知链。 |
+| P7-02 / F12 | 记录旧验收仍是历史事实；新产品中退休，安全数据处置归 AP1/AP8/AP10，不改写过去为失败。 |
+| P9-01～04 | AP7 全部首发范围；与 AP4/AP5 的具体入口共同验收。 |
+| P10 | AP8/AP9/AP10 重新覆盖 Apple-only 交付、双商店和清退；旧八包/ad-hoc 目标不再适用。 |
+| task-status/feature/command/event/host 表及 checks/floors | 本轮不伪改运行状态或降低分母；AP1 原子迁移它们及其消费者后再用作新交付统计。 |
+
+当前 `scripts/native/task-status.mjs` 直接解析 `### Task P…` 和 `### 进度总表`；`scripts/native/extraction.mjs` 直接提取旧 Action。为避免一次文案整理破坏实用工具，本轮保留下面旧正文逐字内容，不把旧条目复制成新的完成度；后续拆分必须同时迁消费者、删除实现/字面偶合测试并保留行为验证。
+
+旧正文原始快照：6,696 行，2,667,893 字节，SHA-256 `aeabd793d6369f08281e627f30c21183a2aeac39efee1d1c02d800ad753c5136`。本轮会验证折叠区与该快照字节一致，且旧任务宇宙、进度镜像与 Action 提取结果不变；这只是文档兼容性证据，不是产品测试。
+
+## G. 官方与项目依据
+
+- [App Store 审核要求](https://developer.apple.com/app-store/review/guidelines/)：重点核对 2.4.5、2.5.2 及实际功能对应条款；不能据此保证审核结果。
+- [签名证书用途](https://developer.apple.com/help/account/certificates/certificates-overview/)；[sandbox 包内命令行 helper](https://developer.apple.com/documentation/xcode/embedding-a-helper-tool-in-a-sandboxed-app)；[sandbox 文件授权](https://developer.apple.com/documentation/security/accessing-files-from-the-macos-app-sandbox)。
+- [原生 Liquid Glass availability](https://developer.apple.com/documentation/swiftui/view/glasseffect(_:in:))；[Intel 系统支持上限](https://developer.apple.com/documentation/macos-release-notes/macos-26_4-release-notes#Rosetta)；[macOS 26 兼容机型](https://support.apple.com/en-in/122867)。
+- [APNs 发送端责任与投递机制](https://developer.apple.com/documentation/usernotifications/setting-up-a-remote-notification-server)。
+- 项目约束与资料：`docs/native/adr/039-distribution-pivot-macos-ios.md`、`docs/native/rollback.md`、`docs/native/reference-provenance.md`、`docs/remote-public-access.md` 及既有 Trellis 规格。过时规则在 AP1 按本次批准结果显式迁移，不能用本计划假称配置已经改变。
+
+<!-- APPLE_ONLY_BASELINE_END -->
+
+---
+
+## 历史执行记录与旧任务契约
+
+下面是重规划前的完整正文，供溯源和现有工具解析。其“当前”“下一片”“不回填”等字样均属于当时记录；与上方 Apple-only 基线冲突时以上方为准。**不要按这里的历史续跑锚点直接开始实施。**
+
+<details>
+<summary>展开旧迁移正文（历史证据，不是 Apple-only 当前执行入口）</summary>
+
+<!-- LEGACY_MIGRATION_RECORD_BEGIN -->
+
 # Aeroric → SwiftUI 原生 macOS 客户端迁移执行计划
 
 > 计划基准：2026-09-21；Aeroric 本地提交 `ca69a4b`，分支 `main`。
@@ -22,6 +293,24 @@
 Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，从 `src-tauri/src/` 展开；实施前在任务工件写出最终完整路径。大模块目录展开遵循 §5.1，不能把缩写当成另一个新工程。
 
 ## ▶ 执行进度标注（Agent 维护，暂停/继续以此为准）
+
+### ▶ P8-05 切片一百一十一续跑锚点（2026-10-12，本地 Conda 发现宿主化；执行中）
+
+**全文核读完成**：本轮先完整浏览开工前的 **6678 行／2663598 B**（sha256 `56a745b933c8610035c05a72045e8406c52047916ebe7983981369bb41989dab`）。主代理读现行规约与后续任务，独立只读代理分段逐字读历史区，覆盖连续、无遗漏；不是把一次被截断的 `cat` 当成全文。对照源码、现行 ADR 与任务工件后，从 **切片110已完成、P8-05仍 in_progress** 接续，不重跑历史待办。
+
+**现况校正（不回填历史）**：`reviews/ide.md` §9 与 Phase8 `implement.md` 已记录 ADR-039 的两轮策略／排序批准；上方历史“proposed”不是最新审批状态。但执行前置仍未闭合，故本轮不删除 React／Windows／Linux／WSL、不改签名／发布矩阵；G43 的远端宿主 owner 仍未决定。`native:doctor` 本轮 **18/18**，host-coverage **311/641**、199 个静态可识别转发点；IDE缺口实测 **35**（旧总表的41过时）。入场 `inventory --check` **rc1／7处**，均为先前 CI 修复推移了 `notification.rs` 的声明行号而未重锚，不是本轮运行时代码变更。
+
+**范围／设计**：按既定 P7-03／P8-05 的单一定义＋延迟转发模式，上收 `infra.detect_conda_environments`；core 统一候选路径、根路径命名、JSON／Python存在性筛选与进程循环，宿主与Tauri共享。仅在可信装配根注入 fake executable／子进程环境；RPC不能选执行程序。SSH孪生保留Tauri、不计作已宿主化。真实 Conda、用户HOME、Keychain、SSH与生产数据均不用于测试。保留入场 `core/.../platform/mod.rs` 的未提交修改与相邻DBX脏树，不提交／推送。
+
+**执行清单（每步完成立即更新）**：
+- [x] **111.0** 修复入场7处 notification pin 漂移（仅14处引用，未改运行时）；本轮先复现7处红灯，再 `--freeze`／`--freeze-reachability`／`--check`／`--freeze-check` 全部 rc0、660/660且字节幂等。入场 platform/mod.rs sha256 未变；证据 `111-0-inventory-{before,after}.log`。
+- [x] **111.1** core `conda_face` 单一候选表／解析器／进程循环＋共享DTO／可信 `CondaProbe` 已落地，Tauri本地消费者重指、SSH构建器与行为保留；旧native“可执行路径命名”契约没有被环境目录语义替换。core纯测 **7/0**、真实fake进程 **4/0**、原infrastructure **6/0**，core workspace与Tauri `cargo check --locked` 均rc0（`111-1-core-and-checks.log`）。接着加宿主／placement行为红灯。
+- [x] **111.2** `HostWiring::conda` 与共用scratch fake工具接入测试：完整认证UDS正控 **0/1红**（真实 `UnsupportedCapability`），实际Tauri External命令 **0/1红**（错误执行本地fake、返回本地数组而非宿主结果）。桌面夹具先有一处 `ErrorCode` 非Copy编译错，修成clone后重跑才计行为红灯；没有把编译失败算作回归证明。证据 `111-2-{host,desktop}-red.log`。
+- [x] **111.3** 既有RPC实际注册，严格无参数准入先于进程IO；本地probe解析与worker全部放入Embedded future。UDS **8/0**、实际桌面命令＋原远端构建器 **8/0**，含未认证／只读／非法参数／缺工具／独立宿主／坏响应／断连／无session，两个先前红灯均复绿、External无本地marker（`111-3-host-desktop-green.log`）。
+- [x] **111.4** 真实attach CLI **4/0**（精确数组、参数／远端拒绝、缺工具空数组、只读宿主），全程memory secrets＋owned fake、没有生产serve。独立只读reviewer `01a12fe3-d492-7ef0-b453-85ff2e8b0bfb` 对照HEAD后无可行动发现；限制＝静态审查、Windows与生产UI未实跑，非人工/grill验收。快照 `111-review.patch` sha256 `0d8e4962bfe07819be048f2ab0e17847ab8289562a4ff7f9dbb27cad50c0b859`，见 `reviews/infrastructure.md` §6。
+- [ ] **111.5** floors双写、最后fmt后重锚、相关门禁与收尾；随后自动接切片112（本地监听端口查询）。
+
+详细文件归属、验收及排除项已写入 `.trellis/tasks/09-21-native-phase-8/{prd,design,implement}.md`；证据目录 `.artifacts/native/p8-05-slice111-20261012/`。**这不是P8-05验收或Phase9入口批准**。
 
 ### ▶ P8-05 切片一百一十开工锚点(2026-10-12,ide 刀五:LSP 会话面 16 条宿主化——**勘察与设计已落盘,实施待续**)
 
@@ -6676,3 +6965,7 @@ Unresolved:
 | W7 | Tauri v2 Sidecar：`https://v2.tauri.app/develop/sidecar/`；配置：`https://v2.tauri.app/reference/config/` | externalBin 的 target-triple 文件命名与打包；macOS 配置覆盖、实际安装位置和签名还须按锁定 Tauri 版本构建验证 |
 
 参考代码如需复制，先检查其 `LICENSE` / `NOTICE` / 使用限制与贡献来源，登记 `docs/native/reference-provenance.md`。默认学习架构并自行实现；不复制参考项目商标、音乐资源、商业账号配置、签名 Team 或私有凭据。此项是来源治理门禁，不是本计划给出的法律结论。
+
+<!-- LEGACY_MIGRATION_RECORD_END -->
+
+</details>

@@ -95,6 +95,19 @@ pub fn login_shell_path() -> &'static str {
 pub fn detect_path(binary: &str) -> String {
     imp::detect_path(binary)
 }
+
+/// Windows 上的脚本启动形态(`.ps1`/`.cmd`/`.bat` → 解释器 + 参数)。与
+/// [`default_shell_command`] 同一转发形态(`imp` 别名按 cfg 指向
+/// `login_shell_{unix,windows}`);Unix 侧没有等价物,所以只在 windows 目标上导出。
+///
+/// 为什么必须补这一条:core 自己的 `settings/launch_spec.rs` 就调
+/// `crate::platform::agent_script_command`(P8-02 刀二把该文件上收时留下的调用),
+/// 而 mod.rs 一直没转发它 ⇒ **windows 目标编译失败**,因为该分支只在 windows 上编译,
+/// macOS/Linux 开发机从不编到那里。
+#[cfg(windows)]
+pub fn agent_script_command(script: &std::path::Path) -> Option<ShellCommand> {
+    imp::agent_script_command(script)
+}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PlatformRuntimeInfo {

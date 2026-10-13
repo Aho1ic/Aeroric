@@ -34,6 +34,22 @@ final class AppServices {
     let projectStore = ProjectStore()
     /// P5-03：项目/任务镜像（宿主快照 → TaskStore）。
     let taskStore = TaskStore()
+    /// AP4: 全业务域 Store 挂载（统一由 AppServices 持有，消除仅存于库目录的断链）。
+    let fileTreeStore = FileTreeStore()
+    let documentStore = DocumentStore()
+    let gitStore = GitStore()
+    let diagnosticsStore = DiagnosticsStore()
+    let debugSessionStore = DebugSessionStore()
+    let breakpointStore = BreakpointStore()
+    let sshConnectionStore = AeroricUI.ConnectionStore()
+    let infrastructureStore = InfrastructureStore()
+    let databaseStore = DatabaseStore()
+    let notebookStore = NotebookStore()
+    let syncStore = SyncStore()
+    let extensionStore = ExtensionStore()
+    let remoteStore = RemoteStore(client: nil)
+    let maintenanceStore = MaintenanceStore(client: nil)
+    var draftPresentationRequested = false
     /// P5-01/P5-02：模式控制器（迁移默认按旧客户端存在性）。
     let interactionModeController = InteractionModeController(
         tauriClientPresent: InteractionModeController.tauriClientPresent
@@ -45,11 +61,13 @@ final class AppServices {
     private(set) var terminalCoordinator: TerminalCoordinator?
     /// 终端流的续看簿记（与任务镜像分开）。
     let terminalStore = TerminalStore()
-
     private(set) var supervisor: HostSupervisor?
     /// The live channel; retained so the sink stays wired between attempts.
     private var attachedConnection: HostConnection?
-
+    /// AP3: Persistent security-scoped bookmark store for sandboxed project access.
+    private(set) var bookmarkStore: SandboxBookmarkStore?
+    /// AP3: Explicit opt-in background host policy (default keepAliveOnUIQuit = false).
+    var backgroundPolicy = BackgroundHostPolicy()
     init(configuration: PreviewConfiguration, protocolVersion: Int) {
         self.configuration = configuration
         self.protocolVersion = protocolVersion
@@ -79,11 +97,7 @@ final class AppServices {
     /// Deriving the default only at supervisor start keeps plain launches
     /// (no supervisor yet) free of any filesystem touch.
     var dataDirectory: URL {
-        if let path = configuration.dataDirectoryPath {
-            return URL(fileURLWithPath: path, isDirectory: true)
-        }
-        return URL.applicationSupportDirectory
-            .appendingPathComponent("com.aeroric.native.dev", isDirectory: true)
+        SandboxDataRoot.resolve(injectedPath: configuration.dataDirectoryPath)
     }
 
     /// Build identifier for the bootstrap surface: version-config+build.
@@ -110,11 +124,15 @@ final class AppServices {
             // The supervisor degrades on its own if the directory is unusable;
             // surfacing a second failure mode here adds nothing.
         }
+        let bookmarks = SandboxBookmarkStore(dataDir: dataDir)
+        _ = bookmarks.restoreAllBookmarks()
+        self.bookmarkStore = bookmarks
+        self.backgroundPolicy = BackgroundHostPolicy.load(from: dataDir)
         let store = connectionStore
         let supervisor = HostSupervisor(
             config: SupervisorConfig(
                 dataDir: dataDir,
-                socketPath: dataDir.appendingPathComponent("host.sock").path,
+                socketPath: SandboxDataRoot.socketPath(for: dataDir),
                 environment: Self.childEnvironment()
             ),
             onChange: { [weak self] phase in
@@ -136,6 +154,7 @@ final class AppServices {
                     self.connectionStore.attach(connection: connection, supervisor: self.supervisor)
                     self.workspaceClient = WorkspaceClient(connection: connection)
                 }
+                await self.refreshWorkspace()
             }
         )
         self.supervisor = supervisor
@@ -148,13 +167,49 @@ final class AppServices {
     /// through the supervisor's nonisolated sync path instead. The run loop's
     /// own cleanup paths stay primary while the process is alive.
     func terminateHostForProcessExit() {
-        supervisor?.terminateChildForProcessExit()
+        let keepAlive = backgroundPolicy.keepAliveOnUIQuit
+        supervisor?.terminateChildForProcessExit(keepAliveInBackground: keepAlive)
+        if !keepAlive {
+            bookmarkStore?.stopAllAccess()
+        }
+    }
+
+    func setBackgroundKeepAliveEnabled(_ enabled: Bool) {
+        backgroundPolicy.keepAliveOnUIQuit = enabled
+        try? backgroundPolicy.save(to: dataDirectory)
+    }
+
+    @discardableResult
+    func stopBackgroundHostService() async -> BackgroundStopImpact {
+        let wasKeepAlive = backgroundPolicy.keepAliveOnUIQuit
+        backgroundPolicy.keepAliveOnUIQuit = false
+        try? backgroundPolicy.save(to: dataDirectory)
+        let pid = (await supervisor?.currentReadyInfo?.pid).map(Int32.init)
+        let wasRunning = supervisor != nil
+        await stopSupervisor()
+        bookmarkStore?.stopAllAccess()
+        return BackgroundStopImpact(
+            wasRunning: wasRunning,
+            backgroundKeepAliveWasEnabled: wasKeepAlive,
+            terminatedPID: pid
+        )
     }
 
     func stopSupervisor() async {
         guard let supervisor else { return }
         self.supervisor = nil
         await supervisor.stop()
+    }
+
+    @discardableResult
+    func authorizeAndOpenProject(url: URL) async throws -> ProjectStore.ProjectEntry {
+        if let bookmarkStore {
+            let state = try bookmarkStore.registerAuthorizedDirectory(url)
+            if case .revoked = state {
+                throw ProjectError.notConnected
+            }
+        }
+        return try await openProject(at: url.path)
     }
 
     /// Environment for the child: whitelist, never a blind passthrough. The
@@ -194,10 +249,19 @@ final class AppServices {
 
     /// 连接就绪后刷新项目/任务镜像。失败静默（快照轮询下次再来）。
     func refreshWorkspace() async {
+        if draftOptionsStorage == nil {
+            draftOptionsStorage = TaskDraft.Options(
+                agents: ["claude", "codex", "dsh", "omp"],
+                models: ["claude-sonnet-4-5", "gpt-5", "deepseek-chat"],
+                efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+                permissionModes: ["ask", "auto_edit", "full_access"]
+            )
+        }
         guard let client = workspaceClient else { return }
         if let projects = try? await client.listProjects() {
             for project in projects {
-                taskStore.upsertProject(id: project.id, path: project.path)
+                _ = projectStore.upsertProject(id: project.id, path: project.path)
+                _ = taskStore.upsertProject(id: project.id, path: project.path)
             }
         }
         if let tasks = try? await client.listTasks() {
@@ -213,16 +277,10 @@ final class AppServices {
                     archived: task.archived,
                     starred: task.starred
                 ))
-                // 会话句柄（generation）快照带了就缓存，供终端挂载判断。
                 if let generation = task.generation {
                     pendingGenerations[task.id] = generation
                 }
             }
-        }
-        // 草稿选项＝宿主 capability 的快照（P5-04 前保守空集；这里只在
-        // 首次刷新时落默认，不覆盖已注入的选项）。
-        if draftOptionsStorage == nil {
-            draftOptionsStorage = .none
         }
     }
 
@@ -478,6 +536,7 @@ final class AppServices {
         else {
             throw ProjectError.malformedReply
         }
+        _ = taskStore.upsertProject(id: projectId, path: projectPath)
         return projectStore.upsertProject(id: projectId, path: projectPath)
     }
 }

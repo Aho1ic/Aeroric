@@ -58,21 +58,31 @@ public struct SupervisorConfig: Sendable {
     public var environment: [String: String]
     public var readyTimeout: Duration
     public var policy: ReconnectPolicy
+    /// AP3: Optional expected build/protocol hashes for cold-start compatibility check.
+    public var expectedBuildHash: String?
+    public var expectedProtocolHash: String?
+    /// AP3: When true, attaches to an already-online compatible background host before spawning.
+    public var allowAttachToExistingHost: Bool
 
     public init(dataDir: URL,
                 socketPath: String,
                 cliExecutable: URL? = nil,
                 environment: [String: String] = [:],
                 readyTimeout: Duration = .seconds(15),
-                policy: ReconnectPolicy = ReconnectPolicy()) {
+                policy: ReconnectPolicy = ReconnectPolicy(),
+                expectedBuildHash: String? = nil,
+                expectedProtocolHash: String? = nil,
+                allowAttachToExistingHost: Bool = true) {
         self.dataDir = dataDir
         self.socketPath = socketPath
         self.cliExecutable = cliExecutable
         self.environment = environment
         self.readyTimeout = readyTimeout
         self.policy = policy
+        self.expectedBuildHash = expectedBuildHash
+        self.expectedProtocolHash = expectedProtocolHash
+        self.allowAttachToExistingHost = allowAttachToExistingHost
     }
-
     public static func defaultCLIURL() -> URL {
         Bundle.main.bundleURL
             .appendingPathComponent("Contents/MacOS/aeroric-cli")
@@ -146,8 +156,8 @@ public actor HostSupervisor {
     private var runTask: Task<Void, Never>?
     private var child: ChildHandle?
     private var connection: HostConnection?
+    private var attachedFaultContinuation: AsyncStream<SupervisorEvent>.Continuation?
     private var stopped = false
-
     public init(config: SupervisorConfig,
                 onChange: @escaping @Sendable (SupervisorPhase) -> Void,
                 configureConnection: @escaping @Sendable (HostConnection) async -> Void = { _ in }) {
@@ -170,10 +180,26 @@ public actor HostSupervisor {
     /// (the orphaned-serve root cause, 2026-10-01). Reads the live child
     /// through the lock-protected slot and kills it; the actor's own
     /// bookkeeping is irrelevant at process exit.
-    public nonisolated func terminateChildForProcessExit() {
+    public nonisolated func terminateChildForProcessExit(keepAliveInBackground: Bool = false) {
         let child = liveChild.load()
+        if keepAliveInBackground {
+            LiveChildSlot.trace("processExit keepAliveInBackground=true pid=\(child?.pid ?? -1)")
+            return
+        }
         LiveChildSlot.trace("processExit terminate pid=\(child?.pid ?? -1)")
         child?.terminate()
+    }
+
+    /// Detaches the UI connection while leaving the background host process running.
+    public func detachForBackgroundKeepAlive() async {
+        stopped = true
+        runTask?.cancel()
+        runTask = nil
+        attachedFaultContinuation?.finish()
+        attachedFaultContinuation = nil
+        await connection?.close()
+        connection = nil
+        setPhase(.stopped)
     }
 
     /// Terminates the child (SIGTERM, then SIGKILL after a grace period) and
@@ -182,10 +208,16 @@ public actor HostSupervisor {
         stopped = true
         runTask?.cancel()
         runTask = nil
+        attachedFaultContinuation?.finish()
+        attachedFaultContinuation = nil
         liveChild.store(nil)
         await connection?.close()
         connection = nil
-        child?.terminate()
+        if let child {
+            child.terminate()
+        } else if let attachedPID = currentReadyInfo?.pid, attachedPID > 0 {
+            kill(pid_t(attachedPID), SIGTERM)
+        }
         child = nil
         currentReadyInfo = nil
         setPhase(.stopped)
@@ -206,8 +238,15 @@ public actor HostSupervisor {
             }
             setPhase(.connecting)
             do {
+                if let incompatibility = checkRuntimeCompatibility() {
+                    setPhase(.incompatible(incompatibility))
+                    return
+                }
                 try await attemptOnce()
                 consecutiveFailures = 0
+            } catch let SupervisorError.incompatibleVersion(reason) {
+                setPhase(.incompatible(reason))
+                return
             } catch {
                 consecutiveFailures += 1
                 setPhase(.degraded(describe(error)))
@@ -215,8 +254,93 @@ public actor HostSupervisor {
         }
     }
 
+    private func checkRuntimeCompatibility() -> String? {
+        let runtimeURL = config.dataDir.appendingPathComponent("runtime.json")
+        guard let data = try? Data(contentsOf: runtimeURL),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let schemaVersion = obj["schemaVersion"] as? Int, schemaVersion > 1 {
+            return "runtime schemaVersion \(schemaVersion) requires a newer client (supported: 1)"
+        }
+        if let expectedProto = config.expectedProtocolHash,
+           let actualProto = obj["protocolHash"] as? String,
+           actualProto != expectedProto {
+            return "host protocolHash \(actualProto) != expected \(expectedProto); coordinated restart required"
+        }
+        if let expectedBuild = config.expectedBuildHash,
+           let actualBuild = obj["buildHash"] as? String,
+           actualBuild != expectedBuild {
+            return "host buildHash \(actualBuild) != expected \(expectedBuild); coordinated restart required"
+        }
+        return nil
+    }
+
+    private func tryAttachExistingHost() async -> Bool {
+        guard config.allowAttachToExistingHost,
+              FileManager.default.fileExists(atPath: config.socketPath),
+              FileManager.default.fileExists(atPath: config.dataDir.appendingPathComponent("host.token").path) else {
+            return false
+        }
+        let connection = HostConnection(
+            socketPath: config.socketPath,
+            tokenProvider: { [config] in
+                let tokenURL = config.dataDir.appendingPathComponent("host.token")
+                let token = try String(contentsOf: tokenURL, encoding: .utf8)
+                return token.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        )
+        let (lifecycle, lifecycleContinuation) = AsyncStream<SupervisorEvent>.makeStream()
+        self.attachedFaultContinuation = lifecycleContinuation
+        defer { self.attachedFaultContinuation = nil }
+        await connection.setFaultSink { [weak self] fault in
+            guard let self else { return }
+            Task { await self.lifecycleNote(fault) }
+        }
+        await connection.setEventSink { _ in }
+        await configureConnection(connection)
+        do {
+            try await connection.connect()
+        } catch {
+            await connection.close()
+            return false
+        }
+        self.connection = connection
+        defer { if self.connection === connection { self.connection = nil } }
+        if let runtimeData = try? Data(contentsOf: config.dataDir.appendingPathComponent("runtime.json")),
+           let obj = try? JSONSerialization.jsonObject(with: runtimeData) as? [String: Any] {
+            let pid = (obj["pid"] as? Int) ?? 0
+            let epoch = (obj["epoch"] as? String) ?? "attached"
+            let rev = (obj["revision"] as? String) ?? "1"
+            let buildHash = (obj["buildHash"] as? String) ?? "attached"
+            let protoHash = (obj["protocolHash"] as? String) ?? "protocol-v1"
+            currentReadyInfo = ReadyInfo(
+                pid: pid,
+                startedAtMs: 0,
+                epoch: epoch,
+                revision: rev,
+                buildHash: buildHash,
+                protocolHash: protoHash,
+                dataDirHash: "",
+                socketPath: config.socketPath
+            )
+        }
+        setPhase(.ready)
+        for await event in lifecycle {
+            switch event {
+            case .connectionFault, .childExited:
+                await connection.close()
+                return true
+            }
+        }
+        return true
+    }
+
     /// One spawn→ready→connect→watch cycle. Throws when the attempt failed.
     private func attemptOnce() async throws {
+        if await tryAttachExistingHost() {
+            return
+        }
         let child = try spawnChild()
         self.child = child
         liveChild.store(child)
@@ -235,8 +359,15 @@ public actor HostSupervisor {
             child.terminate()
             throw SupervisorError.socketMismatch(expected: config.socketPath, reported: ready.socketPath)
         }
+        if let expectedProto = config.expectedProtocolHash, ready.protocolHash != expectedProto {
+            child.terminate()
+            throw SupervisorError.incompatibleVersion("ready protocolHash \(ready.protocolHash) != expected \(expectedProto)")
+        }
+        if let expectedBuild = config.expectedBuildHash, ready.buildHash != expectedBuild {
+            child.terminate()
+            throw SupervisorError.incompatibleVersion("ready buildHash \(ready.buildHash) != expected \(expectedBuild)")
+        }
         currentReadyInfo = ready
-
         let (lifecycle, lifecycleContinuation) = AsyncStream<SupervisorEvent>.makeStream()
         child.lifecycleContinuation = lifecycleContinuation
         let childWatcher = Task.detached { [weak child, lifecycleContinuation] in
@@ -293,9 +424,8 @@ public actor HostSupervisor {
 
     /// The fault sink hops through here (it cannot `await` directly).
     func lifecycleNote(_ fault: ConnectionError) {
-        // Delivered via the active attempt's stream; if no attempt is active
-        // (stop raced), it is ignored — the loop is already gone.
         child?.lifecycleContinuation?.yield(.connectionFault(fault))
+        attachedFaultContinuation?.yield(.connectionFault(fault))
     }
 
     private func setPhase(_ phase: SupervisorPhase) {
@@ -370,6 +500,7 @@ public enum SupervisorError: Error, Equatable, Sendable {
     case hostExited(status: Int)
     case spawnFailed(String)
     case alreadyStopped
+    case incompatibleVersion(String)
 
     public var message: String {
         switch self {
@@ -381,6 +512,7 @@ public enum SupervisorError: Error, Equatable, Sendable {
         case let .hostExited(status): "host exited (status \(status))"
         case let .spawnFailed(reason): "spawn failed: \(reason)"
         case .alreadyStopped: "supervisor already stopped"
+        case let .incompatibleVersion(reason): "incompatible host version: \(reason)"
         }
     }
 }

@@ -75,6 +75,25 @@ targets:
         PRODUCT_NAME: AeroricNative
         PRODUCT_BUNDLE_IDENTIFIER: com.aeroric.native.dev
         INFOPLIST_FILE: AeroricApp/Info.plist
+  # AP0 batch-1 real-sandbox probe carrier (MIGRATION_PLAN.md §D AP0;
+  # .trellis/tasks/10-12-ap0-store-local-feasibility prd Q1=A).
+  # Isolated bundle id so TCC/Keychain/container stay separate from
+  # com.aeroric.native.dev. Built by scripts/native/ap0/probe-batch1.sh with
+  # CODE_SIGNING_ALLOWED=NO, then signed ad-hoc WITH the App Sandbox
+  # entitlement by that same script. Debug/ReleaseLocal, the AeroricNative
+  # scheme, and the INV-09 Tauri signing baseline are untouched.
+  AeroricSandboxProbe:
+    type: application
+    platform: macOS
+    sources:
+      - path: SandboxProbe/Sources
+    settings:
+      base:
+        PRODUCT_NAME: AeroricSandboxProbe
+        PRODUCT_BUNDLE_IDENTIFIER: com.aeroric.native.sandboxprobe
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_ENTITLEMENTS: SandboxProbe/AeroricSandboxProbe.entitlements
+        OTHER_LDFLAGS: "-framework Security"
   AeroricNativeUITests:
     type: bundle.ui-testing
     platform: macOS

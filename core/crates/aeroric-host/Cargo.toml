@@ -23,7 +23,15 @@ uuid = { version = "1", features = ["v4"] } # 与 core/宿主同版：host token
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-parking_lot = { workspace = true } # metrics 的 codex 进程句柄槽（宿主持有，core 只借）
+parking_lot = { workspace = true } # metrics 的 codex 进程句柄槽(宿主持有,core 只借)
+# AP6 推送出口:签名/载荷策略都在 core,这里只做网络(HTTP 到自托管发送端、
+# WS 到自托管 relay)。不引入第二套传输:与 core 用同 crate 同 feature 的 reqwest。
+remote-protocol = { path = "../../../remote-protocol" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking"] } # AP6 推送出口(与 core/Cargo.toml:65 同 crate 同版本)
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] } # AP6 relay 诊断(与 core/Cargo.toml:63 逐字一致)
+# 显式给出 provider:本仓依赖图同时存在 ring(hyper-rustls)与 aws-lc-rs
+# (reqwest/rustls 默认),rustls 在两者同开时**不自己选**,首次 TLS 会 panic。
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 
 [target.'cfg(unix)'.dependencies]
 async-trait = "0.1"
@@ -39,5 +47,13 @@ keyring = { version = "3", features = [
 ] }
 
 [dev-dependencies]
-# 切片九十四红灯夹具：直接建真 SQLite 文件（与 core 同版本共享编译产物）。
+# 切片九十四红灯夹具:直接建真 SQLite 文件(与 core 同版本共享编译产物)。
 rusqlite = { version = "0.32", features = ["bundled"] }
+# AP6 集成验收:套件要起**真的**发送端与**真的** h2 假 APNs,验证的是
+# 宿主 → 发送端 → APNs 三层线上的字节。仅测试期耦合,生产构建不含它。
+aeroric-remote-push = { path = "../../../remote-push" }
+hyper = { version = "1", features = ["server", "client", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "http2"] }
+http-body-util = "0.1"
+axum = "0.8"
+p256 = { version = "0.14", features = ["ecdsa", "pem"] }

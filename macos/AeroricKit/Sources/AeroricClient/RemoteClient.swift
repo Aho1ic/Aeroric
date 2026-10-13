@@ -177,6 +177,221 @@ public struct RemoteClient: Sendable {
         )
     }
 
+    // MARK: - AP6: push plane and self-hosted relay diagnostics
+
+    /// One device's push registration as the host reports it.
+    ///
+    /// Note the absence of an APNs token: the token lives in the user's
+    /// self-hosted sender, so the Mac (and this client) only ever sees *that* a
+    /// device registered and whether APNs has since rejected it.
+    public struct PushDevice: Sendable, Equatable {
+        public var deviceID: String
+        public var platform: String
+        public var registeredAt: Int64
+        public var invalidated: Bool
+
+        public init(deviceID: String, platform: String, registeredAt: Int64, invalidated: Bool) {
+            self.deviceID = deviceID
+            self.platform = platform
+            self.registeredAt = registeredAt
+            self.invalidated = invalidated
+        }
+    }
+
+    /// Counters the host keeps about the push plane. These are what answer
+    /// "notifications are on but I get nothing".
+    public struct PushStats: Sendable, Equatable {
+        public var decisions: Int
+        public var attempts: Int
+        public var accepted: Int
+        public var invalidatedDevices: Int
+        public var failures: Int
+        public var skippedNoDevices: Int
+
+        public init(
+            decisions: Int, attempts: Int, accepted: Int,
+            invalidatedDevices: Int, failures: Int, skippedNoDevices: Int
+        ) {
+            self.decisions = decisions
+            self.attempts = attempts
+            self.accepted = accepted
+            self.invalidatedDevices = invalidatedDevices
+            self.failures = failures
+            self.skippedNoDevices = skippedNoDevices
+        }
+    }
+
+    public struct PushStatus: Sendable, Equatable {
+        public var enabled: Bool
+        /// Whether this host form has a push transport at all.
+        public var wired: Bool
+        public var senderURL: String?
+        public var user: String?
+        public var devices: [PushDevice]
+        public var stats: PushStats
+        /// Non-nil while the sender has asked us to back off (APNs 429/503).
+        public var suppressedForMs: Int?
+        public var detail: String
+
+        public init(
+            enabled: Bool, wired: Bool, senderURL: String?, user: String?,
+            devices: [PushDevice], stats: PushStats, suppressedForMs: Int?, detail: String
+        ) {
+            self.enabled = enabled
+            self.wired = wired
+            self.senderURL = senderURL
+            self.user = user
+            self.devices = devices
+            self.stats = stats
+            self.suppressedForMs = suppressedForMs
+            self.detail = detail
+        }
+
+        public static func unavailable() -> Self {
+            Self(
+                enabled: false, wired: false, senderURL: nil, user: nil,
+                devices: [],
+                stats: PushStats(
+                    decisions: 0, attempts: 0, accepted: 0,
+                    invalidatedDevices: 0, failures: 0, skippedNoDevices: 0
+                ),
+                suppressedForMs: nil,
+                detail: "push status has not been read yet"
+            )
+        }
+    }
+
+    public struct RelayDiagnostics: Sendable, Equatable {
+        public var url: String
+        public var schemeOK: Bool
+        public var reachable: Bool
+        public var authenticated: Bool
+        public var latencyMs: Int?
+        public var detail: String
+
+        public init(
+            url: String, schemeOK: Bool, reachable: Bool,
+            authenticated: Bool, latencyMs: Int?, detail: String
+        ) {
+            self.url = url
+            self.schemeOK = schemeOK
+            self.reachable = reachable
+            self.authenticated = authenticated
+            self.latencyMs = latencyMs
+            self.detail = detail
+        }
+    }
+
+    public func pushStatus() async throws -> PushStatus {
+        let frame = try await connection.request("remote.pushStatus")
+        return Self.parsePushStatus(frame.result)
+    }
+
+    /// Register or clear this device's push binding. An empty `token` unbinds.
+    public func pushRegister(deviceID: String, platform: String, token: String) async throws {
+        _ = try await connection.request(
+            "remote.pushRegister",
+            params: .object([
+                "deviceId": .string(deviceID),
+                "platform": .string(platform),
+                "token": .string(token),
+            ])
+        )
+    }
+
+    /// Ask the host to send one notification now, so the user can verify the
+    /// chain end to end instead of waiting for a task to finish.
+    public func pushTest() async throws -> Int {
+        let frame = try await connection.request("remote.pushTest")
+        return frame.result["accepted"]?.numberText.flatMap(Int.init) ?? 0
+    }
+
+    public func relayDiagnostics() async throws -> RelayDiagnostics {
+        let frame = try await connection.request("remote.relayDiagnostics")
+        guard case let .object(object)? = frame.result["relay"],
+              case let .string(url)? = object["url"] else {
+            throw RemoteClientError.malformedReply
+        }
+        return RelayDiagnostics(
+            url: url,
+            schemeOK: object["schemeOk"]?.boolValue ?? false,
+            reachable: object["reachable"]?.boolValue ?? false,
+            authenticated: object["authenticated"]?.boolValue ?? false,
+            latencyMs: object["latencyMs"]?.numberText.flatMap(Int.init),
+            detail: {
+                if case let .string(value)? = object["detail"] { return value }
+                return ""
+            }()
+        )
+    }
+
+    /// The host's own note about relay responsibility; shown verbatim because
+    /// it is the product disclosure, not UI copy.
+    public func relayDisclosure() async throws -> (note: String, hasDefaultRelay: Bool) {
+        let frame = try await connection.request("remote.relayDiagnostics")
+        let note: String = {
+            if case let .string(value)? = frame.result["note"] { return value }
+            return ""
+        }()
+        let hasDefault = frame.result["defaultRelay"] != nil && frame.result["defaultRelay"] != .null
+        return (note, hasDefault)
+    }
+
+    /// 解析 `remote.pushStatus` 的应答。内部可见性提到 `public` 是**给测试**用的:
+    /// wire 形状的解析规则要在没有活宿主的情况下被钉住,而 `RemoteClient` 的其它
+    /// 解析器(`parseStatus`)沿用内部可见性(它们只被本文件的请求方法消费)。
+    public static func parsePushStatus(_ result: JSONValue) -> PushStatus {
+        guard case let .object(object) = result else { return .unavailable() }
+        func str(_ key: String) -> String? {
+            if case let .string(value)? = object[key] { return value }
+            return nil
+        }
+        func int(_ key: String) -> Int {
+            object[key]?.numberText.flatMap(Int.init) ?? 0
+        }
+        let devices: [PushDevice] = (object["devices"]?.arrayValue ?? []).compactMap { item in
+            guard case let .object(entry) = item,
+                  case let .string(deviceID)? = entry["deviceId"] else { return nil }
+            return PushDevice(
+                deviceID: deviceID,
+                platform: {
+                    if case let .string(value)? = entry["platform"] { return value }
+                    return ""
+                }(),
+                registeredAt: entry["registeredAtMs"]?.numberText.flatMap(Int64.init)
+                    ?? entry["registeredAt"]?.numberText.flatMap(Int64.init) ?? 0,
+                invalidated: entry["invalidated"]?.boolValue ?? false
+            )
+        }
+        let stats = object["stats"].flatMap { value -> PushStats? in
+            guard case let .object(entry) = value else { return nil }
+            func count(_ key: String) -> Int {
+                entry[key]?.numberText.flatMap(Int.init) ?? 0
+            }
+            return PushStats(
+                decisions: count("decisions"),
+                attempts: count("attempts"),
+                accepted: count("accepted"),
+                invalidatedDevices: count("invalidatedDevices"),
+                failures: count("failures"),
+                skippedNoDevices: count("skippedNoDevices")
+            )
+        } ?? PushStats(
+            decisions: 0, attempts: 0, accepted: 0,
+            invalidatedDevices: 0, failures: 0, skippedNoDevices: 0
+        )
+        return PushStatus(
+            enabled: object["enabled"]?.boolValue ?? false,
+            wired: object["wired"]?.boolValue ?? false,
+            senderURL: str("senderUrl"),
+            user: str("user"),
+            devices: devices,
+            stats: stats,
+            suppressedForMs: object["suppressedForMs"]?.numberText.flatMap(Int.init),
+            detail: str("detail") ?? ""
+        )
+    }
+
     // MARK: - Parsing
 
     static func parseStatus(_ result: JSONValue) -> RemoteStatus {

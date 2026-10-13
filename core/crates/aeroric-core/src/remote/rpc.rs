@@ -32,6 +32,10 @@ pub const RPC_CAPABILITIES: &[&str] = &[
     "agent-config.status",
     "agent-config.write",
     "stats.summary",
+    // AP6:通知推送登记与 relay 诊断。刻意**不**给出"通知即授权"的能力名:
+    // 审批仍然只能走 `tasks.approvals`(E2EE 连接内),推送只是提醒。
+    "push.registration",
+    "remote.relay-diagnostics",
 ];
 
 pub fn rpc_capabilities_value() -> Value {
@@ -110,6 +114,13 @@ pub async fn dispatch(
             handle.agents_models(&agent).await
         }
         "stats.summary" => handle.stats_summary().await,
+        // AP6:`push.register` 由手机在已认证会话里上报 APNs token;`push.status`
+        // 与 `push.test` 让设置面能自证链路;`remote.relayDiagnostics` 回答
+        // 「我填的这个自托管 relay 到底能不能用」(产品方不提供默认 relay)。
+        "push.register" => handle.push_register(params).await,
+        "push.status" => handle.push_status().await,
+        "push.test" => handle.push_test().await,
+        "remote.relayDiagnostics" => handle.relay_diagnostics().await,
         "projects.list" => handle.load_projects().await,
         "projects.setPinned" => projects_set_pinned(state, handle, params).await,
         "tasks.list" => tasks_list(state, handle, params).await,
@@ -279,5 +290,9 @@ mod tests {
         assert!(values.iter().any(|value| value == "tasks.models"));
         assert!(values.iter().any(|value| value == "session.structured"));
         assert!(values.iter().any(|value| value == "files.read"));
+        assert!(values.iter().any(|value| value == "push.registration"));
+        assert!(values
+            .iter()
+            .any(|value| value == "remote.relay-diagnostics"));
     }
 }

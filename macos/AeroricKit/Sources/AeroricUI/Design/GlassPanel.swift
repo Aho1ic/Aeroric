@@ -53,8 +53,13 @@ public struct GlassPanel<Content: View>: View {
         Group {
             switch choice {
             case .glass:
-                content
-                    .background(.thinMaterial, ignoresSafeAreaEdges: [])
+                if #available(macOS 26.0, *) {
+                    content
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DSRadius.lg, style: .continuous))
+                } else {
+                    content
+                        .background(.thinMaterial, ignoresSafeAreaEdges: [])
+                }
             case .classic:
                 content
                     .background(Color.dsSurface, ignoresSafeAreaEdges: [])

@@ -13,11 +13,10 @@ enum WorkspaceActions {
     static func route(_ services: AppServices) -> (PaletteCommand) -> Void {
         { command in
             switch command.id {
+            case "task.new": services.draftPresentationRequested = true
             case "project.open": openProjectPanel(services: services)
             case "settings.show": SettingsWindowController.shared.show(state: services)
             default:
-                // "task.new" (and anything unregistered) has no target yet —
-                // task creation lands with P5-03. Ignored, not guessed at.
                 break
             }
         }
@@ -36,7 +35,7 @@ enum WorkspaceActions {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task { @MainActor in
             do {
-                let entry = try await services.openProject(at: url.path)
+                let entry = try await services.authorizeAndOpenProject(url: url)
                 selection?.wrappedValue = entry.id
             } catch {
                 presentOpenProjectFailure(error)
@@ -89,8 +88,7 @@ struct AeroricCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("新建任务") {
-                // Task creation lands with P5-03 (TaskListView/TaskDraftView);
-                // until then the command is honest about having no target.
+                services.draftPresentationRequested = true
             }
             .keyboardShortcut("n")
             .disabled(workspaceActivity != true)

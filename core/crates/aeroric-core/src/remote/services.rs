@@ -72,4 +72,31 @@ pub trait RemoteHostHandle: Send + Sync {
 
     // ── 终端流 ──
     fn terminal_streams(&self, outbound: OutboundSender) -> Box<dyn RemoteTerminalStreams>;
+
+    // ── AP6 推送平面(宿主能力;core 只决定"要不要推/推什么") ──
+    /// 手机经 E2EE 上报 APNs device token(`push.register`)。宿主把它绑定到
+    /// per-user 凭据并转给自托管发送端;**core 与 Swift 都不保存 token**。
+    /// `token` 为空串 = 注销该设备的推送。
+    async fn push_register(&self, params: Value) -> Result<Value, String>;
+
+    /// 当前推送登记状态(`push.status`):是否启用、发送端地址、绑定设备。
+    async fn push_status(&self) -> Result<Value, String>;
+
+    /// 立刻推一条(`push.test`):让用户能在设置里验证"链路真的通"。
+    /// 仍然只走最小化载荷,不因为是测试就放宽隐私边界。
+    async fn push_test(&self) -> Result<Value, String>;
+
+    /// 自托管 relay 的连通性诊断(`remote.relayDiagnostics`)。产品方不提供默认
+    /// relay(Q10),所以必须能回答"你填的这个到底能不能用"。
+    async fn relay_diagnostics(&self) -> Result<Value, String>;
+
+    /// 一台设备的授权**已经结束**(用户在 Mac 上撤销了它)。
+    ///
+    /// core 在 `revoke_device` 里调用它,因为撤销语义横跨三块状态:core 的设备表、
+    /// 宿主的推送绑定表、以及自托管发送端的绑定。core 只能动第一块,所以把「这个
+    /// 设备不再有权限」明确交给宿主 —— 而不是让宿主去猜哪个事件等于撤销。
+    ///
+    /// 实现方**必须**做到:停止向该设备推送(本地绑定失效 + 通知发送端解绑)。
+    /// 失败不该阻断撤销本身(权限已经收回),但要回报出来。
+    async fn device_revoked(&self, device_id: &str) -> Result<Value, String>;
 }

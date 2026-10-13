@@ -5,7 +5,29 @@
 > of a real user directory was performed here**, and none is authorised by it.
 > Companion: `docs/native/environment.md`, `.trellis/tasks/09-21-native-macos/implement.md`.
 
-## Baseline
+## Current Apple-only boundary (approved planning, 2026-10-12)
+
+The current authority is the Apple-only baseline at the top of `MIGRATION_PLAN.md`
+and ADR-039 §7. This is a plan, not evidence of a sandbox/data/signing cutover.
+The original P1-era baseline, switch rows and observations below remain historical;
+their words “currently”, “inert” or “no runtime code” are not today's facts and
+never authorise deleting the current core, macOS tree or user work.
+
+| Stage | Safe boundary | Required proof |
+|---|---|---|
+| AP0–AP7, before user-data cutover | Use isolated data; retain frozen old clients and source data. Do not stop existing production tasks or rewrite credentials. | Real sandbox/tool/permission evidence before relying on a new execution path; a failed probe does not authorise weaker security or a different product. |
+| AP8 migration/rehearsal | Stop writers; make a consistent backup including DB/WAL/attachments; explicitly authorise import into the approved managed root; compare records and files. Re-login/re-pair is permitted where credentials cannot lawfully transfer. | Rehearse on an isolated copy first. Real paths, Keychain and device changes each need contemporaneous approval; source data is not deleted. |
+| AP9 review, before old-client deletion | Keep the verified compatible fallback/recovery path while both App Store reviews are pending; do not equate a runnable window or signed archive with review acceptance. | Complete product journeys, migration/recovery results and both real review decisions. Approval to submit or release is separate. |
+| AP10 retirement and later | Migrate shared Rust/vendor/remote/data dependencies first, then remove legacy UI/platform code under the approved gate. Recovery must use a tested native-version/data recovery path, not a deleted Tauri client. | Both store reviews and full engineering/migration gates passed; current clean builds and real changed paths verified after removal. |
+
+Rollback never means downgrading a data format, restoring stale memory over new
+writes, adopting a lost PTY master, deleting a lock, auto-killing an unverified PID,
+or `git reset --hard`. Code may be recoverable from version control; that does not
+reverse already-migrated user data, permission identities or distributed binaries.
+The old-source backup and post-import changes must remain distinguishable so a
+failed migration cannot silently discard work performed after the backup.
+
+## Historical baseline (not the current recovery procedure)
 
 | Item | Value |
 |---|---|
@@ -54,7 +76,8 @@ A rollback is only meaningful if you know which knob turns what off.
 | P3–P7 | do not launch `aeroric-cli serve` / Native Preview against `~/.aeroric`; they only accept a test `--data-dir` | Tauri client with stepwise embedded core | isolated temp dirs only; user data never touched |
 | P8-05 onwards | set the embedded/external choice back to **embedded** in `src-tauri/src/core_adapter.rs`; the Tauri external adapter is the first rollback target | Tauri embedded core | the **same** host data format — rolling back the client must not roll back formats |
 | P10 | keep Native Preview as a non-default entry point | Tauri as macOS default | as above |
-| **ADR-039(转型)** | 尚未执行删除 ⇒ 今天没有要回退的东西。一旦按 ADR-039 §6 执行:R5 改写 INV-09 后回退需还原 `tauri.conf.json` 的 ad-hoc 基线;**R4「逐步废除 React」的冻结期**窗口内可随时解冻(源代码不动,只是不投新功能);**R1/R3 删 CI 与跨平台代码是唯一不可逆项**(须先有 SwiftUI 客户端能跑,见 ADR-039 §6 S1) | 冻结期:Same as today(R1–R6 尚未落地);执行期:Same as today(旧 Tauri 仍是回退面,直到删除动作发生) | 无——ADR-039 本身不写数据;它改的是「谁能启动、CI 跑什么、签名基线」 |
+| **ADR-039 / AP0–AP9** | Cancel an unexecuted switch, or use only a rehearsed compatible client/data recovery path; the old UI remains until the complete Q12 gate | Frozen legacy clients before retirement; no silent embedded fallback or signature downgrade | Source data remains intact; imported/post-import data follows the current schema, lease and explicit recovery protocol |
+| **ADR-039 / AP10 and later** | Use the verified native-version recovery procedure; do not assume removed Tauri/Expo clients are available | A known-good compatible native version or an explicitly rehearsed restore | Never overwrite newer data or restore a stale full-memory snapshot; retained source/backup is not an automatic rollback destination |
 
 Rules that survive every rollback:
 
@@ -77,7 +100,11 @@ Rules that survive every rollback:
 
 Any real-directory step above needs explicit user approval at the time; this document does not grant it.
 
-## What is currently safe to abandon
+## Historical P1–P4 abandonment assessment — obsolete, do not execute
+
+The following was an early-stage observation, not a current deletion recipe.
+Use the approved Apple-only boundary above; current runtime and user work must
+not be inferred to be inert from this preserved paragraph.
 
 Everything produced by P1–P4 of this migration is inert: deleting `core/`, `macos/`,
 `scripts/native/`, `docs/native/` (including its `digest/` shards), reverting the two

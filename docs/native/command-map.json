@@ -16628,7 +16628,7 @@
       "rust_path": "conda::detect_conda_environments",
       "registered_at": "src-tauri/src/lib.rs:937",
       "definition_candidates": [
-        "src-tauri/src/conda.rs:162"
+        "src-tauri/src/conda.rs:39"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16640,26 +16640,28 @@
       "feature_ids": [
         "F13"
       ],
-      "definition_resolved": "src-tauri/src/conda.rs:162",
+      "definition_resolved": "src-tauri/src/conda.rs:39",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
       "reachable": true,
-      "params": []
+      "params": [
+        "app: tauri::AppHandle<R>!"
+      ]
     },
     {
       "command": "detect_remote_conda_environments",
       "rust_path": "conda::detect_remote_conda_environments",
       "registered_at": "src-tauri/src/lib.rs:938",
       "definition_candidates": [
-        "src-tauri/src/conda.rs:169"
+        "src-tauri/src/conda.rs:64"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16671,7 +16673,7 @@
       "feature_ids": [
         "F13"
       ],
-      "definition_resolved": "src-tauri/src/conda.rs:169",
+      "definition_resolved": "src-tauri/src/conda.rs:64",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -20268,7 +20270,7 @@
       "rust_path": "notification::get_notifications",
       "registered_at": "src-tauri/src/lib.rs:1039",
       "definition_candidates": [
-        "src-tauri/src/notification.rs:750"
+        "src-tauri/src/notification.rs:759"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -20280,7 +20282,7 @@
       "feature_ids": [
         "F19"
       ],
-      "definition_resolved": "src-tauri/src/notification.rs:750",
+      "definition_resolved": "src-tauri/src/notification.rs:759",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -20302,7 +20304,7 @@
       "rust_path": "notification::get_pending_release_update",
       "registered_at": "src-tauri/src/lib.rs:1040",
       "definition_candidates": [
-        "src-tauri/src/notification.rs:801"
+        "src-tauri/src/notification.rs:810"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -20314,7 +20316,7 @@
       "feature_ids": [
         "F19"
       ],
-      "definition_resolved": "src-tauri/src/notification.rs:801",
+      "definition_resolved": "src-tauri/src/notification.rs:810",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -20336,7 +20338,7 @@
       "rust_path": "notification::mark_notification_read",
       "registered_at": "src-tauri/src/lib.rs:1041",
       "definition_candidates": [
-        "src-tauri/src/notification.rs:769"
+        "src-tauri/src/notification.rs:778"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -20348,7 +20350,7 @@
       "feature_ids": [
         "F19"
       ],
-      "definition_resolved": "src-tauri/src/notification.rs:769",
+      "definition_resolved": "src-tauri/src/notification.rs:778",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -20370,7 +20372,7 @@
       "rust_path": "notification::mark_all_notifications_read",
       "registered_at": "src-tauri/src/lib.rs:1042",
       "definition_candidates": [
-        "src-tauri/src/notification.rs:785"
+        "src-tauri/src/notification.rs:794"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -20382,7 +20384,7 @@
       "feature_ids": [
         "F19"
       ],
-      "definition_resolved": "src-tauri/src/notification.rs:785",
+      "definition_resolved": "src-tauri/src/notification.rs:794",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -20403,7 +20405,7 @@
       "rust_path": "notification::prepare_release_update",
       "registered_at": "src-tauri/src/lib.rs:1043",
       "definition_candidates": [
-        "src-tauri/src/notification.rs:820"
+        "src-tauri/src/notification.rs:829"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -20415,7 +20417,7 @@
       "feature_ids": [
         "F19"
       ],
-      "definition_resolved": "src-tauri/src/notification.rs:820",
+      "definition_resolved": "src-tauri/src/notification.rs:829",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -20437,7 +20439,7 @@
       "rust_path": "notification::restart_and_install_release_update",
       "registered_at": "src-tauri/src/lib.rs:1044",
       "definition_candidates": [
-        "src-tauri/src/notification.rs:840"
+        "src-tauri/src/notification.rs:849"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -20449,7 +20451,7 @@
       "feature_ids": [
         "F19"
       ],
-      "definition_resolved": "src-tauri/src/notification.rs:840",
+      "definition_resolved": "src-tauri/src/notification.rs:849",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -20471,7 +20473,7 @@
       "rust_path": "notification::install_release_update",
       "registered_at": "src-tauri/src/lib.rs:1045",
       "definition_candidates": [
-        "src-tauri/src/notification.rs:901"
+        "src-tauri/src/notification.rs:910"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -20483,7 +20485,7 @@
       "feature_ids": [
         "F19"
       ],
-      "definition_resolved": "src-tauri/src/notification.rs:901",
+      "definition_resolved": "src-tauri/src/notification.rs:910",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,

@@ -72,6 +72,15 @@ src-tauri/binaries/
 macos/AeroricKit/.build/
 macos/DerivedData/
 macos/AeroricNative.xcodeproj/
+# AP5/AP6 原生 iOS 伴随端:同一口径 —— `ios/project.yml`(XcodeGen 源)与
+# `AeroricCompanion.entitlements` 是提交面,.xcodeproj 与 SwiftPM 构建产物是派生物。
+ios/AeroricCompanionKit/.build/
+ios/AeroricCompanion.xcodeproj/
+ios/DerivedData/
+# AP6 新 crate 的 Cargo 构建产物(与 core/target/ 同一类:机读二进制不进 git)。
+# `remote-relay/target/` 之所以没问题,是因为它在 `.gitignore` 之外由仓库既有规则
+# 覆盖;新 crate 必须显式列出。
+remote-push/target/
 Trellis/
 trellis/
 .trellis/

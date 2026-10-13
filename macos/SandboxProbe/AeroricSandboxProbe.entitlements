@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- AP0 batch-1 minimal App Sandbox (MIGRATION_PLAN.md §D AP0).
+	     Deliberately minimal: every additional entitlement must be added
+	     because a probe row proved it is required, not preemptively.
+	     Applied at sign time by scripts/native/ap0/probe-batch1.sh
+	     (xcodebuild runs with CODE_SIGNING_ALLOWED=NO for this target). -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+</dict>
+</plist>

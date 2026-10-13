@@ -1,0 +1,33 @@
+name: AeroricCompanion
+options:
+  bundleIdPrefix: com.aeroric
+  deploymentTarget:
+    iOS: "26.0"
+packages:
+  AeroricCompanionKit:
+    path: AeroricCompanionKit
+targets:
+  AeroricCompanion:
+    type: application
+    platform: iOS
+    sources:
+      - path: AeroricCompanionApp
+    dependencies:
+      - package: AeroricCompanionKit
+        product: AeroricMobileTransport
+      - package: AeroricCompanionKit
+        product: AeroricMobileUI
+    settings:
+      base:
+        PRODUCT_NAME: AeroricCompanion
+        PRODUCT_BUNDLE_IDENTIFIER: com.aeroric.ios.companion
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        # AP6: the APNs entitlement the sender targets. It is a development
+        # environment value because provisioning is account-scoped
+        # (GAP-STORE-06); the distribution value comes with the real App ID at
+        # AP9 and must not be faked here.
+        CODE_SIGN_ENTITLEMENTS: AeroricCompanionApp/AeroricCompanion.entitlements
+        # Remote notifications must be delivered in the background; without this
+        # the app cannot learn that a task finished while suspended.
+        INFOPLIST_KEY_UIBackgroundModes: remote-notification

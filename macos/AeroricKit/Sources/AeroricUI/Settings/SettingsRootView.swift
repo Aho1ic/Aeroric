@@ -13,7 +13,13 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
     let onInteractionModeSave: ((InteractionMode) -> Void)?
     let interactionModeSaveError: String?
     @State private var section: SettingsSection = .application
-
+    @State private var localInteractionMode: InteractionMode = .native
+    @State private var configuredAgents: [SettingsCapabilityAgent] = [
+        SettingsCapabilityAgent(id: "claude", family: "claude"),
+        SettingsCapabilityAgent(id: "codex", family: "codex"),
+        SettingsCapabilityAgent(id: "dsh", family: "dsh"),
+        SettingsCapabilityAgent(id: "omp", family: "omp"),
+    ]
     public init(
         state: State,
         interactionMode: Binding<InteractionMode>? = nil,
@@ -42,17 +48,31 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
             Divider().overlay(Color.dsBorder)
             switch section {
             case .application:
-                if let interactionMode {
-                    InteractionSettingsView(
-                        mode: interactionMode,
-                        onSave: { onInteractionModeSave?($0) },
-                        saveError: interactionModeSaveError
-                    )
-                } else {
-                    NotWiredYetView(task: "P5-02（设置中的原生模式切换）")
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        InteractionSettingsView(
+                            mode: interactionMode ?? $localInteractionMode,
+                            onSave: { onInteractionModeSave?($0) },
+                            saveError: interactionModeSaveError
+                        )
+                        GeneralSettingsView()
+                        AppearanceSettingsView()
+                    }
                 }
             case .agents:
-                NotWiredYetView(task: "P5-03/P5-04（Agent 与会话面板）")
+                VStack(spacing: 8) {
+                    AgentSettingsView(agents: configuredAgents)
+                    CustomAgentEditor { newID, newFamily in
+                        let trimmed = newID.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
+                        let resolvedFamily = (newFamily?.isEmpty == false) ? newFamily! : "claude"
+                        if !configuredAgents.contains(where: { $0.id == trimmed }) {
+                            configuredAgents.append(
+                                SettingsCapabilityAgent(id: trimmed, family: resolvedFamily, isCustom: true)
+                            )
+                        }
+                    }
+                }
             case .about:
                 AboutSection(state: state)
             }

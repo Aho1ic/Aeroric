@@ -62,7 +62,9 @@ dependencies = [
  "flate2",
  "futures-util",
  "getrandom 0.2.17",
+ "hex",
  "hkdf 0.12.4",
+ "hmac 0.12.1",
  "if-addrs",
  "libc",
  "md-5",
@@ -99,20 +101,30 @@ version = "0.1.0"
 dependencies = [
  "aeroric-core",
  "aeroric-protocol",
+ "aeroric-remote-push",
  "async-trait",
+ "axum",
  "base64 0.22.1",
  "chrono",
  "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "keyring",
  "libc",
+ "p256",
  "parking_lot",
  "portable-pty",
+ "remote-protocol",
+ "reqwest 0.13.5",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
 ]
 
@@ -123,6 +135,30 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "aeroric-remote-push"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "getrandom 0.3.4",
+ "hex",
+ "hmac 0.12.1",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "p256",
+ "parking_lot",
+ "remote-protocol",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -2036,6 +2072,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fnv"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2305,6 +2347,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "h2"
+version = "0.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d29020232d6aa3fb1daca64c1127cf662cf97f254ae16c18c05b8ab635fc118"
+dependencies = [
+ "atomic-waker",
+ "bytes",
+ "fnv",
+ "futures-core",
+ "futures-sink",
+ "http",
+ "indexmap",
+ "slab",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2522,6 +2583,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
+ "h2",
  "http",
  "http-body",
  "httparse",
@@ -5143,6 +5205,7 @@ checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http",

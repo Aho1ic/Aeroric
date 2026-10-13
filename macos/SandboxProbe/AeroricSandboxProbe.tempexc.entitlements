@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- AP0 batch-2 CONTRAST variant (MIGRATION_PLAN.md §D AP0).
+	     Hypothesis under test: com.apple.security.temporary-exception.
+	     files.absolute-path.read-only grants enough access for the probe to
+	     EXEC a binary outside the container (/tmp/ap0/fake-agent) — if yes,
+	     the mechanism "sandboxed app runs a user-installed CLI via a granted
+	     path" exists at the API level, and the remaining question is only
+	     App Store review policy (batch 3 / grill), not OS capability.
+	     /tmp/ap0/ is created by probe-batch1.sh; the run A (base
+	     entitlements) is the control. Whether this entitlement class is
+	     acceptable for MAS submission is a separate, unanswered question. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
+	<array>
+		<string>/tmp/ap0/</string>
+	</array>
+</dict>
+</plist>

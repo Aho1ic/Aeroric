@@ -20,5 +20,5 @@ pub mod log;
 pub mod pump;
 pub mod snapshot;
 
-pub use log::{EventLog, LoggedEvent};
+pub use log::{EventLog, EventObserver, LoggedEvent};
 pub use snapshot::{since_response, SnapshotDecision};

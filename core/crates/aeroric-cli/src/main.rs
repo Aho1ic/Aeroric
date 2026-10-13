@@ -197,7 +197,66 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             // b1.2 执行装配：registry/字节环/executor/TaskService 全家＋attach 回链。
             let registry = Arc::new(aeroric_core::runtime::registry::TaskRegistry::default());
             let terminal = Arc::new(aeroric_core::terminal::pty::TerminalService::new());
-            let log = Arc::new(aeroric_core::events::EventLog::default());
+            // AP6:推送面在建 log 之前装配 —— 派发器是 EventLog 的观察者,
+            // 必须随 log 一起装好,否则启动窗口里的事件不会被考虑。
+            let push = match aeroric_host::push_host::shared_transport() {
+                Ok(transport) => {
+                    let bindings = Arc::new(aeroric_core::remote::push::PushBindings::new());
+                    let dispatcher =
+                        Arc::new(aeroric_core::remote::push_plane::PushDispatcher::new(
+                            Arc::clone(&bindings),
+                            transport.clone(),
+                            Arc::new(aeroric_core::remote::push_plane::now_ms)
+                                as Arc<dyn Fn() -> i64 + Send + Sync>,
+                        ));
+                    // push-config.json(宿主持有;未启用则不装发送端客户端。
+                    let push_config = aeroric_core::remote::push::load_config(data_dir);
+                    if push_config.enabled {
+                        match (
+                            push_config.sender_url.as_deref(),
+                            push_config.user.as_deref(),
+                            // 凭据明文在钥匙串里,不在配置文件;缺失就明确报错。
+                            started
+                                .context
+                                .secrets
+                                .get(&aeroric_core::context::SecretKey(
+                                    aeroric_core::remote::push::PUSH_CREDENTIAL_KEY.to_string(),
+                                ))
+                                .ok()
+                                .flatten(),
+                        ) {
+                            (Some(url), Some(user), Some(secret)) if !secret.is_empty() => {
+                                match aeroric_core::remote::push::PushSenderClient::new(
+                                    aeroric_core::remote::push::PushSenderConfig {
+                                        url: url.to_string(),
+                                        user: user.to_string(),
+                                        secret,
+                                    },
+                                ) {
+                                    Ok(client) => dispatcher.set_client(Some(client)),
+                                    Err(error) => eprintln!(
+                                        "aeroric-cli serve: push sender rejected: {error}"
+                                    ),
+                                }
+                            }
+                            _ => eprintln!(
+                                "aeroric-cli serve: push is enabled but the sender credential is missing; notifications stay off"
+                            ),
+                        }
+                    }
+                    Some((dispatcher, transport))
+                }
+                Err(error) => {
+                    eprintln!("aeroric-cli serve: push transport unavailable: {error}");
+                    None
+                }
+            };
+            let log = match &push {
+                Some((dispatcher, _)) => Arc::new(
+                    aeroric_core::events::EventLog::default().with_observer(dispatcher.clone()),
+                ),
+                None => Arc::new(aeroric_core::events::EventLog::default()),
+            };
             let executor = aeroric_host::executor::CliPtyExecutor::new(
                 Arc::clone(&started.context),
                 Arc::clone(&registry),
@@ -223,6 +282,9 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             };
             executor.attach(&task_service);
             let task_service_for_remote = Arc::clone(&task_service);
+            let terminal_for_remote = Arc::clone(&terminal);
+            let registry_for_remote = Arc::clone(&registry);
+            let families_for_remote: Arc<dyn aeroric_core::tasks::AgentFamilies> = families.clone();
             // P8-04 刀三：用量族与降级账总在；维护面端口**不给**——通知抓取与
             // "替换正在运行的 app"是桌面宿主的能力，无头宿主注册一个空壳只会让
             // 客户端以为能力存在（见 `HostWiring::maintenance`）。
@@ -252,11 +314,26 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 .unwrap_or(false);
             if remote_enabled {
                 let remote_state = Arc::new(aeroric_core::remote::state::RemoteState::new());
+                // 诊断用的 relay 配置取自 state(即服务真正会用的那份),而不是再读一遍文件。
+                let relay_for_diagnostics = {
+                    let cfg = remote_state.config.lock();
+                    (
+                        cfg.relay_url.clone().unwrap_or_default(),
+                        cfg.relay_token.clone(),
+                    )
+                };
                 let remote_handle: Arc<dyn aeroric_core::remote::services::RemoteHostHandle> =
                     Arc::new(aeroric_host::remote_headless::CliRemoteHandle {
                         service: task_service_for_remote,
                         context: Arc::clone(&started.context),
                         executor: Arc::clone(&executor),
+                        terminal: terminal_for_remote,
+                        registry: registry_for_remote,
+                        approvals: Arc::clone(&services.approvals),
+                        families: families_for_remote,
+                        push: push.as_ref().map(|(dispatcher, _)| Arc::clone(dispatcher)),
+                        push_transport: push.as_ref().map(|(_, transport)| Arc::clone(transport)),
+                        relay: Some(relay_for_diagnostics),
                     });
                 let cfg_port = std::fs::read_to_string(&remote_cfg_path)
                     .ok()

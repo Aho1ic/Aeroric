@@ -9,17 +9,48 @@ import SwiftUI
 /// native 下能力已验证才直接呈现终端，否则显示状态卡与切换按钮）。
 /// 任务生命周期调用全部走 `AppServices`（类型化 workspace client），
 /// 本视图不触碰 wire 格式（INV-02 归属不变）。
+enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
+    case tasks
+    case files
+    case git
+    case ide
+    case connections
+    case infrastructure
+    case database
+    case notebook
+    case extensions
+    case remote
+    case operations
+
+    var titleKey: LocalizedStringKey {
+        switch self {
+        case .tasks: "任务"
+        case .files: "文件"
+        case .git: "Git"
+        case .ide: "IDE"
+        case .connections: "SSH"
+        case .infrastructure: "设施"
+        case .database: "数据库"
+        case .notebook: "笔记"
+        case .extensions: "扩展"
+        case .remote: "远控"
+        case .operations: "运维"
+        }
+    }
+}
+
 struct TaskWorkspaceView: View {
     let services: AppServices
+    @State private var activeSection: WorkspaceSection = .tasks
     /// 每窗口选中的任务 id（窗口局部状态，不进 store）。
     @State private var selectedTaskID: String?
     @State private var draftPresented = false
     @State private var draft = TaskWorkspaceView.emptyDraft
     @State private var draftError: String?
+    @State private var sqlDraft = "SELECT 1;"
     /// native 模式下能力未验证会话的用户主动切换（不自动改全局偏好，
     /// P5-02 语义）。
     @State private var forcedTerminal = false
-
     static var emptyDraft: TaskDraft {
         TaskDraft(
             agent: "",
@@ -33,42 +64,26 @@ struct TaskWorkspaceView: View {
     }
 
     var body: some View {
-        HSplitView {
-            TaskListView(
-                visibleTasks: Binding(
-                    get: { services.taskStore.visibleTasks },
-                    set: { _ in }
-                ),
-                filterText: Binding(
-                    get: { services.taskStore.filterText },
-                    set: { services.taskStore.filterText = $0 }
-                ),
-                onOpenDraft: { draftPresented = true }
-            )
-            .frame(minWidth: 240, maxWidth: 400, maxHeight: .infinity)
-
-            VStack(spacing: 0) {
-                if let task = selectedTask {
-                    TaskDetailHeader(
-                        task: task,
-                        onCancel: { Task { await services.cancelTask(taskId: task.id) } },
-                        onDelete: { services.taskStore.removeTask(id: task.id) },
-                        onStar: { services.toggleStar(taskId: task.id) },
-                        onArchive: { services.toggleArchived(taskId: task.id) }
-                    )
-                    taskBody(task)
-                } else {
-                    Text("选择一个任务查看详情")
-                        .foregroundStyle(Color.dsTextMuted)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .accessibilityIdentifier("tasks.empty-detail")
+        VStack(spacing: 0) {
+            NativeSegmentedPicker(
+                selection: $activeSection,
+                groupTitle: "工作区视图",
+                segments: WorkspaceSection.allCases.map {
+                    .init(value: $0, title: $0.titleKey)
                 }
-            }
-            .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            Divider().overlay(Color.dsBorder)
+            sectionContent
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityIdentifier("tasks.workspace")
-        // 选中运行中任务 → 挂 P5-01 终端轮询；取消选中/切任务 → 释放。
+        .onChange(of: services.draftPresentationRequested) { _, requested in
+            if requested {
+                services.draftPresentationRequested = false
+                draftPresented = true
+            }
+        }
         .onChange(of: selectedTaskID) { _, newValue in
             forcedTerminal = false
             guard let newValue, let task = services.taskStore.tasks.first(where: { $0.id == newValue })
@@ -118,6 +133,158 @@ struct TaskWorkspaceView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text(draftError ?? "")
+        }
+    }
+    @ViewBuilder
+    private var sectionContent: some View {
+        switch activeSection {
+        case .tasks:
+            HSplitView {
+                TaskListView(
+                    visibleTasks: Binding(
+                        get: { services.taskStore.visibleTasks },
+                        set: { _ in }
+                    ),
+                    filterText: Binding(
+                        get: { services.taskStore.filterText },
+                        set: { services.taskStore.filterText = $0 }
+                    ),
+                    selectedTaskID: $selectedTaskID,
+                    onOpenDraft: { draftPresented = true }
+                )
+                .frame(minWidth: 240, maxWidth: 400, maxHeight: .infinity)
+
+                VStack(spacing: 0) {
+                    if let task = selectedTask {
+                        TaskDetailHeader(
+                            task: task,
+                            onCancel: { Task { await services.cancelTask(taskId: task.id) } },
+                            onDelete: { services.taskStore.removeTask(id: task.id) },
+                            onStar: { services.toggleStar(taskId: task.id) },
+                            onArchive: { services.toggleArchived(taskId: task.id) }
+                        )
+                        taskBody(task)
+                    } else {
+                        Text("选择一个任务查看详情")
+                            .foregroundStyle(Color.dsTextMuted)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .accessibilityIdentifier("tasks.empty-detail")
+                    }
+                }
+                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityIdentifier("tasks.workspace")
+        case .files:
+            HSplitView {
+                FileBrowserView(store: services.fileTreeStore)
+                    .frame(minWidth: 220, maxWidth: 340, maxHeight: .infinity)
+                VStack(spacing: 0) {
+                    EditorTabs(store: services.documentStore)
+                    SearchPanel(matches: [])
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        case .git:
+            HSplitView {
+                GitPanel(store: services.gitStore)
+                    .frame(minWidth: 260, maxWidth: 400, maxHeight: .infinity)
+                VStack(spacing: 0) {
+                    HistoryView(store: services.gitStore)
+                    StashView(store: services.gitStore)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .ide:
+            HSplitView {
+                ProblemsView(store: services.diagnosticsStore)
+                    .frame(minWidth: 260, maxWidth: 400, maxHeight: .infinity)
+                DebugPanel(
+                    sessionStore: services.debugSessionStore,
+                    breakpointStore: services.breakpointStore,
+                    debugId: "default"
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .connections:
+            HSplitView {
+                VStack(spacing: 8) {
+                    ConnectionList(store: services.sshConnectionStore)
+                    SSHConnectionEditor { name, host, port, username, _ in
+                        var current = services.sshConnectionStore.connections
+                        current.append(
+                            AeroricUI.ConnectionStore.Connection(
+                                id: UUID().uuidString,
+                                name: name,
+                                host: host,
+                                port: port,
+                                username: username
+                            )
+                        )
+                        services.sshConnectionStore.ingest(current)
+                    }
+                }
+                .frame(minWidth: 260, maxWidth: 380, maxHeight: .infinity)
+                SFTPBrowser(store: services.sshConnectionStore, entries: [])
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .infrastructure:
+            HSplitView {
+                DockerPanel(store: services.infrastructureStore)
+                    .frame(minWidth: 260, maxWidth: 400, maxHeight: .infinity)
+                VStack(spacing: 8) {
+                    PortInspector(store: services.infrastructureStore)
+                    CondaEnvironmentPicker(store: services.infrastructureStore)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .database:
+            HSplitView {
+                DatabaseSidebar(store: services.databaseStore)
+                    .frame(minWidth: 220, maxWidth: 340, maxHeight: .infinity)
+                VStack(spacing: 0) {
+                    SQLQueryEditor(sql: $sqlDraft)
+                    ResultGrid(store: services.databaseStore)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        case .notebook:
+            HSplitView {
+                NotebookSidebar(store: services.notebookStore)
+                    .frame(minWidth: 220, maxWidth: 340, maxHeight: .infinity)
+                VStack(spacing: 8) {
+                    SyncStatusPanel(store: services.syncStore)
+                    RAGSearchView()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .extensions:
+            HSplitView {
+                SkillHubView(store: services.extensionStore)
+                    .frame(minWidth: 240, maxWidth: 360, maxHeight: .infinity)
+                VStack(spacing: 8) {
+                    MCPSettingsView(store: services.extensionStore)
+                    HookStatusView(store: services.extensionStore)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .remote:
+            HSplitView {
+                RemoteAccessSettingsView(store: services.remoteStore)
+                    .frame(minWidth: 280, maxWidth: 420, maxHeight: .infinity)
+                DeviceListView(store: services.remoteStore)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .operations:
+            HSplitView {
+                UsageDashboard(store: services.maintenanceStore)
+                    .frame(minWidth: 320, maxWidth: 480, maxHeight: .infinity)
+                VStack(spacing: 8) {
+                    DiagnosticsView(store: services.maintenanceStore)
+                    NotificationCenterView(store: services.maintenanceStore)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 
