@@ -794,7 +794,15 @@ extension AppServices: WorkspaceStateProviding {
             PaletteCommand(id: "task.new", title: "新建会话"),
             PaletteCommand(id: "project.open", title: "打开项目…"),
             PaletteCommand(id: "settings.show", title: "设置…"),
-        ]
+        ] + Self.sectionCommands(canvasAvailable: canvasBook.isAvailable)
+    }
+
+    /// "前往：…" for every workspace section (the tools behind the toolbar's
+    /// “更多” menu included); the canvas only when the host can store boards.
+    static func sectionCommands(canvasAvailable: Bool) -> [PaletteCommand] {
+        WorkspaceSection.allCases
+            .filter { $0 != .canvas || canvasAvailable }
+            .map { PaletteCommand(id: $0.sidebarID, title: "前往：\($0.title)") }
     }
 }
 

@@ -173,6 +173,8 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
 
     private func handleCommand(_ command: PaletteCommand) {
         if command.id == "task.new" { openDraft() }
+        // Section jumps are window-local navigation, like the sidebar rows.
+        else if command.id.hasPrefix("section.") { navigationSelection.wrappedValue = command.id }
         else { onCommand(command) }
     }
 
