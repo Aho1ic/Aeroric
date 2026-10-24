@@ -36,4 +36,10 @@ public protocol SettingsStateProviding: AnyObject {
     var protocolVersionText: String { get }
     var buildIdentifier: String { get }
     var applicationTag: String { get }
+    /// Legacy custom Agent cleanup; nil hides the entry (previews, tests).
+    var legacyCleanup: LegacyCleanupStore? { get }
+}
+
+public extension SettingsStateProviding {
+    var legacyCleanup: LegacyCleanupStore? { nil }
 }

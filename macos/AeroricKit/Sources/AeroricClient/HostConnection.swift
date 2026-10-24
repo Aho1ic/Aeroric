@@ -139,6 +139,10 @@ public actor HostConnection {
     private var eventSink: (@Sendable (EventFrame) -> Void)?
     private var faultSink: (@Sendable (ConnectionError) -> Void)?
     private var isClosed = false
+    /// Capabilities the host advertised in the handshake reply (name → enabled).
+    /// Empty until a handshake succeeds; replaced on every reconnect. UI gates on
+    /// this, never on probing a method.
+    public private(set) var advertisedCapabilities: [String: Bool] = [:]
 
     public init(socketPath: String, tokenProvider: @escaping @Sendable () throws -> String) {
         self.socketPath = socketPath
@@ -185,7 +189,8 @@ public actor HostConnection {
         do {
             // The registry routes the reply by the id `request()` minted; a
             // reply for a different id never fulfils and surfaces as a timeout.
-            _ = try await request("handshake", params: params, timeout: .seconds(30))
+            let reply = try await request("handshake", params: params, timeout: .seconds(30))
+            advertisedCapabilities = Self.parseCapabilities(reply.result)
         } catch let error as ConnectionError {
             switch error {
             case let .refused(failure):
@@ -195,6 +200,18 @@ public actor HostConnection {
                 throw error
             }
         }
+    }
+
+    /// The handshake reply's `capabilities` array (`[{name, enabled, since?, note?}]`)
+    /// as name → enabled. Malformed entries are skipped, not guessed.
+    public static func parseCapabilities(_ result: JSONValue) -> [String: Bool] {
+        var out: [String: Bool] = [:]
+        for item in result["capabilities"]?.arrayValue ?? [] {
+            guard let name = item["name"]?.stringValue, !name.isEmpty,
+                  let enabled = item["enabled"]?.boolValue else { continue }
+            out[name] = enabled
+        }
+        return out
     }
 
     /// Sends a request and awaits its reply. Each request gets its own id;

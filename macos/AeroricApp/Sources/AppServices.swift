@@ -51,6 +51,8 @@ final class AppServices {
     let maintenanceStore = MaintenanceStore(client: nil)
     /// AP7:会话控制簿记(能力探测结果 + 控制裁决)。
     let agentToolsStore = AgentToolsStore()
+    /// B1:旧版自定义 Agent 清理(设置 → Agents)。按握手广告的能力决定可用性。
+    let legacyCleanupStore = LegacyCleanupStore()
     /// AP7:外部协议只读状态(OAuth/沙箱/工具/媒体/语音)。
     let externalProtocolStore = ExternalProtocolStore()
     /// P5-01/P5-02：模式控制器（迁移默认按旧客户端存在性）。
@@ -171,6 +173,13 @@ final class AppServices {
                     self.configurationReadStates.removeAll()
                     self.projectConfigurations.removeAll()
                     self.configurationEpoch = UUID()
+                }
+                let advertised = await connection.advertisedCapabilities
+                await MainActor.run {
+                    self.legacyCleanupStore.attach(
+                        client: LegacyCleanupClient(connection: connection),
+                        capabilityEnabled: advertised[LegacyCleanupContract.capability] == true
+                    )
                 }
                 // AP7:能力探测走宿主真值。没有适配器面时 `capabilities()` 抛错,
                 // store 保持「未探测」——UI 因此什么都不显示,而不是显示一堆注定
@@ -743,4 +752,6 @@ extension AppServices: WorkspaceStateProviding {
     }
 }
 
-extension AppServices: SettingsStateProviding {}
+extension AppServices: SettingsStateProviding {
+    var legacyCleanup: LegacyCleanupStore? { legacyCleanupStore }
+}

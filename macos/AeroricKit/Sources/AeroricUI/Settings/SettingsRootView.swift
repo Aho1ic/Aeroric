@@ -61,6 +61,11 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
                 }
             case .agents:
                 VStack(spacing: 8) {
+                    if let cleanup = state.legacyCleanup {
+                        LegacyCleanupEntry(store: cleanup)
+                            .padding(.top, 8)
+                        Divider().overlay(Color.dsBorder)
+                    }
                     AgentSettingsView(agents: configuredAgents)
                     CustomAgentEditor { newID, newFamily in
                         let trimmed = newID.trimmingCharacters(in: .whitespacesAndNewlines)
