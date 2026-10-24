@@ -356,6 +356,14 @@ impl HostServices {
             since: Some(1),
             note: Some("Host-local legacy custom Agent cleanup: plan/apply".into()),
         });
+        // UI 改版 M5：无限画布的白板与节点布局；仅本机 UDS。
+        crate::canvas_services::register_canvas_services(&mut set, Arc::clone(&context));
+        capabilities.push(aeroric_protocol::capability::Capability {
+            name: crate::canvas_services::CAPABILITY.into(),
+            enabled: true,
+            since: Some(1),
+            note: Some("Host-local canvas boards and node layout".into()),
+        });
         // UI 改版 M4：已有会话导入（授权后只读索引）与 Agent 安装检测；仅本机 UDS。
         crate::imports_services::register_import_services(&mut set, Arc::clone(&context));
         capabilities.push(aeroric_protocol::capability::Capability {
