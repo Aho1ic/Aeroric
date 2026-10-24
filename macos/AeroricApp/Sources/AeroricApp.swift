@@ -9,6 +9,12 @@ enum AeroricEntryPoint {
     @MainActor
     static func main() {
         #if DEBUG
+        // M2 D2: offline session sample for visual review; no host, services
+        // or product App are constructed.
+        if SessionSampleReviewEntry.isActive(environment: ProcessInfo.processInfo.environment) {
+            AeroricSessionSampleReviewApp.main()
+            return
+        }
         // Q103: decide once from an explicit dictionary before ANY older
         // gate (some inspect directories), App, delegate or product owner.
         let usageDecision = NativeUsageStatisticsReviewEntry.decide(environment: ProcessInfo.processInfo.environment)
@@ -102,6 +108,13 @@ enum AeroricEntryPoint {
 
 #if DEBUG
 import AppKit
+
+/// M2 D2 sample window: the real `SessionRouteView` over fixed data.
+private struct AeroricSessionSampleReviewApp: App {
+    var body: some Scene {
+        WindowGroup("会话样例") { SessionSampleReview() }
+    }
+}
 
 /// A minimal AppKit lifecycle bridge for the independent SwiftUI specimen.
 /// Passing the original decision avoids a second environment read or an eager
