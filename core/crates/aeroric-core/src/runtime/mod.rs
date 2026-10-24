@@ -16,6 +16,7 @@
 //! `docs/native/extraction/runtime-ports.md`。
 
 pub mod events;
+pub mod kill;
 pub mod manager;
 pub mod ports;
 pub mod registry;

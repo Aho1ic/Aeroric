@@ -64,7 +64,7 @@ fn write_fake_agent(root: &Path) -> PathBuf {
     let script = root.join("fake-agent.sh");
     std::fs::write(
         &script,
-        "#!/bin/sh\necho HELLO-FROM-FAKE-AGENT\nstty size\nexit 0\n",
+        "#!/bin/sh\necho HELLO-FROM-FAKE-AGENT\necho \"TERM=$TERM\"\necho \"CLICOLOR=$CLICOLOR\"\necho \"AERORIC_TASK_ID=$AERORIC_TASK_ID\"\necho \"AERORIC_AGENT=$AERORIC_AGENT\"\necho \"AERORIC_AGENT_CODEX_LIKE=$AERORIC_AGENT_CODEX_LIKE\"\necho \"AERORIC_AGENT_MODEL=$AERORIC_AGENT_MODEL\"\necho \"AERORIC_EVENT_DIR=$AERORIC_EVENT_DIR\"\nstty size\nexit 0\n",
     )
     .expect("script");
     #[cfg(unix)]
@@ -144,7 +144,7 @@ async fn a_fake_agent_launch_settles_done_and_retires_its_handles() {
                 agent: "fake".to_string(),
                 permission_mode: "ask".to_string(),
                 immediate: true,
-                selected_model: None,
+                selected_model: Some("fake-model".to_string()),
                 reasoning_effort: None,
                 speed: None,
                 dsh_agent_preset: None,
@@ -202,6 +202,38 @@ async fn a_fake_agent_launch_settles_done_and_retires_its_handles() {
     assert!(
         text.contains("HELLO-FROM-FAKE-AGENT"),
         "字节环没收到脚本输出: {text:?}"
+    );
+    assert!(
+        text.contains("TERM=xterm-256color"),
+        "run-flow terminal env 未到达 PTY: {text:?}"
+    );
+    assert!(
+        text.contains("CLICOLOR=1"),
+        "login-shell 真彩 env 未到达 PTY: {text:?}"
+    );
+    assert!(
+        text.contains("AERORIC_TASK_ID=task-1"),
+        "guard ops 未注入 task id: {text:?}"
+    );
+    assert!(
+        text.contains("AERORIC_AGENT=fake"),
+        "guard ops 未注入 agent: {text:?}"
+    );
+    assert!(
+        text.contains("AERORIC_AGENT_CODEX_LIKE=0"),
+        "guard ops 未注入 codex-like 标记: {text:?}"
+    );
+    assert!(
+        text.contains("AERORIC_AGENT_MODEL=fake-model"),
+        "model env 未到达 PTY: {text:?}"
+    );
+    let expected_event_dir = paths.events_dir("task-1").expect("event dir");
+    assert!(
+        text.contains(&format!(
+            "AERORIC_EVENT_DIR={}",
+            expected_event_dir.display()
+        )),
+        "guard ops 未注入受管 events 目录: {text:?}"
     );
     assert!(
         text.lines().any(|line| line.trim() == "24 80"),
@@ -330,7 +362,17 @@ async fn a_cancelled_run_settles_cancelled_not_done() {
 
     // 给 spawn 与 reader 一点时间，然后取消。
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // 组号必须能从登记表读到，**不能**从 child 句柄读：退出观察线程跨 `wait()`
+    // 整程持有那把锁，`child_for(..).lock()` 在这里会直接挂住（这正是要修的病）。
+    let cancelled_pgid = {
+        let target = registry
+            .kill_target_for("task-slow")
+            .expect("spawn 后必须有登记的信号地址");
+        assert!(target.pid() > 1, "真子进程必须留真 pid: {target:?}");
+        target.pid().to_string()
+    };
     service.cancel(&project, "task-slow").expect("cancel");
+    let cancelled_at = std::time::Instant::now();
 
     // 轮询到 cancelled（上限 5 s：kill 生效的话 exit 线程毫秒级结算）。
     let mut status = String::new();
@@ -349,6 +391,45 @@ async fn a_cancelled_run_settles_cancelled_not_done() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert_eq!(status, "cancelled", "cancel 的终局不能被退出码结算覆盖");
+
+    // 整组必须一起死。脚本里的 `sleep 30` 继承了 pty fd：只 `child.kill()` 杀壳的话
+    // 它会活满 30 s，把 `wait` 拖到自然退出，也让用户看见"取消之后进程还在转"。
+    // 判据查**进程组**而不是壳——壳死是必要条件但远不充分，P3-06 的 `tcgetpgrp`
+    // 路径正是只在壳上成立才显得过关（AP7 复核实测 2/12 直接挂死、12/12 留孤儿）。
+    // pty 子进程在 `pre_exec` 里 setsid，所以 pgid == 组长 pid == 组内全部成员。
+    let mut leftovers = Vec::new();
+    for _ in 0..100 {
+        leftovers = std::process::Command::new("ps")
+            .args(["axo", "pid=,pgid=,command="])
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| {
+                line.split_whitespace()
+                    .nth(1)
+                    .is_some_and(|pgid| pgid == cancelled_pgid.as_str())
+            })
+            .map(str::to_string)
+            .collect();
+        if leftovers.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        leftovers.is_empty(),
+        "cancel 之后组 {cancelled_pgid} 不许留下任何进程: {leftovers:?}"
+    );
+
+    // 时间维度的判据：老路径要等壳自己退出才松手（脚本是 `sleep 30`，即 30 s），
+    // 新路径发完信号就返回。30 s 的脚本 + 5 s 预算让"卡住"无法伪装成"慢慢来"。
+    let elapsed = cancelled_at.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "cancel 必须立即返回，不能等子进程自然退出; 实测 {elapsed:?}"
+    );
+
     drop(service);
     drop(context);
     std::fs::remove_dir_all(&root).ok();

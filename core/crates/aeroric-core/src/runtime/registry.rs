@@ -14,6 +14,9 @@
 //! 4. `pty_masters` → `pty_writers` → `child_handles` → `pending_pty_sizes`
 //!    按 reset/cleanup 流程固定次序取放;
 //! 5. `codex_rpc`(宿主)、`wsl_active_ids`、`initial_input_signals`、`runs` 为叶子锁。
+//! 6. `kill_targets` 也是叶子锁,**刻意不进 `pty_masters → …` 那条链**:退出序
+//!    (`Executor::kill_run`)只许单独取它。原因见 `runtime/kill.rs` 模块头——
+//!    `child_handles` 被退出观察线程跨 `wait()` 整程持有,谁依赖它谁在活进程上挂死。
 //!
 //! 约束:任何锁不得跨越 `.await` 持有(parking_lot 无中毒,但 await 上的死锁不受锁序
 //! 保护);omp/远端 waiter 线程取锁必须用显式作用域限界。
@@ -360,6 +363,13 @@ pub struct TaskRegistry {
     pub pty_writers: Mutex<HashMap<RunKey, Arc<Mutex<Box<dyn std::io::Write + Send>>>>>,
     pub child_handles:
         Mutex<HashMap<RunKey, Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>>,
+    /// SIGKILL 执行器,按 run 记(见 [`crate::runtime::kill::KillTarget`])。
+    ///
+    /// 只在 spawn 时写入(此时 `child_handles` 还没被退出观察线程握住),在
+    /// `remove_pty_handles*` 里删除。**叶子锁**,不参与 `pty_masters → pty_writers →
+    /// child_handles → pending_pty_sizes` 那条链:退出序要能在不碰 `child_handles`
+    /// 的前提下杀进程。
+    pub kill_targets: Mutex<HashMap<RunKey, Arc<crate::runtime::kill::KillTarget>>>,
     /// Addressed to "the next run of this id", not to a run: a resize that arrives before the
     /// process exists has no generation to name, which is why every entry here carries
     /// [`RunKey::UNMINTED`] and `register_pty_session` reads it back under that
@@ -409,6 +419,16 @@ impl TaskRegistry {
     ) -> Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>> {
         let run = self.resource_run(task_id)?;
         self.pty_masters.lock().get(&run).cloned()
+    }
+
+    /// 该任务当前代的信号地址(见 [`crate::runtime::kill::KillTarget`])。
+    ///
+    /// 这是退出序唯一**允许**用来杀进程的东西:它只读一张叶子表,永远不碰
+    /// `child_handles`——那把锁被退出观察线程跨 `wait()` 整程持有。任何"先
+    /// `child_for` 再 `lock().kill()`"的写法都会在活进程上挂死。
+    pub fn kill_target_for(&self, task_id: &str) -> Option<Arc<crate::runtime::kill::KillTarget>> {
+        let run = self.resource_run(task_id)?;
+        self.kill_targets.lock().get(&run).cloned()
     }
 
     /// Whether this task or shell has a live process at all — **any** run, not the newest one,
@@ -614,10 +634,17 @@ impl TaskRegistry {
         self.pty_writers
             .lock()
             .insert(run.clone(), Arc::new(parking_lot::Mutex::new(writer)));
+        // 在包进 Mutex 之前取 pid:之后退出观察线程会长期持有那把锁。
+        let kill_target = child
+            .process_id()
+            .map(|pid| Arc::new(crate::runtime::kill::KillTarget::from_pid(pid as i32)));
         let child_handle = Arc::new(parking_lot::Mutex::new(child));
         self.child_handles
             .lock()
             .insert(run.clone(), Arc::clone(&child_handle));
+        if let Some(target) = kill_target {
+            self.kill_targets.lock().insert(run.clone(), target);
+        }
         // Registered only once all three handles exist: `runs` is what ADR-025's addressing reads,
         // and a run that is half-registered would be addressable but unwritable.
         self.runs.register(run.id(), run.generation());
@@ -639,6 +666,7 @@ impl TaskRegistry {
         drop(writers);
         drop(pending_sizes);
         drop(masters);
+        self.kill_targets.lock().remove(run);
         self.runs.retire(run.id(), run.generation());
         cancel_initial_input_signal_for_run(self, run);
     }
@@ -674,6 +702,7 @@ impl TaskRegistry {
         drop(writers);
         drop(pending_sizes);
         drop(masters);
+        self.kill_targets.lock().remove(run);
         self.runs.retire(run.id(), run.generation());
         true
     }

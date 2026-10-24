@@ -13,7 +13,7 @@
 //! `serviceUnwired: true`，是「拒绝是明说的」同族。
 //!
 //! 与宿主 `pty::run_task_core` 的**具名差**（fake-agent 场景不需要、⑦ 评审
-//! 对账）：hooks/mcp/managed_home 装配、login-shell env 与 guard ops、
+//! 对账）：hooks/mcp/managed_home 装配、
 //! session-evidence 的 settle 分支（`settle_exit` 的「会话算成功」半边）、
 //! prompt 注入（inject_prompt_into_terminal 的打字机路径）、终端历史落盘。
 //! dsh 家族在此返回 `Unsupported`（它的启动走 `dsh_host::executor`，无头宿主不接——
@@ -22,11 +22,13 @@
 use std::io::Read as _;
 use std::sync::{Arc, Mutex, Weak};
 
+use aeroric_core::agents::environment::{aeroric_guard_ops, terminal_env_ops, EnvOp};
 use aeroric_core::agents::launch::{claude_plan, codex_plan, dsh_plan, omp_plan, LaunchInput};
 use aeroric_core::context::CoreContext;
 use aeroric_core::events::EventLog;
 use aeroric_core::runtime::manager::WatcherSupervisor;
 use aeroric_core::runtime::registry::{RunKey, TaskRegistry};
+use aeroric_core::settings::get_login_shell_env;
 use aeroric_core::tasks::executor::{
     CancelTarget, Execution, ExecutorFailure, LaunchRequest, LiveRuns, ResetOutcome, ResumeRequest,
     TaskEvent, TaskExecutor,
@@ -136,39 +138,33 @@ impl CliPtyExecutor {
         resized
     }
 
-    /// 杀一条任务的运行：**pty 前台组 killpg 优先**——`child.kill()` 只杀直接
-    /// 子进程，脚本里继承 pty fd 的后代（`sleep`、node 包装层）会活着把
-    /// `wait` 拖到自然退出（cancel 回归实测拖满 30 s）；`tcgetpgrp(master)`
-    /// 给的是 pty 前台组，SIGKILL 整组，再补直接子进程 kill 兜底
-    /// （组号取不到时至少杀到壳）。
+    /// 杀一条任务的运行:整个进程组 SIGKILL。
+    ///
+    /// 为什么是"组"而不是 `child.kill()`:那只杀直接子进程,脚本里继承 pty fd 的后代
+    /// (`sleep`、node 包装层)会活着把 `wait` 拖到自然退出(cancel 回归实测拖满 30 s)。
+    /// 组号从 spawn 时的 `setsid` 组长号来,不再依赖 `tcgetpgrp(master)`——它对刚
+    /// spawn 的 run 常常答 `None`,而那正是要杀它的时刻(实测 2/12)。
+    ///
+    /// **本函数不得触碰 `child_handles`。** 退出观察线程持着那把锁走完
+    /// `child.lock().wait()`(整段子进程生命周期),所以"先 `child_for` 再 `lock().kill()`"
+    /// 在一台活着的子进程上会一直阻塞:实测 `serve` SIGTERM 后 2/12 次挂死 30s+,
+    /// 12/12 次 `ps` 见子进程孤儿存活。改走 [`crate::runtime::kill::KillTarget`]:
+    /// 只读注册表里的叶子表,发完信号就返回,不问结果。
     pub fn kill_run(&self, task_id: &str) {
-        #[cfg(unix)]
-        {
-            if let Some(master) = self.registry.master_for(task_id) {
-                let pgid = master.lock().process_group_leader();
-                drop(master);
-                if let Some(pgid) = pgid {
-                    // SAFETY: pgid 来自 tcgetpgrp（>0 才是有效组）；killpg 对
-                    // 已消失的组返回 ESRCH，无副作用。
-                    unsafe {
-                        libc::killpg(pgid, libc::SIGKILL);
-                    }
-                }
-            }
-        }
-        if let Some(child) = self.registry.child_for(task_id) {
-            let _ = child.lock().kill();
-        }
+        let Some(target) = self.registry.kill_target_for(task_id) else {
+            return;
+        };
+        target.kill_now();
     }
 
-    /// serve 退出序的子进程策略（P3-06 Q86 具名移交、随本 Task serve 入口落地）：
-    /// 优雅退出时**显式**杀掉全部在飞运行，不指望 master 关闭的隐式 SIGHUP——
-    /// 无视 SIGHUP 的子进程（`trap '' HUP`）不会死。按 task_id 走 kill_run：
-    /// killpg 定址最新代的前台组，旧代残余由进程退出关 master 的 SIGHUP 兜底；
-    /// SIGKILL 强杀 serve 无此路径（OS 语义，子进程孤儿化）。
+    /// serve 退出序的子进程策略(P3-06 Q86 具名移交、随本 Task serve 入口落地):
+    /// 优雅退出时**显式**杀掉全部在飞运行,不指望 master 关闭的隐式 SIGHUP——
+    /// 无视 SIGHUP 的子进程(`trap '' HUP`)不会死。按 task_id 走 kill_run:
+    /// pgid 来自 spawn 时捕获的 setsid 组长号(不再依赖 `tcgetpgrp`,它也答不出
+    /// 刚 spawn 那一刻的前台组);SIGKILL 强杀 serve 无此路径(OS 语义,子进程孤儿化)。
     pub fn kill_all_live(&self) {
         let ids: Vec<String> = {
-            let handles = self.registry.child_handles.lock();
+            let handles = self.registry.kill_targets.lock();
             handles.keys().map(|run| run.id().to_string()).collect()
         };
         for id in ids {
@@ -212,23 +208,82 @@ impl CliPtyExecutor {
     }
 }
 
-fn to_command_builder(plan: aeroric_core::agents::launch::LaunchPlan) -> CommandBuilder {
+fn apply_env_ops(c: &mut CommandBuilder, ops: &[EnvOp]) {
+    for op in ops {
+        match op {
+            EnvOp::Set(key, value) => c.env(key, value),
+            EnvOp::Unset(key) => c.env_remove(key),
+        }
+    }
+}
+
+/// 家族 plan 前后的 run-flow 环境层：terminal ops 必须先于 plan 的 env/unset
+/// （login-shell 合并可能带回 `PI_PROFILE`，而 OMP 的 plan 必须在合并之后
+/// 清除它），guard ops 必须最后（它们指向本次任务的 events 目录）。
+fn to_command_builder(
+    plan: aeroric_core::agents::launch::LaunchPlan,
+    pre_env_ops: &[EnvOp],
+    post_env_ops: &[EnvOp],
+) -> CommandBuilder {
     let mut c = CommandBuilder::new(&plan.program);
     c.args(&plan.args);
     if let Some(cwd) = &plan.cwd {
         c.cwd(cwd);
     }
+    apply_env_ops(&mut c, pre_env_ops);
     for (key, value) in &plan.env {
         c.env(key, value);
     }
     for key in &plan.unset_env {
         c.env_remove(key);
     }
+    apply_env_ops(&mut c, post_env_ops);
     c.set_controlling_tty(false);
     c
 }
 
 impl CliPtyExecutor {
+    /// run-flow 环境层：terminal ops + 可选 model env 在家族 plan 之前，
+    /// guard ops 在 plan 之后。events 目录取受管数据根（与 `--data-dir`
+    /// 一致）；任务 id 非法或路径非 UTF-8 时 guard ops 为空，不猜。
+    fn run_flow_env_ops(
+        &self,
+        task_id: &str,
+        agent: &str,
+        family: ProtocolFamily,
+        selected_model: Option<&str>,
+    ) -> (Vec<EnvOp>, Vec<EnvOp>) {
+        let mut pre = terminal_env_ops(get_login_shell_env());
+        if let Some(model) = selected_model {
+            match model.trim() {
+                "" => {}
+                model => {
+                    pre.push(EnvOp::Set(
+                        "AERORIC_AGENT_MODEL".to_string(),
+                        model.to_string(),
+                    ));
+                }
+            }
+        }
+        let event_dir = self
+            .context
+            .paths
+            .events_dir(task_id)
+            .ok()
+            .and_then(|path| path.to_str().map(str::to_string));
+        let post = if family == ProtocolFamily::Dsh {
+            Vec::new()
+        } else {
+            aeroric_guard_ops(
+                task_id,
+                agent,
+                family == ProtocolFamily::Codex,
+                event_dir.as_deref(),
+            )
+        };
+        (pre, post)
+    }
+
     /// plan 之后的装配全链（launch 与 resume 共用：openpty→activate→reader→exit）。
     /// 步骤次序只此一份——分叉出第二份装配就是第二个真相。
     fn spawn_plan_core(
@@ -239,8 +294,12 @@ impl CliPtyExecutor {
         generation: u64,
         terminal_size: Option<(u16, u16)>,
         family: ProtocolFamily,
+        agent: &str,
+        selected_model: Option<&str>,
     ) -> Execution<()> {
-        let command = to_command_builder(plan);
+        let (pre_env_ops, post_env_ops) =
+            self.run_flow_env_ops(task_id, agent, family, selected_model);
+        let command = to_command_builder(plan, &pre_env_ops, &post_env_ops);
         let pty_system = native_pty_system();
         let (cols, rows) = terminal_size.unwrap_or((120, 30));
         let pair = pty_system
@@ -595,6 +654,8 @@ impl TaskExecutor for CliPtyExecutor {
             request.generation,
             request.terminal_size,
             request.family,
+            &request.agent,
+            request.selected_model.as_deref(),
         )
     }
 
@@ -683,6 +744,8 @@ impl TaskExecutor for CliPtyExecutor {
             request.generation,
             request.terminal_size,
             request.family,
+            &request.agent,
+            request.selected_model.as_deref(),
         )
     }
 
@@ -733,5 +796,36 @@ impl RegistryLiveRuns {
 impl LiveRuns for RegistryLiveRuns {
     fn has_live_run(&self, task_id: &str) -> bool {
         self.registry.child_for(task_id).is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aeroric_core::agents::launch::LaunchPlan;
+
+    fn env_value(cmd: &CommandBuilder, key: &str) -> Option<String> {
+        cmd.get_env(key)
+            .map(|value| value.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn env_ops_run_before_plan_env_and_guard_ops_run_last() {
+        let plan = LaunchPlan::new("omp")
+            .env("PI_CODING_AGENT_DIR", "/managed/omp")
+            .unset_env("PI_PROFILE");
+        let pre = vec![
+            EnvOp::Set("PI_PROFILE".into(), "sota".into()),
+            EnvOp::Set("TERM".into(), "xterm-256color".into()),
+        ];
+        let post = vec![EnvOp::Set("AERORIC_TASK_ID".into(), "t1".into())];
+        let cmd = to_command_builder(plan, &pre, &post);
+        assert_eq!(env_value(&cmd, "PI_PROFILE"), None);
+        assert_eq!(
+            env_value(&cmd, "PI_CODING_AGENT_DIR"),
+            Some("/managed/omp".into())
+        );
+        assert_eq!(env_value(&cmd, "TERM"), Some("xterm-256color".into()));
+        assert_eq!(env_value(&cmd, "AERORIC_TASK_ID"), Some("t1".into()));
     }
 }
