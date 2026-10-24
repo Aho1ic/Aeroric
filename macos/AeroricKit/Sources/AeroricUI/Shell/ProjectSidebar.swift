@@ -1,13 +1,12 @@
 import SwiftUI
 
-/// Redesign 01 navigation spine (codeg "New chat" row + Agents-Anywhere
-/// project → session tree + DSH sizing). v3 draws codeg capsule rows; the
-/// `selection` binding owns the selected row; the column sits on the system sidebar material. Tool
-/// surfaces (Git, 数据库, IDE …) live in the bottom tools menu and ⌘K, never
-/// as permanent rows.
+/// Overhaul M1 navigation column: glass sidebar with codeg-style navigation
+/// (新会话 / 搜索 / 自动化 / 任务), the project → session tree with capsule
+/// hover, and a footer with settings and the connection state. Tool surfaces
+/// (Git, 数据库, IDE …) live in the toolbar's “更多” menu and ⌘K.
 ///
-/// Width policy (DSH `columns.ts`): 280pt default, 264–420pt drag range,
-/// 56pt icon rail when collapsed or when the window is narrower than 1024pt.
+/// Width policy: 260pt default, 220–420pt drag range, 56pt icon rail when
+/// collapsed or when the window is narrower than 1000pt.
 public struct ProjectSidebar: View {
     @Binding var selection: String?
     let items: [SidebarItem]
@@ -15,12 +14,16 @@ public struct ProjectSidebar: View {
     /// Collapsed = the 56pt icon rail, never a hidden column.
     let collapsed: Bool
     @Binding private var expandedProjects: Set<String>
+    private let phase: ConnectionPhaseSnapshot?
+    private let phaseText: String?
     private let onNewProjectTask: (String) -> Void
     private let onMoveSelection: (MoveCommandDirection) -> Void
+    private let onSearch: () -> Void
+    private let onOpenSettings: () -> Void
     /// Window-local status filter. Presentation only; never a host query.
     @State private var filter: SidebarStatusFilter = .all
 
-    public static let collapsedWidth: CGFloat = 56
+    public static let collapsedWidth: CGFloat = NativePanelGeometry.mainShell.railWidth
 
     public init(
         selection: Binding<String?>,
@@ -28,23 +31,31 @@ public struct ProjectSidebar: View {
         width: CGFloat,
         collapsed: Bool = false,
         expandedProjects: Binding<Set<String>> = .constant([]),
+        phase: ConnectionPhaseSnapshot? = nil,
+        phaseText: String? = nil,
         onNewProjectTask: @escaping (String) -> Void = { _ in },
-        onMoveSelection: @escaping (MoveCommandDirection) -> Void = { _ in }
+        onMoveSelection: @escaping (MoveCommandDirection) -> Void = { _ in },
+        onSearch: @escaping () -> Void = {},
+        onOpenSettings: @escaping () -> Void = {}
     ) {
         self._selection = selection
         self.items = items
         self.width = width
         self.collapsed = collapsed
         _expandedProjects = expandedProjects
+        self.phase = phase
+        self.phaseText = phaseText
         self.onNewProjectTask = onNewProjectTask
         self.onMoveSelection = onMoveSelection
+        self.onSearch = onSearch
+        self.onOpenSettings = onOpenSettings
     }
 
     private var workItems: [SidebarItem] {
         items.filter { $0.group == .work && $0.id != SessionNavigation.globalDraft }
     }
     private var projectItems: [SidebarItem] { items.filter { $0.group == .projects } }
-    private var toolItems: [SidebarItem] { items.filter { $0.group == .tools || $0.group == .system } }
+    private var shell: NativePanelGeometry.MainShell { NativePanelGeometry.mainShell }
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -56,48 +67,38 @@ public struct ProjectSidebar: View {
         }
         .frame(width: collapsed ? Self.collapsedWidth : width)
         .frame(maxHeight: .infinity)
-        .background(SidebarBackdrop().ignoresSafeArea())
+        .foregroundStyle(AeroricColor.text)
+        .background(Color.clear.glassSurface(.sidebar).ignoresSafeArea())
     }
 
     // MARK: Expanded
 
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            newSessionButton
-                .padding(.horizontal, 8)
-                .padding(.top, 6)
-                .padding(.bottom, 4)
+            navigation
+                .padding(.horizontal, AeroricSpace.m)
+                .padding(.top, AeroricSpace.s)
+                .padding(.bottom, AeroricSpace.xs)
             if items.isEmpty {
                 emptyContent
             } else {
-                // v3: custom capsule rows (codeg `h-8 rounded-full`) instead of
-                // the system List highlight. Selection stays in the binding;
-                // ↑/↓ still route through `onMoveSelection`.
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
-                        ForEach(workItems) { item in
-                            SidebarCapsuleRow(selected: selection == item.id,
-                                              height: NativePanelGeometry.mainShell.projectRowHeight,
-                                              action: { selection = item.id }) {
-                                SidebarRow(item: item)
-                            }
-                            .accessibilityIdentifier("sidebar.item.\(item.id)")
-                        }
                         projectsHeader
-                            .padding(.top, 10)
-                            .padding(.bottom, 2)
+                            .padding(.top, AeroricSpace.m)
                         if projectItems.isEmpty {
                             Text("尚未打开项目；文件 → 打开项目…")
-                                .font(AeroricFont.ui(AeroricFont.meta))
-                                .foregroundStyle(SessionPalette.muted)
-                                .padding(.horizontal, 10)
+                                .font(.system(size: AeroricType.secondary))
+                                .foregroundStyle(AeroricColor.textTertiary)
+                                .padding(.horizontal, AeroricSpace.m)
+                                .padding(.vertical, AeroricSpace.xs)
                         }
                         ForEach(projectItems) { project in
                             projectGroup(project)
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 8)
+                    .padding(.horizontal, AeroricSpace.m)
+                    .padding(.bottom, AeroricSpace.m)
                 }
                 .scrollIndicators(.never)
                 .focusable()
@@ -105,19 +106,38 @@ public struct ProjectSidebar: View {
                 .onMoveCommand(perform: onMoveSelection)
                 .accessibilityIdentifier("sidebar.list")
             }
-            if !toolItems.isEmpty {
-                Divider().opacity(0.5)
-                toolsMenu
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-            }
+            footer
         }
     }
 
-    private var newSessionButton: some View {
-        SidebarActionRow(systemImage: "square.and.pencil", title: "新建会话", shortcut: "⌘N",
-                         identifier: "sidebar.new-session") {
-            selection = SessionNavigation.globalDraft
+    private var navigation: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HoverCapsuleRow(selected: selection == SessionNavigation.globalDraft,
+                            height: shell.navigationRowHeight,
+                            action: { selection = SessionNavigation.globalDraft }) {
+                NavigationLabel(systemImage: "square.and.pencil", title: "新会话") { KeyChip("⌘N") }
+            }
+            .help("新会话（⌘N）")
+            .accessibilityIdentifier("sidebar.new-session")
+            HoverCapsuleRow(selected: false, height: shell.navigationRowHeight, action: onSearch) {
+                NavigationLabel(systemImage: "magnifyingglass", title: "搜索") { KeyChip("⌘K") }
+            }
+            .help("搜索与命令（⌘K）")
+            .accessibilityIdentifier("sidebar.search")
+            HoverCapsuleRow(selected: false, height: shell.navigationRowHeight, action: {}) {
+                NavigationLabel(systemImage: "bolt", title: "自动化") { ComingSoonBadge() }
+                    .opacity(0.55)
+            }
+            .disabled(true)
+            .help("自动化：即将支持")
+            .accessibilityIdentifier("sidebar.automations")
+            ForEach(workItems) { item in
+                HoverCapsuleRow(selected: selection == item.id, height: shell.navigationRowHeight,
+                                action: { selection = item.id }) {
+                    SidebarRow(item: item)
+                }
+                .accessibilityIdentifier("sidebar.item.\(item.id)")
+            }
         }
     }
 
@@ -128,22 +148,16 @@ public struct ProjectSidebar: View {
     }
 
     private var projectsHeader: some View {
-        HStack(spacing: 4) {
-            Text("项目")
-            Spacer(minLength: 0)
-            filterMenu
-        }
-        .font(AeroricFont.ui(AeroricFont.meta, weight: .medium))
-        .foregroundStyle(SessionPalette.muted)
-        .padding(.horizontal, 10)
-        .accessibilityIdentifier("sidebar.group.projects")
+        SectionHeader("项目") { filterMenu }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("sidebar.group.projects")
     }
 
     @ViewBuilder private func projectGroup(_ project: SidebarItem) -> some View {
         let expanded = expandedProjects.contains(project.id)
         let rows = sessions(of: project)
         ProjectRow(item: project, sessionCount: rows.count, expanded: expanded,
-                   selected: selection == project.id,
+                   selected: selection == project.id, height: shell.projectRowHeight,
                    onSelect: {
                        selection = project.id
                        expandedProjects.insert(project.id)
@@ -155,18 +169,18 @@ public struct ProjectSidebar: View {
             .accessibilityIdentifier("sidebar.item.\(project.id)")
         if expanded {
             ForEach(rows) { child in
-                SidebarCapsuleRow(selected: selection == child.id, height: 26,
-                                  action: { selection = child.id }) {
+                HoverCapsuleRow(selected: selection == child.id, height: shell.sessionRowHeight,
+                                action: { selection = child.id }) {
                     SessionRow(item: child)
                 }
-                .padding(.leading, 18)
+                .padding(.leading, AeroricSpace.l)
                 .accessibilityIdentifier("sidebar.item.\(child.id)")
             }
             if rows.isEmpty {
                 Text(filter == .all ? "还没有会话" : "没有符合筛选的会话")
-                    .font(AeroricFont.ui(AeroricFont.meta))
-                    .foregroundStyle(SessionPalette.muted)
-                    .padding(.leading, 38)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .padding(.leading, 36)
                     .frame(height: 24)
             }
         }
@@ -183,7 +197,7 @@ public struct ProjectSidebar: View {
         } label: {
             Image(systemName: filter == .all
                   ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
-                .foregroundStyle(filter == .all ? SessionPalette.muted : SessionPalette.accent)
+                .foregroundStyle(filter == .all ? AeroricColor.textTertiary : AeroricColor.accent)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -193,64 +207,71 @@ public struct ProjectSidebar: View {
         .accessibilityIdentifier("sidebar.filter")
     }
 
-    private var toolsMenu: some View {
-        Menu {
-            Picker("工具与服务", selection: $selection) {
-                ForEach(toolItems) { item in
-                    Label(item.title, systemImage: item.systemImage ?? "wrench.and.screwdriver")
-                        .tag(Optional(item.id))
-                }
+    private var footer: some View {
+        HStack(spacing: AeroricSpace.xs) {
+            Button(action: onOpenSettings) {
+                Label("设置", systemImage: "gearshape")
+                    .labelStyle(.titleAndIcon)
             }
-            .pickerStyle(.inline)
-        } label: {
-            if collapsed {
-                Image(systemName: "square.grid.2x2")
-                    .frame(maxWidth: .infinity, minHeight: 28)
-            } else {
-                Label("工具", systemImage: "square.grid.2x2")
-                    .font(AeroricFont.ui(AeroricFont.project))
-                    .foregroundStyle(SessionPalette.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+            .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+            .help("设置（⌘,）")
+            .accessibilityIdentifier("sidebar.settings")
+            Spacer(minLength: AeroricSpace.xs)
+            if let phase {
+                ConnectionIndicator(phase: phase, text: phaseText)
             }
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(collapsed ? .hidden : .visible)
-        .help("工具与服务（也可用 ⌘K）")
-        .accessibilityLabel("工具与服务")
-        .accessibilityIdentifier("sidebar.tools-menu")
+        .padding(.horizontal, AeroricSpace.m)
+        .frame(height: 40)
+        .overlay(alignment: .top) { HairlineDivider() }
     }
 
     // MARK: Rail
 
     private var railContent: some View {
         VStack(spacing: 0) {
-            NativeIconButton(systemImage: "square.and.pencil", label: "新建会话",
-                             identifier: "sidebar.new-session") {
-                selection = SessionNavigation.globalDraft
+            VStack(spacing: 2) {
+                railButton("square.and.pencil", "新会话", "sidebar.new-session") {
+                    selection = SessionNavigation.globalDraft
+                }
+                railButton("magnifyingglass", "搜索（⌘K）", "sidebar.search", action: onSearch)
             }
-            .padding(.top, 6)
+            .padding(.top, AeroricSpace.s)
             ScrollView {
                 VStack(spacing: 2) {
                     ForEach(workItems + projectItems) { item in
-                        SidebarCapsuleRow(selected: selection == item.id, height: 30, horizontalPadding: 0,
-                                          action: { selection = item.id }) {
+                        HoverCapsuleRow(selected: selection == item.id, height: 32, horizontalPadding: 0,
+                                        action: { selection = item.id }) {
                             RailRow(item: item)
                         }
                         .accessibilityIdentifier("sidebar.item.\(item.id)")
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.top, 6)
+                .padding(.horizontal, AeroricSpace.m)
+                .padding(.top, AeroricSpace.s)
             }
             .scrollIndicators(.never)
             .focusable()
             .focusEffectDisabled()
             .onMoveCommand(perform: onMoveSelection)
             .accessibilityIdentifier("sidebar.rail")
-            if !toolItems.isEmpty {
-                toolsMenu.padding(.horizontal, 4).padding(.vertical, 6)
-            }
+            railButton("gearshape", "设置", "sidebar.settings", action: onOpenSettings)
+                .padding(.bottom, AeroricSpace.s)
         }
+    }
+
+    private func railButton(_ systemImage: String, _ label: String, _ identifier: String,
+                            action: @escaping () -> Void) -> some View {
+        HoverCapsuleRow(selected: false, height: 32, horizontalPadding: 0, action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(width: 40)
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(identifier)
     }
 
     private var emptyContent: some View {
@@ -287,118 +308,70 @@ public enum SidebarStatusFilter: String, CaseIterable, Hashable, Sendable {
     }
 }
 
-/// codeg-style action row at the top of the sidebar. A standalone button,
-/// not a selection state: hover paints a subdued fill only.
-struct SidebarActionRow: View {
+/// Navigation row label: glyph, title, trailing accessory (key chip / badge).
+struct NavigationLabel<Trailing: View>: View {
     let systemImage: String
     let title: String
-    let shortcut: String?
-    let identifier: String
-    let action: () -> Void
-    @State private var hovered = false
+    @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .frame(width: 16)
-                    .foregroundStyle(SessionPalette.secondary)
-                Text(title)
-                    .foregroundStyle(SessionPalette.text)
-                Spacer(minLength: 4)
-                if let shortcut {
-                    Text(shortcut)
-                        .font(AeroricFont.ui(AeroricFont.meta))
-                        .foregroundStyle(SessionPalette.muted)
-                }
-            }
-            .font(AeroricFont.ui(AeroricFont.body, weight: .medium))
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .contentShape(Capsule(style: .continuous))
-            .background {
-                if hovered {
-                    Capsule(style: .continuous)
-                        .fill(SessionPalette.hover)
-                }
-            }
+        HStack(spacing: AeroricSpace.m) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .frame(width: 16)
+            Text(title)
+                .font(.system(size: AeroricType.body))
+                .foregroundStyle(AeroricColor.text)
+            Spacer(minLength: AeroricSpace.xs)
+            trailing()
         }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
-        .help("\(title)\(shortcut.map { "（\($0)）" } ?? "")")
-        .accessibilityIdentifier(identifier)
     }
 }
 
-/// Selectable capsule row (codeg sidebar `h-8 rounded-full`): no fill at
-/// rest, hover fill, stronger fill when selected.
-struct SidebarCapsuleRow<Label: View>: View {
-    let selected: Bool
-    let height: CGFloat
-    var horizontalPadding: CGFloat = 10
-    let action: () -> Void
-    @ViewBuilder let label: () -> Label
-    @State private var hovered = false
-
-    var body: some View {
-        Button(action: action) {
-            label()
-                .padding(.horizontal, horizontalPadding)
-                .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .leading)
-                .background {
-                    if selected || hovered {
-                        Capsule(style: .continuous)
-                            .fill(selected ? SessionPalette.selection : SessionPalette.hover)
-                    }
-                }
-                .contentShape(Capsule(style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
-/// Project row: disclosure chevron, folder glyph, name, session count and a
-/// hover "新建会话" button, all inside one flat capsule.
+/// Project row (DSH): the folder glyph turns into the disclosure chevron on
+/// hover; the session count gives way to a "新建会话" button.
 private struct ProjectRow: View {
     let item: SidebarItem
     let sessionCount: Int
     let expanded: Bool
     let selected: Bool
+    let height: CGFloat
     let onSelect: () -> Void
     let onToggle: () -> Void
     let onNewTask: () -> Void
     @State private var hovered = false
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: AeroricSpace.xs) {
             Button(action: onToggle) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(SessionPalette.muted)
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
-                    .frame(width: 16, height: 24)
-                    .contentShape(Rectangle())
+                Group {
+                    if hovered {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                    } else {
+                        Image(systemName: expanded ? "folder.fill" : "folder")
+                            .font(.system(size: 13))
+                    }
+                }
+                .foregroundStyle(AeroricColor.textSecondary)
+                .frame(width: 18, height: 22)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(expanded ? "收起 \(item.title)" : "展开 \(item.title)")
             Button(action: onSelect) {
-                HStack(spacing: 6) {
-                    Image(systemName: expanded ? "folder.fill" : "folder")
-                        .font(AeroricFont.ui(AeroricFont.project))
-                        .foregroundStyle(SessionPalette.secondary)
-                        .frame(width: 16)
+                HStack(spacing: AeroricSpace.s) {
                     Text(item.title)
-                        .font(AeroricFont.ui(AeroricFont.project, weight: .medium))
+                        .font(.system(size: AeroricType.body, weight: .medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 2)
                     if sessionCount > 0 && !hovered {
                         Text("\(sessionCount)")
-                            .font(AeroricFont.ui(AeroricFont.meta))
-                            .monospacedDigit()
-                            .foregroundStyle(SessionPalette.muted)
+                            .font(.system(size: AeroricType.caption).monospacedDigit())
+                            .foregroundStyle(AeroricColor.textTertiary)
                     }
                 }
                 .frame(maxHeight: .infinity)
@@ -410,9 +383,9 @@ private struct ProjectRow: View {
                 Button(action: onNewTask) {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(SessionPalette.secondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .frame(width: 22, height: 22)
-                        .background(Circle().fill(SessionPalette.selection))
+                        .background(Circle().fill(AeroricColor.hover))
                 }
                 .buttonStyle(.plain)
                 .help("在\(item.title)中新建会话")
@@ -420,13 +393,12 @@ private struct ProjectRow: View {
                 .accessibilityIdentifier("sidebar.new-task.\(item.id)")
             }
         }
-        .padding(.leading, 4)
-        .padding(.trailing, 4)
-        .frame(height: NativePanelGeometry.mainShell.projectRowHeight)
+        .padding(.horizontal, AeroricSpace.xs)
+        .frame(height: height)
         .background {
             if selected || hovered {
                 Capsule(style: .continuous)
-                    .fill(selected ? SessionPalette.selection : SessionPalette.hover)
+                    .fill(selected ? AeroricColor.selection : AeroricColor.hover)
             }
         }
         .onHover { hovered = $0 }
@@ -434,51 +406,47 @@ private struct ProjectRow: View {
     }
 }
 
-/// Session row: status dot, title, pin marker.
+/// Session row: agent glyph (who), title, relative time, status dot (what).
 private struct SessionRow: View {
     let item: SidebarItem
 
     var body: some View {
-        HStack(spacing: 8) {
-            SessionStatusDot(status: item.status)
+        HStack(spacing: AeroricSpace.s) {
+            AgentGlyph(agent: item.agent, size: 14)
             Text(item.title)
-                .font(AeroricFont.ui(AeroricFont.project))
+                .font(.system(size: AeroricType.body))
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 2)
             if item.pinned {
                 Image(systemName: "pin.fill")
                     .font(.system(size: 9))
-                    .foregroundStyle(SessionPalette.muted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityLabel("已置顶")
             }
+            if let updatedAt = item.updatedAt {
+                Text(RelativeTime.short(updatedAt))
+                    .font(.system(size: AeroricType.caption).monospacedDigit())
+                    .foregroundStyle(AeroricColor.textTertiary)
+            }
+            SessionStatusDot(status: item.status)
         }
         .help("\(item.title) · \(SessionStatusDot.label(item.status))")
     }
 }
 
-/// Small coloured dot for a host task status. Colour is never the only
-/// signal: the label is the accessibility value and tooltip.
+/// Status dot for a host task status (wire vocabulary). Forwards to the shared
+/// `StatusDot`; the label is the accessibility value and tooltip.
 public struct SessionStatusDot: View {
     let status: String?
     public init(status: String?) { self.status = status }
 
     public var body: some View {
-        Circle()
-            .fill(Self.color(status))
-            .frame(width: 6, height: 6)
-            .frame(width: 12)
-            .accessibilityLabel(Self.label(status))
+        StatusDot(ActivityState(wireStatus: status), label: Self.label(status))
     }
 
     public static func color(_ status: String?) -> Color {
-        switch status {
-        case "running", "pending", "detached": SessionPalette.teal
-        case "input_required": SessionPalette.amber
-        case "failed": Color.dsDanger
-        case "cancelled", "done": SessionPalette.muted
-        default: SessionPalette.edge
-        }
+        ActivityState(wireStatus: status).color
     }
 
     public static func label(_ status: String?) -> String {
@@ -495,28 +463,65 @@ public struct SessionStatusDot: View {
     }
 }
 
+/// Connection state in the sidebar footer: dot + short text.
+struct ConnectionIndicator: View {
+    let phase: ConnectionPhaseSnapshot
+    let text: String?
+
+    var body: some View {
+        HStack(spacing: AeroricSpace.xs) {
+            Circle().fill(Self.color(phase)).frame(width: 6, height: 6)
+            Text(Self.shortLabel(phase))
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+        }
+        .help(text ?? Self.shortLabel(phase))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("sidebar.connection")
+    }
+
+    static func color(_ phase: ConnectionPhaseSnapshot) -> Color {
+        switch DetailState.resolve(phase) {
+        case .loading: AeroricColor.warning
+        case .empty: AeroricColor.success
+        case .disconnected, .incompatible: AeroricColor.danger
+        }
+    }
+
+    static func shortLabel(_ phase: ConnectionPhaseSnapshot) -> String {
+        switch DetailState.resolve(phase) {
+        case .loading: "连接中"
+        case .empty: "已连接"
+        case .disconnected: "已断开"
+        case .incompatible: "不兼容"
+        }
+    }
+}
+
 /// One plain navigation row: leading glyph, truncating title, trailing count.
 struct SidebarRow: View {
     let item: SidebarItem
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: AeroricSpace.m) {
             if let systemImage = item.systemImage {
                 Image(systemName: systemImage)
-                    .font(AeroricFont.ui(AeroricFont.project))
+                    .font(.system(size: 13))
                     .frame(width: 16)
-                    .foregroundStyle(SessionPalette.secondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
             }
             Text(item.title)
-                .font(AeroricFont.ui(AeroricFont.project))
+                .font(.system(size: AeroricType.body))
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 4)
             if let badge = item.badge, badge > 0 {
                 Text("\(badge)")
-                    .font(AeroricFont.ui(AeroricFont.meta, weight: .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(SessionPalette.muted)
+                    .font(.system(size: AeroricType.caption, weight: .medium).monospacedDigit())
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .padding(.horizontal, 6)
+                    .frame(height: 16)
+                    .background(Capsule(style: .continuous).fill(AeroricColor.layer2))
             }
         }
         .help(item.title)
@@ -529,15 +534,15 @@ struct RailRow: View {
 
     var body: some View {
         Image(systemName: item.systemImage ?? "circle")
-            .font(.system(size: 15))
-            .foregroundStyle(SessionPalette.secondary)
+            .font(.system(size: 14))
+            .foregroundStyle(AeroricColor.textSecondary)
             .frame(maxWidth: .infinity, alignment: .center)
             .help(item.title)
             .accessibilityLabel(item.title)
     }
 }
 
-/// Shared empty-state anatomy: centred glyph, a title, and a next-step hint.
+/// Shared empty-state anatomy for panes. Forwards to `AeroricEmptyState`.
 public struct PaneEmptyState: View {
     let systemImage: String
     let title: String
@@ -550,20 +555,6 @@ public struct PaneEmptyState: View {
     }
 
     public var body: some View {
-        VStack(spacing: 6) {
-            Image(systemName: systemImage)
-                .font(.system(size: 22))
-                .foregroundStyle(SessionPalette.muted.opacity(0.7))
-                .padding(.bottom, 2)
-            Text(title)
-                .font(AeroricFont.ui(AeroricFont.body, weight: .medium))
-                .foregroundStyle(SessionPalette.secondary)
-            Text(hint)
-                .font(AeroricFont.ui(AeroricFont.meta))
-                .foregroundStyle(SessionPalette.muted)
-                .multilineTextAlignment(.center)
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        AeroricEmptyState(systemImage: systemImage, title: title, message: hint)
     }
 }

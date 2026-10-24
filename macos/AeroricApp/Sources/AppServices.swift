@@ -709,7 +709,8 @@ extension AppServices: WorkspaceStateProviding {
                     .map { task in
                         SidebarItem(id: SessionNavigation.task(task.id), title: task.title,
                                     systemImage: "bubble.left", group: .projects,
-                                    status: task.status, pinned: task.starred)
+                                    status: task.status, pinned: task.starred, agent: task.agent,
+                                    updatedAt: task.updatedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) })
                     }
             )
         }
@@ -731,16 +732,24 @@ extension AppServices: WorkspaceStateProviding {
         return count > 0 ? count : nil
     }
 
-    /// Global mirror counts, explicitly cached. Event completeness and
-    /// freshness are not established by the current typed API.
+    /// Why the status bar has no counts yet; nil once the mirror is loaded
+    /// (the counts speak for themselves then).
     var statusContext: String? {
         guard taskSnapshotReadState == .loaded else {
             if case .failed = taskSnapshotReadState { return "任务状态读取失败（保留缓存）" }
             return "任务状态尚未确认"
         }
-        let running = taskStore.tasks.filter { $0.status == "running" }.count
-        let input = taskStore.tasks.filter { $0.status == "input_required" }.count
-        return "缓存：运行中 \(running) · 待输入 \(input)"
+        return nil
+    }
+
+    /// Running / waiting counts from the cached task mirror. Event completeness
+    /// and freshness are not established by the current typed API.
+    var activityCounts: ActivityCounts? {
+        guard taskSnapshotReadState == .loaded else { return nil }
+        return ActivityCounts(
+            running: taskStore.tasks.filter { ["pending", "running", "detached"].contains($0.status) }.count,
+            waiting: taskStore.tasks.filter { $0.status == "input_required" }.count
+        )
     }
 
     var paletteCommands: [PaletteCommand] {

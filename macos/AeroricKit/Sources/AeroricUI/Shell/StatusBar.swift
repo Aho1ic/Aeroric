@@ -18,24 +18,28 @@ public struct StatusBar: View {
     let phase: ConnectionPhaseSnapshot
     let phaseText: String
     let environmentLabel: String
-    /// What the window is scoped to (project name, task count, …). The app
+    /// What the window is scoped to, or why counts are unavailable. The app
     /// formats it; the shell does not interpret it.
     let context: String?
+    /// Live running / waiting counts (overhaul M1); nil until the mirror loads.
+    let counts: ActivityCounts?
 
     public init(
         phase: ConnectionPhaseSnapshot,
         phaseText: String,
         environmentLabel: String,
-        context: String? = nil
+        context: String? = nil,
+        counts: ActivityCounts? = nil
     ) {
         self.phase = phase
         self.phaseText = phaseText
         self.environmentLabel = environmentLabel
         self.context = context
+        self.counts = counts
     }
 
     public var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: AeroricSpace.m) {
             Circle()
                 .fill(phaseIndicatorColor)
                 .frame(width: 6, height: 6)
@@ -43,25 +47,39 @@ public struct StatusBar: View {
             Text(phaseText)
                 .lineLimit(1)
                 .accessibilityIdentifier("statusbar.phase")
-            Spacer(minLength: 12)
+            Spacer(minLength: AeroricSpace.l)
             if let context, !context.isEmpty {
                 Text(context)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .accessibilityIdentifier("statusbar.context")
             }
+            if let counts {
+                countLabel(.running, "运行中", counts.running)
+                countLabel(.waiting, "待回应", counts.waiting)
+            }
             if isDiagnosticEnvironment {
                 Text(environmentLabel)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("statusbar.environment")
             }
         }
-        .font(AeroricFont.ui(AeroricFont.meta))
-        .foregroundStyle(SessionPalette.secondary)
-        .padding(.horizontal, 12)
+        .font(.system(size: AeroricType.caption))
+        .foregroundStyle(AeroricColor.textSecondary)
+        .padding(.horizontal, AeroricSpace.l)
         .frame(height: NativePanelGeometry.mainShell.statusBarHeight)
-        .background(SessionPalette.gutter)
-        // Redesign v3 (Orca 24pt strip): text only, on the gutter between panels.
+        .background(AeroricColor.canvas)
+        .overlay(alignment: .top) { HairlineDivider() }
+    }
+
+    private func countLabel(_ state: ActivityState, _ title: String, _ value: Int) -> some View {
+        HStack(spacing: AeroricSpace.xs) {
+            Circle().fill(value > 0 ? state.color : AeroricColor.textTertiary.opacity(0.5))
+                .frame(width: 6, height: 6)
+            Text("\(title) \(value)").monospacedDigit()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("statusbar.count.\(title)")
     }
 
     /// Same single rule as the bootstrap block (`DiagnosticEnvironment`):
@@ -73,12 +91,5 @@ public struct StatusBar: View {
         DiagnosticEnvironment.isDiagnostic(environmentLabel)
     }
 
-    private var phaseIndicatorColor: Color {
-        switch DetailState.resolve(phase) {
-        case .loading: Color.dsWarning
-        case .empty: Color.dsSuccess
-        case .disconnected: Color.dsDanger
-        case .incompatible: Color.dsDanger
-        }
-    }
+    private var phaseIndicatorColor: Color { ConnectionIndicator.color(phase) }
 }

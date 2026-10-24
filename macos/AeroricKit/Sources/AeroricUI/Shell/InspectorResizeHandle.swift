@@ -8,7 +8,7 @@ private struct MainShellInspectorWidthKey: EnvironmentKey {
 }
 
 public extension EnvironmentValues {
-    /// Stored auxiliary-panel width; 0 means "first opening" (0.45 of the window).
+    /// Stored auxiliary-panel width; 0 means "first opening" (the 320pt default).
     var mainShellInspectorWidth: Binding<Double>? {
         get { self[MainShellInspectorWidthKey.self] }
         set { self[MainShellInspectorWidthKey.self] = newValue }
@@ -16,7 +16,7 @@ public extension EnvironmentValues {
 }
 
 /// Drag handle for the auxiliary panel. Dragging left widens the panel.
-/// Clamped to 300pt…70% of the window; the budget still protects the centre.
+/// Clamped to 260–520pt; the budget still protects the centre.
 public struct InspectorResizeHandle: View {
     private let width: Binding<Double>?
     private let effectiveWidth: CGFloat
@@ -30,7 +30,9 @@ public struct InspectorResizeHandle: View {
     }
 
     public var body: some View {
+        // The column hairline, centred in a wider invisible drag strip.
         Color.clear
+            .overlay(alignment: .trailing) { HairlineDivider(.vertical) }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
             .onHover { inside in
@@ -44,7 +46,7 @@ public struct InspectorResizeHandle: View {
                         if dragStart == nil { dragStart = effectiveWidth }
                         let shell = NativePanelGeometry.mainShell
                         let next = (dragStart ?? effectiveWidth) - value.translation.width
-                        width.wrappedValue = Double(min(totalWidth * shell.maximumInspectorFraction,
+                        width.wrappedValue = Double(min(shell.maximumInspectorWidth,
                                                         max(shell.minimumInspectorWidth, next)))
                     }
                     .onEnded { _ in dragStart = nil }

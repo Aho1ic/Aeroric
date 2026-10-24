@@ -26,27 +26,33 @@ public enum NativePanelGeometry {
     /// tests keep the 18/8/8 values, while the approved shell uses the
     /// tighter 25/7/6 composition.
     public struct MainShell: Equatable, Sendable {
+        /// Overhaul M1: the three columns sit flush, split by hairlines that
+        /// double as drag handles (DSH frame). No gutters, no panel radius.
         public let panelRadius: CGFloat = 0
         public let horizontalInset: CGFloat = 0
         public let bottomInset: CGFloat = 0
         public let columnGap: CGFloat = 0
-        /// Redesign 01 (DSH `columns.ts`): 280 default, 264–420 drag range.
-        public let defaultSidebarWidth: CGFloat = 280
-        public let minimumSidebarWidth: CGFloat = 264
+        /// Width of the invisible drag strip that carries the hairline.
+        public let handleWidth: CGFloat = 6
+        /// Collapsed sidebar: the icon rail.
+        public let railWidth: CGFloat = 56
+        public let defaultSidebarWidth: CGFloat = 260
+        public let minimumSidebarWidth: CGFloat = 220
         public let maximumSidebarWidth: CGFloat = 420
         /// Below this window width the sidebar falls back to the icon rail.
-        public let sidebarAutoCollapseWidth: CGFloat = 1024
-        /// Inspector: never narrower than 300; first opening takes 0.45.
-        public let minimumInspectorWidth: CGFloat = 300
-        public let initialInspectorFraction: CGFloat = 0.45
-        public let maximumInspectorFraction: CGFloat = 0.7
+        public let sidebarAutoCollapseWidth: CGFloat = 1000
+        public let defaultInspectorWidth: CGFloat = 320
+        public let minimumInspectorWidth: CGFloat = 260
+        public let maximumInspectorWidth: CGFloat = 520
         /// The centre is protected: the inspector shrinks, then hides.
-        public let minimumCentreWidth: CGFloat = 400
-        public let minimumWindowWidth: CGFloat = 860
-        public let minimumWindowHeight: CGFloat = 560
+        public let minimumCentreWidth: CGFloat = 480
+        public let minimumWindowWidth: CGFloat = 900
+        public let minimumWindowHeight: CGFloat = 600
         public let defaultWindowWidth: CGFloat = 1280
         public let defaultWindowHeight: CGFloat = 820
-        public let projectRowHeight: CGFloat = 28
+        public let navigationRowHeight: CGFloat = 30
+        public let projectRowHeight: CGFloat = 30
+        public let sessionRowHeight: CGFloat = 28
         public let resourceRowHeight: CGFloat = 24
         public let statusBarHeight: CGFloat = 24
         public let terminalBarHeight: CGFloat = 32
@@ -83,16 +89,14 @@ public enum NativePanelGeometry {
     ) -> MainShellBudget {
         let shell = mainShell
         let auto = !sidebarCollapsed && totalWidth < shell.sidebarAutoCollapseWidth
-        let sidebar = (sidebarCollapsed || auto) ? ProjectSidebar.collapsedWidth : min(
+        let sidebar = (sidebarCollapsed || auto) ? shell.railWidth : min(
             shell.maximumSidebarWidth, max(shell.minimumSidebarWidth, preferredSidebarWidth)
         )
         var inspector: CGFloat = 0
         if inspectorVisible {
-            let wanted = preferredInspectorWidth ?? (totalWidth * shell.initialInspectorFraction).rounded()
-            let ceiling = totalWidth * shell.maximumInspectorFraction
-            let available = totalWidth - sidebar - shell.minimumCentreWidth
-            let target = min(ceiling, max(shell.minimumInspectorWidth, wanted))
-            let fitted = min(target, available)
+            let wanted = preferredInspectorWidth ?? shell.defaultInspectorWidth
+            let target = min(shell.maximumInspectorWidth, max(shell.minimumInspectorWidth, wanted))
+            let fitted = min(target, totalWidth - sidebar - shell.minimumCentreWidth)
             inspector = fitted >= shell.minimumInspectorWidth ? fitted.rounded(.down) : 0
         }
         let workspace = max(0, totalWidth - sidebar - inspector)

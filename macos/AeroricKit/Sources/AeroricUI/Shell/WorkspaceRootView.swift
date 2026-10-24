@@ -39,7 +39,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
     /// Dragged auxiliary-panel width; 0 = first opening (0.45 of the window).
     @SceneStorage("workspace.inspector-width") private var inspectorWidth: Double = 0
     @SceneStorage("workspace.expanded-projects") private var expandedProjectJSON = ""
-    @AppStorage("settings.surfacePreference") private var surfaceRawValue = SurfacePreference.glass.rawValue
+    @AppStorage(LegacySurfacePreview.storageKey) private var legacyPreviewStored = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Collapsed = the 56pt icon rail, never a hidden column.
     ///
@@ -66,39 +66,37 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
 
     public var body: some View {
         GeometryReader { geometry in
-            let gap = ShellRadius.panelGap
-            // Redesign v3: rounded floating panels on the gutter colour. The
-            // budget sees the width left after the three outer/inner gutters;
-            // the inspector's own gutter is part of its budgeted width.
+            // Overhaul M1: flush columns — glass sidebar, a hairline drag
+            // strip, then the opaque reading canvas (+ inspector inside it).
+            let handle = NativePanelGeometry.mainShell.handleWidth
             let budget = NativePanelGeometry.mainShellBudget(
-                totalWidth: max(0, geometry.size.width - 3 * gap), preferredSidebarWidth: sidebarWidth,
+                totalWidth: max(0, geometry.size.width - handle), preferredSidebarWidth: sidebarWidth,
                 inspectorVisible: inspectorVisible, sidebarCollapsed: sidebarCollapsed,
                 preferredInspectorWidth: inspectorWidth > 0 ? inspectorWidth : nil
             )
             let railShown = sidebarCollapsed || budget.sidebarAutoCollapsed
             HStack(spacing: 0) {
-                RoundedShellPanel(fill: SessionPalette.sidebar.opacity(0)) {
-                    ProjectSidebar(
-                        selection: navigationSelection, items: state.sidebarItems,
-                        width: budget.sidebarWidth, collapsed: railShown,
-                        expandedProjects: expandedProjects,
-                        onNewProjectTask: { navigationSelection.wrappedValue = SessionNavigation.draft(projectID: $0) },
-                        onMoveSelection: moveSidebarSelection
-                    )
-                }
+                ProjectSidebar(
+                    selection: navigationSelection, items: state.sidebarItems,
+                    width: budget.sidebarWidth, collapsed: railShown,
+                    expandedProjects: expandedProjects,
+                    phase: state.phaseSnapshot, phaseText: state.phaseText,
+                    onNewProjectTask: { navigationSelection.wrappedValue = SessionNavigation.draft(projectID: $0) },
+                    onMoveSelection: moveSidebarSelection,
+                    onSearch: { palettePresented = true },
+                    onOpenSettings: { onCommand(PaletteCommand(id: "settings.show", title: "设置…")) }
+                )
                 Group {
                     if railShown {
-                        Color.clear
+                        Color.clear.overlay(alignment: .leading) { HairlineDivider(.vertical) }
                     } else {
                         SidebarResizeHandle(width: $sidebarWidth, effectiveWidth: budget.sidebarWidth)
                     }
                 }
-                .frame(width: gap)
+                .frame(width: handle)
                 WorkspaceDetail(state: state, selection: navigationSelection, readyContent: readyContent)
                     .frame(width: max(0, budget.contentWidth))
             }
-            .padding(.horizontal, gap)
-            .padding(.bottom, gap)
             .environment(\.mainShellBudget, budget)
             .environment(\.mainShellNavigationEpoch, navigationEpoch)
             .environment(\.mainShellInspectorWidth, $inspectorWidth)
@@ -112,6 +110,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                 breadcrumb
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                moreToolsMenu
                 Toggle(isOn: $inspectorVisible) { Image(systemName: "sidebar.right") }
                     .toggleStyle(.button)
                     .help("辅助面板（详情 / 文件 / 改动 / Git 日志）")
@@ -123,20 +122,22 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                                  identifier: "workspace.new-session") { openDraft() }
             }
         }
-        .toolbarBackground(SessionPalette.gutter, for: .windowToolbar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             StatusBar(
                 phase: state.phaseSnapshot,
                 phaseText: state.phaseText,
                 environmentLabel: state.environmentLabel,
-                context: state.statusContext
+                context: state.statusContext,
+                counts: state.activityCounts
             )
         }
-        .background(SessionPalette.gutter.ignoresSafeArea())
-        .foregroundStyle(SessionPalette.text)
+        .background(AeroricColor.canvas.ignoresSafeArea())
+        .foregroundStyle(AeroricColor.text)
+        .environment(\.legacySurfacePreview,
+                     LegacySurfacePreview.isAvailable && (legacyPreviewStored || LegacySurfacePreview.launchEnabled))
         // Arrow handling stays on the sidebar List; editors retain their
         // own cursor keys.
-        .animation(reduceMotion ? nil : .easeInOut(duration: DSMotion.normal), value: sidebarCollapsed)
+        .animation(AeroricMotion.animation(AeroricMotion.slow, reduceMotion: reduceMotion), value: sidebarCollapsed)
         .font(AeroricFont.ui(AeroricFont.body))
         .frame(minWidth: NativePanelGeometry.mainShell.minimumWindowWidth,
                minHeight: NativePanelGeometry.mainShell.minimumWindowHeight)
@@ -186,11 +187,11 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
         return HStack(spacing: 6) {
             if let project {
                 Text(project.title)
-                    .foregroundStyle(SessionPalette.secondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .lineLimit(1)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(SessionPalette.muted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityHidden(true)
             }
             Text(title)
@@ -204,7 +205,34 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
         .frame(maxWidth: 360, alignment: .leading)
     }
 
-    private var surface: SurfacePreference { SurfacePreference(rawValue: surfaceRawValue) ?? .glass }
+    /// The 11 tool and system surfaces (Git, 数据库, IDE …): one toolbar menu
+    /// and ⌘K, never permanent sidebar rows.
+    private var moreToolsMenu: some View {
+        let tools = state.sidebarItems.filter { $0.group == .tools || $0.group == .system }
+        return Menu {
+            ForEach([SidebarGroup.tools, .system], id: \.self) { group in
+                let rows = tools.filter { $0.group == group }
+                if !rows.isEmpty {
+                    Section(group == .tools ? "工具" : "系统") {
+                        ForEach(rows) { item in
+                            Button {
+                                navigationSelection.wrappedValue = item.id
+                            } label: {
+                                Label(item.title, systemImage: item.systemImage ?? "wrench.and.screwdriver")
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "square.grid.2x2")
+        }
+        .menuIndicator(.hidden)
+        .help("工具与服务（也可用 ⌘K）")
+        .accessibilityLabel("工具与服务")
+        .accessibilityIdentifier("workspace.more-tools")
+    }
+
     private var navigationSelection: Binding<String?> {
         Binding(get: { selection }, set: {
             selection = $0
@@ -264,8 +292,9 @@ struct SidebarResizeHandle: View {
     @State private var dragStartWidth: CGFloat?
 
     var body: some View {
-        // Redesign v3: the gutter between rounded panels is the handle.
+        // The column hairline sits on the sidebar edge; the strip is the hit area.
         Color.clear
+            .overlay(alignment: .leading) { HairlineDivider(.vertical) }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
             .onHover { inside in

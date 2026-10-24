@@ -51,6 +51,7 @@ public struct AppearanceSettingsView: View {
     @AppStorage("settings.terminalFontSize") private var terminalFontSize = 13.0
     @AppStorage("settings.uiFontFamily") private var uiFontFamily = ""
     @AppStorage("settings.monoFontFamily") private var monoFontFamily = ""
+    @AppStorage(LegacySurfacePreview.storageKey) private var legacySurfacePreview = false
 
     public init() {}
 
@@ -64,6 +65,11 @@ public struct AppearanceSettingsView: View {
             Stepper("终端字号 \(Int(terminalFontSize))", value: $terminalFontSize, in: 8...32)
             TextField("界面字体", text: $uiFontFamily)
             TextField("等宽字体", text: $monoFontFamily)
+            if LegacySurfacePreview.isAvailable {
+                // DEBUG only: review the macOS 14–25 material fallback on a newer Mac.
+                Toggle("预览旧系统外观（调试）", isOn: $legacySurfacePreview)
+                    .accessibilityIdentifier("settings.debug.legacy-surface")
+            }
         }
         .padding(16)
         .accessibilityIdentifier("settings.appearance")

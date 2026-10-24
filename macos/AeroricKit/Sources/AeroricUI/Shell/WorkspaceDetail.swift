@@ -119,6 +119,10 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
     public var status: String?
     /// Host-authoritative star, shown as "置顶" in the sidebar.
     public var pinned: Bool
+    /// Agent that runs the session (`claude`, `codex`, …) for the row glyph.
+    public var agent: String?
+    /// Last activity, for the row's relative time.
+    public var updatedAt: Date?
 
     public init(
         id: String,
@@ -128,7 +132,9 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
         group: SidebarGroup = .projects,
         children: [SidebarItem]? = nil,
         status: String? = nil,
-        pinned: Bool = false
+        pinned: Bool = false,
+        agent: String? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -138,6 +144,8 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
         self.children = children
         self.status = status
         self.pinned = pinned
+        self.agent = agent
+        self.updatedAt = updatedAt
     }
 }
 
@@ -173,6 +181,22 @@ public protocol WorkspaceStateProviding: AnyObject {
     var statusContext: String? { get }
     /// Commands offered by the palette; ordering is the app's choice.
     var paletteCommands: [PaletteCommand] { get }
+    /// Live counts for the status bar; nil until the task mirror is loaded.
+    var activityCounts: ActivityCounts? { get }
+}
+
+public extension WorkspaceStateProviding {
+    var activityCounts: ActivityCounts? { nil }
+}
+
+/// Running / waiting-for-you counts shown in the status bar.
+public struct ActivityCounts: Equatable, Sendable {
+    public var running: Int
+    public var waiting: Int
+    public init(running: Int, waiting: Int) {
+        self.running = running
+        self.waiting = waiting
+    }
 }
 
 /// The four deliberately separate shell states (P4-04 Action 5): loading is
@@ -207,7 +231,6 @@ public enum DetailState: Equatable, Sendable {
 /// launch can never race a state transition.
 public struct WorkspaceDetail<State: WorkspaceStateProviding>: View {
     let state: State
-    @AppStorage("settings.surfacePreference") private var surfaceRawValue = SurfacePreference.glass.rawValue
     /// The window's selected sidebar item. Held as a **binding** because the
     /// ready-state content is built by the app from this selection — the
     /// shell owns the navigation spine, the app owns what a row means.
@@ -255,11 +278,10 @@ public struct WorkspaceDetail<State: WorkspaceStateProviding>: View {
         .frame(minWidth: 600, minHeight: 400)
     }
 
+    /// Overhaul M1: connection states sit on the opaque reading canvas.
     private var connectionPanel: some View {
-        GlassPanel(preference: SurfacePreference(rawValue: surfaceRawValue) ?? .glass,
-                   cornerRadius: NativePanelGeometry.mainShell.panelRadius) {
-            connectionContent
-        }
+        connectionContent
+            .background(AeroricColor.canvas)
     }
 
     @ViewBuilder private var connectionContent: some View {
@@ -278,10 +300,11 @@ public struct WorkspaceDetail<State: WorkspaceStateProviding>: View {
 
 private struct LoadingStateView: View {
     var body: some View {
-        VStack(spacing: 12) {
-            ProgressView()
+        VStack(spacing: AeroricSpace.l) {
+            ProgressView().controlSize(.small)
             Text("连接宿主中…")
-                .foregroundStyle(Color.dsTextSecondary)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .accessibilityIdentifier("detail.loading")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -290,18 +313,9 @@ private struct LoadingStateView: View {
 
 private struct EmptyStateView: View {
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "tray")
-                .font(.system(size: 32))
-                .foregroundStyle(Color.dsTextMuted)
-            Text("暂无项目")
-                .foregroundStyle(Color.dsTextSecondary)
-                .accessibilityIdentifier("detail.empty")
-            Text("通过菜单 文件 → 打开项目… 选择一个目录")
-                .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        AeroricEmptyState(systemImage: "folder.badge.plus", title: "暂无项目",
+                          message: "通过菜单 文件 → 打开项目… 选择一个目录，就可以开始新会话。",
+                          titleIdentifier: "detail.empty")
     }
 }
 
@@ -309,24 +323,10 @@ private struct DisconnectedStateView: View {
     let reason: String?
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "bolt.slash")
-                .font(.system(size: 32))
-                .foregroundStyle(Color.dsWarning)
-            Text("已断开")
-                .foregroundStyle(Color.dsText)
-                .accessibilityIdentifier("detail.disconnected")
-            if let reason {
-                Text(reason)
-                    .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
-                    .multilineTextAlignment(.center)
-            }
-            Text("宿主将自动重连；本窗口数据只读等待恢复")
-                .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        AeroricEmptyState(systemImage: "bolt.slash", title: "已断开",
+                          message: [reason, "宿主将自动重连；本窗口数据只读等待恢复"]
+                              .compactMap { $0 }.joined(separator: "\n"),
+                          tint: AeroricColor.warning, titleIdentifier: "detail.disconnected")
     }
 }
 
@@ -334,24 +334,10 @@ private struct IncompatibleStateView: View {
     let reason: String?
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 32))
-                .foregroundStyle(Color.dsDanger)
-            Text("协议不兼容")
-                .foregroundStyle(Color.dsText)
-                .accessibilityIdentifier("detail.incompatible")
-            if let reason {
-                Text(reason)
-                    .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
-                    .multilineTextAlignment(.center)
-            }
-            Text("请更新 Aeroric 以匹配宿主协议版本")
-                .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        AeroricEmptyState(systemImage: "exclamationmark.triangle", title: "协议不兼容",
+                          message: [reason, "请更新 Aeroric 以匹配宿主协议版本"]
+                              .compactMap { $0 }.joined(separator: "\n"),
+                          tint: AeroricColor.danger, titleIdentifier: "detail.incompatible")
     }
 }
 

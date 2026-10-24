@@ -3,21 +3,25 @@ import SwiftUI
 @testable import AeroricUI
 
 /// Arithmetic only: no hosting/window, defaults, client, agent or file I/O.
-/// Redesign 01 rules (DSH `columns.ts`): sidebar 280 (264–420), 56pt rail
-/// below 1024, inspector ≥300 and 0.45 of the window on first open, centre
-/// protected at 400 — the inspector shrinks, then hides.
+/// Overhaul M1 rules: flush columns, sidebar 260 (220–420), 56pt rail below
+/// 1000, inspector 320 by default (260–520), centre protected at 480 — the
+/// inspector shrinks, then hides.
 final class MainShellGeometryTests: XCTestCase {
     private let shell = NativePanelGeometry.mainShell
 
-    func testRedesignConstants() {
-        XCTAssertEqual(shell.defaultSidebarWidth, 280)
-        XCTAssertEqual(shell.minimumSidebarWidth, 264)
+    func testOverhaulConstants() {
+        XCTAssertEqual(shell.defaultSidebarWidth, 260)
+        XCTAssertEqual(shell.minimumSidebarWidth, 220)
         XCTAssertEqual(shell.maximumSidebarWidth, 420)
-        XCTAssertEqual(shell.sidebarAutoCollapseWidth, 1024)
-        XCTAssertEqual(shell.minimumInspectorWidth, 300)
-        XCTAssertEqual(shell.minimumCentreWidth, 400)
-        XCTAssertEqual(shell.minimumWindowWidth, 860)
-        XCTAssertEqual(shell.minimumWindowHeight, 560)
+        XCTAssertEqual(shell.sidebarAutoCollapseWidth, 1000)
+        XCTAssertEqual(shell.defaultInspectorWidth, 320)
+        XCTAssertEqual(shell.minimumInspectorWidth, 260)
+        XCTAssertEqual(shell.maximumInspectorWidth, 520)
+        XCTAssertEqual(shell.minimumCentreWidth, 480)
+        XCTAssertEqual(shell.minimumWindowWidth, 900)
+        XCTAssertEqual(shell.minimumWindowHeight, 600)
+        XCTAssertEqual(shell.columnGap, 0)
+        XCTAssertEqual(shell.panelRadius, 0)
         XCTAssertEqual(shell.statusBarHeight, 24)
         XCTAssertEqual(shell.terminalBarHeight, 32)
         XCTAssertEqual(shell.terminalInitialFraction, 0.28, accuracy: 0.0001)
@@ -25,13 +29,13 @@ final class MainShellGeometryTests: XCTestCase {
 
     func testReferenceWidths() {
         for (width, left, centre, right): (CGFloat, CGFloat, CGFloat, CGFloat) in [
-            (1280, 280, 424, 576),
-            (1260, 280, 413, 567),
-            (1024, 280, 400, 344),
-            (1000, 56, 494, 450),
-            (860, 56, 417, 387),
+            (1280, 260, 700, 320),
+            (1260, 260, 680, 320),
+            (1000, 260, 480, 260),
+            (990, 56, 614, 320),
+            (900, 56, 524, 320),
         ] {
-            let budget = NativePanelGeometry.mainShellBudget(totalWidth: width, preferredSidebarWidth: 280)
+            let budget = NativePanelGeometry.mainShellBudget(totalWidth: width, preferredSidebarWidth: 260)
             XCTAssertEqual(budget.sidebarWidth, left, "width \(width)")
             XCTAssertEqual(budget.workspaceWidth, centre, "width \(width)")
             XCTAssertEqual(budget.inspectorWidth, right, "width \(width)")
@@ -39,7 +43,7 @@ final class MainShellGeometryTests: XCTestCase {
     }
 
     func testNarrowWindowFallsBackToRailWithoutChangingPreference() {
-        let narrow = NativePanelGeometry.mainShellBudget(totalWidth: 1000, preferredSidebarWidth: 360)
+        let narrow = NativePanelGeometry.mainShellBudget(totalWidth: 990, preferredSidebarWidth: 360)
         XCTAssertTrue(narrow.sidebarAutoCollapsed)
         XCTAssertEqual(narrow.sidebarWidth, ProjectSidebar.collapsedWidth)
         let wide = NativePanelGeometry.mainShellBudget(totalWidth: 1400, preferredSidebarWidth: 360)
@@ -47,31 +51,35 @@ final class MainShellGeometryTests: XCTestCase {
         XCTAssertEqual(wide.sidebarWidth, 360, "the stored drag preference returns on widening")
     }
 
-    func testSidebarPreferenceIsClampedToDragRange() {
+    func testPreferencesAreClampedToTheirRanges() {
         XCTAssertEqual(NativePanelGeometry.mainShellBudget(
-            totalWidth: 1600, preferredSidebarWidth: 100).sidebarWidth, 264)
+            totalWidth: 1600, preferredSidebarWidth: 100).sidebarWidth, 220)
         XCTAssertEqual(NativePanelGeometry.mainShellBudget(
             totalWidth: 1600, preferredSidebarWidth: 900).sidebarWidth, 420)
+        XCTAssertEqual(NativePanelGeometry.mainShellBudget(
+            totalWidth: 2000, preferredSidebarWidth: 260, preferredInspectorWidth: 900).inspectorWidth, 520)
+        XCTAssertEqual(NativePanelGeometry.mainShellBudget(
+            totalWidth: 2000, preferredSidebarWidth: 260, preferredInspectorWidth: 100).inspectorWidth, 260)
     }
 
     func testInspectorHidesRatherThanSqueezingTheCentre() {
-        // 1024 with a 420 sidebar leaves 204pt: below the 300 floor, so hide.
-        let budget = NativePanelGeometry.mainShellBudget(totalWidth: 1024, preferredSidebarWidth: 420)
+        // 1100 with a 420 sidebar leaves 200pt beside a 480 centre: hide.
+        let budget = NativePanelGeometry.mainShellBudget(totalWidth: 1100, preferredSidebarWidth: 420)
         XCTAssertEqual(budget.inspectorWidth, 0)
-        XCTAssertEqual(budget.workspaceWidth, 604)
+        XCTAssertEqual(budget.workspaceWidth, 680)
     }
 
     func testClosedInspectorHasNoPhantomWidth() {
         let budget = NativePanelGeometry.mainShellBudget(
-            totalWidth: 1260, preferredSidebarWidth: 280, inspectorVisible: false)
+            totalWidth: 1260, preferredSidebarWidth: 260, inspectorVisible: false)
         XCTAssertEqual(budget.inspectorWidth, 0)
-        XCTAssertEqual(budget.workspaceWidth, 980)
+        XCTAssertEqual(budget.workspaceWidth, 1000)
         XCTAssertEqual(budget.contentWidth, budget.workspaceWidth)
     }
 
     func testEveryAllowedWidthPreservesInvariants() {
-        for width in stride(from: CGFloat(860), through: 2000, by: 20) {
-            for preference: CGFloat in [264, 280, 340, 420] {
+        for width in stride(from: CGFloat(900), through: 2000, by: 20) {
+            for preference: CGFloat in [220, 260, 340, 420] {
                 for visible in [false, true] {
                     for collapsed in [false, true] {
                         let budget = NativePanelGeometry.mainShellBudget(
@@ -81,8 +89,8 @@ final class MainShellGeometryTests: XCTestCase {
                         XCTAssertEqual(budget.sidebarWidth + budget.contentWidth, width, label)
                         XCTAssertGreaterThanOrEqual(budget.workspaceWidth, shell.minimumCentreWidth, label)
                         XCTAssertTrue(budget.inspectorWidth == 0
-                                      || budget.inspectorWidth >= shell.minimumInspectorWidth, label)
-                        XCTAssertLessThanOrEqual(budget.inspectorWidth, width * shell.maximumInspectorFraction, label)
+                                      || (shell.minimumInspectorWidth...shell.maximumInspectorWidth)
+                                          .contains(budget.inspectorWidth), label)
                         if collapsed { XCTAssertEqual(budget.sidebarWidth, 56, label) }
                         if !visible { XCTAssertEqual(budget.inspectorWidth, 0, label) }
                     }

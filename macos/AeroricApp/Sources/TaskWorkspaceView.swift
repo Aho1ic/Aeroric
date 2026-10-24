@@ -45,7 +45,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     /// the sidebar row model carries text, not view builders.
     var title: String {
         switch self {
-        case .tasks: "全部任务"
+        case .tasks: "任务"
         case .files: "文件"
         case .git: "Git"
         case .ide: "IDE"
@@ -166,21 +166,20 @@ struct TaskWorkspaceView: View {
         !usesFullWorkspace && (shellBudget?.inspectorWidth ?? 0) > 0
     }
 
-    /// Redesign v3: centre and auxiliary panel are separate rounded cards.
-    /// The auxiliary panel's budgeted width includes the gutter before it,
-    /// which doubles as its drag handle. It stays mounted while hidden so
-    /// its list identities survive a toggle.
+    /// Overhaul M1: the centre is the opaque reading canvas; the auxiliary
+    /// panel sits flush beside it behind a hairline drag strip, with a glass
+    /// tab strip over opaque content. Its budgeted width includes the strip.
+    /// It stays mounted while hidden so its list identities survive a toggle.
     private var layout: some View {
         HStack(spacing: 0) {
-            RoundedShellPanel(fill: SessionPalette.canvas) {
-                VStack(spacing: 0) {
-                    previewNavigation
-                    centralContent
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                previewNavigation
+                centralContent
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(AeroricColor.canvas)
             if let shellBudget {
-                let gap = ShellRadius.panelGap
+                let gap = NativePanelGeometry.mainShell.handleWidth
                 let panelWidth = max(0, (shellBudget.inspectorWidth > 0
                     ? shellBudget.inspectorWidth : NativePanelGeometry.mainShell.minimumInspectorWidth) - gap)
                 InspectorResizeHandle(width: inspectorWidthPreference,
@@ -188,12 +187,11 @@ struct TaskWorkspaceView: View {
                                       totalWidth: shellBudget.totalWidth)
                     .frame(width: showsAuxiliary ? gap : 0)
                     .allowsHitTesting(showsAuxiliary)
-                RoundedShellPanel(fill: SessionPalette.card) {
-                    auxiliaryPanel
-                        .frame(width: panelWidth)
-                        .frame(maxHeight: .infinity)
-                }
-                .frame(width: showsAuxiliary ? panelWidth : 0)
+                auxiliaryPanel
+                    .frame(width: panelWidth)
+                    .frame(maxHeight: .infinity)
+                    .background(AeroricColor.layer1)
+                    .frame(width: showsAuxiliary ? panelWidth : 0)
                 .clipped()
                 .opacity(showsAuxiliary ? 1 : 0)
                 .allowsHitTesting(showsAuxiliary)
@@ -303,10 +301,11 @@ struct TaskWorkspaceView: View {
             }
             .padding(.horizontal, 8)
             .frame(height: 40)
+            .glassSurface(.tabStrip)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("辅助面板")
             .accessibilityIdentifier("auxiliary.tabs")
-            Rectangle().fill(SessionPalette.edge).frame(height: 1)
+            HairlineDivider()
             ZStack {
                 auxiliaryDetails
                     .opacity(auxiliaryTab == .details ? 1 : 0)
