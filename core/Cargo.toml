@@ -1,16 +1,19 @@
 [workspace]
-# Independent Rust workspace: src-tauri/, remote-protocol/ and remote-relay/ keep
-# their own manifests and lock files on purpose, so release output paths under
-# src-tauri/target/ do not shift.
+# Independent Rust workspace: remote-protocol/, remote-push/ and remote-relay/
+# keep their own manifests and lock files on purpose.
 resolver = "2"
 members = ["crates/aeroric-protocol", "crates/aeroric-core", "crates/aeroric-host", "crates/aeroric-cli"]
+# Vendored path crates live under core/vendor/; keep them out of the workspace so
+# their own dev-dependencies never enter Cargo.lock.
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.93"
 authors = ["Aeroric"]
-license = "MIT"
+license-file = "../LICENSE"
+publish = false
 repository = "https://github.com/Aeroric/Aeroric"
 
 [workspace.dependencies]
@@ -23,16 +26,15 @@ thiserror = "2"
 tokio = { version = "1", features = ["sync", "macros", "rt", "rt-multi-thread", "time", "process", "io-util", "net", "fs", "signal", "io-std"] } # signal/io-std：aeroric-cli serve 的优雅关停与 attach 的 stdin/stdout 中继（P3-07）
 base64 = "0.22"
 parking_lot = "0.12"
-portable-pty = { path = "../src-tauri/vendor/portable-pty" }
+portable-pty = { path = "vendor/portable-pty" }
 
 # This workspace root is the patch owner for everything it resolves; patches
 # declared in a member crate are silently ignored by Cargo, so the mapping lives
-# here and scripts/native/check-patches.mjs keeps it in sync with src-tauri.
-# Paths are relative to core/, hence ../src-tauri/... and ../../dbx/...
+# here. Vendored crates live in core/vendor/; dbx is a sibling repository.
 [patch.crates-io]
-portable-pty = { path = "../src-tauri/vendor/portable-pty" }
-ssfmt = { path = "../src-tauri/vendor/ssfmt" }
-notify-types = { path = "../src-tauri/vendor/notify-types" }
+portable-pty = { path = "vendor/portable-pty" }
+ssfmt = { path = "vendor/ssfmt" }
+notify-types = { path = "vendor/notify-types" }
 mysql_async = { git = "https://github.com/zipg/mysql_async.git", rev = "4a9e60a62f5a48e35ef9ccc9fc8277d5012b19dd" }
 tokio-postgres = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "ac8ad476de59093d33ab9f294531c956e0c6a724" }
 postgres-types = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "ac8ad476de59093d33ab9f294531c956e0c6a724" }
