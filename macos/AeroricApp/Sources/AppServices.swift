@@ -55,6 +55,8 @@ final class AppServices {
     let legacyCleanupStore = LegacyCleanupStore()
     /// Imported Claude/Codex sessions (M4); gated on the host's `imports` capability.
     let importBook = ImportBook()
+    /// Canvas boards and node layout (M5); gated on the host's `canvas` capability.
+    let canvasBook = CanvasBook()
     /// AP7:外部协议只读状态(OAuth/沙箱/工具/媒体/语音)。
     let externalProtocolStore = ExternalProtocolStore()
     /// P5-01/P5-02：模式控制器（迁移默认按旧客户端存在性）。
@@ -185,6 +187,10 @@ final class AppServices {
                     self.importBook.attach(
                         client: ImportsClient(connection: connection),
                         capabilityEnabled: advertised[ImportsClient.capability] == true
+                    )
+                    self.canvasBook.attach(
+                        client: CanvasClient(connection: connection),
+                        capabilityEnabled: advertised[CanvasClient.capability] == true
                     )
                 }
                 // AP7:能力探测走宿主真值。没有适配器面时 `capabilities()` 抛错,
@@ -694,7 +700,8 @@ extension AppServices: WorkspaceStateProviding {
     /// ordering is the hierarchy the flat 12-segment strip could not express
     /// (see `WorkspaceSection`).
     var sidebarItems: [SidebarItem] {
-        let sections = WorkspaceSection.allCases.map { section in
+        // The canvas row appears only when the host can store boards.
+        let sections = WorkspaceSection.allCases.filter { $0 != .canvas || canvasBook.isAvailable }.map { section in
             SidebarItem(
                 id: section.sidebarID,
                 title: section.title,

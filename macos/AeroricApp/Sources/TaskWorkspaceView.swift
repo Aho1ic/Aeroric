@@ -29,6 +29,7 @@ import SwiftUI
 /// the hierarchy the flat strip had lost.
 enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     case tasks
+    case canvas
     case files
     case git
     case ide
@@ -46,6 +47,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     var title: String {
         switch self {
         case .tasks: "任务"
+        case .canvas: "画布"
         case .files: "文件"
         case .git: "Git"
         case .ide: "IDE"
@@ -69,6 +71,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     var systemImage: String {
         switch self {
         case .tasks: "checklist"
+        case .canvas: "square.on.square.dashed"
         case .files: "folder"
         case .git: "arrow.triangle.branch"
         case .ide: "ladybug"
@@ -91,7 +94,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     /// Agent tools gets real data today; the rest explain what they will do.
     var status: ToolSectionStatus {
         switch self {
-        case .tasks: .wired
+        case .tasks, .canvas: .wired
         case .files: .comingSoon("浏览、搜索与编辑项目文件。当前请用右侧面板的“文件”只读浏览。")
         case .git: .comingSoon("暂存、提交、分支、worktree 与历史。当前请用右侧面板的“改动”查看 diff。")
         case .ide: .comingSoon("问题列表、符号大纲与调试会话。")
@@ -108,7 +111,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
 
     var group: SidebarGroup {
         switch self {
-        case .tasks: .work
+        case .tasks, .canvas: .work
         case .files, .git, .ide, .database, .notebook, .agentTools: .tools
         case .connections, .infrastructure, .extensions, .remote, .operations: .system
         }
@@ -495,6 +498,15 @@ struct TaskWorkspaceView: View {
                     .allowsHitTesting(!previewActive)
                     .disabled(previewActive)
                     .accessibilityHidden(previewActive)
+            } else if activeSection == .canvas {
+                CanvasPage(
+                    book: services.canvasBook, resolver: canvasResolver,
+                    onOpenSession: { selection = $0 },
+                    onOpenFile: { projectID, path in openPreview(.init(projectID: projectID, path: path, kind: .file)) }
+                )
+                .opacity(previewActive ? 0 : 1)
+                .allowsHitTesting(!previewActive)
+                .accessibilityHidden(previewActive)
             } else if activeSection != .tasks {
                 ToolSectionScaffold(
                     title: activeSection.title, systemImage: activeSection.systemImage,
@@ -526,6 +538,23 @@ struct TaskWorkspaceView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// What canvas cards point at, looked up in this window's stores (M5).
+    private var canvasResolver: CanvasResolver {
+        CanvasResolver(
+            task: { id in services.taskStore.tasks.first { $0.id == id } },
+            imported: { id in services.importBook.session(id: id) },
+            projects: { services.taskStore.projects },
+            allTasks: { TaskBoard.sorted(services.taskStore.tasks.filter { !$0.archived }) },
+            allImported: { services.importBook.sessions },
+            readFile: { projectID, path in
+                guard let reader = services.projectResourceReader else {
+                    return .failure(AppServices.ProjectError.notConnected)
+                }
+                do { return .success(try await reader.text(projectID: projectID, path: path)) } catch { return .failure(error) }
+            }
+        )
     }
 
     private var draftScope: SessionDraftScope? { SessionNavigation.draftScope(selection) }
@@ -824,8 +853,8 @@ struct TaskWorkspaceView: View {
     @ViewBuilder
     private var sectionContent: some View {
         switch activeSection {
-        case .tasks:
-            EmptyView() // The persistent taskContent is mounted once above.
+        case .tasks, .canvas:
+            EmptyView() // Mounted directly by centralContent.
         case .files:
             HSplitView {
                 FileBrowserView(store: services.fileTreeStore)
