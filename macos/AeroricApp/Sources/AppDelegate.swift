@@ -1,4 +1,5 @@
 import AppKit
+import AeroricUI
 
 /// Window lifecycle policy for the preview app (P4-01 Action 6, real
 /// multi-window behaviour P4-04):
@@ -24,6 +25,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// Light / dark / system from Settings → 外观 (M3), before any window shows.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        AppTheme.applyStored()
     }
 
     /// Default reopen handling (P4-01 policy): returning true lets SwiftUI's

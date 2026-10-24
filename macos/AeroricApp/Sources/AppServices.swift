@@ -763,4 +763,6 @@ extension AppServices: WorkspaceStateProviding {
 
 extension AppServices: SettingsStateProviding {
     var legacyCleanup: LegacyCleanupStore? { legacyCleanupStore }
+    var settingsInteractionMode: InteractionModeController? { interactionModeController }
+    var connectionPhaseText: String? { phaseText }
 }

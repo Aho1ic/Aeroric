@@ -1,270 +1,310 @@
+import AppKit
 import SwiftUI
 
-/// P5-05 Action 1：设置视图集（Action 1 七视图）。每项设置映射到
-/// SettingsStore 的 panelRegistry（G11）；分 UI-only（@AppStorage 合法）
-/// 与 shared business（SettingsStore 分界——shared 走调用方提交 core 配置，
-/// 不用 @AppStorage 另存一份）。
-public struct GeneralSettingsView: View {
-    /// UI-only 偏好（窗口尺寸等；UserDefaults 合法）。
-    @AppStorage("settings.taskDisplayWindow") private var taskDisplayWindow = false
-    @AppStorage("settings.attentionBadge") private var attentionBadge = true
-    @AppStorage("settings.sftpLocalDefaultPath") private var sftpLocalDefaultPath = ""
-    /// shared business 示例（DSH web search）：经调用方提交，本地只镜像。
-    public var onSharedSave: ((_ panelID: String, _ value: String) -> Void)?
-    @State private var dshWebSearchEnabled = false
-    @State private var saveError: String?
+// Settings building blocks (M3). Only settings that something actually reads
+// live here; unwired ones were removed rather than shown as working (D4).
 
-    public init(onSharedSave: ((_ panelID: String, _ value: String) -> Void)? = nil) {
-        self.onSharedSave = onSharedSave
+/// Settings window navigation.
+public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
+    case general, appearance, agents, connection, legacyCleanup, about
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .general: "通用"
+        case .appearance: "外观"
+        case .agents: "Agents"
+        case .connection: "连接"
+        case .legacyCleanup: "旧版 Agent 清理"
+        case .about: "关于"
+        }
+    }
+
+    public var systemImage: String {
+        switch self {
+        case .general: "gearshape"
+        case .appearance: "paintpalette"
+        case .agents: "cpu"
+        case .connection: "bolt.horizontal"
+        case .legacyCleanup: "trash"
+        case .about: "info.circle"
+        }
+    }
+}
+
+/// App-wide light / dark / system choice, applied through `NSApp.appearance`
+/// so every window (main, settings, sheets) follows it.
+public enum AppTheme: String, CaseIterable, Identifiable, Sendable {
+    case system, light, dark
+
+    public static let storageKey = "settings.themeMode"
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .system: "跟随系统"
+        case .light: "浅色"
+        case .dark: "深色"
+        }
+    }
+
+    public var appearance: NSAppearance? {
+        switch self {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
+
+    public static var stored: AppTheme {
+        UserDefaults.standard.string(forKey: storageKey).flatMap(AppTheme.init(rawValue:)) ?? .system
+    }
+
+    @MainActor public static func applyStored() {
+        NSApp.appearance = stored.appearance
+    }
+}
+
+/// Rounded card grouping settings rows, separated by hairlines.
+public struct SettingsCard<Content: View>: View {
+    let title: String?
+    let content: Content
+
+    public init(_ title: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
     }
 
     public var body: some View {
-        Form {
-            Toggle("任务完成时弹出显示窗口", isOn: $taskDisplayWindow)
-            Toggle("未读提醒角标", isOn: $attentionBadge)
-            TextField("SFTP 本地默认路径", text: $sftpLocalDefaultPath)
-            Toggle("DSH 联网搜索", isOn: Binding(
-                get: { dshWebSearchEnabled },
-                set: { newValue in
-                    if let error = SettingsStore.validateSave(panelID: "general", value: "") {
-                        saveError = error
-                        return
-                    }
-                    dshWebSearchEnabled = newValue
-                    onSharedSave?("general", newValue ? "enabled" : "disabled")
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            if let title {
+                Text(title)
+                    .font(AeroricType.sectionLabel())
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .padding(.leading, AeroricSpace.xs)
+            }
+            // Each row draws a top hairline; the first one sits on the card
+            // edge and is hidden by the clip, so rows read as separated.
+            VStack(spacing: 0) { content }
+                .padding(.top, -1)
+                .background(AeroricColor.layer1)
+                .clipShape(AeroricRadius.shape(AeroricRadius.m))
+                .overlay { AeroricRadius.shape(AeroricRadius.m).strokeBorder(AeroricColor.separator1, lineWidth: 1) }
+        }
+    }
+}
+
+/// Title and grey explanation on the left, the control on the right.
+public struct SettingsRow<Control: View>: View {
+    let title: String
+    let detail: String?
+    let control: Control
+
+    public init(_ title: String, detail: String? = nil, @ViewBuilder control: () -> Control) {
+        self.title = title
+        self.detail = detail
+        self.control = control()
+    }
+
+    public var body: some View {
+        HStack(alignment: .center, spacing: AeroricSpace.xl) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: AeroricType.body))
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            ))
+            }
+            Spacer(minLength: AeroricSpace.l)
+            control
+        }
+        .padding(.horizontal, AeroricSpace.l)
+        .padding(.vertical, AeroricSpace.m + 2)
+        .frame(minHeight: 44)
+        .overlay(alignment: .top) { HairlineDivider().padding(.leading, AeroricSpace.l) }
+    }
+}
+
+// MARK: - Panes
+
+struct GeneralSettingsPane: View {
+    let controller: InteractionModeController?
+    let fallbackMode: Binding<InteractionMode>?
+    let onFallbackSave: ((InteractionMode) -> Void)?
+    let fallbackError: String?
+
+    private var mode: InteractionMode { controller?.mode ?? fallbackMode?.wrappedValue ?? .native }
+    private var saveError: String? { controller?.lastSaveError ?? fallbackError }
+
+    var body: some View {
+        SettingsCard("交互") {
+            SettingsRow("高级终端模式",
+                        detail: "开启后终端与原生面板并存。只改变呈现，不改变底层 Agent，也不会重启或取消运行中的任务。") {
+                Toggle("高级终端模式", isOn: Binding(
+                    get: { mode.toggleIsOn },
+                    set: { on in save(InteractionMode(toggleIsOn: on)) }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .accessibilityIdentifier("settings.general.interaction-mode")
+            }
             if let saveError {
-                Text(saveError)
-                    .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                Text("保存失败，已回滚：\(saveError)")
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.danger)
+                    .padding(AeroricSpace.l)
+                    .accessibilityIdentifier("settings.general.interaction-mode-error")
             }
         }
-        .padding(16)
-        .accessibilityIdentifier("settings.general")
+    }
+
+    private func save(_ newMode: InteractionMode) {
+        if let controller {
+            controller.setMode(newMode)
+        } else {
+            fallbackMode?.wrappedValue = newMode
+            onFallbackSave?(newMode)
+        }
     }
 }
 
-/// 外观设置（theme/fonts：UI-only，@AppStorage 合法）。
-public struct AppearanceSettingsView: View {
-    @AppStorage("settings.themeMode") private var themeMode = "system"
-    @AppStorage("settings.terminalFontSize") private var terminalFontSize = 13.0
-    @AppStorage("settings.uiFontFamily") private var uiFontFamily = ""
-    @AppStorage("settings.monoFontFamily") private var monoFontFamily = ""
+struct AppearanceSettingsPane: View {
+    @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
+    @AppStorage("settings.surfacePreference") private var surfaceRaw = SurfacePreference.glass.rawValue
     @AppStorage(LegacySurfacePreview.storageKey) private var legacySurfacePreview = false
+    private let scale = AeroricTypeScale.shared
 
-    public init() {}
-
-    public var body: some View {
-        Form {
-            Picker("主题", selection: $themeMode) {
-                Text("跟随系统").tag("system")
-                Text("浅色").tag("light")
-                Text("深色").tag("dark")
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.xl) {
+            SettingsCard("主题") {
+                SettingsRow("外观", detail: "浅色、深色，或跟随系统设置。") {
+                    Picker("外观", selection: $themeRaw) {
+                        ForEach(AppTheme.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .accessibilityIdentifier("settings.appearance.theme")
+                }
+                SettingsRow("材质", detail: "玻璃：侧栏、工具栏和浮层使用系统玻璃效果。经典：全部不透明。系统“降低透明度”开启时总是不透明。") {
+                    Picker("材质", selection: $surfaceRaw) {
+                        Text("玻璃").tag(SurfacePreference.glass.rawValue)
+                        Text("经典").tag(SurfacePreference.classic.rawValue)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .accessibilityIdentifier("settings.appearance.surface")
+                }
             }
-            Stepper("终端字号 \(Int(terminalFontSize))", value: $terminalFontSize, in: 8...32)
-            TextField("界面字体", text: $uiFontFamily)
-            TextField("等宽字体", text: $monoFontFamily)
+            SettingsCard("字号") {
+                sizeRow(.text, title: "正文", detail: "界面与对话文字")
+                sizeRow(.code, title: "代码", detail: "代码、diff 与工具调用详情")
+                sizeRow(.terminal, title: "终端", detail: "内嵌终端")
+            }
             if LegacySurfacePreview.isAvailable {
-                // DEBUG only: review the macOS 14–25 material fallback on a newer Mac.
-                Toggle("预览旧系统外观（调试）", isOn: $legacySurfacePreview)
-                    .accessibilityIdentifier("settings.debug.legacy-surface")
+                SettingsCard("调试") {
+                    SettingsRow("预览旧系统外观", detail: "在 macOS 26 上强制使用 macOS 14–25 的材质回退，仅调试构建可见。") {
+                        Toggle("预览旧系统外观", isOn: $legacySurfacePreview)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .accessibilityIdentifier("settings.debug.legacy-surface")
+                    }
+                }
             }
         }
-        .padding(16)
-        .accessibilityIdentifier("settings.appearance")
+        .onChange(of: themeRaw) { _, _ in AppTheme.applyStored() }
+    }
+
+    private func sizeRow(_ kind: AeroricTypeScale.Kind, title: String, detail: String) -> some View {
+        SettingsRow(title, detail: "\(detail) · 当前 \(Int(kind.size(scale.step(for: kind)))) pt") {
+            Picker(title, selection: Binding(get: { scale.step(for: kind) }, set: { scale.set($0, for: kind) })) {
+                ForEach(AeroricTypeScale.Step.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .accessibilityIdentifier("settings.appearance.size.\(kind.rawValue)")
+        }
     }
 }
 
-/// Agent 设置（all-agent-configs：shared business，经调用方提交 core）。
-public struct AgentSettingsView: View {
-    public var agents: [SettingsCapabilityAgent]
-    public var onSharedSave: ((_ panelID: String, _ value: String) -> Void)?
-
-    public init(
-        agents: [SettingsCapabilityAgent] = [],
-        onSharedSave: ((_ panelID: String, _ value: String) -> Void)? = nil
-    ) {
-        self.agents = agents
-        self.onSharedSave = onSharedSave
-    }
-
-    public var body: some View {
-        List {
-            ForEach(agents, id: \.id) { agent in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(agent.id)
-                    Text(agent.family)
-                        .font(.caption)
-                        .foregroundStyle(Color.dsTextMuted)
+struct AgentsSettingsPane: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.xl) {
+            SettingsCard("内置 Agent") {
+                ForEach(NativeHarnessPicker.harnesses) { harness in
+                    SettingsRow(harness.title, detail: "协议族：\(harness.id)") {
+                        AgentGlyph(agent: harness.id, size: 18)
+                    }
                 }
-                .accessibilityIdentifier("settings.agent.\(agent.id)")
+            }
+            SettingsCard {
+                SettingsRow("管理 Agent 配置", detail: "模型、权限与密钥的配置目录由宿主提供；在这里编辑尚未接通。") {
+                    ComingSoonBadge()
+                }
             }
         }
         .accessibilityIdentifier("settings.agents")
     }
 }
 
-/// Agent 条目（四族别名＋自定义档案；SettingsCapability.familyOf 判定）。
-public struct SettingsCapabilityAgent: Identifiable, Equatable, Sendable {
-    public var id: String
-    public var family: String
-    public var isCustom: Bool
+struct ConnectionSettingsPane<State: SettingsStateProviding>: View {
+    let state: State
 
-    public init(id: String, family: String, isCustom: Bool = false) {
-        self.id = id
-        self.family = family
-        self.isCustom = isCustom
+    var body: some View {
+        SettingsCard("宿主") {
+            SettingsRow("连接状态") {
+                Text(state.connectionPhaseText ?? "未知")
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .accessibilityIdentifier("settings.connection.phase")
+            }
+            SettingsRow("协议版本") {
+                Text(state.protocolVersionText)
+                    .font(.system(size: AeroricType.secondary, design: .monospaced))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .accessibilityIdentifier("settings.protocol")
+            }
+            SettingsRow("环境") {
+                Text(state.environmentLabel)
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .accessibilityIdentifier("settings.environment")
+            }
+        }
     }
 }
 
-/// 自定义档案编辑器（新增/编辑自定义 agent；family 显式声明可选）。
-public struct CustomAgentEditor: View {
-    public var onSave: (_ id: String, _ family: String?) -> Void
-    @State private var agentID = ""
-    @State private var family = ""
+struct AboutSettingsPane<State: SettingsStateProviding>: View {
+    let state: State
 
-    public init(onSave: @escaping (_ id: String, _ family: String?) -> Void) {
-        self.onSave = onSave
-    }
-
-    public var body: some View {
-        Form {
-            TextField("Agent ID", text: $agentID)
-                .accessibilityIdentifier("custom-agent.id")
-            Picker("Family（可选）", selection: $family) {
-                Text("自动").tag("")
-                ForEach(["claude", "codex", "dsh", "omp"], id: \.self) { f in
-                    Text(f).tag(f)
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.xl) {
+            HStack(spacing: AeroricSpace.l) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 56, height: 56)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Aeroric").font(.system(size: AeroricType.title, weight: .semibold))
+                    Text("多 Agent 协作工作台").foregroundStyle(AeroricColor.textSecondary)
                 }
             }
-            Button("保存") {
-                let resolved = SettingsCapability.familyOf(
-                    agentID: agentID, declared: family.isEmpty ? nil : family
-                )
-                onSave(agentID, resolved)
-            }
-            .disabled(agentID.isEmpty)
-            .accessibilityIdentifier("custom-agent.save")
-        }
-        .padding(16)
-        .accessibilityIdentifier("settings.custom-agent")
-    }
-}
-
-/// 模型设置（usage/models：capability 门控——effort 白名单外不发）。
-public struct ModelSettingsView: View {
-    public var family: String
-    public var onEffortChange: ((_ effort: String) -> Void)?
-    @State private var selectedEffort = ""
-
-    public init(family: String, onEffortChange: ((_ effort: String) -> Void)? = nil) {
-        self.family = family
-        self.onEffortChange = onEffortChange
-    }
-
-    private var allowedEfforts: [String] {
-        SettingsCapability.effortLevels(for: family)
-    }
-
-    public var body: some View {
-        Form {
-            if allowedEfforts.isEmpty {
-                Text("该 Agent 家不支持 effort 设置")
-                    .foregroundStyle(Color.dsTextMuted)
-            } else {
-                Picker("Effort", selection: $selectedEffort) {
-                    ForEach(allowedEfforts, id: \.self) { effort in
-                        Text(effort).tag(effort)
-                    }
+            SettingsCard {
+                SettingsRow("构建") {
+                    Text(state.buildIdentifier)
+                        .font(.system(size: AeroricType.secondary, design: .monospaced))
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("settings.build")
                 }
-                Button("应用") {
-                    guard SettingsCapability.supportsEffort(selectedEffort, family: family) else { return }
-                    onEffortChange?(selectedEffort)
-                }
-                    .disabled(!SettingsCapability.supportsEffort(selectedEffort, family: family))
-            }
-        }
-        .padding(16)
-        .accessibilityIdentifier("settings.models")
-    }
-}
-
-/// 快捷键设置（shortcuts：UI-only）。
-public struct ShortcutSettingsView: View {
-    @AppStorage("settings.paletteShortcut") private var paletteShortcut = "⌘K"
-
-    public init() {}
-
-    public var body: some View {
-        Form {
-            TextField("命令面板快捷键", text: $paletteShortcut)
-        }
-        .padding(16)
-        .accessibilityIdentifier("settings.shortcuts")
-    }
-}
-
-/// Agent 升级视图（Action 4：显示安装渠道/影响任务/进度；用户确认后执行，
-/// 不因打开设置自动 upgrade）。
-public struct AgentUpdateView: View {
-    public var onUpdate: ((_ channel: String) -> Void)?
-    @State private var channel = "npm"
-    @State private var confirmed = false
-    @State private var inFlight = false
-
-    public init(onUpdate: ((_ channel: String) -> Void)? = nil) {
-        self.onUpdate = onUpdate
-    }
-
-    public var body: some View {
-        Form {
-            Picker("安装渠道", selection: $channel) {
-                ForEach(SettingsCapability.updateChannels, id: \.self) { channel in
-                    Text(channel).tag(channel)
+                SettingsRow("应用标识") {
+                    Text(state.applicationTag)
+                        .font(.system(size: AeroricType.secondary, design: .monospaced))
+                        .accessibilityIdentifier("settings.application")
                 }
             }
-            .accessibilityIdentifier("agent-update.channel")
-            Text("升级会影响正在运行的任务；确认后执行。")
-                .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
-            Toggle("我已确认", isOn: $confirmed)
-                .accessibilityIdentifier("agent-update.confirm")
-            Button("升级") {
-                guard SettingsCapability.canStartUpdate(channel: channel, confirmedByUser: confirmed) else {
-                    return
-                }
-                inFlight = true
-                onUpdate?(channel)
-            }
-            .disabled(!confirmed || inFlight)
-            .accessibilityIdentifier("agent-update.start")
-            if inFlight {
-                ProgressView()
-                    .accessibilityIdentifier("agent-update.progress")
-            }
         }
-        .padding(16)
-        .accessibilityIdentifier("settings.agent-updates")
-    }
-}
-
-/// 设置搜索索引（panelRegistry 全映射的检索；G11 全 19 panel 可搜）。
-public struct SettingsSearchIndex {
-    public let entries: [SettingsStore.Panel]
-
-    @MainActor
-    public init(store: SettingsStore) {
-        self.entries = store.availablePanels()
-    }
-
-    /// 按查询过滤面板（title/id 双匹配；空白＝全部）。
-    public func search(_ query: String) -> [SettingsStore.Panel] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return entries }
-        return entries.filter {
-            $0.id.localizedCaseInsensitiveContains(trimmed)
-                || $0.section.rawValue.localizedCaseInsensitiveContains(trimmed)
-        }
+        .accessibilityIdentifier("settings.about")
     }
 }

@@ -9,7 +9,7 @@ import SwiftUI
 @MainActor
 public final class SettingsWindowController: NSObject, NSWindowDelegate {
     public static let shared = SettingsWindowController()
-    private static let contentSize = NSSize(width: 560, height: 400)
+    private static let contentSize = NSSize(width: 760, height: 520)
     private var window: NSWindow?
 
     public func show(state: some SettingsStateProviding) {
@@ -20,11 +20,13 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
         let win = NSWindow(
             contentRect: NSRect(origin: .zero, size: Self.contentSize),
-            styleMask: [.titled, .closable],
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         win.title = "设置"
+        win.titlebarAppearsTransparent = true
+        win.contentMinSize = NSSize(width: 680, height: 460)
         win.isReleasedWhenClosed = false
         win.contentViewController = NSHostingController(
             rootView: SettingsRootView(state: state)

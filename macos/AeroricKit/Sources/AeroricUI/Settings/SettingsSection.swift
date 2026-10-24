@@ -38,8 +38,14 @@ public protocol SettingsStateProviding: AnyObject {
     var applicationTag: String { get }
     /// Legacy custom Agent cleanup; nil hides the entry (previews, tests).
     var legacyCleanup: LegacyCleanupStore? { get }
+    /// The app's interaction-mode owner; nil in previews and tests.
+    var settingsInteractionMode: InteractionModeController? { get }
+    /// Host connection phase for the 连接 pane; nil shows "未知".
+    var connectionPhaseText: String? { get }
 }
 
 public extension SettingsStateProviding {
     var legacyCleanup: LegacyCleanupStore? { nil }
+    var settingsInteractionMode: InteractionModeController? { nil }
+    var connectionPhaseText: String? { nil }
 }

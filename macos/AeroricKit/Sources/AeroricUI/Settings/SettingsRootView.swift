@@ -1,25 +1,16 @@
 import SwiftUI
 
-/// Root of the single reusable settings window (P4-04 Action 3): a segmented
-/// picker reusing the shared `NativeSegmentedPicker` primitive (ADR-001 §4
-/// rule 4), then the selected section's content. Sections that arrive with
-/// later tasks render an explicit not-yet-wired state — never a fake
-/// completed panel. The section vocabulary itself lives in
-/// `SettingsSection.swift`.
+/// Settings window (M3): left navigation, right scrolling content of cards.
+/// Only settings that are actually read somewhere appear (D4). No container
+/// accessibility identifier here: it would replace every descendant's own.
 public struct SettingsRootView<State: SettingsStateProviding>: View {
     let state: State
-    /// P5-02：模式绑定为 nil 时，application 分区显示未接通占位。
+    /// Fallbacks for previews/tests without an `InteractionModeController`.
     let interactionMode: Binding<InteractionMode>?
     let onInteractionModeSave: ((InteractionMode) -> Void)?
     let interactionModeSaveError: String?
-    @State private var section: SettingsSection = .application
-    @State private var localInteractionMode: InteractionMode = .native
-    @State private var configuredAgents: [SettingsCapabilityAgent] = [
-        SettingsCapabilityAgent(id: "claude", family: "claude"),
-        SettingsCapabilityAgent(id: "codex", family: "codex"),
-        SettingsCapabilityAgent(id: "dsh", family: "dsh"),
-        SettingsCapabilityAgent(id: "omp", family: "omp"),
-    ]
+    @SwiftUI.State private var pane: SettingsPane? = .general
+
     public init(
         state: State,
         interactionMode: Binding<InteractionMode>? = nil,
@@ -32,115 +23,53 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
         self.interactionModeSaveError = interactionModeSaveError
     }
 
+    private var panes: [SettingsPane] {
+        SettingsPane.allCases.filter { $0 != .legacyCleanup || state.legacyCleanup != nil }
+    }
+
     public var body: some View {
-        VStack(spacing: 0) {
-            NativeSegmentedPicker(
-                selection: $section,
-                groupTitle: "设置分区",
-                segments: SettingsSection.allCases.map {
-                    .init(value: $0, title: $0.titleKey)
-                }
-            )
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityIdentifier("settings.section-picker")
-            Divider().overlay(Color.dsBorder)
-            switch section {
-            case .application:
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        InteractionSettingsView(
-                            mode: interactionMode ?? $localInteractionMode,
-                            onSave: { onInteractionModeSave?($0) },
-                            saveError: interactionModeSaveError
-                        )
-                        GeneralSettingsView()
-                        AppearanceSettingsView()
-                    }
-                }
-            case .agents:
-                VStack(spacing: 8) {
-                    if let cleanup = state.legacyCleanup {
-                        LegacyCleanupEntry(store: cleanup)
-                            .padding(.top, 8)
-                        Divider().overlay(Color.dsBorder)
-                    }
-                    AgentSettingsView(agents: configuredAgents)
-                    CustomAgentEditor { newID, newFamily in
-                        let trimmed = newID.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmed.isEmpty else { return }
-                        let resolvedFamily = (newFamily?.isEmpty == false) ? newFamily! : "claude"
-                        if !configuredAgents.contains(where: { $0.id == trimmed }) {
-                            configuredAgents.append(
-                                SettingsCapabilityAgent(id: trimmed, family: resolvedFamily, isCustom: true)
-                            )
-                        }
-                    }
-                }
-            case .about:
-                AboutSection(state: state)
+        HStack(spacing: 0) {
+            List(panes, selection: $pane) { item in
+                Label(item.title, systemImage: item.systemImage)
+                    .tag(Optional(item))
+                    .accessibilityIdentifier("settings.nav.\(item.rawValue)")
             }
+            .listStyle(.sidebar)
+            .frame(width: 190)
+            .accessibilityIdentifier("settings.nav")
+            HairlineDivider(.vertical)
+            ScrollView {
+                VStack(alignment: .leading, spacing: AeroricSpace.xl) {
+                    Text((pane ?? .general).title)
+                        .font(.system(size: AeroricType.largeTitle, weight: .semibold))
+                    content(pane ?? .general)
+                }
+                .padding(AeroricSpace.xxxl)
+                .frame(maxWidth: 620, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(AeroricColor.canvas)
         }
-        .frame(width: 520, height: 360)
-        .background(NativeMaterial.underWindowBackground.ignoresSafeArea())
-        // Kept as the lifecycle test's query target. Caveat (measured
-        // 2026-10-01, AX dump): a container identifier propagates onto
-        // descendant leaves and replaces their own, so identifiers below
-        // this point (settings.environment …) are not AX-queryable while
-        // this tag is here. When P5-05 wires real controls it must drop
-        // this tag and query section leaves directly.
-        .accessibilityIdentifier("settings.root")
+        .frame(minWidth: 680, minHeight: 460)
     }
-}
 
-private struct NotWiredYetView: View {
-    let task: String
-
-    var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "hourglass")
-                .font(.system(size: 24))
-                .foregroundStyle(Color.dsTextMuted)
-            Text("该分区尚未接入")
-                .font(.headline)
-                .foregroundStyle(Color.dsText)
-            Text("内容将随 \(task) 接入；当前构建不提供此设置。")
-                .font(.caption)
-                .foregroundStyle(Color.dsTextSecondary)
-                .multilineTextAlignment(.center)
+    @ViewBuilder private func content(_ pane: SettingsPane) -> some View {
+        switch pane {
+        case .general:
+            GeneralSettingsPane(controller: state.settingsInteractionMode, fallbackMode: interactionMode,
+                                onFallbackSave: onInteractionModeSave, fallbackError: interactionModeSaveError)
+        case .appearance:
+            AppearanceSettingsPane()
+        case .agents:
+            AgentsSettingsPane()
+        case .connection:
+            ConnectionSettingsPane(state: state)
+        case .legacyCleanup:
+            if let cleanup = state.legacyCleanup {
+                SettingsCard { LegacyCleanupEntry(store: cleanup).padding(AeroricSpace.l) }
+            }
+        case .about:
+            AboutSettingsPane(state: state)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-private struct AboutSection<State: SettingsStateProviding>: View {
-    let state: State
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            LabeledContent("environment") {
-                Text(state.environmentLabel)
-                    .accessibilityIdentifier("settings.environment")
-            }
-            LabeledContent("protocol") {
-                Text(state.protocolVersionText)
-                    .accessibilityIdentifier("settings.protocol")
-            }
-            LabeledContent("build") {
-                Text(state.buildIdentifier)
-                    .accessibilityIdentifier("settings.build")
-            }
-            LabeledContent("application") {
-                Text(state.applicationTag)
-                    .accessibilityIdentifier("settings.application")
-            }
-            Spacer()
-        }
-        .font(.callout)
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .accessibilityIdentifier("settings.about")
     }
 }
