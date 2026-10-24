@@ -3789,7 +3789,7 @@ fn parse_messages(lines: &[String], family: ProtocolFamily) -> Vec<SessionMessag
 /// 解析结果 → v1 `SessionPage`（客户端按 v1 契约解码）。文本与思考是
 /// `Text` 块；工具调用、结果与附件保持不透明（kind + 原样 payload），客户端
 /// 按 kind 认领，宿主不推断结构。
-fn session_page(
+pub(crate) fn session_page(
     session_id: String,
     family: ProtocolFamily,
     messages: Vec<SessionMessage>,

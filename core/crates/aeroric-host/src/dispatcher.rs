@@ -356,6 +356,14 @@ impl HostServices {
             since: Some(1),
             note: Some("Host-local legacy custom Agent cleanup: plan/apply".into()),
         });
+        // UI 改版 M4：已有会话导入（授权后只读索引）与 Agent 安装检测；仅本机 UDS。
+        crate::imports_services::register_import_services(&mut set, Arc::clone(&context));
+        capabilities.push(aeroric_protocol::capability::Capability {
+            name: crate::imports_services::CAPABILITY.into(),
+            enabled: true,
+            since: Some(1),
+            note: Some("Host-local read-only import of existing Claude/Codex sessions".into()),
+        });
         crate::ide_services::register_ide_services(&mut set, Arc::clone(&context));
         crate::lsp_services::register_lsp_services(
             &mut set,
