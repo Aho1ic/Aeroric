@@ -64,49 +64,38 @@ public struct TaskListView: View {
     }
 }
 
-/// 单行：状态/时间/agent 来自快照。
+/// 单行：状态点 + 标题 + 项目 · Agent · 相对时间（全部来自快照）。
 public struct TaskRow: View {
     let task: TaskStore.TaskEntry
+    let projectName: String?
 
-    public init(task: TaskStore.TaskEntry) {
+    public init(task: TaskStore.TaskEntry, projectName: String? = nil) {
         self.task = task
+        self.projectName = projectName
     }
 
     public var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(TaskRow.statusColor(task.status))
-                .frame(width: 7, height: 7)
-                .accessibilityHidden(true)
+        HStack(spacing: AeroricSpace.m) {
+            StatusDot(ActivityState(wireStatus: task.status), label: task.status)
             VStack(alignment: .leading, spacing: 2) {
                 Text(task.title)
+                    .font(.system(size: AeroricType.body))
                     .lineLimit(1)
-                Text("\(task.status) · \(task.agent ?? "—")")
-                    .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
+                TaskMetaLine(task: task, projectName: projectName)
             }
             Spacer()
             if task.starred {
                 Image(systemName: "star.fill")
-                    .font(.caption)
-                    .foregroundStyle(Color.dsWarning)
+                    .font(.system(size: 10))
+                    .foregroundStyle(AeroricColor.warning)
             }
             if task.archived {
                 Text("已归档")
-                    .font(.caption2)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
             }
         }
+        .padding(.vertical, AeroricSpace.xs)
         .accessibilityIdentifier("task.row.\(task.id)")
-    }
-
-    static func statusColor(_ status: String) -> Color {
-        switch status {
-        case "running": Color.dsSuccess
-        case "input_required": Color.dsWarning
-        case "failed", "cancelled": Color.dsDanger
-        case "done": Color.dsTextMuted
-        default: Color.dsTextSecondary
-        }
     }
 }

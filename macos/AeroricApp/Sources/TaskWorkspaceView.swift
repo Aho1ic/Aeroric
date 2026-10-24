@@ -756,8 +756,8 @@ struct TaskWorkspaceView: View {
             .allowsHitTesting(SessionNavigation.taskID(selection) != nil)
             .accessibilityHidden(SessionNavigation.taskID(selection) == nil)
             if SessionNavigation.taskID(selection) == nil {
-                TaskListView(
-                    visibleTasks: Binding(get: { visibleTasks }, set: { _ in }),
+                TaskBoardView(
+                    tasks: visibleTasks,
                     filterText: $taskFilterText,
                     selectedTaskID: Binding(
                         get: { selectedTaskID },
@@ -766,9 +766,13 @@ struct TaskWorkspaceView: View {
                             if let id { selection = SessionNavigation.task(id) }
                         }
                     ),
-                    onOpenDraft: { openNewSession() }
+                    projectNames: Dictionary(services.taskStore.projects.map { ($0.id, $0.name) },
+                                             uniquingKeysWith: { first, _ in first }),
+                    onOpenDraft: { openNewSession() },
+                    onCancel: { id in Task { await services.cancelTask(taskId: id) } },
+                    onStar: { services.toggleStar(taskId: $0) },
+                    onArchive: { services.toggleArchived(taskId: $0) }
                 )
-                .background(Color.dsSurface)
             }
         }
         .accessibilityIdentifier("tasks.workspace")
