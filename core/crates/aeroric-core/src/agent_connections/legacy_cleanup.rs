@@ -505,6 +505,18 @@ fn verify_profile(
     }
 
     let data_dir = context.paths.data_dir();
+    // Q5: once the profile is gone, the executor launches this id through the
+    // configuration `launch::legacy_mapping` resolves. Clean up only when that is
+    // the configuration verified above.
+    match super::launch::legacy_mapping(data_dir, &profile_id) {
+        Some(launch) if launch.config_id == recorded.config_id => {}
+        _ => {
+            return Err(
+                "the migrated agent configuration is not the one this Agent would launch from; left in place"
+                    .to_string(),
+            )
+        }
+    }
     Ok(Draft {
         entry: JournalEntry {
             source: source.to_string(),
@@ -1303,6 +1315,39 @@ mod tests {
             .retain(|config| !config.id.contains("custom"));
         store::save(&path, &document).unwrap();
         assert_blocked(&fixture, "custom:ds", "is missing");
+    }
+
+    #[test]
+    fn blocked_when_the_launch_mapping_disagrees_with_the_verified_config() {
+        let fixture = migrated("launch-mapping", &["ds"]);
+        let path = migration::report_path(fixture.data_dir());
+        let mut report: MigrationReport =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let entry = report
+            .migrated
+            .iter()
+            .find(|entry| entry.source == "custom:ds")
+            .unwrap()
+            .clone();
+        // A second record for the same source pointing at another live
+        // configuration: verification uses the first, the launch path the last.
+        let mut document = store::load(&store::document_path(fixture.data_dir())).unwrap();
+        let mut other = document
+            .configs
+            .iter()
+            .find(|config| config.id == entry.config_id)
+            .unwrap()
+            .clone();
+        other.id = "another-config".into();
+        other.label = "Another".into();
+        document.configs.push(other);
+        store::save(&store::document_path(fixture.data_dir()), &document).unwrap();
+        report.already_present.push(MigrationEntry {
+            config_id: "another-config".into(),
+            ..entry
+        });
+        std::fs::write(&path, serde_json::to_vec(&report).unwrap()).unwrap();
+        assert_blocked(&fixture, "custom:ds", "would launch from");
     }
 
     #[test]

@@ -11,6 +11,7 @@ pub mod capability;
 pub mod envelope;
 pub mod error;
 pub mod event;
+pub mod legacy_cleanup;
 pub mod project;
 pub mod session;
 pub mod submission;

@@ -1,0 +1,81 @@
+{
+  "applyRequest": {
+    "schemaVersion": 1,
+    "sourceIds": [
+      "custom:fixture-ready"
+    ]
+  },
+  "applyResult": {
+    "candidates": [
+      {
+        "source": "custom:fixture-ready",
+        "state": {
+          "state": "done"
+        }
+      },
+      {
+        "source": "custom:fixture-rotated",
+        "state": {
+          "reason": "new credential `connection:legacy-connection-custom-66:credential` does not match the legacy credential",
+          "state": "blocked"
+        }
+      },
+      {
+        "source": "custom:fixture-partial",
+        "state": {
+          "reason": "QuarantineWrapper: legacy launcher is no longer an Aeroric-generated wrapper; left in place",
+          "remaining": [
+            "quarantineWrapper",
+            "deleteOldSecrets"
+          ],
+          "state": "partial"
+        }
+      },
+      {
+        "source": "custom:fixture-done",
+        "state": {
+          "state": "done"
+        }
+      }
+    ],
+    "quarantineBatch": "20261024T120000.000Z-0",
+    "schemaVersion": 1
+  },
+  "contract": "legacy-cleanup.schema.json",
+  "planResult": {
+    "candidates": [
+      {
+        "source": "custom:fixture-ready",
+        "state": {
+          "state": "eligible"
+        }
+      },
+      {
+        "source": "custom:fixture-rotated",
+        "state": {
+          "reason": "new credential `connection:legacy-connection-custom-66:credential` does not match the legacy credential",
+          "state": "blocked"
+        }
+      },
+      {
+        "source": "custom:fixture-partial",
+        "state": {
+          "reason": "QuarantineWrapper: legacy launcher is no longer an Aeroric-generated wrapper; left in place",
+          "remaining": [
+            "quarantineWrapper",
+            "deleteOldSecrets"
+          ],
+          "state": "partial"
+        }
+      },
+      {
+        "source": "custom:fixture-done",
+        "state": {
+          "state": "done"
+        }
+      }
+    ],
+    "quarantineBatch": null,
+    "schemaVersion": 1
+  }
+}

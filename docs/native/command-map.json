@@ -28,6 +28,28 @@
         "host": "submission_services::register",
         "cli": "rpc task.submission.get --params-file <original-identity-and-fingerprint.json>",
         "consumer": "WorkspaceClient.submission(_:)"
+      },
+      {
+        "name": "agentConnections.legacyCleanup.plan",
+        "mutating": false,
+        "capability": "agentConnections.legacyCleanup",
+        "contract": "contracts/native/v1/legacy-cleanup.schema.json",
+        "coreService": "agent_connections::legacy_cleanup::plan_legacy_cleanup",
+        "host": "agent_connections_services::register_agent_connection_services",
+        "cli": "rpc agentConnections.legacyCleanup.plan",
+        "remote": false,
+        "consumer": "pending: legacy cleanup confirmation UI slice"
+      },
+      {
+        "name": "agentConnections.legacyCleanup.apply",
+        "mutating": true,
+        "capability": "agentConnections.legacyCleanup",
+        "contract": "contracts/native/v1/legacy-cleanup.schema.json",
+        "coreService": "agent_connections::legacy_cleanup::apply_legacy_cleanup",
+        "host": "agent_connections_services::register_agent_connection_services",
+        "cli": "rpc agentConnections.legacyCleanup.apply --params-file <confirmed-sources.json>",
+        "remote": false,
+        "consumer": "pending: legacy cleanup confirmation UI slice"
       }
     ]
   },

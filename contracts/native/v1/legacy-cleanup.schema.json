@@ -1,0 +1,168 @@
+{
+  "$defs": {
+    "applyRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "sourceIds": {
+          "items": {
+            "pattern": "^custom:.*\\S",
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "sourceIds"
+      ],
+      "type": "object"
+    },
+    "candidate": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "state": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "state": {
+                  "const": "eligible"
+                }
+              },
+              "required": [
+                "state"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "reason": {
+                  "type": "string"
+                },
+                "state": {
+                  "const": "blocked"
+                }
+              },
+              "required": [
+                "state",
+                "reason"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "remaining": {
+                  "items": {
+                    "enum": [
+                      "removeProfile",
+                      "quarantineSidecar",
+                      "quarantineWrapper",
+                      "deleteOldSecrets"
+                    ]
+                  },
+                  "type": "array"
+                },
+                "state": {
+                  "const": "partial"
+                }
+              },
+              "required": [
+                "state",
+                "remaining",
+                "reason"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "state": {
+                  "const": "done"
+                }
+              },
+              "required": [
+                "state"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "required": [
+        "source",
+        "state"
+      ],
+      "type": "object"
+    },
+    "report": {
+      "additionalProperties": false,
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/candidate"
+          },
+          "type": "array"
+        },
+        "quarantineBatch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schemaVersion": {
+          "const": 1
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "candidates",
+        "quarantineBatch"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "capability": "agentConnections.legacyCleanup",
+  "hostLocal": "Not forwarded by the remote plane.",
+  "methods": {
+    "agentConnections.legacyCleanup.apply": {
+      "mutating": true,
+      "params": {
+        "$ref": "#/$defs/applyRequest"
+      },
+      "result": {
+        "$ref": "#/$defs/report"
+      }
+    },
+    "agentConnections.legacyCleanup.plan": {
+      "mutating": false,
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/report"
+      }
+    }
+  },
+  "order": "removeProfile → quarantineSidecar → quarantineWrapper → deleteOldSecrets; a failed step stops that entry as partial without rollback; apply again resumes it.",
+  "source": "aeroric-protocol/src/legacy_cleanup.rs + docs/native/command-map.json nativeServices",
+  "title": "aeroric-native-legacy-agent-cleanup-v1"
+}

@@ -8,10 +8,11 @@
 use std::sync::Arc;
 
 use aeroric_core::agent_connections::model::{AgentConfig, Connection, ConnectionsDocument, Pool};
-use aeroric_core::agent_connections::{fetch, routing, service, store};
+use aeroric_core::agent_connections::{fetch, legacy_cleanup, routing, service, store};
 use aeroric_core::context::CoreContext;
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
+use aeroric_protocol::legacy_cleanup as wire;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
@@ -311,6 +312,88 @@ fn fetch_models_handler(context: &Arc<CoreContext>) -> Handler {
     })
 }
 
+fn wire_step(step: legacy_cleanup::CleanupStep) -> wire::CleanupStep {
+    match step {
+        legacy_cleanup::CleanupStep::RemoveProfile => wire::CleanupStep::RemoveProfile,
+        legacy_cleanup::CleanupStep::QuarantineSidecar => wire::CleanupStep::QuarantineSidecar,
+        legacy_cleanup::CleanupStep::QuarantineWrapper => wire::CleanupStep::QuarantineWrapper,
+        legacy_cleanup::CleanupStep::DeleteOldSecrets => wire::CleanupStep::DeleteOldSecrets,
+    }
+}
+
+fn wire_report(
+    candidates: Vec<legacy_cleanup::CleanupCandidate>,
+    quarantine_dir: Option<std::path::PathBuf>,
+) -> Value {
+    let candidates = candidates
+        .into_iter()
+        .map(|candidate| wire::Candidate {
+            source: candidate.source,
+            state: match candidate.state {
+                legacy_cleanup::CandidateState::Eligible => wire::CandidateState::Eligible {},
+                legacy_cleanup::CandidateState::Blocked { reason } => {
+                    wire::CandidateState::Blocked { reason }
+                }
+                legacy_cleanup::CandidateState::Partial { remaining, reason } => {
+                    wire::CandidateState::Partial {
+                        remaining: remaining.into_iter().map(wire_step).collect(),
+                        reason,
+                    }
+                }
+                legacy_cleanup::CandidateState::Done => wire::CandidateState::Done {},
+            },
+        })
+        .collect();
+    // Only the batch name crosses the wire, never an absolute path (D4).
+    let quarantine_batch = quarantine_dir
+        .as_deref()
+        .and_then(std::path::Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned());
+    serde_json::to_value(wire::CleanupReport {
+        schema_version: wire::SCHEMA_VERSION,
+        candidates,
+        quarantine_batch,
+    })
+    .unwrap_or(Value::Null)
+}
+
+/// Read-only. Holds `DOC_LOCK` so a concurrent config edit cannot interleave with
+/// the verification it reports.
+fn legacy_cleanup_plan(request: Request, context: Arc<CoreContext>) -> Frame {
+    if !request.params.is_null() && request.params != json!({}) {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "agentConnections.legacyCleanup.plan takes no parameters",
+        );
+    }
+    let _guard = DOC_LOCK.lock();
+    match legacy_cleanup::plan_legacy_cleanup(&context) {
+        Ok(plan) => ok(&request, wire_report(plan.candidates, None)),
+        Err(e) => failure(request.id.clone(), ErrorCode::IoError, &e),
+    }
+}
+
+/// Acts only on the confirmed ids that still verify (Q10/Q11). `DOC_LOCK` also
+/// serializes applies: the cleanup journal is a single file.
+fn legacy_cleanup_apply(request: Request, context: Arc<CoreContext>) -> Frame {
+    let ids = match serde_json::from_value::<wire::ApplyRequest>(request.params.clone())
+        .map_err(|e| format!("invalid legacy cleanup request: {e}"))
+        .and_then(|parsed| parsed.validated_ids())
+    {
+        Ok(ids) => ids,
+        Err(e) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &e),
+    };
+    let _guard = DOC_LOCK.lock();
+    match legacy_cleanup::apply_legacy_cleanup(&context, &ids) {
+        Ok(outcome) => ok(
+            &request,
+            wire_report(outcome.candidates, outcome.quarantine_dir),
+        ),
+        Err(e) => failure(request.id.clone(), ErrorCode::IoError, &e),
+    }
+}
+
 pub fn register_agent_connection_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     set.register("agentConnections.load", blocking(&context, load));
     set.register(
@@ -343,4 +426,6 @@ pub fn register_agent_connection_services(set: &mut ServiceSet, context: Arc<Cor
         "agentConnections.fetchModels",
         fetch_models_handler(&context),
     );
+    set.register(wire::PLAN_METHOD, blocking(&context, legacy_cleanup_plan));
+    set.register(wire::APPLY_METHOD, blocking(&context, legacy_cleanup_apply));
 }

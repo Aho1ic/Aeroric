@@ -348,6 +348,14 @@ impl HostServices {
             &mut set,
             Arc::clone(&context),
         );
+        // Registered unconditionally above, so advertised unconditionally: the
+        // native client gates its cleanup screen on this, never on a method probe.
+        capabilities.push(aeroric_protocol::capability::Capability {
+            name: aeroric_protocol::legacy_cleanup::CAPABILITY.into(),
+            enabled: true,
+            since: Some(1),
+            note: Some("Host-local legacy custom Agent cleanup: plan/apply".into()),
+        });
         crate::ide_services::register_ide_services(&mut set, Arc::clone(&context));
         crate::lsp_services::register_lsp_services(
             &mut set,

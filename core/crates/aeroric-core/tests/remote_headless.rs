@@ -685,3 +685,23 @@ async fn headless_serve_serves_list_create_cancel_over_paired_ws() {
 
     server.shutdown(&state);
 }
+
+/// Legacy Agent cleanup is host-local: the phone can neither plan nor apply it.
+#[tokio::test]
+async fn legacy_cleanup_methods_are_not_on_the_remote_whitelist() {
+    let state = RemoteState::new_in_memory();
+    for method in [
+        aeroric_protocol::legacy_cleanup::PLAN_METHOD,
+        aeroric_protocol::legacy_cleanup::APPLY_METHOD,
+    ] {
+        let error = aeroric_core::remote::rpc::dispatch(
+            &state,
+            &HeadlessHandle,
+            method,
+            json!({"schemaVersion": 1, "sourceIds": ["custom:any"]}),
+        )
+        .await
+        .expect_err("remote must not reach legacy cleanup");
+        assert!(error.contains("Unknown method"), "{method}: {error}");
+    }
+}

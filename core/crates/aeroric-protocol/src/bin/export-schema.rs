@@ -1134,20 +1134,39 @@ fn main() -> Result<(), String> {
     let map: Value =
         serde_json::from_str(&raw).map_err(|e| format!("command-map.json is unparseable: {e}"))?;
     let native = aeroric_protocol::submission::schema();
-    let mapped: BTreeSet<_> = map["nativeServices"]["methods"]
+    let cleanup = aeroric_protocol::legacy_cleanup::schema();
+    let entries = map["nativeServices"]["methods"]
         .as_array()
-        .ok_or("command-map.json lacks native submission services")?
+        .ok_or("command-map.json lacks native submission services")?;
+    let mapped: BTreeSet<_> = entries
         .iter()
         .filter_map(|method| method["name"].as_str())
         .collect();
-    let defined: BTreeSet<_> = native["methods"]
-        .as_object()
-        .ok_or("native submission schema lacks methods")?
-        .keys()
-        .map(String::as_str)
-        .collect();
-    if mapped != defined || map["nativeServices"]["capability"] != native["capability"] {
-        return Err("native submission service inventory differs from its protocol schema".into());
+    let mut defined: BTreeSet<&str> = BTreeSet::new();
+    for schema in [&native, &cleanup] {
+        defined.extend(
+            schema["methods"]
+                .as_object()
+                .ok_or("a native service schema lacks methods")?
+                .keys()
+                .map(String::as_str),
+        );
+    }
+    // The section-level capability is the submission one; any other native
+    // service names its own on the entry, and it must match its schema.
+    let capabilities_match = entries.iter().all(|entry| {
+        let name = entry["name"].as_str().unwrap_or_default();
+        if cleanup["methods"].get(name).is_some() {
+            entry["capability"] == cleanup["capability"]
+        } else {
+            entry.get("capability").is_none()
+        }
+    });
+    if mapped != defined
+        || map["nativeServices"]["capability"] != native["capability"]
+        || !capabilities_match
+    {
+        return Err("native service inventory differs from its protocol schemas".into());
     }
     let topics_raw = std::fs::read_to_string(root.join("docs/native/event-topics.json"))
         .map_err(|e| format!("cannot read docs/native/event-topics.json (ADR-007): {e}"))?;
@@ -1174,6 +1193,19 @@ fn main() -> Result<(), String> {
             serde_json::json!({
                 "contract":"session-submission.schema.json",
                 "request":aeroric_protocol::submission::fixture_request()
+            }),
+        ),
+        (
+            "v1/legacy-cleanup.schema.json".into(),
+            aeroric_protocol::legacy_cleanup::schema(),
+        ),
+        (
+            "v1/fixtures/legacy-cleanup.json".into(),
+            serde_json::json!({
+                "contract":"legacy-cleanup.schema.json",
+                "planResult":aeroric_protocol::legacy_cleanup::fixture_plan(),
+                "applyRequest":aeroric_protocol::legacy_cleanup::fixture_apply_request(),
+                "applyResult":aeroric_protocol::legacy_cleanup::fixture_apply()
             }),
         ),
         ("v1/envelope.schema.json".into(), envelope_schema()),
