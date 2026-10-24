@@ -258,3 +258,97 @@ fn discard_and_log_and_branches() {
     let detail = service::commit_detail(&repo.root, "HEAD").unwrap();
     assert_eq!(detail.message, "init");
 }
+
+fn io_error_to_string(error: std::io::Error) -> String {
+    error.to_string()
+}
+
+fn write_text(repo: &TempRepo, path: &str, content: &str) -> Result<(), String> {
+    let target = repo.root.join(path);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(io_error_to_string)?;
+    }
+    std::fs::write(target, content).map_err(io_error_to_string)?;
+    Ok(())
+}
+
+#[test]
+fn file_diff_returns_staged_unstaged_and_untracked_text() -> Result<(), String> {
+    let repo = new_repo("aeroric-git-file-diff");
+    commit_file(&repo, "tracked.txt", "base\n", "init");
+    write_text(&repo, "tracked.txt", "changed\n")?;
+    let unstaged = service::file_diff(&repo.root, "tracked.txt", false)?;
+    if !unstaged.contains("-base") {
+        return Err("unstaged diff missing removed line".to_string());
+    }
+    if !unstaged.contains("+changed") {
+        return Err("unstaged diff missing added line".to_string());
+    }
+    service::stage(&repo.root, "tracked.txt", &service::GitService::new().locks)?;
+    let staged = service::file_diff(&repo.root, "tracked.txt", true)?;
+    if !staged.contains("+changed") {
+        return Err("staged diff missing added line".to_string());
+    }
+    write_text(&repo, "untracked.txt", "hello\n")?;
+    let untracked = service::file_diff(&repo.root, "untracked.txt", false)?;
+    if !untracked.contains("+hello") {
+        return Err("untracked diff missing content".to_string());
+    }
+    Ok(())
+}
+
+#[test]
+fn file_diff_uses_literal_pathspec_and_rejects_symlink_escape() -> Result<(), String> {
+    let repo = new_repo("aeroric-git-file-diff-literal");
+    commit_file(&repo, "a*", "base\n", "add star");
+    commit_file(&repo, "ab", "base\n", "add ab");
+    write_text(&repo, "a*", "star changed\n")?;
+    write_text(&repo, "ab", "ab changed\n")?;
+    let literal = service::file_diff(&repo.root, "a*", false)?;
+    if !literal.contains("a*") {
+        return Err("literal path missing from diff".to_string());
+    }
+    if literal.contains("ab") {
+        return Err("wildcard path matched another file".to_string());
+    }
+    let outside = std::env::temp_dir().join("aeroric-outside-secret.txt");
+    let _ = std::fs::remove_file(&outside);
+    std::fs::write(&outside, "secret\n").map_err(io_error_to_string)?;
+    let link = repo.root.join("link.txt");
+    std::os::unix::fs::symlink(&outside, &link).map_err(io_error_to_string)?;
+    if service::file_diff(&repo.root, "link.txt", false).is_ok() {
+        return Err("symlink escape was accepted".to_string());
+    }
+    let _ = std::fs::remove_file(&outside);
+    Ok(())
+}
+
+#[test]
+fn file_diff_refuses_oversized_result_instead_of_truncating() -> Result<(), String> {
+    let repo = new_repo("aeroric-git-file-diff-size");
+    let content = "a".repeat(1024 * 1024 + 1);
+    write_text(&repo, "large.txt", &content)?;
+    if service::file_diff(&repo.root, "large.txt", false).is_ok() {
+        return Err("oversized diff was returned as complete".to_string());
+    }
+    Ok(())
+}
+
+#[test]
+fn file_diff_rejects_directory_paths_instead_of_scanning_them() -> Result<(), String> {
+    let repo = new_repo("aeroric-git-file-diff-dir");
+    commit_file(&repo, "dir/inside.txt", "base\n", "add");
+    write_text(&repo, "dir/inside.txt", "changed\n")?;
+    if service::file_diff(&repo.root, "dir", false).is_ok() {
+        return Err("directory path was accepted as a single-file diff".to_string());
+    }
+    service::stage(
+        &repo.root,
+        "dir/inside.txt",
+        &service::GitService::new().locks,
+    )?;
+    if service::file_diff(&repo.root, "dir", true).is_ok() {
+        return Err("staged directory path was accepted as a single-file diff".to_string());
+    }
+    Ok(())
+}

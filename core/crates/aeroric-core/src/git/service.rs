@@ -1684,57 +1684,163 @@ fn truncate_bytes(raw: &str, limit: usize) -> String {
     .into_owned()
 }
 
-/// 单文件 diff（legacy `git_file_diff` verbatim，外加一条**刻意收紧**的路径守卫）。
+/// 单文件只读 diff（安全完整版）。
 ///
-/// argv：`diff [--cached] -- <file>`（10s）。主路径**不检查** git 退出码（legacy
-/// 如此）：stdout 为空且未 staged 时回落 `diff --no-index <空文件> <绝对路径>`
-/// （空临时文件用 uuid 命名；先删临时文件再传播回落错误，顺序逐字）。
-///
-/// **刻意收紧**：legacy 对 `file_path` 零校验，而回落的 `--no-index` 把它变成
-/// 任意文件读取原语（绝对路径经 `root.join` 整体替换，`../` 越 worktree）。
-/// 本地实现按 P6-01 path_policy 的服务端权威原则加 `validate_git_relative_path`
-/// （切片 79「更严的守卫保持更严」先例）——合法路径行为逐字不变，越界路径从
-/// "泄露文件"变"拒绝"。两条截断上限都是 200 * 1024 **字节**（不是字符）。
+/// - 路径先过 `validate_git_relative_path`，再以 `--literal-pathspecs` 和 `--`
+///   传递；文件名中的 `*`/`[`/`:` 不会变成 pathspec 模式。
+/// - staged 用 `diff --cached`；unstaged 对 tracked 文件用 `diff`，对
+///   untracked 文件用 `diff --no-index /dev/null <canonical path>`，不写
+///   临时文件，也不再把空结果回落成任意文件读取。
+/// - 返回完整 stdout；超过 `MAX_FILE_DIFF_BYTES` 时明确报错，不截断。
 pub fn file_diff(repo_root: &Path, file_path: &str, staged: bool) -> Result<String, String> {
     validate_git_relative_path(file_path)?;
-    let limit = 200 * 1024;
-    let mut args: Vec<&str> = vec!["diff"];
     if staged {
-        args.push("--cached");
-    }
-    args.push("--");
-    args.push(file_path);
-    let output = transport::run_git(repo_root, &args, transport::FILE_DIFF_TIMEOUT, None)?;
-    let raw = output.stdout;
-    if raw.is_empty() && !staged {
-        let abs_path = repo_root.join(file_path);
-        let abs_path_str = abs_path.to_string_lossy().into_owned();
-        let empty_file = std::env::temp_dir().join(format!(
-            "aeroric-empty-{}.tmp",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::File::create(&empty_file)
-            .map_err(|error| format!("Failed to create temporary file for git diff: {error}"))?;
-        let empty_str = empty_file.to_string_lossy().into_owned();
-        let fallback_args = vec![
-            "diff",
-            "--no-index",
-            empty_str.as_str(),
-            abs_path_str.as_str(),
-        ];
-        let fallback = transport::run_git(
+        if !tracked_file_is_exact(repo_root, file_path)? {
+            return Err("Staged diff target is not a tracked file".to_string());
+        }
+        let output = transport::run_git(
             repo_root,
-            &fallback_args,
+            &[
+                "--literal-pathspecs",
+                "diff",
+                "--cached",
+                "--no-ext-diff",
+                "--no-color",
+                "--unified=3",
+                "--",
+                file_path,
+            ],
             transport::FILE_DIFF_TIMEOUT,
             None,
-        );
-        let _ = std::fs::remove_file(&empty_file);
-        let fallback = fallback?;
-        return Ok(truncate_bytes(&fallback.stdout, limit));
+        )?;
+        if !output.success {
+            return Err(transport::git_command_error(
+                &output,
+                "Failed to get staged diff",
+            ));
+        }
+        return bounded_file_diff(output.stdout);
     }
-    Ok(truncate_bytes(&raw, limit))
+
+    if tracked_file_is_exact(repo_root, file_path)? {
+        let output = transport::run_git(
+            repo_root,
+            &[
+                "--literal-pathspecs",
+                "diff",
+                "--no-ext-diff",
+                "--no-color",
+                "--unified=3",
+                "--",
+                file_path,
+            ],
+            transport::FILE_DIFF_TIMEOUT,
+            None,
+        )?;
+        if !output.success {
+            return Err(transport::git_command_error(
+                &output,
+                "Failed to get working diff",
+            ));
+        }
+        return bounded_file_diff(output.stdout);
+    }
+
+    let root = repo_root.canonicalize().map_err(untracked_root_error)?;
+    let candidate = root.join(file_path);
+    let metadata = std::fs::symlink_metadata(&candidate).map_err(untracked_inspect_error)?;
+    if metadata.file_type().is_symlink() {
+        return Err("Untracked diff target is not a regular file".to_string());
+    }
+    if !metadata.is_file() {
+        return Err("Untracked diff target is not a regular file".to_string());
+    }
+    let resolved = candidate.canonicalize().map_err(untracked_resolve_error)?;
+    if !resolved.starts_with(&root) {
+        return Err("Untracked diff target escapes the project root".to_string());
+    }
+    let resolved = resolved.to_string_lossy().into_owned();
+    let output = transport::run_git(
+        repo_root,
+        &[
+            "diff",
+            "--no-index",
+            "--no-color",
+            "--unified=3",
+            "--",
+            "/dev/null",
+            resolved.as_str(),
+        ],
+        transport::FILE_DIFF_TIMEOUT,
+        None,
+    )?;
+    // `git diff --no-index` exits 1 when the files differ; that is the normal
+    // success path here. Empty stdout with non-success is a real failure.
+    if !output.success && output.stdout.is_empty() {
+        return Err(transport::git_command_error(
+            &output,
+            "Failed to get untracked diff",
+        ));
+    }
+    bounded_file_diff(output.stdout)
 }
 
+/// `git ls-files -z --error-unmatch -- <path>` returns the exact NUL-terminated
+/// path only when the pathspec names one tracked file. A directory pathspec
+/// expands to every entry under it (or exits non-zero when empty), so requiring
+/// byte equality keeps `file_diff` from turning a directory into a directory-wide
+/// diff in either the staged or unstaged branch.
+fn tracked_file_is_exact(repo_root: &Path, file_path: &str) -> Result<bool, String> {
+    let mut expected = String::from(file_path);
+    expected.push('\0');
+    let tracked = transport::run_git(
+        repo_root,
+        &[
+            "--literal-pathspecs",
+            "ls-files",
+            "-z",
+            "--error-unmatch",
+            "--",
+            file_path,
+        ],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    Ok(tracked.success && tracked.stdout == expected)
+}
+
+/// The UI refuses to render a partial diff as complete. Core therefore returns
+/// the full output or a named error instead of silently truncating at a byte
+/// boundary (the old 200 KiB path could split a UTF-8 scalar).
+const MAX_FILE_DIFF_BYTES: usize = 1024 * 1024;
+
+fn bounded_file_diff(raw: String) -> Result<String, String> {
+    if raw.len() > MAX_FILE_DIFF_BYTES {
+        let mut message = String::from("diff exceeds ");
+        message.push_str(&MAX_FILE_DIFF_BYTES.to_string());
+        message.push_str(" bytes; refusing to return a truncated preview");
+        return Err(message);
+    }
+    Ok(raw)
+}
+
+fn untracked_root_error(error: std::io::Error) -> String {
+    let mut message = String::from("Failed to resolve project root for untracked diff: ");
+    message.push_str(&error.to_string());
+    message
+}
+
+fn untracked_inspect_error(error: std::io::Error) -> String {
+    let mut message = String::from("Failed to inspect untracked file for diff: ");
+    message.push_str(&error.to_string());
+    message
+}
+
+fn untracked_resolve_error(error: std::io::Error) -> String {
+    let mut message = String::from("Failed to resolve untracked file for diff: ");
+    message.push_str(&error.to_string());
+    message
+}
 /// 提交里某文件的完整内容（legacy `git_show_file_diff` verbatim）：
 /// `show --format= --end-of-options <hash> -- <file>`；失败回落**仅 stderr**
 /// （不是 combined()）；截断上限 500 * 1024 **字节**。legacy 的同步 run_git
