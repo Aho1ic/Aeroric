@@ -394,6 +394,33 @@ final class HostConnectionTests: XCTestCase {
         XCTAssertTrue(overlong, "expected an overlong transport fault, got \(faults.value)")
     }
 
+    /// A write after the host closed its end must come back as a fault, not
+    /// SIGPIPE: XCTest does not ignore the signal, so without SO_NOSIGPIPE on
+    /// the client socket this test kills the whole test process.
+    func testWriteAfterPeerCloseFaultsInsteadOfRaisingSIGPIPE() async throws {
+        let server = makeServer()
+        let peerClosed = Locked(false)
+        server.start { _, sender in
+            sender.close()
+            peerClosed.mutate { $0 = true }
+        }
+        // No read pump: the EOF must not close the transport before the write.
+        let transport = SocketTransport()
+        transport.open(fd: try SocketTransport.connect(to: server.path))
+        defer { transport.close() }
+        transport.send(Array("first\n".utf8)) { _ in }
+        let closed = await waitUntil(peerClosed.value)
+        XCTAssertTrue(closed)
+
+        let fault = Locked<ConnectionError?>(nil)
+        transport.send(Array("second\n".utf8)) { error in
+            fault.mutate { $0 = error }
+        }
+        let faulted = await waitUntil(fault.value != nil)
+        XCTAssertTrue(faulted)
+        XCTAssertEqual(fault.value, .io("write failed: errno \(EPIPE)"))
+    }
+
     func testHandshakeFailureSurfacesAuthDenied() async throws {
         let server = makeServer()
         server.start { line, sender in

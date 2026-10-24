@@ -39,6 +39,18 @@ final class SocketTransport: @unchecked Sendable {
         }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw ConnectionError.io("socket() failed: errno \(errno)") }
+        // The host can close its end between our connect and a write (a
+        // SIGTERMed host drops its connections before its listener, so a
+        // reconnect can land in the backlog of a dying process). Neither the app
+        // nor XCTest ignores SIGPIPE and Darwin has no MSG_NOSIGNAL, so without
+        // this a write to the dead peer kills the whole process instead of
+        // returning EPIPE to `send`'s fault path.
+        var noSigPipe: Int32 = 1
+        guard setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            let errnoValue = errno
+            Darwin.close(fd)
+            throw ConnectionError.io("setsockopt(SO_NOSIGPIPE) failed: errno \(errnoValue)")
+        }
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = Array(path.utf8)
