@@ -81,6 +81,7 @@ Aeroric 现有 macOS 客户端是 Tauri（WKWebView + React）。原生迁移后
 - SwiftUI **不**写 Agent 启动参数、**不**解析原始会话 JSONL、**不**直接改共享业务数据（INV-02）。
 - 一个数据目录只有一个业务写入者（INV-03）；`AlreadyInUse` 必须显示锁持有者与安全退出方式，**不得**自动 kill PID。
 - UI 模式切换只是呈现方式变化，不得 kill/resume/relaunch Agent，不得改变 sessionId / 权限 / 模型 / cwd / PTY generation（INV-04）。
+  **已被 ADR-043 决定 4 修订（2026-10-25）：** 不再有终端/原生模式切换；现行表述为“呈现层操作（滚动、折叠、切换面板或窗口）不得改变会话进程、会话 id、权限、模型或 cwd；改变模型、权限、effort 只能经驱动的显式 configure，从下一轮生效；中断只停止当前一轮，不结束会话”。
 - 不从终端 ANSI 文本猜工具调用或审批（INV-12）；未知内容保留为带来源的 opaque 项。
 - 不得把 `remote-protocol` 当作全量业务协议库：它是 **relay 撮合控制面**，业务契约在 `packages/remote-contracts` 与 `src-tauri/src/remote`。本地 IPC 协议版本与 relay 版本号**互不借用**。
 
