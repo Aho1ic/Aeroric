@@ -156,9 +156,10 @@ fn is_wal_sidecar(rel_path: &str) -> bool {
 
 /// 原子写留下的临时文件(`.name.<pid>-<nanos>.tmp`)不是数据,是垃圾。
 fn is_temp(rel_path: &str) -> bool {
-    rel_path.rsplit('/').next().is_some_and(|n| {
-        n.ends_with(".tmp") && (n.starts_with('.') || n.contains(".tmp."))
-    })
+    rel_path
+        .rsplit('/')
+        .next()
+        .is_some_and(|n| n.ends_with(".tmp") && (n.starts_with('.') || n.contains(".tmp.")))
 }
 
 fn to_rel(root: &Path, path: &Path) -> String {
@@ -179,8 +180,8 @@ fn walk_files(root: &Path) -> Result<Vec<PathBuf>, StorageError> {
         for entry in read {
             let entry = entry.map_err(|e| read_err("cannot read directory entry", &dir, e))?;
             let path = entry.path();
-            let meta = fs::symlink_metadata(&path)
-                .map_err(|e| read_err("cannot stat", &path, e))?;
+            let meta =
+                fs::symlink_metadata(&path).map_err(|e| read_err("cannot stat", &path, e))?;
             if meta.file_type().is_symlink() {
                 // 软链不跟着走:数据目录里的链接指向外部转录,备份它们会把
                 // "只读的外部家目录"拉进这份副本,且可能成环。
@@ -228,14 +229,12 @@ fn copy_database(src: &Path, dest: &Path) -> Result<DatabaseCheck, StorageError>
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| io_err("cannot create parent", parent, e))?;
     }
-    let source = rusqlite::Connection::open_with_flags(
-        src,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| StorageError::Unreadable {
-        path: src.to_path_buf(),
-        reason: format!("cannot open for backup: {e}"),
-    })?;
+    let source =
+        rusqlite::Connection::open_with_flags(src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| StorageError::Unreadable {
+                path: src.to_path_buf(),
+                reason: format!("cannot open for backup: {e}"),
+            })?;
     source
         .backup(rusqlite::DatabaseName::Main, dest, None)
         .map_err(|e| StorageError::ReplaceFailed {
@@ -268,14 +267,12 @@ fn remove_sidecars(database: &Path) {
 
 /// 打开一份**已落盘**的库,取出可对账的证据:`integrity_check` + 每张用户表的行数。
 pub fn inspect_database(path: &Path) -> Result<DatabaseCheck, StorageError> {
-    let connection = rusqlite::Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| StorageError::Unreadable {
-        path: path.to_path_buf(),
-        reason: format!("cannot open copy: {e}"),
-    })?;
+    let connection =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| StorageError::Unreadable {
+                path: path.to_path_buf(),
+                reason: format!("cannot open copy: {e}"),
+            })?;
     let integrity: String = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))
         .map_err(|e| StorageError::Unreadable {
@@ -501,7 +498,9 @@ pub fn verify(backup_dir: &Path) -> Result<Vec<VerifyProblem>, StorageError> {
                 }),
                 Some(found) if found != expected => problems.push(VerifyProblem {
                     rel_path: recorded.rel_path.clone(),
-                    problem: format!("table {table} has {found} rows, manifest recorded {expected}"),
+                    problem: format!(
+                        "table {table} has {found} rows, manifest recorded {expected}"
+                    ),
                 }),
                 Some(_) => {}
             }
@@ -589,7 +588,11 @@ pub fn restore(
     if !diverged.is_empty() && !discard_newer {
         return Err(StorageError::ContentDiverged {
             path: dest.to_path_buf(),
-            expected: format!("{} files as recorded in {}", manifest.covered_paths().len(), MANIFEST_NAME),
+            expected: format!(
+                "{} files as recorded in {}",
+                manifest.covered_paths().len(),
+                MANIFEST_NAME
+            ),
             found: format!(
                 "{} file(s) written after the backup: {}",
                 diverged.len(),
@@ -620,10 +623,7 @@ pub fn restore(
         written += 1;
     }
 
-    Ok(RestoreOutcome {
-        written,
-        diverged,
-    })
+    Ok(RestoreOutcome { written, diverged })
 }
 
 #[cfg(test)]
@@ -685,14 +685,27 @@ mod tests {
         let manifest = create(&source, &dest, 1_700_000_000_000, true).unwrap();
         let check = manifest.databases.first().expect("the db must be recorded");
         assert_eq!(check.integrity, "ok");
-        assert_eq!(check.tables.get("notes"), Some(&40), "backup API must carry the WAL rows");
+        assert_eq!(
+            check.tables.get("notes"),
+            Some(&40),
+            "backup API must carry the WAL rows"
+        );
 
         // 侧车不得进备份:副本自带一致的 WAL,再叠一份别人时刻的 `-wal` 会让恢复
         // 把旧日志重放到新库上(`database disk image is malformed` 的经典成因)。
-        assert!(!dest.join("index.db-wal").exists(), "-wal must not be copied alongside the backup API output");
-        assert!(!dest.join("index.db-shm").exists(), "-shm must not be copied either");
+        assert!(
+            !dest.join("index.db-wal").exists(),
+            "-wal must not be copied alongside the backup API output"
+        );
+        assert!(
+            !dest.join("index.db-shm").exists(),
+            "-shm must not be copied either"
+        );
 
-        assert!(verify(&dest).unwrap().is_empty(), "a fresh backup must verify clean");
+        assert!(
+            verify(&dest).unwrap().is_empty(),
+            "a fresh backup must verify clean"
+        );
         drop(live);
         fs::remove_dir_all(root).ok();
     }
@@ -710,7 +723,10 @@ mod tests {
         let manifest = create(&source, &dest, 1, false).unwrap();
         assert_eq!(manifest.covered_paths(), vec!["projects.json"]);
         assert!(!dest.join(".write.lock").exists());
-        assert!(!dest.join("host.token").exists(), "a credential must not be copied");
+        assert!(
+            !dest.join("host.token").exists(),
+            "a credential must not be copied"
+        );
         fs::remove_dir_all(root).ok();
     }
 
@@ -727,7 +743,10 @@ mod tests {
         fs::write(dest.join("projects.json"), b"[{\"id\":\"p2\"}]").unwrap();
         let problems = verify(&dest).unwrap();
         assert_eq!(problems.len(), 1, "{problems:?}");
-        assert!(problems[0].problem.contains("content changed"), "{problems:?}");
+        assert!(
+            problems[0].problem.contains("content changed"),
+            "{problems:?}"
+        );
         fs::remove_dir_all(root).ok();
     }
 
@@ -791,7 +810,10 @@ mod tests {
         create(&source, &dest, 1, false).unwrap();
         let problems = verify(&dest).unwrap();
         assert_eq!(problems.len(), 1, "{problems:?}");
-        assert!(problems[0].problem.contains("covers no files"), "{problems:?}");
+        assert!(
+            problems[0].problem.contains("covers no files"),
+            "{problems:?}"
+        );
         fs::remove_dir_all(root).ok();
     }
 
@@ -805,7 +827,10 @@ mod tests {
         fs::create_dir_all(&dest).unwrap();
         fs::write(dest.join("already-here"), b"x").unwrap();
         let error = create(&source, &dest, 1, false).expect_err("merging must be refused");
-        assert!(matches!(error, StorageError::ReplaceFailed { .. }), "{error:?}");
+        assert!(
+            matches!(error, StorageError::ReplaceFailed { .. }),
+            "{error:?}"
+        );
         fs::remove_dir_all(root).ok();
     }
 }

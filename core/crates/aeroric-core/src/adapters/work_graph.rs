@@ -111,10 +111,7 @@ pub struct TaskNode {
 #[serde(tag = "warning", rename_all = "snake_case")]
 pub enum WorkGraphWarning {
     /// 同一个工作目录上有并发子代理,可能互相踩文件。
-    SharedWorkingDirectory {
-        cwd: String,
-        sessions: Vec<String>,
-    },
+    SharedWorkingDirectory { cwd: String, sessions: Vec<String> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,7 +162,11 @@ impl TaskTree {
         external_item_id: Option<&str>,
         persistence: PersistenceKind,
     ) -> Result<NodeKey, WorkGraphError> {
-        if external_item_id.map(str::trim).unwrap_or_default().is_empty() {
+        if external_item_id
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+        {
             return Err(WorkGraphError::MissingExternalId {
                 node_id: node_id.to_string(),
             });
@@ -202,14 +203,15 @@ impl TaskTree {
                 node_id: key.node_id.clone(),
             });
         }
-        let node = self.nodes.get_mut(key).ok_or_else(|| WorkGraphError::MissingExternalId {
-            node_id: key.node_id.clone(),
-        })?;
+        let node = self
+            .nodes
+            .get_mut(key)
+            .ok_or_else(|| WorkGraphError::MissingExternalId {
+                node_id: key.node_id.clone(),
+            })?;
         if node.status.is_terminal() && !status.is_terminal() {
-            node.stale_updates.push(format!(
-                "late {:?} after {:?}",
-                status, node.status
-            ));
+            node.stale_updates
+                .push(format!("late {:?} after {:?}", status, node.status));
             return Err(WorkGraphError::TerminalStateNotRevivable {
                 node_id: key.node_id.clone(),
                 current: node.status,
@@ -266,10 +268,7 @@ impl SubagentRegistry {
 
     /// 登记上游已存在的子代理。**幂等**:同一个 session 再来一次不会新建记录,
     /// 也不会触发第二次 spawn(宿主据此不重复启动)。
-    pub fn register_external(
-        &mut self,
-        record: SubagentRecord,
-    ) -> (bool, Vec<WorkGraphWarning>) {
+    pub fn register_external(&mut self, record: SubagentRecord) -> (bool, Vec<WorkGraphWarning>) {
         let created = match self.records.get(&record.session_id) {
             Some(existing) => existing != &record,
             None => true,
@@ -278,7 +277,8 @@ impl SubagentRegistry {
             return (false, Vec::new());
         }
         let already = self.records.contains_key(&record.session_id);
-        self.records.insert(record.session_id.clone(), record.clone());
+        self.records
+            .insert(record.session_id.clone(), record.clone());
         (already, self.warnings())
     }
 
@@ -372,7 +372,8 @@ impl GoalStore {
     /// 重启恢复:持久化的 active goal **不自动续跑**,改为待确认。
     pub fn restore_after_restart(&mut self) -> Vec<GoalRecord> {
         let mut pending = Vec::new();
-        self.goals.retain(|_, goal| goal.persistence != PersistenceKind::InMemory);
+        self.goals
+            .retain(|_, goal| goal.persistence != PersistenceKind::InMemory);
         for goal in self.goals.values_mut() {
             if goal.status == GoalStatus::Active {
                 goal.status = GoalStatus::RestoredUnconfirmed;
@@ -383,7 +384,11 @@ impl GoalStore {
     }
 
     /// 用户确认后才继续;未确认的 goal 拒绝 resume。
-    pub fn resume(&mut self, goal_id: &str, confirmed: bool) -> Result<&GoalRecord, WorkGraphError> {
+    pub fn resume(
+        &mut self,
+        goal_id: &str,
+        confirmed: bool,
+    ) -> Result<&GoalRecord, WorkGraphError> {
         let goal = self
             .goals
             .get_mut(goal_id)
@@ -444,9 +449,14 @@ pub trait CheckpointWriter: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum CheckpointOutcome {
-    Saved { key: String },
+    Saved {
+        key: String,
+    },
     /// 写入失败:工作继续,但不得对外声称「已存」。
-    Failed { key: String, error: String },
+    Failed {
+        key: String,
+        error: String,
+    },
 }
 
 /// 写 checkpoint。失败不 panic、不静默。
@@ -507,13 +517,26 @@ mod tests {
     fn two_sessions_may_each_have_a_t1_without_crossing() {
         let mut tree = TaskTree::new();
         let a = tree
-            .register_external("session-a", "T1", "dsh", Some("item-a"), PersistenceKind::Checkpointed)
+            .register_external(
+                "session-a",
+                "T1",
+                "dsh",
+                Some("item-a"),
+                PersistenceKind::Checkpointed,
+            )
             .unwrap();
         let b = tree
-            .register_external("session-b", "T1", "dsh", Some("item-b"), PersistenceKind::Checkpointed)
+            .register_external(
+                "session-b",
+                "T1",
+                "dsh",
+                Some("item-b"),
+                PersistenceKind::Checkpointed,
+            )
             .unwrap();
         assert_ne!(a, b);
-        tree.apply_status(&a, "session-a", NodeStatus::Running).unwrap();
+        tree.apply_status(&a, "session-a", NodeStatus::Running)
+            .unwrap();
         assert_eq!(tree.get(&a).unwrap().status, NodeStatus::Running);
         assert_eq!(tree.get(&b).unwrap().status, NodeStatus::Pending);
         assert_eq!(tree.session_nodes("session-a").len(), 1);
@@ -523,7 +546,13 @@ mod tests {
     fn an_update_for_another_session_is_refused() {
         let mut tree = TaskTree::new();
         let a = tree
-            .register_external("session-a", "T1", "dsh", Some("item-a"), PersistenceKind::Checkpointed)
+            .register_external(
+                "session-a",
+                "T1",
+                "dsh",
+                Some("item-a"),
+                PersistenceKind::Checkpointed,
+            )
             .unwrap();
         let error = tree
             .apply_status(&a, "session-b", NodeStatus::Running)
@@ -666,7 +695,10 @@ mod tests {
             store.get("g1").unwrap().status,
             GoalStatus::RestoredUnconfirmed
         );
-        assert!(store.get("g2").is_none(), "in-memory goals do not come back");
+        assert!(
+            store.get("g2").is_none(),
+            "in-memory goals do not come back"
+        );
 
         let error = store.resume("g1", false).unwrap_err();
         assert_eq!(

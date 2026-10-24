@@ -158,12 +158,15 @@ async fn mapped_name_fails_over_on_503_and_stops_on_422() {
     // Next request: the session sticks to the channel that worked.
     let response = send(&info.base_url, &failover_token).await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(down_seen.lock().unwrap().len(), 1, "cooling + sticky skip it");
+    assert_eq!(
+        down_seen.lock().unwrap().len(),
+        1,
+        "cooling + sticky skip it"
+    );
     assert_eq!(up_seen.lock().unwrap().len(), 2);
 
     // 422 is a request error: another channel would fail the same way.
-    let request_error_token =
-        task_tokens::issue("e2e-request-error", Some("request-error".into()));
+    let request_error_token = task_tokens::issue("e2e-request-error", Some("request-error".into()));
     let response = send(&info.base_url, &request_error_token).await;
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(bad_seen.lock().unwrap().len(), 1);

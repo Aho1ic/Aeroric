@@ -65,7 +65,10 @@ fn for_each_secret(
     }
     if let Some(Value::Object(builtins)) = fields.get_mut("builtin_agent_credentials") {
         for (agent, credentials) in builtins.iter_mut() {
-            if let Some(value) = credentials.as_object_mut().and_then(|o| o.get_mut("api_key")) {
+            if let Some(value) = credentials
+                .as_object_mut()
+                .and_then(|o| o.get_mut("api_key"))
+            {
                 f(&format!("agent-config:builtin:{agent}:api_key"), value)?;
             }
         }
@@ -159,10 +162,7 @@ pub fn split_for_disk(
 
 /// Put credentials back after reading. A missing or unreadable entry keeps the
 /// marker (see module docs) and is reported, never treated as "cleared".
-pub fn hydrate_from_store(
-    fields: &mut Map<String, Value>,
-    store: &dyn SecretStore,
-) -> Vec<String> {
+pub fn hydrate_from_store(fields: &mut Map<String, Value>, store: &dyn SecretStore) -> Vec<String> {
     let mut failures = Vec::new();
     let _ = for_each_secret(fields, &mut |account, value| {
         if value.as_str() != Some(KEYCHAIN_MARKER) {
@@ -211,7 +211,10 @@ mod tests {
         for secret in ["sk-ds", "\"pw\"", "sk-claude", "proxy-pw"] {
             assert!(!text.contains(secret), "{secret} leaked to disk: {text}");
         }
-        assert!(text.contains("no-id-is-left-alone"), "unkeyed entry untouched");
+        assert!(
+            text.contains("no-id-is-left-alone"),
+            "unkeyed entry untouched"
+        );
         assert!(!has_plaintext_secrets(&mut disk.clone()) || text.contains("no-id"));
 
         let mut loaded = disk.clone();
@@ -241,7 +244,12 @@ mod tests {
         disk["custom_agents"] = json!([]);
         split_for_disk(&mut disk, &previous, &store).unwrap();
         let keys = store.keys();
-        assert!(!keys.iter().any(|k| k.starts_with("agent-config:custom:ds:")), "{keys:?}");
+        assert!(
+            !keys
+                .iter()
+                .any(|k| k.starts_with("agent-config:custom:ds:")),
+            "{keys:?}"
+        );
         assert!(keys.contains(&"agent-config:builtin:claude:api_key".to_string()));
     }
 
@@ -262,7 +270,10 @@ mod tests {
         // Saving that state must not delete what the real store holds.
         split_for_disk(&mut loaded, &previous, &store).unwrap();
         assert_eq!(
-            store.get(&SecretKey("proxy:password".into())).unwrap().as_deref(),
+            store
+                .get(&SecretKey("proxy:password".into()))
+                .unwrap()
+                .as_deref(),
             Some("proxy-pw")
         );
     }

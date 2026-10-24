@@ -184,12 +184,8 @@ pub fn append_terminal_history(
     let mut compacted = tail.into_bytes();
     compacted.extend_from_slice(incoming.as_bytes());
     let clipped = utf8_tail_bytes(&compacted, retention.max_bytes).to_vec();
-    crate::storage::atomic::write_atomic(
-        path,
-        &clipped,
-        crate::storage::atomic::FileMode::Private,
-    )
-    .map_err(|e| e.to_string())
+    crate::storage::atomic::write_atomic(path, &clipped, crate::storage::atomic::FileMode::Private)
+        .map_err(|e| e.to_string())
 }
 
 /// `&str` 版的取尾:`utf8_tail_bytes` 的字符边界语义,但输入已是字符串。

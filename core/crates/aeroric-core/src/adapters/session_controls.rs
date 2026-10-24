@@ -402,7 +402,8 @@ fn redact_value(value: &Value, pointer: &str, redacted: &mut Vec<String>) -> Val
             let mut out = serde_json::Map::new();
             for (key, child) in map {
                 let lowered = key.to_ascii_lowercase();
-                let child_pointer = format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
+                let child_pointer =
+                    format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
                 if REDACTED_KEYS.contains(&lowered.as_str()) {
                     redacted.push(child_pointer);
                     continue;
@@ -456,7 +457,13 @@ mod tests {
         crate::adapters::probe_agent_capabilities(
             &crate::adapters::CapabilityProbe::new("dsh")
                 .native_prompt(true)
-                .supports(&["session.plan", "session.compact", "session.fork", "session.revert", "session.share"]),
+                .supports(&[
+                    "session.plan",
+                    "session.compact",
+                    "session.fork",
+                    "session.revert",
+                    "session.share",
+                ]),
         )
     }
 
@@ -471,7 +478,11 @@ mod tests {
         let request = SessionControlRequest::new(SessionCapability::Compact, "s1");
         let error = controls.authorize(&request, &json!({})).unwrap_err();
         match error {
-            ControlError::Unsupported { capability, method, note } => {
+            ControlError::Unsupported {
+                capability,
+                method,
+                note,
+            } => {
                 assert_eq!(capability, SessionCapability::Compact);
                 assert_eq!(method, "session.compact");
                 assert!(note.unwrap().contains("session.compact"));
@@ -524,14 +535,18 @@ mod tests {
         let session = SessionControlRequest::new(SessionCapability::Revert, "s1")
             .revert_target(RevertTarget::Session);
         assert_eq!(
-            controls.authorize(&session, &json!({})).unwrap().revert_target,
+            controls
+                .authorize(&session, &json!({}))
+                .unwrap()
+                .revert_target,
             Some(RevertTarget::Session)
         );
 
-        let workspace = SessionControlRequest::new(SessionCapability::Revert, "s1")
-            .revert_target(RevertTarget::Workspace {
+        let workspace = SessionControlRequest::new(SessionCapability::Revert, "s1").revert_target(
+            RevertTarget::Workspace {
                 affected_paths: vec!["src/main.rs".to_string()],
-            });
+            },
+        );
         let error = controls.authorize(&workspace, &json!({})).unwrap_err();
         assert_eq!(
             error,
@@ -582,10 +597,11 @@ mod tests {
             "env": { "TOKEN": "t" },
             "messages": [{ "role": "user", "text": "hi" }],
         });
-        let request = SessionControlRequest::new(SessionCapability::Share, "s1")
-            .share_destination(ShareDestination::Local {
+        let request = SessionControlRequest::new(SessionCapability::Share, "s1").share_destination(
+            ShareDestination::Local {
                 path: "~/Desktop".to_string(),
-            });
+            },
+        );
         let response = controls.authorize(&request, &payload).unwrap();
         let export = response.share.unwrap();
         assert!(export.payload.get("apiKey").is_none());

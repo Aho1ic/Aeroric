@@ -9,7 +9,9 @@ use super::model::{Connection, WireProtocol};
 fn auth_kind(connection: &Connection) -> AgentSetupKind {
     if connection.protocols.contains(&WireProtocol::Messages)
         && !connection.protocols.contains(&WireProtocol::Responses)
-        && !connection.protocols.contains(&WireProtocol::ChatCompletions)
+        && !connection
+            .protocols
+            .contains(&WireProtocol::ChatCompletions)
     {
         AgentSetupKind::ClaudeCode
     } else {
@@ -17,7 +19,10 @@ fn auth_kind(connection: &Connection) -> AgentSetupKind {
     }
 }
 
-pub async fn fetch_models(connection: &Connection, credential: &str) -> Result<Vec<String>, String> {
+pub async fn fetch_models(
+    connection: &Connection,
+    credential: &str,
+) -> Result<Vec<String>, String> {
     if connection.base_url.trim().is_empty() {
         return Err("connection has no base URL".to_string());
     }

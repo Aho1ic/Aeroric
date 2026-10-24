@@ -59,10 +59,7 @@ const fn addressable(id: i32) -> bool {
 impl KillTarget {
     /// 不可发送的地址:整份 `kill_now` 是空操作。用于拿不到 pid 的平台/时刻。
     pub fn disabled() -> Self {
-        Self {
-            pid: 0,
-            pgid: None,
-        }
+        Self { pid: 0, pgid: None }
     }
 
     /// 由子进程 pid 构造。pty 子进程在 `spawn_command` 的 `pre_exec` 里

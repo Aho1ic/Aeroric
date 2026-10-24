@@ -3,6 +3,7 @@
 //! runtime -> listener -> ready (P3-06).
 
 pub mod adapter_services;
+pub mod agent_connections_services;
 pub mod auth;
 pub mod codec;
 pub mod connection_services;
@@ -11,9 +12,9 @@ pub mod diagnostics;
 pub mod dispatcher;
 pub mod executor;
 pub mod families;
-pub mod gateway;
 pub mod file_access;
 pub mod file_services2;
+pub mod gateway;
 pub mod ide_services;
 pub mod infrastructure_services;
 pub(crate) mod local_targets;
@@ -26,7 +27,6 @@ pub mod remote_headless;
 pub mod search_services;
 pub mod services;
 pub mod settings_services;
-pub mod agent_connections_services;
 pub mod startup;
 pub mod submission_services;
 pub mod subscriptions;

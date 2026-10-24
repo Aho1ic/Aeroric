@@ -19,21 +19,34 @@ pub enum Reach {
     /// Upstream speaks the harness protocol; no translation.
     Direct,
     /// The gateway translates between the two protocols (Q30/Q34).
-    ViaGateway { from: WireProtocol, to: WireProtocol },
+    ViaGateway {
+        from: WireProtocol,
+        to: WireProtocol,
+    },
 }
 
 /// Stable reason codes for "this cannot be used" (shown in UI, AA04 style).
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum Unavailable {
-    ConnectionMissing { connection_id: String },
+    ConnectionMissing {
+        connection_id: String,
+    },
     ConnectionDisabled,
-    PoolMissing { pool_id: String },
+    PoolMissing {
+        pool_id: String,
+    },
     NoProtocol,
     /// Translation needed, but this harness is not on the gateway yet (Q32-a).
-    GatewayNotYetForHarness { harness: Harness },
-    ModelNotOffered { model: String },
-    CoolingDown { until_epoch_s: u64 },
+    GatewayNotYetForHarness {
+        harness: Harness,
+    },
+    ModelNotOffered {
+        model: String,
+    },
+    CoolingDown {
+        until_epoch_s: u64,
+    },
     NoCandidates,
 }
 
@@ -198,7 +211,8 @@ pub fn order(
     usage: &mut UsageCounters,
     now_epoch_s: u64,
 ) -> Vec<Candidate> {
-    let cooling = |c: &Candidate| cooldowns.get(&c.connection_id).copied().unwrap_or(0) > now_epoch_s;
+    let cooling =
+        |c: &Candidate| cooldowns.get(&c.connection_id).copied().unwrap_or(0) > now_epoch_s;
     // Stable base order: priority, then id, so every strategy is deterministic.
     list.sort_by(|a, b| {
         a.priority

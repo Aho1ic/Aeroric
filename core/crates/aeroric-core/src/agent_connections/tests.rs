@@ -60,7 +60,11 @@ fn deepseek_doc() -> ConnectionsDocument {
                 vec![WireProtocol::Messages],
                 vec![model("ds-flash-anthropic", "deepseek-v4.1-flash")],
             ),
-            conn("c", vec![WireProtocol::Responses], vec![model("gpt-x", "gpt-x")]),
+            conn(
+                "c",
+                vec![WireProtocol::Responses],
+                vec![model("gpt-x", "gpt-x")],
+            ),
         ],
         pools: vec![],
         configs: vec![],
@@ -70,10 +74,18 @@ fn deepseek_doc() -> ConnectionsDocument {
 #[test]
 fn mapped_name_gathers_every_channel_and_translates_protocols() {
     let doc = deepseek_doc();
-    let (found, excluded) = candidates(&doc, &route_config(Harness::Claude, None), "deepseek-v4.1-flash");
+    let (found, excluded) = candidates(
+        &doc,
+        &route_config(Harness::Claude, None),
+        "deepseek-v4.1-flash",
+    );
     let ids: Vec<_> = found.iter().map(|c| c.connection_id.as_str()).collect();
     assert_eq!(ids, ["a", "b"]);
-    assert_eq!(found[1].reach, Reach::Direct, "Claude speaks Messages natively");
+    assert_eq!(
+        found[1].reach,
+        Reach::Direct,
+        "Claude speaks Messages natively"
+    );
     assert_eq!(
         found[0].reach,
         Reach::ViaGateway {
@@ -81,7 +93,10 @@ fn mapped_name_gathers_every_channel_and_translates_protocols() {
             to: WireProtocol::ChatCompletions
         }
     );
-    assert_eq!(found[0].upstream_model, "deepseek-chat", "upstream id is what is sent");
+    assert_eq!(
+        found[0].upstream_model, "deepseek-chat",
+        "upstream id is what is sent"
+    );
     assert!(excluded
         .iter()
         .any(|(id, why)| id == "c" && matches!(why, Unavailable::ModelNotOffered { .. })));
@@ -90,19 +105,38 @@ fn mapped_name_gathers_every_channel_and_translates_protocols() {
 #[test]
 fn omp_cannot_use_a_translated_channel_yet() {
     let doc = deepseek_doc();
-    let (found, excluded) = candidates(&doc, &route_config(Harness::Omp, None), "deepseek-v4.1-flash");
+    let (found, excluded) = candidates(
+        &doc,
+        &route_config(Harness::Omp, None),
+        "deepseek-v4.1-flash",
+    );
     assert_eq!(found.len(), 1, "only the native Chat Completions channel");
     assert!(excluded.iter().any(|(id, why)| id == "b"
-        && *why == Unavailable::GatewayNotYetForHarness { harness: Harness::Omp }));
+        && *why
+            == Unavailable::GatewayNotYetForHarness {
+                harness: Harness::Omp
+            }));
 }
 
 #[test]
 fn cooling_channels_move_last_but_stay_reachable() {
     let doc = deepseek_doc();
-    let (found, _) = candidates(&doc, &route_config(Harness::Claude, None), "deepseek-v4.1-flash");
+    let (found, _) = candidates(
+        &doc,
+        &route_config(Harness::Claude, None),
+        "deepseek-v4.1-flash",
+    );
     let cooldowns = Cooldowns::from([("a".to_string(), 1_000)]);
     let mut usage = UsageCounters::default();
-    let ordered = order(found, PoolStrategy::Priority, "r", None, &cooldowns, &mut usage, 500);
+    let ordered = order(
+        found,
+        PoolStrategy::Priority,
+        "r",
+        None,
+        &cooldowns,
+        &mut usage,
+        500,
+    );
     let ids: Vec<_> = ordered.iter().map(|c| c.connection_id.as_str()).collect();
     assert_eq!(ids, ["b", "a"]);
 }
@@ -110,9 +144,21 @@ fn cooling_channels_move_last_but_stay_reachable() {
 #[test]
 fn sticky_session_wins_over_strategy_order() {
     let doc = deepseek_doc();
-    let (found, _) = candidates(&doc, &route_config(Harness::Claude, None), "deepseek-v4.1-flash");
+    let (found, _) = candidates(
+        &doc,
+        &route_config(Harness::Claude, None),
+        "deepseek-v4.1-flash",
+    );
     let mut usage = UsageCounters::default();
-    let ordered = order(found, PoolStrategy::Priority, "r", Some("b"), &Cooldowns::new(), &mut usage, 0);
+    let ordered = order(
+        found,
+        PoolStrategy::Priority,
+        "r",
+        Some("b"),
+        &Cooldowns::new(),
+        &mut usage,
+        0,
+    );
     assert_eq!(ordered[0].connection_id, "b");
 }
 
@@ -124,7 +170,15 @@ fn round_robin_rotates_across_calls() {
     let mut firsts = Vec::new();
     for _ in 0..4 {
         let (found, _) = candidates(&doc, &cfg, "deepseek-v4.1-flash");
-        let ordered = order(found, PoolStrategy::RoundRobin, "r", None, &Cooldowns::new(), &mut usage, 0);
+        let ordered = order(
+            found,
+            PoolStrategy::RoundRobin,
+            "r",
+            None,
+            &Cooldowns::new(),
+            &mut usage,
+            0,
+        );
         firsts.push(ordered[0].connection_id.clone());
     }
     assert_eq!(firsts, ["a", "b", "a", "b"]);
@@ -138,20 +192,43 @@ fn pool_priority_and_free_first() {
         label: "p".into(),
         strategy: PoolStrategy::FreeFirst,
         members: vec![
-            PoolMember { connection_id: "a".into(), priority: 0, weight: 1, free: false },
-            PoolMember { connection_id: "b".into(), priority: 5, weight: 1, free: true },
+            PoolMember {
+                connection_id: "a".into(),
+                priority: 0,
+                weight: 1,
+                free: false,
+            },
+            PoolMember {
+                connection_id: "b".into(),
+                priority: 5,
+                weight: 1,
+                free: true,
+            },
         ],
         sticky_sessions: true,
         sticky_ttl_seconds: 3600,
     });
     let cfg = AgentConfig {
-        target: ConfigTarget::Pool { pool_id: "p".into() },
+        target: ConfigTarget::Pool {
+            pool_id: "p".into(),
+        },
         ..route_config(Harness::Claude, None)
     };
     let (found, _) = candidates(&doc, &cfg, "deepseek-v4.1-flash");
     let mut usage = UsageCounters::default();
-    let ordered = order(found, PoolStrategy::FreeFirst, "p", None, &Cooldowns::new(), &mut usage, 0);
-    assert_eq!(ordered[0].connection_id, "b", "free member first despite lower priority");
+    let ordered = order(
+        found,
+        PoolStrategy::FreeFirst,
+        "p",
+        None,
+        &Cooldowns::new(),
+        &mut usage,
+        0,
+    );
+    assert_eq!(
+        ordered[0].connection_id, "b",
+        "free member first despite lower priority"
+    );
 }
 
 #[test]
@@ -179,12 +256,16 @@ fn offered_models_are_deduplicated_mapped_names() {
 #[test]
 fn validation_rejects_ambiguous_mapping_and_dangling_refs() {
     let mut doc = deepseek_doc();
-    doc.connections[0].models.push(model("other", "deepseek-v4.1-flash"));
+    doc.connections[0]
+        .models
+        .push(model("other", "deepseek-v4.1-flash"));
     assert!(store::validate(&doc).unwrap_err().contains("twice"));
 
     let mut doc = deepseek_doc();
     doc.configs.push(AgentConfig {
-        target: ConfigTarget::Pool { pool_id: "nope".into() },
+        target: ConfigTarget::Pool {
+            pool_id: "nope".into(),
+        },
         ..route_config(Harness::Claude, None)
     });
     assert!(store::validate(&doc).is_err());
@@ -210,7 +291,10 @@ fn document_round_trips_without_credentials() {
     let secrets = MemorySecrets::default();
     store::set_credential(&secrets, "a", "sk-test").unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("sk-test"));
-    assert_eq!(store::get_credential(&secrets, "a").unwrap().as_deref(), Some("sk-test"));
+    assert_eq!(
+        store::get_credential(&secrets, "a").unwrap().as_deref(),
+        Some("sk-test")
+    );
     store::delete_credential(&secrets, "a").unwrap();
     assert_eq!(store::get_credential(&secrets, "a").unwrap(), None);
 }

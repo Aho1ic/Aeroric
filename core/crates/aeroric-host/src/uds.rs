@@ -199,11 +199,13 @@ mod tests {
             default_socket_path(deep),
             PathBuf::from("/tmp/aeroric-98e1d459c998c1aa.sock")
         );
-        assert!(default_socket_path(deep)
-            .as_os_str()
-            .as_encoded_bytes()
-            .len()
-            < SUN_PATH_LIMIT);
+        assert!(
+            default_socket_path(deep)
+                .as_os_str()
+                .as_encoded_bytes()
+                .len()
+                < SUN_PATH_LIMIT
+        );
     }
 
     #[tokio::test]

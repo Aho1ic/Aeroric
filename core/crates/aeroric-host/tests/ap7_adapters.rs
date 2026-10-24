@@ -13,9 +13,9 @@ use host_harness::Harness;
 use serde_json::{json, Value};
 
 use aeroric_core::adapters::CapabilityProbe;
+use aeroric_host::adapter_services::AdapterInjection;
 use aeroric_protocol::envelope::Frame;
 use aeroric_protocol::error::ErrorCode;
-use aeroric_host::adapter_services::AdapterInjection;
 
 /// 探测:方法与版本都取自 core 内钉住的 DSH 清单,而不是测试里手写的字符串。
 fn dsh_probe() -> CapabilityProbe {
@@ -53,13 +53,12 @@ async fn connect() -> (
     tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
     tokio::net::unix::OwnedWriteHalf,
 ) {
-    let harness = Harness::start_with_wiring("ap7-adapters", |_| {
-        aeroric_host::dispatcher::HostWiring {
+    let harness =
+        Harness::start_with_wiring("ap7-adapters", |_| aeroric_host::dispatcher::HostWiring {
             adapters: Some(std::sync::Arc::new(injection())),
             ..Default::default()
-        }
-    })
-    .await;
+        })
+        .await;
     let (mut reader, mut writer) = harness.connect().await;
     Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
     (harness, reader, writer)
@@ -93,7 +92,12 @@ async fn handshake_advertises_only_probed_capabilities_with_evidence() {
         .unwrap_or_default();
     let by_name: std::collections::HashMap<&str, &Value> = capabilities
         .iter()
-        .filter_map(|capability| capability.get("name").and_then(Value::as_str).map(|name| (name, capability)))
+        .filter_map(|capability| {
+            capability
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|name| (name, capability))
+        })
         .collect();
 
     let controls = by_name["session-controls"];
@@ -101,7 +105,10 @@ async fn handshake_advertises_only_probed_capabilities_with_evidence() {
     let note = controls["note"].as_str().unwrap();
     // 证据里必须有适配器名、版本,以及**具体**被广告的方法名。
     assert!(note.contains("dsh"), "{note}");
-    assert!(note.contains(aeroric_core::agents::dsh_host::client::PACKAGE_VERSION), "{note}");
+    assert!(
+        note.contains(aeroric_core::agents::dsh_host::client::PACKAGE_VERSION),
+        "{note}"
+    );
     assert!(note.contains("session.fork"), "{note}");
     // plan/share 在真实方法表里不存在,因此不得出现在证据里。
     assert!(!note.contains("session.plan"), "{note}");
@@ -132,14 +139,20 @@ async fn a_host_without_a_probed_adapter_registers_nothing_and_says_why() {
         .cloned()
         .unwrap_or_default();
     assert!(
-        !capabilities.iter().any(|capability| capability["name"] == "session-controls"),
+        !capabilities
+            .iter()
+            .any(|capability| capability["name"] == "session-controls"),
         "a host with no adapter injection must not advertise session controls"
     );
 
     let frame = Harness::call(
         &mut reader,
         &mut writer,
-        &Harness::request("c-1", "session.control", json!({"capability": "fork", "sessionId": "s"})),
+        &Harness::request(
+            "c-1",
+            "session.control",
+            json!({"capability": "fork", "sessionId": "s"}),
+        ),
     )
     .await;
     // 方法根本没注册 → 与「方法存在但未广告」同一个公开语义:`UnsupportedCapability`。
@@ -168,7 +181,11 @@ async fn adapters_capabilities_reports_the_probe_verbatim() {
     );
     let agent = &result["agent"];
     assert_eq!(agent["nativePrompt"], json!(true));
-    assert_eq!(agent["fork"], json!(true), "session.fork is in the pinned table");
+    assert_eq!(
+        agent["fork"],
+        json!(true),
+        "session.fork is in the pinned table"
+    );
     assert_eq!(agent["planMode"], json!(false), "session.plan is not");
     assert_eq!(agent["share"], json!(false), "session.share is not");
     // 探不到的项要能解释自己。

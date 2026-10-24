@@ -559,21 +559,21 @@ impl TaskService {
     pub fn submit(
         &self,
         request: &aeroric_protocol::submission::SubmissionRequest,
-    ) -> Result<aeroric_protocol::submission::SubmissionReceipt, super::submissions::SubmissionError> {
+    ) -> Result<aeroric_protocol::submission::SubmissionReceipt, super::submissions::SubmissionError>
+    {
         // Lock order: settings → submissions → task mutations → operation ledger.
         // The execution resolver reads the same settings snapshot without a write.
         let _settings = crate::storage::settings::settings_lock().lock();
         crate::storage::compat::require_writer(&self.context)?;
-        let (project, reasons) = match crate::settings::session_catalog::for_project(
-            &self.context,
-            &request.project_id,
-        ) {
-            Ok((project, catalog)) => (
-                Some(project),
-                crate::settings::session_catalog::validate(&catalog, request),
-            ),
-            Err(reason) => (None, vec![reason]),
-        };
+        let (project, reasons) =
+            match crate::settings::session_catalog::for_project(&self.context, &request.project_id)
+            {
+                Ok((project, catalog)) => (
+                    Some(project),
+                    crate::settings::session_catalog::validate(&catalog, request),
+                ),
+                Err(reason) => (None, vec![reason]),
+            };
         super::submissions::submit(&self.context, &self.submissions, request, reasons, || {
             let project = project
                 .as_ref()
@@ -620,7 +620,8 @@ impl TaskService {
         &self,
         id: &str,
         fingerprint: &str,
-    ) -> Result<aeroric_protocol::submission::SubmissionLookup, super::submissions::SubmissionError> {
+    ) -> Result<aeroric_protocol::submission::SubmissionLookup, super::submissions::SubmissionError>
+    {
         super::submissions::lookup(&self.context, &self.submissions, id, fingerprint)
     }
 

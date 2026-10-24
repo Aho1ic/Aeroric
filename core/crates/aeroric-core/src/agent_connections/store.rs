@@ -36,7 +36,10 @@ pub fn validate(doc: &ConnectionsDocument) -> Result<(), String> {
         let mut names = std::collections::HashSet::new();
         for m in &c.models {
             if m.upstream_id.trim().is_empty() {
-                return Err(format!("connection `{}` has a model without upstream id", c.id));
+                return Err(format!(
+                    "connection `{}` has a model without upstream id",
+                    c.id
+                ));
             }
             // Two entries on one connection may not claim the same mapped name:
             // routing would have to guess which upstream model to send.
@@ -74,7 +77,10 @@ pub fn validate(doc: &ConnectionsDocument) -> Result<(), String> {
             ConfigTarget::Route { pool_id } => pool_id.as_deref().is_none_or(has_pool),
         };
         if !ok {
-            return Err(format!("config `{}` targets something that does not exist", cfg.id));
+            return Err(format!(
+                "config `{}` targets something that does not exist",
+                cfg.id
+            ));
         }
     }
     Ok(())
@@ -100,7 +106,10 @@ pub fn set_credential(
     )
 }
 
-pub fn get_credential(store: &dyn SecretStore, connection_id: &str) -> Result<Option<String>, String> {
+pub fn get_credential(
+    store: &dyn SecretStore,
+    connection_id: &str,
+) -> Result<Option<String>, String> {
     store.get(&SecretKey(format!("connection:{connection_id}:credential")))
 }
 

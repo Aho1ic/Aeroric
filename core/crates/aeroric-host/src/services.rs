@@ -866,10 +866,7 @@ fn project_read_task_terminal_history(request: Request, context: Arc<CoreContext
         .filter(|bytes| *bytes > 0)
         .unwrap_or(HISTORY_REPLY_MAX_BYTES)
         .min(HISTORY_REPLY_MAX_BYTES);
-    match aeroric_core::terminal::history::read_terminal_history_tail_from_path(
-        &path,
-        requested,
-    ) {
+    match aeroric_core::terminal::history::read_terminal_history_tail_from_path(&path, requested) {
         Ok(history) => ok(&request, json!(history)),
         Err(e) => failure(
             request.id,
@@ -4867,7 +4864,10 @@ mod terminal_replay_tests {
 
         // 真实落盘一个项目与一条任务记录:这是 `evicted` 与 `unknownStream` 的
         // 唯一分界(记录在 vs 两处都查无)。
-        let project_dir = context.paths.project_dir("proj-evicted").expect("project dir");
+        let project_dir = context
+            .paths
+            .project_dir("proj-evicted")
+            .expect("project dir");
         std::fs::create_dir_all(&project_dir).expect("create project dir");
         std::fs::write(
             context.paths.projects_file(),
@@ -4881,7 +4881,10 @@ mod terminal_replay_tests {
         )
         .expect("write projects");
         std::fs::write(
-            context.paths.tasks_file("proj-evicted").expect("tasks file"),
+            context
+                .paths
+                .tasks_file("proj-evicted")
+                .expect("tasks file"),
             serde_json::to_vec(&json!([{
                 "id": "task-retired",
                 "projectId": "proj-evicted",

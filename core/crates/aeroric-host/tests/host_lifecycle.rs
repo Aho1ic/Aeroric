@@ -229,22 +229,21 @@ async fn production_startup_migrates_legacy_agent_settings_before_ready() {
     std::fs::write(paths.settings_file(), &settings).expect("legacy settings");
     let secrets = Arc::new(aeroric_core::context::MemorySecrets::default());
 
-    let started =
-        aeroric_host::startup::run_startup_with_secrets_and_legacy_agent_migration(
-            &HostOptions {
-                socket_path: paths.data_dir().join("host.sock"),
-                paths: paths.clone(),
-                ready_fd: None,
-            },
-            Arc::new(SystemClock),
-            &owner(),
-            &LocalProbe,
-            "bh",
-            "ph",
-            secrets.clone(),
-        )
-        .await
-        .expect("production startup");
+    let started = aeroric_host::startup::run_startup_with_secrets_and_legacy_agent_migration(
+        &HostOptions {
+            socket_path: paths.data_dir().join("host.sock"),
+            paths: paths.clone(),
+            ready_fd: None,
+        },
+        Arc::new(SystemClock),
+        &owner(),
+        &LocalProbe,
+        "bh",
+        "ph",
+        secrets.clone(),
+    )
+    .await
+    .expect("production startup");
 
     let document = aeroric_core::agent_connections::store::load(
         &paths.data_dir().join("agent-connections.json"),

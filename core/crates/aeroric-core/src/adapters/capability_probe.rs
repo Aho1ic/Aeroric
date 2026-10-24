@@ -179,9 +179,7 @@ mod tests {
         assert_eq!(caps.extra["adapterVersion"], "0.8.1");
         let unsupported = caps.extra["unsupported"].as_array().unwrap();
         assert_eq!(unsupported.len(), 3);
-        assert!(unsupported
-            .iter()
-            .any(|value| value == "session.compact"));
+        assert!(unsupported.iter().any(|value| value == "session.compact"));
     }
 
     #[test]

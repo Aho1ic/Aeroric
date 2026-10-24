@@ -172,7 +172,10 @@ async fn claude_reaches_a_chat_only_channel_through_the_bridge() {
         assert!(text.contains(event), "missing {event} in:\n{text}");
     }
     assert!(text.contains("Hel") && text.contains("lo"), "{text}");
-    assert!(!text.contains("chat.completion"), "raw Chat chunks leaked:\n{text}");
+    assert!(
+        !text.contains("chat.completion"),
+        "raw Chat chunks leaked:\n{text}"
+    );
 
     task_tokens::revoke("e2e-messages");
     router.stop().await.unwrap();

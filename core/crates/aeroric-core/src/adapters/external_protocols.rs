@@ -177,9 +177,8 @@ impl OAuthStatus {
     /// 该状态是否应当被 `generation` 更新的登录覆盖。过期/旧代次都不得覆盖新登录。
     pub fn should_be_replaced_by(&self, incoming_generation: u64) -> bool {
         match self {
-            OAuthStatus::Configured { generation, .. } | OAuthStatus::Expired { generation, .. } => {
-                incoming_generation > *generation
-            }
+            OAuthStatus::Configured { generation, .. }
+            | OAuthStatus::Expired { generation, .. } => incoming_generation > *generation,
             OAuthStatus::NotConfigured => true,
         }
     }
@@ -243,9 +242,8 @@ pub fn apply_login(
 ) -> Result<OAuthStatus, OAuthError> {
     if !current.should_be_replaced_by(incoming_generation) {
         let current_generation = match current {
-            OAuthStatus::Configured { generation, .. } | OAuthStatus::Expired { generation, .. } => {
-                *generation
-            }
+            OAuthStatus::Configured { generation, .. }
+            | OAuthStatus::Expired { generation, .. } => *generation,
             OAuthStatus::NotConfigured => 0,
         };
         return Err(OAuthError::StaleGeneration {
@@ -294,7 +292,10 @@ pub struct SandboxReport {
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum SandboxError {
     /// 要求了沙箱但没就绪 → **fail closed**,不降级运行。
-    EnabledButNotReady { backend: String, note: Option<String> },
+    EnabledButNotReady {
+        backend: String,
+        note: Option<String>,
+    },
     /// 平台不支持又要求沙箱。
     UnsupportedButRequired,
 }
@@ -388,8 +389,13 @@ impl ToolActivityNotice {
 #[serde(tag = "handoff", rename_all = "snake_case")]
 pub enum ToolPermissionHandoff {
     Ready,
-    OpenSystemSettings { kind: ToolPermissionKind },
-    Reauthorize { kind: ToolPermissionKind, hint: String },
+    OpenSystemSettings {
+        kind: ToolPermissionKind,
+    },
+    Reauthorize {
+        kind: ToolPermissionKind,
+        hint: String,
+    },
 }
 
 // ── voice ────────────────────────────────────────────────────────────────────
@@ -422,15 +428,22 @@ pub enum VoicePhase {
 pub enum VoiceError {
     /// 用户没开语音输入。
     NotOptedIn,
-    MicDenied { permission: MicPermission },
+    MicDenied {
+        permission: MicPermission,
+    },
     /// 没录到任何音频(或全是静音)。
     NoAudio,
     /// 转写失败/网络失败。
-    TranscriptionFailed { detail: String },
+    TranscriptionFailed {
+        detail: String,
+    },
     /// 草稿是空的 —— 不发送空 prompt。
     EmptyDraft,
     /// 顺序错误(例如没在 Recording 就 stop)。
-    WrongPhase { expected: Vec<VoicePhase>, actual: VoicePhase },
+    WrongPhase {
+        expected: Vec<VoicePhase>,
+        actual: VoicePhase,
+    },
 }
 
 /// 语音输入状态机。**终态只有 `Sent` 与 `Cancelled`**,且只有 `Sent` 才产生请求。
@@ -558,7 +571,12 @@ mod tests {
             peer_version: 2,
             ..negotiation
         };
-        assert_eq!(ok.negotiate(&["/repo".to_string()]).unwrap().negotiated_version, 2);
+        assert_eq!(
+            ok.negotiate(&["/repo".to_string()])
+                .unwrap()
+                .negotiated_version,
+            2
+        );
     }
 
     #[test]
@@ -725,7 +743,10 @@ mod tests {
             summary: "open a page".to_string(),
             executor: "external agent".to_string(),
             permissions: vec![
-                (ToolPermissionKind::ScreenRecording, ToolPermissionGrant::Denied),
+                (
+                    ToolPermissionKind::ScreenRecording,
+                    ToolPermissionGrant::Denied,
+                ),
                 (
                     ToolPermissionKind::Accessibility,
                     ToolPermissionGrant::UnstableSignature,
@@ -752,7 +773,10 @@ mod tests {
     #[test]
     fn voice_is_off_unless_opted_in_and_a_denied_mic_produces_nothing() {
         let mut session = VoiceSession::new(false);
-        assert_eq!(session.start(MicPermission::Granted), Err(VoiceError::NotOptedIn));
+        assert_eq!(
+            session.start(MicPermission::Granted),
+            Err(VoiceError::NotOptedIn)
+        );
         assert_eq!(session.submitted_prompt, None);
 
         let mut session = VoiceSession::new(true);

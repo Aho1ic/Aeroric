@@ -19,7 +19,9 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::remote::auth::AuthStore;
-use crate::remote::config::{load_config, load_config_in, save_config, save_config_in, RemoteConfig};
+use crate::remote::config::{
+    load_config, load_config_in, save_config, save_config_in, RemoteConfig,
+};
 use crate::remote::crypto;
 use crate::remote::event_log::EventLog;
 use crate::remote::protocol::{push_json, RpcVersion};

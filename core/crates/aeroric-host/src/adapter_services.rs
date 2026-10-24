@@ -100,7 +100,11 @@ pub fn adapter_capabilities(injection: &AdapterInjection) -> Vec<Capability> {
             Some(format!(
                 "adapter {:?} {}: {}",
                 injection.probe.adapter,
-                injection.probe.version.as_deref().unwrap_or("version unknown"),
+                injection
+                    .probe
+                    .version
+                    .as_deref()
+                    .unwrap_or("version unknown"),
                 advertised.join(", ")
             ))
         },
@@ -151,11 +155,12 @@ fn parse_capability(value: &Value) -> Result<SessionCapability, String> {
 }
 
 fn parse_permission(value: &Value) -> Result<aeroric_protocol::task::PermissionMode, String> {
-    serde_json::from_value(value.clone())
-        .map_err(|_| format!("unknown permission mode {value:?}"))
+    serde_json::from_value(value.clone()).map_err(|_| format!("unknown permission mode {value:?}"))
 }
 
-fn parse_revert_target(value: &Value) -> Result<aeroric_core::adapters::session_controls::RevertTarget, String> {
+fn parse_revert_target(
+    value: &Value,
+) -> Result<aeroric_core::adapters::session_controls::RevertTarget, String> {
     use aeroric_core::adapters::session_controls::RevertTarget;
     match value.get("target").and_then(Value::as_str) {
         Some("session") => Ok(RevertTarget::Session),
@@ -232,7 +237,8 @@ fn build_request(params: &Value) -> Result<(SessionControlRequest, Value), Strin
         request = request.share_destination(parse_share_destination(destination)?);
     }
     if params.get("shareRedaction").and_then(Value::as_str) == Some("none") {
-        request = request.share_redaction(aeroric_core::adapters::session_controls::ShareRedaction::None);
+        request =
+            request.share_redaction(aeroric_core::adapters::session_controls::ShareRedaction::None);
     }
     if let Some(confirmed) = params.get("confirmed").and_then(Value::as_bool) {
         request = request.confirmed(confirmed);
@@ -244,18 +250,15 @@ fn build_request(params: &Value) -> Result<(SessionControlRequest, Value), Strin
 
 fn control_error(error: ControlError) -> (ErrorCode, String) {
     match &error {
-        ControlError::Unsupported { .. } => (
-            ErrorCode::UnsupportedCapability,
-            format!("{error:?}"),
-        ),
+        ControlError::Unsupported { .. } => {
+            (ErrorCode::UnsupportedCapability, format!("{error:?}"))
+        }
         ControlError::PermissionDrift { .. }
         | ControlError::PermissionEscalation { .. }
         | ControlError::PreviewRequired { .. }
         | ControlError::PublicShareNeedsEndpoint
         | ControlError::ConfirmationRequired { .. }
-        | ControlError::MissingTarget { .. } => {
-            (ErrorCode::InvalidArgument, format!("{error:?}"))
-        }
+        | ControlError::MissingTarget { .. } => (ErrorCode::InvalidArgument, format!("{error:?}")),
     }
 }
 
@@ -266,10 +269,7 @@ pub fn register_session_control_services(set: &mut ServiceSet, injection: Arc<Ad
         return;
     }
     // 每个会话的能力探测在注册时冻结一次:方法表不会在宿主生命周期内变。
-    let controls = SessionControls::new(
-        injection.capabilities(),
-        injection.queued_permission_mode,
-    );
+    let controls = SessionControls::new(injection.capabilities(), injection.queued_permission_mode);
     set.register(
         "session.control",
         Arc::new(move |request, _context| {

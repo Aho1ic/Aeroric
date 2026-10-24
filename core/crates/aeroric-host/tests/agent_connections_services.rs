@@ -231,7 +231,10 @@ async fn referenced_connections_cannot_be_deleted() {
         .call("agentConnections.deleteConnection", json!({ "id": "a" }))
         .await
         .expect("delete connection");
-    assert!(reply["document"]["connections"].as_array().unwrap().is_empty());
+    assert!(reply["document"]["connections"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert!(reply["document"]["pools"][0]["members"]
         .as_array()
         .unwrap()
@@ -301,7 +304,10 @@ async fn fetch_without_credential_fails_and_keeps_the_catalog() {
     .expect("put");
     let before = rig.document();
     let failed = rig
-        .call("agentConnections.fetchModels", json!({ "connectionId": "a" }))
+        .call(
+            "agentConnections.fetchModels",
+            json!({ "connectionId": "a" }),
+        )
         .await;
     assert!(failed.is_err(), "{failed:?}");
     assert_eq!(rig.document(), before);

@@ -301,7 +301,9 @@ impl HostServices {
                 name: aeroric_protocol::submission::CAPABILITY.into(),
                 enabled: true,
                 since: Some(1),
-                note: Some("Versioned native configurations and durable submission receipts".into()),
+                note: Some(
+                    "Versioned native configurations and durable submission receipts".into(),
+                ),
             });
         }
         crate::services::register_read_services(&mut set, Arc::clone(&context));

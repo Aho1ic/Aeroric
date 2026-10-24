@@ -319,9 +319,8 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             // security normalization applied by `load_config_in`.
             let remote_config = aeroric_core::remote::config::load_config_in(data_dir);
             if remote_config.enabled {
-                let remote_state = Arc::new(
-                    aeroric_core::remote::state::RemoteState::new_at(data_dir),
-                );
+                let remote_state =
+                    Arc::new(aeroric_core::remote::state::RemoteState::new_at(data_dir));
                 // 诊断用的 relay 配置取自 state(即服务真正会用的那份),而不是再读一遍文件。
                 let relay_for_diagnostics = {
                     let cfg = remote_state.config.lock();

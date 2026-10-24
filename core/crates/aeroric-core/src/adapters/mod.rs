@@ -30,8 +30,12 @@ pub use external_protocols::{
     admit_attachments, answer_webview_credential_request, apply_login, AcpAttachment,
     AcpNegotiation, AcpRefusal, AcpSession, AttachmentKind, AttachmentRefusal, MicPermission,
     OAuthError, OAuthFlow, OAuthLaunch, OAuthStatus, SandboxError, SandboxReport, SandboxState,
-    ToolActivityNotice, ToolPermissionGrant, ToolPermissionHandoff, ToolPermissionKind,
-    VoiceError, VoicePhase, VoiceSession, WebviewCredentialRequest,
+    ToolActivityNotice, ToolPermissionGrant, ToolPermissionHandoff, ToolPermissionKind, VoiceError,
+    VoicePhase, VoiceSession, WebviewCredentialRequest,
+};
+pub use session_controls::{
+    ControlError, SessionCapability, SessionControlRequest, SessionControlResponse,
+    SessionControls, ShareExport, ShareRedaction,
 };
 pub use work_graph::{
     CheckpointOutcome, CheckpointWriter, ExternalRef, GoalRecord, GoalStatus, GoalStore,
@@ -42,8 +46,4 @@ pub use workflow::{
     MaintenanceArtifact, MaintenanceArtifactState, MaintenanceError, MaintenanceKind,
     MaintenanceStore, MemoryMaintenanceConfig, ResumeRefusal, RetryDecision, RetryPolicy,
     StepRecord, StepStatus, WorkflowJournal,
-};
-pub use session_controls::{
-    ControlError, SessionCapability, SessionControlRequest, SessionControlResponse,
-    SessionControls, ShareExport, ShareRedaction,
 };

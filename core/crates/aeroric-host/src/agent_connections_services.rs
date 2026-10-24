@@ -115,7 +115,11 @@ fn put_connection(request: Request, context: Arc<CoreContext>) -> Frame {
     // a failed save the user can retry.
     if let Some(secret) = optional_str(&request, "credential") {
         if let Err(e) = store::set_credential(context.secrets.as_ref(), &connection.id, &secret) {
-            return failure(request.id.clone(), ErrorCode::IoError, &format!("keychain: {e}"));
+            return failure(
+                request.id.clone(),
+                ErrorCode::IoError,
+                &format!("keychain: {e}"),
+            );
         }
     }
     mutate(&request, &context, |doc| {
@@ -125,7 +129,10 @@ fn put_connection(request: Request, context: Arc<CoreContext>) -> Frame {
 }
 
 fn set_credential(request: Request, context: Arc<CoreContext>) -> Frame {
-    let (id, secret) = match (param::<String>(&request, "connectionId"), param::<String>(&request, "credential")) {
+    let (id, secret) = match (
+        param::<String>(&request, "connectionId"),
+        param::<String>(&request, "credential"),
+    ) {
         (Ok(id), Ok(secret)) => (id, secret),
         (Err(e), _) | (_, Err(e)) => {
             return failure(request.id.clone(), ErrorCode::InvalidArgument, &e)
@@ -137,11 +144,19 @@ fn set_credential(request: Request, context: Arc<CoreContext>) -> Frame {
         Err(e) => return failure(request.id.clone(), ErrorCode::IoError, &e),
     };
     if !doc.connections.iter().any(|c| c.id == id) {
-        return failure(request.id.clone(), ErrorCode::NotFound, "connection not found");
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "connection not found",
+        );
     }
     // Empty string deletes (Q27: revoking a key takes effect immediately).
     if let Err(e) = store::set_credential(context.secrets.as_ref(), &id, &secret) {
-        return failure(request.id.clone(), ErrorCode::IoError, &format!("keychain: {e}"));
+        return failure(
+            request.id.clone(),
+            ErrorCode::IoError,
+            &format!("keychain: {e}"),
+        );
     }
     ok(&request, snapshot(&context, &doc))
 }
@@ -151,7 +166,9 @@ fn delete_connection(request: Request, context: Arc<CoreContext>) -> Frame {
         Ok(id) => id,
         Err(e) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &e),
     };
-    let frame = mutate(&request, &context, |doc| service::delete_connection(doc, &id));
+    let frame = mutate(&request, &context, |doc| {
+        service::delete_connection(doc, &id)
+    });
     // Only drop the key once the document no longer references the connection.
     if frame_is_ok(&frame) {
         let _ = store::delete_credential(context.secrets.as_ref(), &id);
@@ -296,13 +313,34 @@ fn fetch_models_handler(context: &Arc<CoreContext>) -> Handler {
 
 pub fn register_agent_connection_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     set.register("agentConnections.load", blocking(&context, load));
-    set.register("agentConnections.putConnection", blocking(&context, put_connection));
-    set.register("agentConnections.setCredential", blocking(&context, set_credential));
-    set.register("agentConnections.deleteConnection", blocking(&context, delete_connection));
+    set.register(
+        "agentConnections.putConnection",
+        blocking(&context, put_connection),
+    );
+    set.register(
+        "agentConnections.setCredential",
+        blocking(&context, set_credential),
+    );
+    set.register(
+        "agentConnections.deleteConnection",
+        blocking(&context, delete_connection),
+    );
     set.register("agentConnections.putPool", blocking(&context, put_pool));
-    set.register("agentConnections.deletePool", blocking(&context, delete_pool));
+    set.register(
+        "agentConnections.deletePool",
+        blocking(&context, delete_pool),
+    );
     set.register("agentConnections.putConfig", blocking(&context, put_config));
-    set.register("agentConnections.deleteConfig", blocking(&context, delete_config));
-    set.register("agentConnections.candidates", blocking(&context, candidates));
-    set.register("agentConnections.fetchModels", fetch_models_handler(&context));
+    set.register(
+        "agentConnections.deleteConfig",
+        blocking(&context, delete_config),
+    );
+    set.register(
+        "agentConnections.candidates",
+        blocking(&context, candidates),
+    );
+    set.register(
+        "agentConnections.fetchModels",
+        fetch_models_handler(&context),
+    );
 }

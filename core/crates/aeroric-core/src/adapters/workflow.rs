@@ -80,13 +80,28 @@ pub struct WorkflowJournal {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum ResumeRefusal {
-    ScriptChanged { journal: String, current: String },
-    AdapterVersionChanged { journal: String, current: String },
-    StepInputChanged { stage: String, journal: String, current: String },
+    ScriptChanged {
+        journal: String,
+        current: String,
+    },
+    AdapterVersionChanged {
+        journal: String,
+        current: String,
+    },
+    StepInputChanged {
+        stage: String,
+        journal: String,
+        current: String,
+    },
     /// 结果不明的步骤还没 reconcile 就要求续跑。
-    UnreconciledUnknownStep { stage: String },
+    UnreconciledUnknownStep {
+        stage: String,
+    },
     /// 达到重试上限的步骤挡在那里。
-    BlockedStep { stage: String, attempts: u32 },
+    BlockedStep {
+        stage: String,
+        attempts: u32,
+    },
 }
 
 impl WorkflowJournal {
@@ -179,7 +194,9 @@ impl WorkflowJournal {
             }
         }
         for (stage, input_hash) in step_inputs {
-            let Some(step) = self.step(stage) else { continue };
+            let Some(step) = self.step(stage) else {
+                continue;
+            };
             if step.input_hash != *input_hash {
                 return Err(ResumeRefusal::StepInputChanged {
                     stage: stage.to_string(),
@@ -232,7 +249,12 @@ pub enum RetryDecision {
 
 /// 重试判定。副作用步骤永远先 reconcile;`max_attempts == 0` 按 1 处理
 /// (配置写 0 是错误,但不该被解释成无限重试)。
-pub fn decide_retry(policy: RetryPolicy, side_effect: bool, attempts: u32, outcome_known: bool) -> RetryDecision {
+pub fn decide_retry(
+    policy: RetryPolicy,
+    side_effect: bool,
+    attempts: u32,
+    outcome_known: bool,
+) -> RetryDecision {
     if side_effect {
         if !outcome_known {
             return RetryDecision::ReconcileFirst {
@@ -364,9 +386,11 @@ impl MaintenanceStore {
     }
 
     /// 只能入 staging。产物**永远**先到 staging,没有直达正式记忆的入口。
-    pub fn stage(&mut self, config: &MemoryMaintenanceConfig, artifact: MaintenanceArtifact)
-        -> Result<&MaintenanceArtifact, MaintenanceError>
-    {
+    pub fn stage(
+        &mut self,
+        config: &MemoryMaintenanceConfig,
+        artifact: MaintenanceArtifact,
+    ) -> Result<&MaintenanceArtifact, MaintenanceError> {
         if !config.enabled {
             return Err(MaintenanceError::Disabled { kind: config.kind });
         }
@@ -443,9 +467,7 @@ mod tests {
 
         assert!(journal.can_resume("hash-a", "1.2.0", &[], 3).is_ok());
 
-        let refusal = journal
-            .can_resume("hash-b", "1.2.0", &[], 3)
-            .unwrap_err();
+        let refusal = journal.can_resume("hash-b", "1.2.0", &[], 3).unwrap_err();
         assert_eq!(
             refusal,
             ResumeRefusal::ScriptChanged {
@@ -488,7 +510,9 @@ mod tests {
         // 调用方**没有**列出 deploy,只列了 build:未 reconcile 的步骤照样挡住续跑。
         journal.record_step("deploy", "in-3", true, StepStatus::Unknown);
         assert_eq!(
-            journal.can_resume("h", "v", &[("build", "in-1")], 3).unwrap_err(),
+            journal
+                .can_resume("h", "v", &[("build", "in-1")], 3)
+                .unwrap_err(),
             ResumeRefusal::UnreconciledUnknownStep {
                 stage: "deploy".to_string(),
             }
@@ -496,7 +520,9 @@ mod tests {
         // reconcile 之后 + 输入未变 → 可以续跑。
         journal.record_step("deploy", "in-3", true, StepStatus::Failed);
         journal.reconciled = Some("not pushed".to_string());
-        assert!(journal.can_resume("h", "v", &[("build", "in-1")], 3).is_ok());
+        assert!(journal
+            .can_resume("h", "v", &[("build", "in-1")], 3)
+            .is_ok());
 
         // 重试到顶的步骤同样是 terminal-ish:挡住。
         journal.record_step("deploy", "in-3", true, StepStatus::Failed);
@@ -565,15 +591,33 @@ mod tests {
     #[test]
     fn read_steps_retry_up_to_the_bound_and_then_block() {
         assert_eq!(
-            decide_stage_retry("test", RetryPolicy::Bounded { max_attempts: 3 }, false, 0, true),
+            decide_stage_retry(
+                "test",
+                RetryPolicy::Bounded { max_attempts: 3 },
+                false,
+                0,
+                true
+            ),
             RetryDecision::Retry { attempt: 1 }
         );
         assert_eq!(
-            decide_stage_retry("test", RetryPolicy::Bounded { max_attempts: 3 }, false, 2, true),
+            decide_stage_retry(
+                "test",
+                RetryPolicy::Bounded { max_attempts: 3 },
+                false,
+                2,
+                true
+            ),
             RetryDecision::Retry { attempt: 3 }
         );
         assert_eq!(
-            decide_stage_retry("test", RetryPolicy::Bounded { max_attempts: 3 }, false, 3, true),
+            decide_stage_retry(
+                "test",
+                RetryPolicy::Bounded { max_attempts: 3 },
+                false,
+                3,
+                true
+            ),
             RetryDecision::Blocked {
                 stage: "test".to_string(),
                 attempts: 3
@@ -581,11 +625,23 @@ mod tests {
         );
         // max_attempts: 0 是配置错误,按 1 处理,不是无限重试。
         assert_eq!(
-            decide_stage_retry("test", RetryPolicy::Bounded { max_attempts: 0 }, false, 0, true),
+            decide_stage_retry(
+                "test",
+                RetryPolicy::Bounded { max_attempts: 0 },
+                false,
+                0,
+                true
+            ),
             RetryDecision::Retry { attempt: 1 }
         );
         assert_eq!(
-            decide_stage_retry("test", RetryPolicy::Bounded { max_attempts: 0 }, false, 1, true),
+            decide_stage_retry(
+                "test",
+                RetryPolicy::Bounded { max_attempts: 0 },
+                false,
+                1,
+                true
+            ),
             RetryDecision::Blocked {
                 stage: "test".to_string(),
                 attempts: 1
