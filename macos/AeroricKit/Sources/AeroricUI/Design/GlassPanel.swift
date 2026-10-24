@@ -63,7 +63,7 @@ public struct NativePanelFoundation: View {
         case .glass:
             NativeMaterial.underWindowBackground
         case .classic:
-            Color.dsCanvas
+            AeroricColor.canvas
         }
     }
 }
@@ -72,7 +72,7 @@ public struct NativePanelFoundation: View {
 /// opaque system surface (classic / reduce transparency).
 ///
 /// Text-dense panes (terminal, editor) must NOT stack translucent layers
-/// under every row: those panes sit on `Color.dsTextBackground`, which is
+/// under every row: those panes sit on `AeroricColor.layer1`, which is
 /// opaque by construction. GlassPanel is for chrome-level shells —
 /// sidebars, inspector panels, floating cards.
 ///
@@ -162,7 +162,7 @@ public struct GlassPanel<Content: View>: View {
                     .background(.thinMaterial, in: shape)
             case .classic:
                 content
-                    .background(Color.dsSurface, in: shape)
+                    .background(AeroricColor.canvas, in: shape)
             }
         }
         // Hairline edge keeps panels legible against arbitrary window
@@ -171,7 +171,7 @@ public struct GlassPanel<Content: View>: View {
         // increased contrast strengthens it.
         .overlay {
             shape
-                .strokeBorder(Color.dsBorder.opacity(outline.opacity), lineWidth: outline.width)
+                .strokeBorder(AeroricColor.separator2.opacity(outline.opacity), lineWidth: outline.width)
                 .allowsHitTesting(false)
         }
         // Shape the background, not child text, focus rings, scrollbars or

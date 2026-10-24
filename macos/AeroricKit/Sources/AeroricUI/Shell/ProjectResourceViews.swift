@@ -331,14 +331,14 @@ public struct CentralResourcePreview: View {
                                      identifier: "preview.retry", action: onRetry)
                         .disabled(!projectAvailable)
                 }
-                Text(target.path).font(AeroricFont.mono(AeroricFont.file)).textSelection(.enabled)
-                Text("只读 · 宿主快照 · 版本未知").foregroundStyle(Color.dsTextMuted)
+                Text(target.path).font(AeroricType.mono(AeroricType.secondary)).textSelection(.enabled)
+                Text("只读 · 宿主快照 · 版本未知").foregroundStyle(AeroricColor.textTertiary)
                 if target.kind != .file {
                     Text("只读 · 宿主完整 diff（超过 1 MiB 会明确失败，不截断）")
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                 }
             }
-            .font(AeroricFont.mono(AeroricFont.meta))
+            .font(AeroricType.mono(AeroricType.caption))
             .padding(12)
             Divider()
             if !projectAvailable {
@@ -347,13 +347,13 @@ public struct CentralResourcePreview: View {
             } else {
                 if let notice = scene.previewState.notice {
                     Text(notice + (scene.previewText == nil ? "" : "（以下为缓存，版本未知）"))
-                        .font(AeroricFont.mono(AeroricFont.meta)).textSelection(.enabled).padding(12)
+                        .font(AeroricType.mono(AeroricType.caption)).textSelection(.enabled).padding(12)
                 }
                 if scene.previewState == .loading { ProgressView().controlSize(.small).padding(12) }
                 if let text = scene.previewText {
                     if text.isEmpty {
                         Text(target.kind == .file ? "空文件" : "此文件没有可显示的文本 diff")
-                            .font(AeroricFont.mono(AeroricFont.meta)).padding(12)
+                            .font(AeroricType.mono(AeroricType.caption)).padding(12)
                     }
                     sourceLines
                 } else {
@@ -365,7 +365,7 @@ public struct CentralResourcePreview: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.dsTextBackground)
+        .background(AeroricColor.layer1)
         .accessibilityIdentifier("workspace.central-preview")
     }
     private var sourceLines: some View {
@@ -378,9 +378,9 @@ public struct CentralResourcePreview: View {
                         }
                         lineNumber(line.newNumber)
                         Text(verbatim: line.text.isEmpty ? " " : line.text)
-                            .font(AeroricFont.mono(AeroricFont.code))
-                            .foregroundStyle(line.kind == .added ? Color.dsSuccess
-                                             : line.kind == .removed ? Color.dsDanger : Color.dsText)
+                            .font(AeroricType.mono(AeroricType.code))
+                            .foregroundStyle(line.kind == .added ? AeroricColor.success
+                                             : line.kind == .removed ? AeroricColor.danger : AeroricColor.text)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: true, vertical: true)
                     }
@@ -398,7 +398,7 @@ public struct CentralResourcePreview: View {
     }
     private func lineNumber(_ number: Int?) -> some View {
         Text(number.map(String.init) ?? "")
-            .font(AeroricFont.mono(AeroricFont.meta)).foregroundStyle(Color.dsTextMuted)
+            .font(AeroricType.mono(AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)
             .frame(minWidth: 32, alignment: .trailing)
             .accessibilityHidden(true)
     }

@@ -6,7 +6,7 @@ import SwiftUI
 // the approved stage-01 scope (`docs/native/frontend-redesign-stage-01.md`
 // §2 + review-round-07): an 18pt continuous panel radius, an 8pt inset and
 // an 8pt gap between panels, on the existing 4pt token scale. Radii come
-// from `DSRadius`, spacing from `DSSpacing`; nothing here redefines either.
+// from `AeroricRadius`, spacing from `AeroricSpace`; nothing here redefines either.
 //
 // The width budgets are REVIEW SAMPLES. They reproduce the measured browser
 // fixtures so the shared geometry can be checked against them:
@@ -108,13 +108,13 @@ public enum NativePanelGeometry {
 
     // MARK: - Shape and chrome numbers
 
-    /// Panel corner radius: the existing `xl` role (18), continuous.
-    public static let panelRadius: CGFloat = DSRadius.xl
+    /// Panel corner radius: `AeroricRadius.xl` (20), continuous.
+    public static let panelRadius: CGFloat = AeroricRadius.xl
     /// Inset between the window edge and the panel band, and the panel's
-    /// own content padding (`DSSpacing` step 2 = 8).
-    public static let panelInset: CGFloat = DSSpacing.v(2)
-    /// Gap between adjacent panels (`DSSpacing` step 2 = 8).
-    public static let panelGap: CGFloat = DSSpacing.v(2)
+    /// own content padding (`AeroricSpace.m` = 8).
+    public static let panelInset: CGFloat = AeroricSpace.m
+    /// Gap between adjacent panels (`AeroricSpace.m` = 8).
+    public static let panelGap: CGFloat = AeroricSpace.m
     /// The review fixture draws a 1pt window outline; the sample's inner
     /// width is the total width minus this on both sides (1260 → 1258).
     /// The real window has no such outline — it is a fixture budget only.

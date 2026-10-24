@@ -139,7 +139,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
         // Arrow handling stays on the sidebar List; editors retain their
         // own cursor keys.
         .animation(AeroricMotion.animation(AeroricMotion.slow, reduceMotion: reduceMotion), value: sidebarCollapsed)
-        .font(AeroricFont.ui(AeroricFont.body))
+        .font(Font.system(size: AeroricType.body))
         .frame(minWidth: NativePanelGeometry.mainShell.minimumWindowWidth,
                minHeight: NativePanelGeometry.mainShell.minimumWindowHeight)
         .focusedValue(\.palettePresentation, $palettePresented)
@@ -202,7 +202,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                 .accessibilityValue(title)
                 .accessibilityIdentifier("detail.selection")
         }
-        .font(AeroricFont.ui(AeroricFont.body))
+        .font(Font.system(size: AeroricType.body))
         .frame(maxWidth: 360, alignment: .leading)
     }
 

@@ -28,8 +28,8 @@ public struct ContentBlock: View {
             FlatDisclosureRow(symbol: "brain", title: "思考", summary: Self.summary(thinking),
                               expanded: $expanded, identifier: "session.content.thinking-toggle") {
                 Text(thinking)
-                    .font(AeroricFont.ui(AeroricFont.meta))
-                    .foregroundStyle(SessionPalette.secondary)
+                    .font(Font.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .textSelection(.enabled)
             }
         case let .toolUse(id, name, input):
@@ -45,8 +45,8 @@ public struct ContentBlock: View {
             }
         case let .attachment(name, mediaType, _):
             Label("\(name)（\(mediaType)）", systemImage: "paperclip")
-                .font(AeroricFont.ui(AeroricFont.meta))
-                .foregroundStyle(SessionPalette.secondary)
+                .font(Font.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .accessibilityIdentifier("session.content.attachment")
         }
     }
@@ -89,15 +89,15 @@ struct FlatDisclosureRow<Detail: View>: View {
                     if symbol != "chevron.right" {
                         Image(systemName: symbol).font(.system(size: 11))
                     }
-                    Text(title).font(AeroricFont.ui(AeroricFont.meta, weight: .medium))
-                        .foregroundStyle(SessionPalette.text)
+                    Text(title).font(Font.system(size: AeroricType.caption, weight: .medium))
+                        .foregroundStyle(AeroricColor.text)
                     if !summary.isEmpty {
-                        Text(summary).font(AeroricFont.mono(AeroricFont.meta))
+                        Text(summary).font(AeroricType.mono(AeroricType.caption))
                             .lineLimit(1).truncationMode(.tail)
                     }
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(hovered ? SessionPalette.text : SessionPalette.secondary)
+                .foregroundStyle(hovered ? AeroricColor.text : AeroricColor.textSecondary)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -118,14 +118,14 @@ struct CodeText: View {
     var body: some View {
         ScrollView(.horizontal) {
             Text(text)
-                .font(AeroricFont.mono(AeroricFont.code))
-                .foregroundStyle(SessionPalette.secondary)
+                .font(AeroricType.mono(AeroricType.code))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: true, vertical: true)
                 .padding(10)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SessionPalette.card, in: RoundedRectangle(cornerRadius: ShellRadius.chip, style: .continuous))
+        .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.m, style: .continuous))
     }
 }
 
@@ -143,7 +143,7 @@ struct DiffText: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                     Text(line.isEmpty ? " " : String(line))
-                        .font(AeroricFont.mono(AeroricFont.code))
+                        .font(AeroricType.mono(AeroricType.code))
                         .foregroundStyle(color(line))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(background(line))
@@ -154,19 +154,19 @@ struct DiffText: View {
             .padding(.vertical, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SessionPalette.card, in: RoundedRectangle(cornerRadius: ShellRadius.chip, style: .continuous))
+        .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.m, style: .continuous))
     }
 
     private func color(_ line: Substring) -> Color {
-        if line.hasPrefix("+"), !line.hasPrefix("+++") { return SessionPalette.teal }
-        if line.hasPrefix("-"), !line.hasPrefix("---") { return Color.dsDanger }
-        if line.hasPrefix("@@") { return SessionPalette.accent }
-        return SessionPalette.secondary
+        if line.hasPrefix("+"), !line.hasPrefix("+++") { return AeroricColor.teal }
+        if line.hasPrefix("-"), !line.hasPrefix("---") { return AeroricColor.danger }
+        if line.hasPrefix("@@") { return AeroricColor.accent }
+        return AeroricColor.textSecondary
     }
 
     private func background(_ line: Substring) -> Color {
-        if line.hasPrefix("+"), !line.hasPrefix("+++") { return SessionPalette.tintTeal }
-        if line.hasPrefix("-"), !line.hasPrefix("---") { return Color.dsDanger.opacity(0.08) }
+        if line.hasPrefix("+"), !line.hasPrefix("+++") { return AeroricColor.teal.opacity(0.12) }
+        if line.hasPrefix("-"), !line.hasPrefix("---") { return AeroricColor.danger.opacity(0.08) }
         return .clear
     }
 }
@@ -177,8 +177,8 @@ struct DiffText: View {
 struct NoImageProvider: ImageProvider {
     func makeImage(url: URL?) -> some View {
         Label(url?.lastPathComponent ?? "图片", systemImage: "photo")
-            .font(AeroricFont.ui(AeroricFont.meta))
-            .foregroundStyle(SessionPalette.muted)
+            .font(Font.system(size: AeroricType.caption))
+            .foregroundStyle(AeroricColor.textTertiary)
     }
 }
 
@@ -191,15 +191,15 @@ extension Theme {
     /// System text at 13pt, JetBrains Mono for code, DSH colour roles.
     @MainActor static let aeroric = Theme()
         .text {
-            ForegroundColor(SessionPalette.text)
+            ForegroundColor(AeroricColor.text)
             FontSize(13)
         }
         .code {
             FontFamily(.custom("JetBrainsMono-Regular"))
             FontSize(.em(0.92))
-            BackgroundColor(SessionPalette.chip)
+            BackgroundColor(AeroricColor.layer2)
         }
-        .link { ForegroundColor(SessionPalette.accent) }
+        .link { ForegroundColor(AeroricColor.accent) }
         .heading1 { configuration in
             configuration.label
                 .markdownTextStyle { FontWeight(.semibold); FontSize(.em(1.3)) }
@@ -226,19 +226,19 @@ extension Theme {
                     .markdownTextStyle {
                         FontFamily(.custom("JetBrainsMono-Regular"))
                         FontSize(12)
-                        ForegroundColor(SessionPalette.secondary)
+                        ForegroundColor(AeroricColor.textSecondary)
                     }
                     .padding(10)
             }
-            .background(SessionPalette.card, in: RoundedRectangle(cornerRadius: ShellRadius.chip, style: .continuous))
+            .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.m, style: .continuous))
             .markdownMargin(top: 0, bottom: 8)
         }
         .blockquote { configuration in
             configuration.label
-                .markdownTextStyle { ForegroundColor(SessionPalette.secondary) }
+                .markdownTextStyle { ForegroundColor(AeroricColor.textSecondary) }
                 .padding(.leading, 10)
                 .overlay(alignment: .leading) {
-                    Rectangle().fill(SessionPalette.edge).frame(width: 2)
+                    Rectangle().fill(AeroricColor.separator2).frame(width: 2)
                 }
         }
 }

@@ -45,7 +45,7 @@ public struct ConversationTerminalSplit<Conversation: View, Terminal: View>: Vie
                     terminal
                         .frame(maxWidth: .infinity)
                         .frame(height: height)
-                        .background(SessionPalette.canvas)
+                        .background(AeroricColor.canvas)
                 }
             }
         }
@@ -55,22 +55,22 @@ public struct ConversationTerminalSplit<Conversation: View, Terminal: View>: Vie
         HStack(spacing: 8) {
             Image(systemName: "terminal")
                 .font(.system(size: 11))
-                .foregroundStyle(SessionPalette.secondary)
+                .foregroundStyle(AeroricColor.textSecondary)
             Text(terminalTitle)
-                .font(AeroricFont.ui(AeroricFont.meta, weight: .medium))
-                .foregroundStyle(SessionPalette.secondary)
+                .font(Font.system(size: AeroricType.caption, weight: .medium))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .lineLimit(1)
             Spacer(minLength: 8)
             NativeIconButton(systemImage: terminalExpanded ? "chevron.down" : "chevron.up",
                              label: terminalExpanded ? "收起终端" : "展开终端",
                              identifier: "session.terminal.toggle") { terminalExpanded.toggle() }
-                .foregroundStyle(SessionPalette.secondary)
+                .foregroundStyle(AeroricColor.textSecondary)
         }
         .padding(.leading, 14)
         .padding(.trailing, 6)
         .frame(height: NativePanelGeometry.mainShell.terminalBarHeight)
-        .background(SessionPalette.card)
-        .overlay(alignment: .top) { Rectangle().fill(SessionPalette.edge).frame(height: 1) }
+        .background(AeroricColor.layer1)
+        .overlay(alignment: .top) { Rectangle().fill(AeroricColor.separator2).frame(height: 1) }
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 2)

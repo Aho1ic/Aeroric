@@ -131,7 +131,7 @@ final class ApprovedSessionDraftTests: XCTestCase {
         XCTAssertEqual(NewSessionGeometry.inputRadius(compact: false), 16)
         XCTAssertEqual(NewSessionGeometry.inputRadius(compact: true), 16)
         XCTAssertEqual(NewSessionGeometry.contextGap, 6)
-        XCTAssertEqual(NativePanelGeometry.panelRadius, 18)
+        XCTAssertEqual(NativePanelGeometry.panelRadius, AeroricRadius.xl)
     }
 
     func testEveryCreationSurfaceUsesExplicitProjectAndGlobalDestinations() {

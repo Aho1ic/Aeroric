@@ -214,7 +214,7 @@ public struct RemoteAccessSettingsView: View {
             Section("远控能力") {
                 Text(store.readState.notice ?? "已读取远控服务与设备状态")
                     .font(.callout)
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .accessibilityIdentifier("remote.capability")
             }
             Section("服务") {
@@ -231,7 +231,7 @@ public struct RemoteAccessSettingsView: View {
                 HStack {
                     Text(store.readState == .loaded ? (store.status.running ? "运行中" : "已停止") : "服务状态未核实")
                         .font(.caption)
-                        .foregroundStyle(store.status.running ? Color.dsSuccess : Color.dsTextSecondary)
+                        .foregroundStyle(store.status.running ? AeroricColor.success : AeroricColor.textSecondary)
                     if store.readState == .loaded {
                         Text(":\(store.status.port)")
                         .font(.caption.monospaced())
@@ -239,7 +239,7 @@ public struct RemoteAccessSettingsView: View {
                     if store.status.networkExposed {
                         Text("已暴露到网络")
                             .font(.caption)
-                            .foregroundStyle(Color.dsWarning)
+                            .foregroundStyle(AeroricColor.warning)
                     }
                 }
                 .accessibilityIdentifier("remote.status-line")
@@ -273,7 +273,7 @@ public struct RemoteAccessSettingsView: View {
             if let error = store.lastError {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
                     .accessibilityIdentifier("remote.error")
             }
         }
@@ -299,11 +299,11 @@ public struct RemoteAccessSettingsView: View {
         HStack {
             Text(store.pushStatus.wired ? "推送可用" : "此宿主未装配推送出口")
                 .font(.caption)
-                .foregroundStyle(store.pushStatus.wired ? Color.dsSuccess : Color.dsWarning)
+                .foregroundStyle(store.pushStatus.wired ? AeroricColor.success : AeroricColor.warning)
             Spacer()
             Text(store.pushStatus.enabled ? "已配置发送端" : "未配置发送端")
                 .font(.caption)
-                .foregroundStyle(Color.dsTextSecondary)
+                .foregroundStyle(AeroricColor.textSecondary)
         }
         .accessibilityIdentifier("push.summary")
 
@@ -313,20 +313,20 @@ public struct RemoteAccessSettingsView: View {
         }
         Text(store.pushStatus.detail)
             .font(.caption)
-            .foregroundStyle(Color.dsTextSecondary)
+            .foregroundStyle(AeroricColor.textSecondary)
             .accessibilityIdentifier("push.detail")
 
         if let suppressed = store.pushStatus.suppressedForMs {
             Text("发送端要求退避,约 \(suppressed / 1000) 秒内不再推送(APNs 限流/不可用)")
                 .font(.caption)
-                .foregroundStyle(Color.dsWarning)
+                .foregroundStyle(AeroricColor.warning)
                 .accessibilityIdentifier("push.backoff")
         }
 
         if store.pushStatus.devices.isEmpty {
             Text("还没有设备登记推送;在手机上打开伴随端并允许通知后即可上报。")
                 .font(.caption)
-                .foregroundStyle(Color.dsTextSecondary)
+                .foregroundStyle(AeroricColor.textSecondary)
                 .accessibilityIdentifier("push.no-devices")
         } else {
             ForEach(store.pushStatus.devices, id: \.deviceID) { device in
@@ -338,7 +338,7 @@ public struct RemoteAccessSettingsView: View {
                              ? "APNs 已判该令牌失效,需在手机上重新允许通知"
                              : "已登记(\(device.platform))")
                             .font(.caption)
-                            .foregroundStyle(device.invalidated ? Color.dsWarning : Color.dsTextSecondary)
+                            .foregroundStyle(device.invalidated ? AeroricColor.warning : AeroricColor.textSecondary)
                     }
                     Spacer()
                     Button("取消推送") {
@@ -361,23 +361,23 @@ public struct RemoteAccessSettingsView: View {
         let stats = store.pushStatus.stats
         Text("本机计数:判定 \(stats.decisions) · 尝试 \(stats.attempts) · 已投递 \(stats.accepted) · 失效 \(stats.invalidatedDevices) · 失败 \(stats.failures) · 无设备 \(stats.skippedNoDevices)")
             .font(.caption.monospaced())
-            .foregroundStyle(Color.dsTextSecondary)
+            .foregroundStyle(AeroricColor.textSecondary)
             .accessibilityIdentifier("push.stats")
 
         Text("通知只提示「任务完成/失败/等待审批」,不含标题、路径或命令;它不是审批授权,请回到已连接的会话确认。")
             .font(.caption)
-            .foregroundStyle(Color.dsTextSecondary)
+            .foregroundStyle(AeroricColor.textSecondary)
 
         if let notice = pushNotice {
             Text(notice)
                 .font(.caption)
-                .foregroundStyle(Color.dsTextSecondary)
+                .foregroundStyle(AeroricColor.textSecondary)
                 .accessibilityIdentifier("push.notice")
         }
         if let error = store.lastError {
             Text(error)
                 .font(.caption)
-                .foregroundStyle(Color.dsDanger)
+                .foregroundStyle(AeroricColor.danger)
                 .accessibilityIdentifier("push.error")
         }
     }
@@ -397,7 +397,7 @@ public struct RemoteAccessSettingsView: View {
             }
             Text(diagnostics.detail)
                 .font(.caption)
-                .foregroundStyle(diagnostics.authenticated ? Color.dsSuccess : Color.dsWarning)
+                .foregroundStyle(diagnostics.authenticated ? AeroricColor.success : AeroricColor.warning)
         }
         .accessibilityIdentifier("remote.relay-result")
     }
@@ -431,7 +431,7 @@ public struct PairingView: View {
                     .accessibilityIdentifier("remote.pairing-endpoint")
                 Text("\(pairing.expiresInSeconds) 秒内有效")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                 Button(copied ? "已复制" : "复制链接") {
                     #if canImport(AppKit)
                     NSPasteboard.general.clearContents()
@@ -443,7 +443,7 @@ public struct PairingView: View {
             } else {
                 Text("正在生成配对码…")
                 if let error = store.lastError {
-                    Text(error).font(.caption).foregroundStyle(Color.dsDanger)
+                    Text(error).font(.caption).foregroundStyle(AeroricColor.danger)
                 }
             }
             Button("关闭") {
@@ -472,7 +472,7 @@ public struct DeviceListView: View {
         Section("已配对设备") {
             if store.devices.isEmpty {
                 Text(store.readState == .loaded ? "暂无设备" : (store.readState.notice ?? "设备列表尚未核实"))
-                    .font(.caption).foregroundStyle(Color.dsTextSecondary)
+                    .font(.caption).foregroundStyle(AeroricColor.textSecondary)
             }
             ForEach(store.devices, id: \.id) { device in
                 HStack {
@@ -480,11 +480,11 @@ public struct DeviceListView: View {
                         Text(device.name).accessibilityIdentifier("remote.device.\(device.id)")
                         Text(Self.timestamp(device.lastSeenAt))
                             .font(.caption)
-                            .foregroundStyle(Color.dsTextSecondary)
+                            .foregroundStyle(AeroricColor.textSecondary)
                     }
                     Spacer()
                     if device.online {
-                        Text("在线").font(.caption).foregroundStyle(Color.dsSuccess)
+                        Text("在线").font(.caption).foregroundStyle(AeroricColor.success)
                     }
                     Button("撤销") { pendingRevoke = device }
                         .disabled(!store.canControl)

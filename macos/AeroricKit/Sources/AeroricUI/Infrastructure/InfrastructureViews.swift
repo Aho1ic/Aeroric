@@ -17,10 +17,10 @@ public struct DockerPanel: View {
                 VStack(spacing: 8) {
                     Image(systemName: "shippingbox.slash")
                         .font(.system(size: 28))
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                     Text(reason)
                         .font(.caption)
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .accessibilityIdentifier("infrastructure.daemon-unavailable")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -60,7 +60,7 @@ public struct ImageList: View {
                     .font(.caption.monospaced())
                 Text("\(image.size) · \(image.id)")
                     .font(.caption2)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
             }
             .accessibilityIdentifier("infrastructure.image.\(image.id)")
         }
@@ -97,7 +97,7 @@ public struct ContainerDetail: View {
                     .font(.headline)
                 Text("\(container.image) · \(container.state) · \(container.status)")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                 if !container.ports.isEmpty {
                     Text("端口：\(container.ports)")
                         .font(.caption)
@@ -128,7 +128,7 @@ public struct ContainerDetail: View {
                 }
             } else {
                 Text("选择一个容器查看详情")
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -165,7 +165,7 @@ public struct PortInspector: View {
                 Spacer()
                 Text("PID \(port.pid)")
                     .font(.caption2)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                 Button("Owner") { onOwner?(port.port) }
                     .font(.caption2)
                     .accessibilityIdentifier("infrastructure.port.owner.\(port.port)")

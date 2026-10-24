@@ -51,7 +51,7 @@ public struct GitPanel: View {
                             if store.changesReadState == .loaded {
                                 DiffView(diffText: store.diffText)
                             } else {
-                                Text("尚未加载 diff").foregroundStyle(Color.dsTextSecondary)
+                                Text("尚未加载 diff").foregroundStyle(AeroricColor.textSecondary)
                             }
                         }
                         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -95,7 +95,7 @@ public struct ChangeList: View {
     public var body: some View {
         if let notice = store.changesReadState.notice {
             VStack(spacing: 8) {
-                Text(notice).font(.callout).foregroundStyle(Color.dsTextSecondary)
+                Text(notice).font(.callout).foregroundStyle(AeroricColor.textSecondary)
                 if !store.changes.isEmpty {
                     Text("保留 \(store.changes.count) 条旧变更；尚未核实当前仓库。").font(.caption)
                 }
@@ -140,7 +140,7 @@ public struct ChangeList: View {
             if store.conflictPaths.contains(change.path) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.caption2)
-                    .foregroundStyle(Color.dsWarning)
+                    .foregroundStyle(AeroricColor.warning)
                     .accessibilityIdentifier("git.conflict.\(change.path)")
             }
             Spacer()
@@ -159,10 +159,10 @@ public struct ChangeList: View {
 
     private func statusColor(_ status: String) -> Color {
         switch status {
-        case "M": Color.dsWarning
-        case "A", "?": Color.dsSuccess
-        case "D": Color.dsDanger
-        default: Color.dsTextSecondary
+        case "M": AeroricColor.warning
+        case "A", "?": AeroricColor.success
+        case "D": AeroricColor.danger
+        default: AeroricColor.textSecondary
         }
     }
 }
@@ -230,7 +230,7 @@ public struct CommitSheet: View {
                 .font(.callout)
             Text("\(diff.split(separator: "\n").count) 行 diff")
                 .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
+                .foregroundStyle(AeroricColor.textTertiary)
             HStack {
                 Button("提交") { onConfirm() }
                     .accessibilityIdentifier("git.commit-sheet.confirm")
@@ -274,7 +274,7 @@ public struct HistoryView: View {
 
     public var body: some View {
         if let notice = store.historyReadState.notice, store.commits.isEmpty {
-            Text(notice).foregroundStyle(Color.dsTextSecondary)
+            Text(notice).foregroundStyle(AeroricColor.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if store.commits.isEmpty {
             PaneEmptyState(
@@ -286,20 +286,20 @@ public struct HistoryView: View {
         } else {
             VStack(spacing: 6) {
                 if let notice = store.historyReadState.notice {
-                    Text(notice).font(.caption).foregroundStyle(Color.dsTextSecondary)
+                    Text(notice).font(.caption).foregroundStyle(AeroricColor.textSecondary)
                 }
                 List(store.commits) { commit in
                 HStack(spacing: 6) {
                     Text(commit.shortHash)
                         .font(.caption2.monospaced())
-                        .foregroundStyle(Color.dsAccent)
+                        .foregroundStyle(AeroricColor.accent)
                     Text(commit.message)
                         .font(.caption)
                         .lineLimit(1)
                     Spacer()
                     Text("\(commit.author) · \(commit.date)")
                         .font(.caption2)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
                 .accessibilityIdentifier("git.commit.\(commit.shortHash)")
             }
@@ -359,9 +359,9 @@ public struct StashView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let notice = store.stashReadState.notice {
-                Text(notice).font(.caption).foregroundStyle(Color.dsTextSecondary)
+                Text(notice).font(.caption).foregroundStyle(AeroricColor.textSecondary)
             } else if store.stashEntries.isEmpty {
-                Text("暂无贮藏").font(.caption).foregroundStyle(Color.dsTextSecondary)
+                Text("暂无贮藏").font(.caption).foregroundStyle(AeroricColor.textSecondary)
             }
             HStack {
                 TextField("stash 信息…", text: $stashMessage)
@@ -377,7 +377,7 @@ public struct StashView: View {
                 HStack {
                     Text("stash@{\(entry.index)}")
                         .font(.caption2.monospaced())
-                        .foregroundStyle(Color.dsAccent)
+                        .foregroundStyle(AeroricColor.accent)
                     Text(entry.message)
                         .font(.caption)
                         .lineLimit(1)

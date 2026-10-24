@@ -18,13 +18,13 @@ public struct ConnectionList: View {
                 VStack(spacing: 8) {
                     Image(systemName: "server.rack")
                         .font(.system(size: 24))
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                     Text("暂无 SSH 连接")
                         .font(.callout)
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                     Text("在下方填写名称、主机与用户名后保存")
                         .font(.caption)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -41,12 +41,12 @@ public struct ConnectionList: View {
                             if connection.hasPassword {
                                 Image(systemName: "lock.fill")
                                     .font(.caption2)
-                                    .foregroundStyle(Color.dsTextMuted)
+                                    .foregroundStyle(AeroricColor.textTertiary)
                             }
                         }
                         Text("\(connection.username)@\(connection.host):\(connection.port)")
                             .font(.caption2)
-                            .foregroundStyle(Color.dsTextMuted)
+                            .foregroundStyle(AeroricColor.textTertiary)
                     }
                     .accessibilityIdentifier("connections.item.\(connection.id)")
                 }
@@ -85,7 +85,7 @@ public struct SSHConnectionEditor: View {
             if let error {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
             }
             Button("保存") {
                 guard !name.trimmingCharacters(in: .whitespaces).isEmpty,
@@ -145,7 +145,7 @@ public struct HostKeyPrompt: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: kind.isKeyChanged ? "exclamationmark.triangle.fill" : "key")
-                    .foregroundStyle(kind.isKeyChanged ? Color.dsDanger : Color.dsWarning)
+                    .foregroundStyle(kind.isKeyChanged ? AeroricColor.danger : AeroricColor.warning)
                 Text(title)
                     .font(.headline)
                     .accessibilityIdentifier("connections.hostkey.title")
@@ -153,7 +153,7 @@ public struct HostKeyPrompt: View {
             if case let .keyChanged(previous) = kind {
                 Text("之前信任的指纹：\(previous)——如果这不是你预期的主机更换，请拒绝。")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .accessibilityIdentifier("connections.hostkey.previous")
             }
             VStack(alignment: .leading, spacing: 4) {
@@ -209,7 +209,7 @@ public struct SFTPBrowser: View {
             if let remoteCWD = store.remoteCWD {
                 Text("远程：\(remoteCWD)")
                     .font(.caption)
-                    .foregroundStyle(Color.dsAccent)
+                    .foregroundStyle(AeroricColor.accent)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -222,15 +222,15 @@ public struct SFTPBrowser: View {
                 VStack(spacing: 8) {
                     Image(systemName: "folder.badge.questionmark")
                         .font(.system(size: 24))
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                     Text("没有可浏览的文件")
                         .font(.callout)
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                     Text(store.remoteCWD == nil
                          ? "选择或新建一个连接后浏览远程文件"
                          : "此目录为空")
                         .font(.caption)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -240,14 +240,14 @@ public struct SFTPBrowser: View {
                 HStack(spacing: 6) {
                     Image(systemName: entry.isDir ? "folder" : "doc")
                         .font(.caption2)
-                        .foregroundStyle(entry.isDir ? Color.dsAccent : Color.dsTextSecondary)
+                        .foregroundStyle(entry.isDir ? AeroricColor.accent : AeroricColor.textSecondary)
                     Text(entry.name)
                         .font(.caption)
                     Spacer()
                     if let size = entry.size {
                         Text("\(size) B")
                             .font(.caption2)
-                            .foregroundStyle(Color.dsTextMuted)
+                            .foregroundStyle(AeroricColor.textTertiary)
                     }
                 }
                 .contentShape(Rectangle())
@@ -302,13 +302,13 @@ public struct TransferQueueView: View {
                 HStack {
                     Text(item.direction == "upload" ? "↑" : "↓")
                         .font(.caption)
-                        .foregroundStyle(Color.dsAccent)
+                        .foregroundStyle(AeroricColor.accent)
                     Text(item.name)
                         .font(.caption)
                     Spacer()
                     Text(item.status)
                         .font(.caption2)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
                 ProgressView(value: item.progress)
                     .accessibilityIdentifier("connections.transfer.progress.\(item.id)")
@@ -345,14 +345,14 @@ public struct RemoteWorkspaceBanner: View {
         HStack(spacing: 6) {
             Image(systemName: "server.rack")
                 .font(.caption)
-                .foregroundStyle(Color.dsAccent)
+                .foregroundStyle(AeroricColor.accent)
             Text("远程工作区：\(remoteCWD)（本机：\(localCWD)）")
                 .font(.caption)
             Spacer()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color.dsSurface.opacity(0.55))
+        .background(AeroricColor.canvas.opacity(0.55))
         .accessibilityIdentifier("connections.remote-banner")
     }
 }

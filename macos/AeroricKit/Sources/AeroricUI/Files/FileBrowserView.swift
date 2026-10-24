@@ -137,10 +137,10 @@ public struct FileRow: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("files.toggle.\(node.path)")
                 Image(systemName: "folder")
-                    .foregroundStyle(Color.dsAccent)
+                    .foregroundStyle(AeroricColor.accent)
             } else {
                 Image(systemName: node.isSymlink ? "link" : "doc")
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .padding(.leading, 14)
             }
             Text(node.name)
@@ -266,13 +266,13 @@ public struct SearchPanel: View {
                 VStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 24))
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                     Text("没有搜索结果")
                         .font(.callout)
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                     Text("输入关键词后按回车或点「搜索」")
                         .font(.caption)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("files.search.empty")
@@ -281,7 +281,7 @@ public struct SearchPanel: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(match.path):\(match.line)")
                             .font(.caption)
-                            .foregroundStyle(Color.dsTextMuted)
+                            .foregroundStyle(AeroricColor.textTertiary)
                         Text(match.excerpt)
                             .font(.caption.monospaced())
                             .lineLimit(2)
@@ -323,7 +323,7 @@ public struct ReplacePreviewSheet: View {
                         .font(.callout)
                     Text("\(file.matches.count) 处命中")
                         .font(.caption)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
                 .accessibilityIdentifier("files.replace.preview.\(file.path)")
             }

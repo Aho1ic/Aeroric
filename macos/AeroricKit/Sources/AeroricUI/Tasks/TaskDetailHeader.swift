@@ -39,27 +39,27 @@ public struct TaskDetailHeader: View {
         HStack(spacing: 10) {
             SessionStatusDot(status: task.status)
             Text(task.title)
-                .font(AeroricFont.ui(AeroricFont.body, weight: .semibold))
+                .font(Font.system(size: AeroricType.body, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .accessibilityIdentifier("task.detail.title")
             Text("\(SessionStatusDot.label(task.status)) · \(task.agent ?? "—")")
-                .font(AeroricFont.ui(AeroricFont.meta))
-                .foregroundStyle(SessionPalette.muted)
+                .font(Font.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
                 .lineLimit(1)
             Spacer(minLength: 8)
             if Self.isRunning(task.status), let onCancel {
                 Button("停止", action: onCancel)
                     .buttonStyle(.borderless)
-                    .font(AeroricFont.ui(AeroricFont.meta, weight: .medium))
-                    .foregroundStyle(SessionPalette.secondary)
+                    .font(Font.system(size: AeroricType.caption, weight: .medium))
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .accessibilityIdentifier("task.detail.cancel")
             }
             if let onStar {
                 NativeIconButton(systemImage: task.starred ? "pin.fill" : "pin",
                                  label: task.starred ? "取消置顶" : "置顶",
                                  identifier: "task.detail.star", action: onStar)
-                    .foregroundStyle(task.starred ? SessionPalette.accent : SessionPalette.secondary)
+                    .foregroundStyle(task.starred ? AeroricColor.accent : AeroricColor.textSecondary)
             }
             Menu {
                 if let onArchive {
@@ -73,7 +73,7 @@ public struct TaskDetailHeader: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .foregroundStyle(SessionPalette.secondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -84,7 +84,7 @@ public struct TaskDetailHeader: View {
         .padding(.horizontal, 16)
         .frame(height: 44)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(SessionPalette.edge).frame(height: 1)
+            Rectangle().fill(AeroricColor.separator2).frame(height: 1)
         }
         .confirmationDialog(
             Self.isRunning(task.status) ? "任务仍在运行，确定删除？" : "删除此会话记录？",

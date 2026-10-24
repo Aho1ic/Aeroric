@@ -20,7 +20,7 @@ public struct DatabaseSidebar: View {
                 if connection.isProduction {
                     Text("生产")
                         .font(.caption2)
-                        .foregroundStyle(Color.dsDanger)
+                        .foregroundStyle(AeroricColor.danger)
                         .accessibilityIdentifier("database.production-badge.\(connection.id)")
                 }
             }
@@ -68,7 +68,7 @@ public struct ConnectionEditor: View {
             if let error {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
             }
             Button("保存") {
                 guard !name.trimmingCharacters(in: .whitespaces).isEmpty else {
@@ -112,7 +112,7 @@ public struct SchemaBrowser: View {
                 if let rowCount = table.rowCount {
                     Text("\(rowCount) 行")
                         .font(.caption2)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
             }
             .accessibilityIdentifier("database.table.\(table.name)")
@@ -175,7 +175,7 @@ public struct ResultGrid: View {
                                 // 列类型/NULL/binary 明确。
                                 Text(cell.isEmpty ? "NULL" : cell)
                                     .font(.caption2.monospaced())
-                                    .foregroundStyle(cell.isEmpty ? Color.dsTextMuted : Color.dsText)
+                                    .foregroundStyle(cell.isEmpty ? AeroricColor.textTertiary : AeroricColor.text)
                                     .lineLimit(1)
                             }
                         }
@@ -204,7 +204,7 @@ public struct ResultGrid: View {
                 if let total = store.totalCount {
                     Text("共 \(total) 行")
                         .font(.caption2)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
             }
             .padding(8)
@@ -240,12 +240,12 @@ public struct StructureEditor: View {
                     .font(.caption.monospaced())
                 Text(column.columnType)
                     .font(.caption2)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                 Spacer()
                 if column.nullable {
                     Text("NULL")
                         .font(.caption2)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
             }
             .accessibilityIdentifier("database.structure.\(column.name)")
@@ -273,7 +273,7 @@ public struct ImportExportSheet: View {
                 .font(.headline)
             Text(path)
                 .font(.caption)
-                .foregroundStyle(Color.dsTextSecondary)
+                .foregroundStyle(AeroricColor.textSecondary)
             ScrollView {
                 Text(preview)
                     .font(.caption2.monospaced())
@@ -320,7 +320,7 @@ public struct RedisBrowser: View {
                     .font(.caption.monospaced())
                 Text(entry.valueType)
                     .font(.caption2)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                 if let value = entry.value {
                     Text(value)
                         .font(.caption2.monospaced())
@@ -381,7 +381,7 @@ public struct ProductionConfirmationSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.shield.fill")
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
                 Text("生产库写入确认")
                     .font(.headline)
                     .accessibilityIdentifier("database.production.title")

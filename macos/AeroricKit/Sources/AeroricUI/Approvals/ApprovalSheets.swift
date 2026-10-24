@@ -25,7 +25,7 @@ public struct ApprovalSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.shield.fill")
-                    .foregroundStyle(Color.dsWarning)
+                    .foregroundStyle(AeroricColor.warning)
                 Text(request.toolName ?? "工具")
                     .font(.headline)
                     .accessibilityIdentifier("approval.tool-name")
@@ -33,7 +33,7 @@ public struct ApprovalSheet: View {
             if let reason = request.reason, !reason.isEmpty {
                 Text(reason)
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .textSelection(.enabled)
                     .accessibilityIdentifier("approval.reason")
             }
@@ -58,7 +58,7 @@ public struct ApprovalSheet: View {
             if store.isSubmitted(eventId: request.id) {
                 Text("已提交，等待宿主确认…")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("approval.submitted")
             }
         }

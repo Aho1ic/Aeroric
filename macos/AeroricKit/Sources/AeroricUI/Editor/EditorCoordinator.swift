@@ -60,7 +60,7 @@ public struct EditorTabs: View {
                 HStack(spacing: 4) {
                     if doc.content != doc.diskContent {
                         Circle()
-                            .fill(Color.dsWarning)
+                            .fill(AeroricColor.warning)
                             .frame(width: 6, height: 6)
                             .accessibilityIdentifier("editor.dirty.\(doc.path)")
                     }
@@ -72,7 +72,7 @@ public struct EditorTabs: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(doc.path == store.selectedPath ? Color.dsSurface : Color.clear)
+                .background(doc.path == store.selectedPath ? AeroricColor.canvas : Color.clear)
                 .onTapGesture { store.select(doc.path) }
                 .accessibilityIdentifier("editor.tab.\(doc.path)")
             }
@@ -111,7 +111,7 @@ public struct SaveConflictSheet: View {
                 .accessibilityIdentifier("editor.conflict.title")
             Text("磁盘上的 \(path) 内容与打开时不同；不可静默覆盖。")
                 .font(.caption)
-                .foregroundStyle(Color.dsTextSecondary)
+                .foregroundStyle(AeroricColor.textSecondary)
             HStack(spacing: 8) {
                 Button("覆盖磁盘") { onOverwrite() }
                     .accessibilityIdentifier("editor.conflict.overwrite")
@@ -171,7 +171,7 @@ public struct LocalHistoryPanel: View {
                     Spacer()
                     Text("\(entry.size) B")
                         .font(.caption2)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                     Button("预览") {
                         previewingEntryID = entry.id
                         onPreview?(entry.id)

@@ -85,12 +85,12 @@ public struct WorktreeCreateSheet: View {
                 // 目标项目 branch policy（AGENTS main-only）。
                 Text("该项目禁止新增分支；worktree 创建已被 branch policy 阻止。")
                     .font(.caption)
-                    .foregroundStyle(Color.dsWarning)
+                    .foregroundStyle(AeroricColor.warning)
                     .accessibilityIdentifier("worktree.policy-blocked")
             }
             Text("分支名：\(WorktreePolicy.taskWorktreeBranchName(taskID))")
                 .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
+                .foregroundStyle(AeroricColor.textTertiary)
             HStack {
                 Button("创建") {
                     onCreate?(taskID, baseBranch)
@@ -130,19 +130,19 @@ public struct WorktreeTaskBadge: View {
         HStack(spacing: 4) {
             Image(systemName: "arrow.triangle.branch")
                 .font(.caption2)
-                .foregroundStyle(discarded ? Color.dsTextMuted : Color.dsAccent)
+                .foregroundStyle(discarded ? AeroricColor.textTertiary : AeroricColor.accent)
             Text(branch)
                 .font(.caption2.monospaced())
             if discarded {
                 Text("已丢弃")
                     .font(.caption2)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("worktree.badge.discarded")
             }
             if let additions, let deletions {
                 Text("+\(additions)/−\(deletions)")
                     .font(.caption2.monospaced())
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .accessibilityIdentifier("worktree.badge.diffstats")
             }
         }
@@ -193,7 +193,7 @@ public struct WorktreeMergeSheet: View {
             if let reason = blockedReason {
                 Text(reason)
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
                     .accessibilityIdentifier("worktree.merge-blocked")
             }
             HStack {
@@ -242,13 +242,13 @@ public struct WorktreeDiscardSheet: View {
                 .font(.headline)
             Text("移除 \(branch) 及其工作树（未合并的提交将丢失）。")
                 .font(.caption)
-                .foregroundStyle(Color.dsTextSecondary)
+                .foregroundStyle(AeroricColor.textSecondary)
             Toggle("我已确认丢弃", isOn: $confirmed)
                 .accessibilityIdentifier("worktree.discard-confirm")
             if let reason = blockedReason {
                 Text(reason)
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
                     .accessibilityIdentifier("worktree.discard-blocked")
             }
             HStack {

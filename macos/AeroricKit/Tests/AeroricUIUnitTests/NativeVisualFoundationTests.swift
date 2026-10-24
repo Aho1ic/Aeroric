@@ -5,9 +5,9 @@ import XCTest
 
 final class NativeVisualFoundationTests: XCTestCase {
     func testGeometryReusesExistingTokens() {
-        XCTAssertEqual(NativePanelGeometry.panelRadius, DSRadius.xl)
-        XCTAssertEqual(NativePanelGeometry.panelInset, DSSpacing.v(2))
-        XCTAssertEqual(NativePanelGeometry.panelGap, DSSpacing.v(2))
+        XCTAssertEqual(NativePanelGeometry.panelRadius, AeroricRadius.xl)
+        XCTAssertEqual(NativePanelGeometry.panelInset, AeroricSpace.m)
+        XCTAssertEqual(NativePanelGeometry.panelGap, AeroricSpace.m)
         XCTAssertEqual(NativePanelGeometry.navigationRowHeight, 32)
         XCTAssertEqual(NativePanelGeometry.statusBarHeight, 32)
     }
@@ -105,8 +105,8 @@ final class NativeVisualFoundationTests: XCTestCase {
     }
 
     func testReducedMotionRemovesTheReviewAnimationDuration() {
-        XCTAssertEqual(DSMotion.duration(DSMotion.normal, reduceMotion: true), 0)
-        XCTAssertEqual(DSMotion.duration(DSMotion.normal, reduceMotion: false), DSMotion.normal)
+        XCTAssertEqual(AeroricMotion.duration(AeroricMotion.standard, reduceMotion: true), 0)
+        XCTAssertEqual(AeroricMotion.duration(AeroricMotion.standard, reduceMotion: false), AeroricMotion.standard)
     }
 
     @MainActor

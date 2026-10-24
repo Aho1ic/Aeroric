@@ -62,28 +62,28 @@ public struct UsageDashboard: View {
 
             if !store.statistics.hasData {
                 Text("这段时间没有用量记录。")
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("usage.empty")
             } else {
                 let totals = store.statistics.totals
                 Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 6) {
                     GridRow {
-                        Text("请求数").foregroundStyle(Color.dsTextMuted)
+                        Text("请求数").foregroundStyle(AeroricColor.textTertiary)
                         Text("\(totals.requestCount)")
                     }
                     GridRow {
-                        Text("Token").foregroundStyle(Color.dsTextMuted)
+                        Text("Token").foregroundStyle(AeroricColor.textTertiary)
                         Text("\(totals.totalTokens)")
                     }
                     GridRow {
-                        Text("费用").foregroundStyle(Color.dsTextMuted)
+                        Text("费用").foregroundStyle(AeroricColor.textTertiary)
                         // 有推算单价的行时标注口径，避免把估算当账单。
                         Text(String(format: "$%.4f", totals.totalCost)
                             + (totals.estimatedRequestCount > 0
                                 ? "（含 \(totals.estimatedRequestCount) 条按同档推算）" : ""))
                     }
                     GridRow {
-                        Text("缓存命中率").foregroundStyle(Color.dsTextMuted)
+                        Text("缓存命中率").foregroundStyle(AeroricColor.textTertiary)
                         Text(String(format: "%.0f%%", totals.cacheHitRate * 100))
                     }
                 }
@@ -94,7 +94,7 @@ public struct UsageDashboard: View {
                 HStack(spacing: 16) {
                     ForEach(breakdownRows, id: \.label) { row in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(row.label).font(.caption).foregroundStyle(Color.dsTextMuted)
+                            Text(row.label).font(.caption).foregroundStyle(AeroricColor.textTertiary)
                             Text("\(row.totals.requestCount) 次")
                             Text(String(format: "$%.4f", row.totals.totalCost))
                                 .font(.caption.monospaced())
@@ -131,11 +131,11 @@ struct UsageSeriesChart: View {
             ForEach(Array(days.enumerated()), id: \.offset) { _, day in
                 VStack(spacing: 2) {
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(Color.dsAccent)
+                        .fill(AeroricColor.accent)
                         .frame(width: 8, height: max(1, CGFloat(60 * day.totalTokens / peak)))
                     Text(day.hour.map { "\($0)" } ?? String(day.date.suffix(2)))
                         .font(.system(size: 8))
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
             }
         }
@@ -165,7 +165,7 @@ struct SubscriptionUsageSection: View {
             } else {
                 Text("尚未读取。")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
             }
         }
     }
@@ -176,7 +176,7 @@ struct SubscriptionUsageSection: View {
             if let text {
                 Text(text).font(.caption.monospaced())
             } else {
-                Text("不可用").font(.caption).foregroundStyle(Color.dsTextMuted)
+                Text("不可用").font(.caption).foregroundStyle(AeroricColor.textTertiary)
             }
         }
         .accessibilityIdentifier("usage.subscription-\(label.lowercased())")
@@ -240,7 +240,7 @@ public struct NotificationCenterView: View {
                 Text("通知").font(.headline)
                 Text("\(store.feed.unreadCount) 条未读")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                 Spacer()
                 Button("刷新") { Task { await store.loadNotifications(force: true) } }
                     .accessibilityIdentifier("notifications.refresh")
@@ -251,7 +251,7 @@ public struct NotificationCenterView: View {
 
             if store.feed.notifications.isEmpty {
                 Text("没有通知。")
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("notifications.empty")
             } else {
                 ScrollView {
@@ -277,16 +277,16 @@ struct NotificationRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Circle()
-                .fill(item.isRead ? Color.clear : Color.dsAccent)
+                .fill(item.isRead ? Color.clear : AeroricColor.accent)
                 .frame(width: 6, height: 6)
                 .padding(.top, 6)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title).fontWeight(item.isRead ? .regular : .semibold)
-                Text(item.body).font(.caption).foregroundStyle(Color.dsTextSecondary)
+                Text(item.body).font(.caption).foregroundStyle(AeroricColor.textSecondary)
                 // 链接只显示**宿主放行过的** http(s) URL（`sanitize_url` 在 core，
                 // 客户端拿到的 None 就是不显示，客户端不再过滤一遍）。
                 if let url = item.url {
-                    Text(url).font(.caption2).foregroundStyle(Color.dsTextMuted).lineLimit(1)
+                    Text(url).font(.caption2).foregroundStyle(AeroricColor.textTertiary).lineLimit(1)
                 }
             }
             Spacer()
@@ -359,7 +359,7 @@ public struct CleanupSettingsView: View {
 
             Text("只会清理已完成/失败/取消的任务；收藏、还能续跑、以及未处理的 worktree 不动。刚打开开关时先记时点，下一个周期才真的清。")
                 .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
+                .foregroundStyle(AeroricColor.textTertiary)
                 .accessibilityIdentifier("cleanup.note")
 
             Button("保存") { onSave?(current) }
@@ -443,7 +443,7 @@ public struct WeeklyReportView: View {
             if taskCount == 0 {
                 Text("这个区间没有任务，周报会是空的——宿主会拒绝生成。")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("weekly.empty-note")
             }
             Button("生成周报") {
@@ -467,11 +467,11 @@ public struct WeeklyReportView: View {
             if let lastWritten {
                 Text("已写入 \(lastWritten)")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .accessibilityIdentifier("weekly.written")
             }
             if let error = store.lastError {
-                Text(error).font(.caption).foregroundStyle(Color.dsDanger)
+                Text(error).font(.caption).foregroundStyle(AeroricColor.danger)
                     .accessibilityIdentifier("weekly.error")
             }
         }
@@ -516,7 +516,7 @@ public struct ReleaseView: View {
             let updateCandidates = store.feed.notifications.filter(\.newerThanCurrent)
             if updateCandidates.isEmpty {
                 Text("没有比当前更新的版本。")
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("release.uptodate")
             } else {
                 ForEach(updateCandidates, id: \.id) { candidate in
@@ -527,7 +527,7 @@ public struct ReleaseView: View {
                                 // 这台机器上没有可装的资产（架构/发行版不匹配）。
                                 Text("这个版本没有适配本机的安装包")
                                     .font(.caption)
-                                    .foregroundStyle(Color.dsWarning)
+                                    .foregroundStyle(AeroricColor.warning)
                             }
                         }
                         Spacer()
@@ -548,7 +548,7 @@ public struct ReleaseView: View {
                     .accessibilityIdentifier("release.checksum")
                 Text("替换会退出并重启应用。正在运行的任务会被中断——先确认没有任务在跑。")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                 Toggle("我已确认要重启并替换", isOn: $confirmed)
                     .accessibilityIdentifier("release.confirm")
                 Button("重启并安装") {
@@ -560,7 +560,7 @@ public struct ReleaseView: View {
             }
 
             if let error = store.lastError {
-                Text(error).font(.caption).foregroundStyle(Color.dsDanger)
+                Text(error).font(.caption).foregroundStyle(AeroricColor.danger)
                     .accessibilityIdentifier("release.error")
             }
         }
@@ -589,7 +589,7 @@ public struct DiagnosticsView: View {
             }
             if store.degradations.isEmpty {
                 Text("没有降级记录。")
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("diagnostics.empty")
             } else {
                 ScrollView {
@@ -597,10 +597,10 @@ public struct DiagnosticsView: View {
                         ForEach(Array(store.degradations.enumerated()), id: \.offset) { _, row in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(row.component).fontWeight(.semibold)
-                                Text(row.reason).font(.caption).foregroundStyle(Color.dsTextSecondary)
+                                Text(row.reason).font(.caption).foregroundStyle(AeroricColor.textSecondary)
                                 Text("已退到 \(row.fallback)")
                                     .font(.caption2)
-                                    .foregroundStyle(Color.dsTextMuted)
+                                    .foregroundStyle(AeroricColor.textTertiary)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .accessibilityIdentifier("diagnostics.row-\(row.component)")
@@ -645,11 +645,11 @@ public struct PermissionSettingsView: View {
                 if let plan = report.identity.plan {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(plan.headline).fontWeight(.semibold)
-                            .foregroundStyle(report.identity.warning == nil ? Color.dsTextSecondary : Color.dsWarning)
+                            .foregroundStyle(report.identity.warning == nil ? AeroricColor.textSecondary : AeroricColor.warning)
                             .accessibilityIdentifier("permissions.identity-headline")
                         Text(plan.explanation)
                             .font(.caption)
-                            .foregroundStyle(Color.dsTextSecondary)
+                            .foregroundStyle(AeroricColor.textSecondary)
                             .accessibilityIdentifier("permissions.identity-explanation")
                         if let reauthorize = plan.reauthorize {
                             Button("重新授权…") { pendingReauthorize = reauthorize }
@@ -663,13 +663,13 @@ public struct PermissionSettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(permission.id)
                             if let detail = permission.detail {
-                                Text(detail).font(.caption).foregroundStyle(Color.dsTextMuted)
+                                Text(detail).font(.caption).foregroundStyle(AeroricColor.textTertiary)
                             }
                         }
                         Spacer()
                         Text(permission.statusLabel)
                             .font(.caption)
-                            .foregroundStyle(permission.status == .granted ? Color.dsSuccess : Color.dsTextMuted)
+                            .foregroundStyle(permission.status == .granted ? AeroricColor.success : AeroricColor.textTertiary)
                             .accessibilityIdentifier("permissions.status-\(permission.id)")
                         if permission.canRequestInApp {
                             Button("请求") { onRequest?(permission.id) }
@@ -682,7 +682,7 @@ public struct PermissionSettingsView: View {
                 }
             } else {
                 Text("权限状态尚未读取。")
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("permissions.unknown")
             }
         }

@@ -186,14 +186,14 @@ public struct ImagePreview: View {
             VStack(spacing: 8) {
                 Image(systemName: "eye.slash")
                     .font(.system(size: 28))
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                 Text(reason)
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .multilineTextAlignment(.center)
                 Text("可以用外部程序打开该文件")
                     .font(.caption2)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityIdentifier("editor.readonly")

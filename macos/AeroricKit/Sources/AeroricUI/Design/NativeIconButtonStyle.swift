@@ -44,7 +44,7 @@ public struct NativeIconButtonStyle: PrimitiveButtonStyle {
                     .background {
                         if isHovering && isEnabled {
                             Capsule(style: .continuous)
-                                .fill(Color.dsText.opacity(NativePanelGeometry.iconHoverFillOpacity))
+                                .fill(AeroricColor.text.opacity(NativePanelGeometry.iconHoverFillOpacity))
                         }
                     }
             }
@@ -82,7 +82,7 @@ public struct NativeIconButton: View {
     public var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: DSTypography.body))
+                .font(.system(size: AeroricType.body))
         }
         .buttonStyle(NativeIconButtonStyle())
         .accessibilityLabel(label)

@@ -12,10 +12,10 @@ struct LegacyCleanupEntry: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("旧版自定义 Agent")
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(Color.dsText)
+                    .foregroundStyle(AeroricColor.text)
                 Text(store.unavailableReason ?? "已迁移到新配置的旧 Agent 可在确认后清理旧启动脚本与凭据文件。")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
@@ -41,7 +41,7 @@ struct LegacyCleanupSheet: View {
                 .font(.headline)
             Text("只处理已迁移到新 Agent 配置的旧自定义 Agent，内建 Agent 不受影响。勾选后才会执行，每一项都会在宿主上重新核对。")
                 .font(.caption)
-                .foregroundStyle(Color.dsTextSecondary)
+                .foregroundStyle(AeroricColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             content
@@ -49,12 +49,12 @@ struct LegacyCleanupSheet: View {
             if let error = store.lastError {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
             }
             if let batch = store.lastBatch {
                 Label("已移入隔离区：数据目录/legacy-agent-quarantine/\(batch)", systemImage: "archivebox")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .textSelection(.enabled)
             }
 
@@ -99,7 +99,7 @@ struct LegacyCleanupSheet: View {
             if report.candidates.isEmpty {
                 Text("没有需要清理的旧版自定义 Agent。")
                     .font(.callout)
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(report.candidates) { candidate in
@@ -142,7 +142,7 @@ private struct LegacyCleanupRow: View {
                 if let detail {
                     Text(detail)
                         .font(.caption)
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
@@ -162,10 +162,10 @@ private struct LegacyCleanupRow: View {
 
     private var statusColor: Color {
         switch candidate.state {
-        case .eligible: .dsAccent
-        case .blocked: .dsWarning
-        case .partial: .dsWarning
-        case .done: .dsSuccess
+        case .eligible: AeroricColor.accent
+        case .blocked: AeroricColor.warning
+        case .partial: AeroricColor.warning
+        case .done: AeroricColor.success
         }
     }
 

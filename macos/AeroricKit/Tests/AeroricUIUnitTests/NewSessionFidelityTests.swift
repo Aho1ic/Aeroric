@@ -30,7 +30,7 @@ final class NewSessionFidelityTests: XCTestCase {
         XCTAssertEqual(NewSessionGeometry.harnessHeight, 34)
         XCTAssertEqual(NewSessionGeometry.harnessItemHeight, 28)
         XCTAssertEqual(NewSessionGeometry.harnessIconSize, 16)
-        XCTAssertEqual(NativePanelGeometry.panelRadius, 18)
+        XCTAssertEqual(NativePanelGeometry.panelRadius, AeroricRadius.xl)
         // Redesign 01: flush columns, no floating 25pt cards.
         XCTAssertEqual(NativePanelGeometry.mainShell.panelRadius, 0)
     }

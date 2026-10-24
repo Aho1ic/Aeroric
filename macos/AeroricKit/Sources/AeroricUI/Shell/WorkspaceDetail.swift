@@ -459,10 +459,10 @@ struct BootstrapInfoBlock<State: WorkspaceStateProviding>: View {
             }
         }
         .font(.caption)
-        .foregroundStyle(Color.dsTextSecondary)
+        .foregroundStyle(AeroricColor.textSecondary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color.dsSurface.opacity(0.55))
+        .background(AeroricColor.canvas.opacity(0.55))
         // No identifier on this container — not even on the outermost
         // modifier. Measured 2026-10-13 from the AX dump of a failing
         // `AppLaunchTests` run: a `.accessibilityIdentifier` anywhere on this

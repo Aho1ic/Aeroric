@@ -84,7 +84,7 @@ public struct ComposerView: View {
                             }
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.dsSurface)
+                            .background(AeroricColor.canvas)
                         }
                     }
                 }
@@ -104,7 +104,7 @@ public struct ComposerView: View {
             if let sendError {
                 Text(sendError)
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
                     .accessibilityIdentifier("composer.error")
             }
         }
@@ -172,7 +172,7 @@ public struct QueuePanel: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("队列")
                 .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
+                .foregroundStyle(AeroricColor.textTertiary)
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 Text("#\(item.seq) \(item.type)")
                     .font(.caption)
@@ -196,7 +196,7 @@ public struct GoalPanel: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("目标")
                 .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
+                .foregroundStyle(AeroricColor.textTertiary)
             ForEach(Array(goals.enumerated()), id: \.offset) { index, goal in
                 Text(goal)
                     .font(.caption)
@@ -220,7 +220,7 @@ public struct SubagentPanel: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("子代理")
                 .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
+                .foregroundStyle(AeroricColor.textTertiary)
             ForEach(Array(subagents.enumerated()), id: \.offset) { index, subagent in
                 Text(subagent)
                     .font(.caption)
@@ -247,13 +247,13 @@ public struct TrajectoryView: View {
                     HStack(spacing: 6) {
                         Text("#\(entry.seq)")
                             .font(.caption2.monospaced())
-                            .foregroundStyle(Color.dsTextMuted)
+                            .foregroundStyle(AeroricColor.textTertiary)
                         Text(entry.type)
                             .font(.caption)
                         if let time = entry.time {
                             Text(time)
                                 .font(.caption2)
-                                .foregroundStyle(Color.dsTextMuted)
+                                .foregroundStyle(AeroricColor.textTertiary)
                         }
                     }
                     .accessibilityIdentifier("trajectory.entry.\(index)")

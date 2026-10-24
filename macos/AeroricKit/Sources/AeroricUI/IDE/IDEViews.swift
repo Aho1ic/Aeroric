@@ -13,7 +13,7 @@ public struct ProblemsView: View {
         List(store.problems) { problem in
             HStack(spacing: 6) {
                 Image(systemName: problem.severity == "error" ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(problem.severity == "error" ? Color.dsDanger : Color.dsWarning)
+                    .foregroundStyle(problem.severity == "error" ? AeroricColor.danger : AeroricColor.warning)
                     .font(.caption)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(problem.message)
@@ -21,7 +21,7 @@ public struct ProblemsView: View {
                         .lineLimit(2)
                     Text("\(problem.file):\(problem.line):\(problem.column) · \(problem.source)\(problem.code.map { " · \($0)" } ?? "")")
                         .font(.caption2)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
             }
             .accessibilityIdentifier("ide.problem.\(problem.id)")
@@ -29,7 +29,7 @@ public struct ProblemsView: View {
         .overlay {
             if store.problems.isEmpty {
                 Text("无问题")
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .font(.caption)
             }
         }
@@ -62,13 +62,13 @@ public struct SymbolOutlineView: View {
             HStack(spacing: 6) {
                 Image(systemName: "f.circle")
                     .font(.caption2)
-                    .foregroundStyle(Color.dsAccent)
+                    .foregroundStyle(AeroricColor.accent)
                 Text(symbol.name)
                     .font(.caption)
                 Spacer()
                 Text(symbol.line.formatted())
                     .font(.caption2)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
             }
             .accessibilityIdentifier("ide.symbol.\(symbol.id)")
         }
@@ -107,7 +107,7 @@ public struct CompletionPanel: View {
                     if let detail = completion.detail {
                         Text(detail)
                             .font(.caption2)
-                            .foregroundStyle(Color.dsTextMuted)
+                            .foregroundStyle(AeroricColor.textTertiary)
                     }
                 }
             }
@@ -154,7 +154,7 @@ public struct RunConfigurationEditor: View {
                         .font(.caption)
                     Text(config.command)
                         .font(.caption2.monospaced())
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
                 .accessibilityIdentifier("ide.run-config.\(config.id)")
             }
@@ -203,7 +203,7 @@ public struct RunConfigurationEditor: View {
             if let error {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
             }
         }
         .padding(12)
@@ -235,14 +235,14 @@ public struct TestResultsView: View {
         List(results) { result in
             HStack(spacing: 6) {
                 Image(systemName: result.passed ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .foregroundStyle(result.passed ? Color.dsSuccess : Color.dsDanger)
+                    .foregroundStyle(result.passed ? AeroricColor.success : AeroricColor.danger)
                 Text(result.name)
                     .font(.caption)
                 if let location = result.failureLocation {
                     Spacer()
                     Text(location)
                         .font(.caption2.monospaced())
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
             }
             .accessibilityIdentifier("ide.test.\(result.id)")
@@ -285,12 +285,12 @@ public struct DebugPanel: View {
                 if let reason = session.pausedReason {
                     Text("已暂停：\(reason)")
                         .font(.caption)
-                        .foregroundStyle(Color.dsWarning)
+                        .foregroundStyle(AeroricColor.warning)
                         .accessibilityIdentifier("ide.debug.paused-reason")
                 }
                 Text("调用栈")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                 ForEach(Array(session.callStack.enumerated()), id: \.offset) { _, frame in
                     Text("\(frame.functionName) · \(frame.file):\(frame.line)")
                         .font(.caption2.monospaced())
@@ -299,7 +299,7 @@ public struct DebugPanel: View {
                 ForEach(Array(session.scopes.enumerated()), id: \.offset) { _, scope in
                     Text(scope.name)
                         .font(.caption)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                     ForEach(Array(scope.variables.enumerated()), id: \.offset) { _, variable in
                         Text("\(variable.name) = \(variable.value)")
                             .font(.caption2.monospaced())
@@ -321,7 +321,7 @@ public struct DebugPanel: View {
                 // 未知 adapter 状态可诊断。
                 Text("adapter：\(diagnostic)")
                     .font(.caption2)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("ide.debug.adapter-diagnostic")
             }
             if breakpointStore.breakpoints.isEmpty {
@@ -329,12 +329,12 @@ public struct DebugPanel: View {
                 // 没有断点是正常状态,说清楚即可。
                 Text("断点：无")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("ide.debug.bp-empty")
             } else {
                 Text("断点")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                 ForEach(breakpointStore.breakpoints) { bp in
                     Text("\(bp.file):\(bp.line)\(bp.condition.map { " · when \($0)" } ?? "")")
                         .font(.caption2.monospaced())
@@ -377,10 +377,10 @@ public struct WebPreview: View {
             VStack(spacing: 8) {
                 Image(systemName: "lock.shield")
                     .font(.system(size: 28))
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                 Text("该 URL 未被批准预览；可以用系统浏览器打开。")
                     .font(.caption)
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .multilineTextAlignment(.center)
                 Button("在浏览器打开") {
                     NSWorkspace.shared.open(url)
