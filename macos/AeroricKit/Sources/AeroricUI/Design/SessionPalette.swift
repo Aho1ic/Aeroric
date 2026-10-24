@@ -7,44 +7,36 @@ import AppKit
 /// NSColor, so light, dark and Increase Contrast resolve through AppKit
 /// appearance matching instead of per-view branches.
 public enum SessionPalette {
-    /// `bg-base`: main content and inspector.
-    public static let canvas = dynamic(light: 0xFFFFFF, dark: 0x151517)
-    public static let foundation = dynamic(light: 0xF5F6F7, dark: 0x151517)
-    /// Sidebar fallback when transparency is reduced (neutral-bluish-50 / 900).
-    public static let sidebar = dynamic(light: 0xF9FAFB, dark: 0x1B1B1C)
-    public static let surface = dynamic(light: 0xFFFFFF, dark: 0x151517)
-    /// `bg-layer-1`: composer, cards.
-    public static let input = dynamic(light: 0xFFFFFF, dark: 0x232324)
-    public static let card = dynamic(light: 0xF9FAFB, dark: 0x1F1F20)
-    /// Hover / chip fill (`bg-module-platform`).
-    public static let chip = dynamic(light: 0xF1F3F5, dark: 0x2C2C2E)
-    /// User message bubble.
-    public static let bubble = dynamic(light: 0xF1F3F5, dark: 0x2C2C2E)
-    public static let text = dynamic(light: 0x0F1115, dark: 0xF9FAFB)
-    public static let secondary = dynamic(light: 0x61666B, dark: 0xCFD3D6,
-                                          lightContrast: 0x353638, darkContrast: 0xE9ECF2)
-    public static let muted = dynamic(light: 0x81858C, dark: 0xADB2B8,
-                                      lightContrast: 0x43454A, darkContrast: 0xCFD3D6)
-    public static let edge = dynamic(light: 0xE5E7EB, dark: 0x2E2F31,
-                                     lightContrast: 0x81858C, darkContrast: 0x81858C)
-    /// `brand-primary-new-color` (deepseek-500 / 450).
-    public static let accent = dynamic(light: 0x4176E6, dark: 0x5686FE)
+    // Overhaul M1: every role forwards to `AeroricColor`, the single colour
+    // vocabulary. The names stay so unmigrated views keep compiling and pick
+    // up the new values instead of disagreeing with migrated ones.
+    public static let canvas = AeroricColor.canvas
+    public static let foundation = AeroricColor.canvas
+    public static let sidebar = AeroricColor.sidebar
+    public static let surface = AeroricColor.canvas
+    public static let input = AeroricColor.layer1
+    public static let card = AeroricColor.layer1
+    public static let chip = AeroricColor.layer2
+    public static let bubble = AeroricColor.userBubble
+    public static let text = AeroricColor.text
+    public static let secondary = AeroricColor.textSecondary
+    public static let muted = AeroricColor.textTertiary
+    public static let edge = AeroricColor.separator2
+    public static let accent = AeroricColor.accent
     public static let blue = accent
+    // Hue accents used inside conversation content (not status roles).
     public static let teal = dynamic(light: 0x16856F, dark: 0x5CC9A7)
     public static let violet = dynamic(light: 0x7A5AD6, dark: 0xA992F2)
-    public static let amber = dynamic(light: 0xB7791F, dark: 0xF0B85A)
+    public static let amber = AeroricColor.warning
     public static let tintBlue = dynamic(light: 0xEEF3FD, dark: 0x1E2638)
     public static let tintTeal = dynamic(light: 0xE8F6F2, dark: 0x1A2A26)
     public static let tintAmber = dynamic(light: 0xFDF5E6, dark: 0x2E2719)
-    /// codeg `hover:bg-accent`: ghost-button and row hover capsule.
-    public static let hover = dynamic(light: 0xEEF0F3, dark: 0x2A2A2C)
-    /// Selected row / open-menu capsule (one step stronger than hover).
-    public static let selection = dynamic(light: 0xE6E9EE, dark: 0x323235,
-                                          lightContrast: 0xCFD3D6, darkContrast: 0x4A4C50)
-    /// Window foundation visible in the gaps between the rounded panels.
-    public static let gutter = dynamic(light: 0xF1F2F4, dark: 0x0F0F10)
+    public static let hover = AeroricColor.hover
+    public static let selection = AeroricColor.selection
+    /// No gutters between panels any more: the columns sit flush.
+    public static let gutter = AeroricColor.canvas
     public static let orbit = edge
-    public static let shadow = Color.black.opacity(0.08)
+    public static let shadow = AeroricColor.shadow
 
     static func dynamic(light: UInt32, dark: UInt32,
                         lightContrast: UInt32? = nil, darkContrast: UInt32? = nil) -> Color {

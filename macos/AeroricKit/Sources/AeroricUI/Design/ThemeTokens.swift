@@ -77,38 +77,26 @@ public enum DSMotion {
     public static let slow: TimeInterval = 0.260
 }
 
-// MARK: - Colour roles (dynamic system colours only)
+// MARK: - Colour roles (forward to AeroricColor)
 
+// Overhaul M1: the `ds*` names forward to `AeroricColor` so the two older
+// palettes stop disagreeing. Every role is still a dynamic colour resolved per
+// appearance (light, dark, increased contrast).
 public extension Color {
-    /// Window / canvas base (`windowBackgroundColor`).
-    static let dsCanvas = Color(nsColor: .windowBackgroundColor)
-    /// Elevated control surface (`controlBackgroundColor`).
-    static let dsSurface = Color(nsColor: .controlBackgroundColor)
-    /// Readable text background for terminal & editor panes
-    /// (`textBackgroundColor`) — deliberately opaque, never a stacked
-    /// translucent layer under every text row.
-    static let dsTextBackground = Color(nsColor: .textBackgroundColor)
-    /// Hairline separators (`separatorColor`).
-    static let dsBorder = Color(nsColor: .separatorColor)
-    /// Primary text (`labelColor`).
-    static let dsText = Color(nsColor: .labelColor)
-    /// Secondary text (`secondaryLabelColor`).
-    static let dsTextSecondary = Color(nsColor: .secondaryLabelColor)
-    /// Muted text (`tertiaryLabelColor`).
-    static let dsTextMuted = Color(nsColor: .tertiaryLabelColor)
-    /// Accent (`Color.accentColor` — follows the system accent preference).
-    static let dsAccent = Color.accentColor
-    /// Positive state (`systemGreen`).
-    static let dsSuccess = Color(nsColor: .systemGreen)
-    /// Warning state (`systemOrange`).
-    static let dsWarning = Color(nsColor: .systemOrange)
-    /// Destructive state (`systemRed`).
-    static let dsDanger = Color(nsColor: .systemRed)
-    /// Focus ring (`controlAccentColor` — tracks the accent beyond Color.accentColor).
-    static let dsFocus = Color(nsColor: .controlAccentColor)
-    /// Text on top of accent surfaces (`controlAccentColor`'s readable pair
-    /// is produced by the system for labels on accent backgrounds).
-    static let dsOnAccent = Color(nsColor: .alternateSelectedControlTextColor)
+    static let dsCanvas = AeroricColor.canvas
+    static let dsSurface = AeroricColor.layer1
+    /// Opaque text background for terminal and editor panes.
+    static let dsTextBackground = AeroricColor.canvas
+    static let dsBorder = AeroricColor.separator2
+    static let dsText = AeroricColor.text
+    static let dsTextSecondary = AeroricColor.textSecondary
+    static let dsTextMuted = AeroricColor.textTertiary
+    static let dsAccent = AeroricColor.accent
+    static let dsSuccess = AeroricColor.success
+    static let dsWarning = AeroricColor.warning
+    static let dsDanger = AeroricColor.danger
+    static let dsFocus = AeroricColor.accent
+    static let dsOnAccent = Color.white
 }
 
 // MARK: - Motion policy (reduced motion honoured)
