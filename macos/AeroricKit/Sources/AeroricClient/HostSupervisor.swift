@@ -2,6 +2,26 @@ import Foundation
 import os
 import AeroricProtocol
 
+/// The `runtime.json` layout this client understands — the Swift mirror of core's
+/// `aeroric_core::storage::runtime::RUNTIME_SCHEMA_VERSION`.
+///
+/// It exists as a named constant because the bare literal drifted: core moved to 2
+/// in P2-04 (v2 added `contentFingerprints`, a real schema change rather than an
+/// optional extra field), while this check kept rejecting anything above 1. Every
+/// real data directory therefore reported schemaVersion 2, and the native client
+/// refused **its own current host** with "requires a newer client (supported: 1)" —
+/// the shell showed 协议不兼容 and no task could run.
+///
+/// A higher value in the file still means "a newer core has been here" and must be
+/// refused (core's own rule, `storage/runtime.rs`), so the check itself is right.
+/// What was wrong was the bound: a "newer client" limit the shipped client violates
+/// is not a safety check. `RuntimeSchemaVersionTests` pins the two sides together.
+public enum RuntimeSchemaVersion {
+    /// Mirrors `RUNTIME_SCHEMA_VERSION` in
+    /// `core/crates/aeroric-core/src/storage/runtime.rs`.
+    public static let supported = 2
+}
+
 /// Supervisor lifecycle phases — mirrored verbatim by the UI store.
 public enum SupervisorPhase: Equatable, Sendable {
     case idle
@@ -144,12 +164,36 @@ final class LiveChildSlot: @unchecked Sendable {
     }
 }
 
+/// Attached hosts have no `ChildHandle` (they were spawned by an earlier UI
+/// process). The process-exit path still needs a synchronous pid target; this
+/// slot is written only after an authenticated attach succeeds and is cleared
+/// by detach/stop so a stale pid can never be signalled later.
+final class LiveAttachedPIDSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pid: pid_t = 0
+
+    func store(_ value: pid_t) {
+        lock.lock()
+        pid = value
+        lock.unlock()
+        LiveChildSlot.trace("attachedStore pid=\(value)")
+    }
+
+    func load() -> pid_t {
+        lock.lock()
+        defer { lock.unlock() }
+        return pid
+    }
+}
+
 public actor HostSupervisor {
     public private(set) var phase: SupervisorPhase = .idle
     /// Ready line of the most recent successful spawn attempt (cleared on stop).
     public private(set) var currentReadyInfo: ReadyInfo?
     /// Mirror of the actor's `child`, for the synchronous process-exit path.
     private let liveChild = LiveChildSlot()
+    /// Attached-host pid mirror; zero when this supervisor spawned the host.
+    private let liveAttachedPID = LiveAttachedPIDSlot()
     private let config: SupervisorConfig
     private let onChange: @Sendable (SupervisorPhase) -> Void
     private let configureConnection: @Sendable (HostConnection) async -> Void
@@ -182,12 +226,23 @@ public actor HostSupervisor {
     /// bookkeeping is irrelevant at process exit.
     public nonisolated func terminateChildForProcessExit(keepAliveInBackground: Bool = false) {
         let child = liveChild.load()
+        let attachedPID = liveAttachedPID.load()
         if keepAliveInBackground {
-            LiveChildSlot.trace("processExit keepAliveInBackground=true pid=\(child?.pid ?? -1)")
+            LiveChildSlot.trace(
+                "processExit keepAliveInBackground=true pid=\(child?.pid ?? attachedPID)"
+            )
             return
         }
-        LiveChildSlot.trace("processExit terminate pid=\(child?.pid ?? -1)")
-        child?.terminate()
+        if let child {
+            LiveChildSlot.trace("processExit terminate pid=\(child.pid)")
+            child.terminate()
+            return
+        }
+        if attachedPID > 0 {
+            LiveChildSlot.trace("processExit terminate attached pid=\(attachedPID)")
+            kill(attachedPID, SIGTERM)
+            liveAttachedPID.store(0)
+        }
     }
 
     /// Detaches the UI connection while leaving the background host process running.
@@ -199,6 +254,7 @@ public actor HostSupervisor {
         attachedFaultContinuation = nil
         await connection?.close()
         connection = nil
+        liveAttachedPID.store(0)
         setPhase(.stopped)
     }
 
@@ -210,13 +266,15 @@ public actor HostSupervisor {
         runTask = nil
         attachedFaultContinuation?.finish()
         attachedFaultContinuation = nil
+        let attachedPID = liveAttachedPID.load()
         liveChild.store(nil)
+        liveAttachedPID.store(0)
         await connection?.close()
         connection = nil
         if let child {
             child.terminate()
-        } else if let attachedPID = currentReadyInfo?.pid, attachedPID > 0 {
-            kill(pid_t(attachedPID), SIGTERM)
+        } else if attachedPID > 0 {
+            kill(attachedPID, SIGTERM)
         }
         child = nil
         currentReadyInfo = nil
@@ -260,8 +318,18 @@ public actor HostSupervisor {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        if let schemaVersion = obj["schemaVersion"] as? Int, schemaVersion > 1 {
-            return "runtime schemaVersion \(schemaVersion) requires a newer client (supported: 1)"
+        // `RuntimeSchemaVersion.supported` is the Swift mirror of core's
+        // `storage::runtime::RUNTIME_SCHEMA_VERSION`. This literal used to be a bare
+        // `1` and had drifted: core moved to 2 in P2-04 (v2 added
+        // `contentFingerprints`), so **every real data directory** carried
+        // `schemaVersion: 2` and the native client refused the host with
+        // "requires a newer client (supported: 1)" — the shell showed 协议不兼容
+        // against its own, current host. Measured 2026-10-13 on the real app data
+        // dir (`~/Library/Application Support/com.aeroric.native.dev/runtime.json`:
+        // `"schemaVersion": 2`). A "newer client" bound that the shipped client
+        // itself violates is not a safety check, it is an outage.
+        if let schemaVersion = obj["schemaVersion"] as? Int, schemaVersion > RuntimeSchemaVersion.supported {
+            return "runtime schemaVersion \(schemaVersion) requires a newer client (supported: \(RuntimeSchemaVersion.supported))"
         }
         if let expectedProto = config.expectedProtocolHash,
            let actualProto = obj["protocolHash"] as? String,
@@ -277,6 +345,10 @@ public actor HostSupervisor {
     }
 
     private func tryAttachExistingHost() async -> Bool {
+        // A previous attach may have died while the run loop was backing off.
+        // Clear the stale pid before attempting a new handshake so process
+        // exit cannot signal a recycled pid.
+        liveAttachedPID.store(0)
         guard config.allowAttachToExistingHost,
               FileManager.default.fileExists(atPath: config.socketPath),
               FileManager.default.fileExists(atPath: config.dataDir.appendingPathComponent("host.token").path) else {
@@ -324,11 +396,15 @@ public actor HostSupervisor {
                 dataDirHash: "",
                 socketPath: config.socketPath
             )
+            if pid > 0 {
+                liveAttachedPID.store(pid_t(pid))
+            }
         }
         setPhase(.ready)
         for await event in lifecycle {
             switch event {
             case .connectionFault, .childExited:
+                liveAttachedPID.store(0)
                 await connection.close()
                 return true
             }
@@ -341,6 +417,7 @@ public actor HostSupervisor {
         if await tryAttachExistingHost() {
             return
         }
+        liveAttachedPID.store(0)
         let child = try spawnChild()
         self.child = child
         liveChild.store(child)

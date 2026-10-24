@@ -38,6 +38,15 @@ final class SandboxLifecycleTests: XCTestCase {
         let deepSock = SandboxDataRoot.socketPath(for: URL(fileURLWithPath: deepPath, isDirectory: true))
         XCTAssertLessThan(deepSock.utf8.count, SandboxDataRoot.sunPathLimit)
         XCTAssertTrue(deepSock.hasPrefix("/tmp/aeroric-"))
+
+        // Cross-language contract: core's `uds::default_socket_path` pins the
+        // same fixture and expected value. A mismatch here makes the CLI host
+        // report a different ready socket than the Swift client configured.
+        let sandboxFixture = URL(fileURLWithPath:
+            "/Users/fixture/Library/Containers/com.aeroric.native.dev/Data/Library/Application Support/com.aeroric.native.dev",
+            isDirectory: true)
+        XCTAssertEqual(SandboxDataRoot.socketPath(for: sandboxFixture),
+                       "/tmp/aeroric-98e1d459c998c1aa.sock")
     }
 
     // MARK: - 2. Security-Scoped Bookmarks (Persist, Restart, Stale Refresh, Revoke)
@@ -299,4 +308,71 @@ final class SandboxLifecycleTests: XCTestCase {
         }
         XCTAssertTrue(gone, "Explicit stop must terminate the background host")
     }
+    func testProcessExitTerminatesAttachedHostWhenKeepAliveDisabled() async throws {
+        let dataDir = makeScratchDir()
+        defer { try? FileManager.default.removeItem(at: dataDir) }
+
+        let fakeHost = try makeMultiAcceptFakeHost()
+        defer { try? FileManager.default.removeItem(at: fakeHost.deletingLastPathComponent()) }
+
+        var policy = BackgroundHostPolicy.load(from: dataDir)
+        policy.keepAliveOnUIQuit = true
+        try policy.save(to: dataDir)
+
+        let sockPath = SandboxDataRoot.socketPath(for: dataDir)
+        let sup1 = HostSupervisor(
+            config: SupervisorConfig(dataDir: dataDir, socketPath: sockPath, cliExecutable: fakeHost),
+            onChange: { _ in }
+        )
+        supervisors.append(sup1)
+        await sup1.start()
+        let deadline1 = Date().addingTimeInterval(5)
+        while Date() < deadline1, await sup1.phase != .ready {
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+        let phase1 = await sup1.phase
+        XCTAssertEqual(phase1, .ready)
+        let hostPID = Int32(await sup1.currentReadyInfo?.pid ?? 0)
+        XCTAssertGreaterThan(hostPID, 0)
+
+        // First UI quits with keep-alive: the host survives and a later launch
+        // attaches to it without spawning a child.
+        sup1.terminateChildForProcessExit(keepAliveInBackground: true)
+        await sup1.detachForBackgroundKeepAlive()
+        XCTAssertEqual(kill(hostPID, 0), 0)
+
+        let sup2 = HostSupervisor(
+            config: SupervisorConfig(
+                dataDir: dataDir,
+                socketPath: sockPath,
+                cliExecutable: URL(fileURLWithPath: "/nonexistent/should-not-spawn")
+            ),
+            onChange: { _ in }
+        )
+        supervisors.append(sup2)
+        await sup2.start()
+        let deadline2 = Date().addingTimeInterval(5)
+        while Date() < deadline2, await sup2.phase != .ready {
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+        let phase2 = await sup2.phase
+        XCTAssertEqual(phase2, .ready)
+        let attachedPID = Int32(await sup2.currentReadyInfo?.pid ?? 0)
+        XCTAssertEqual(attachedPID, hostPID)
+
+        // The next UI quit does not keep the host alive, so the attached
+        // process must receive SIGTERM from the synchronous process-exit path.
+        sup2.terminateChildForProcessExit(keepAliveInBackground: false)
+        let deadline3 = Date().addingTimeInterval(3)
+        var gone = false
+        while Date() < deadline3 {
+            if kill(hostPID, 0) == -1 && errno == ESRCH {
+                gone = true
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(gone, "process exit without keep-alive must terminate the attached host")
+    }
+
 }
