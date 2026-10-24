@@ -50,11 +50,13 @@ public enum DSTypography {
 /// fallback for Chinese and system symbols. Keeping the constructor here
 /// avoids a second font vocabulary in shell, inspector and preview views.
 public enum AeroricFont {
-    public static let file: CGFloat = 12
-    public static let project: CGFloat = 12
-    public static let body: CGFloat = 13
-    public static let code: CGFloat = 12
-    public static let meta: CGFloat = 11
+    // Forward to the text-size setting (M3); values at the default step are
+    // unchanged (file/project 12, body 13, code 12, meta 11).
+    public static var file: CGFloat { AeroricType.secondary }
+    public static var project: CGFloat { AeroricType.secondary }
+    public static var body: CGFloat { AeroricType.body }
+    public static var code: CGFloat { AeroricType.code }
+    public static var meta: CGFloat { AeroricType.caption }
     public static let title: CGFloat = 16
 
     public static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {

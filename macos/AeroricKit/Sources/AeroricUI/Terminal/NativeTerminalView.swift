@@ -12,10 +12,20 @@ public struct NativeTerminalView: NSViewRepresentable {
     }
 
     public func makeNSView(context: Context) -> TerminalView {
-        coordinator.renderer
+        let view = coordinator.renderer
+        Self.applyFont(size: AeroricTypeScale.shared.terminalSize, to: view)
+        return view
     }
 
     public func updateNSView(_ nsView: TerminalView, context: Context) {
-        // 字节/输入全走 coordinator；这里无需刷新。
+        // 字节/输入全走 coordinator；这里只跟随终端字号档位（M3）。
+        Self.applyFont(size: AeroricTypeScale.shared.terminalSize, to: nsView)
+    }
+
+    /// JetBrains Mono when the app bundle registered it, else the system mono.
+    static func applyFont(size: CGFloat, to view: TerminalView) {
+        guard view.font.pointSize != size else { return }
+        view.font = NSFont(name: "JetBrainsMono-Regular", size: size)
+            ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 }

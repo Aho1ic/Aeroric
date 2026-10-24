@@ -31,9 +31,13 @@ public enum AeroricRadius {
 /// Type scale. Interface text is the system face (SF + PingFang); code and the
 /// terminal use JetBrains Mono through `AeroricFont.mono`.
 public enum AeroricType {
-    public static let caption: CGFloat = 11
-    public static let secondary: CGFloat = 12
-    public static let body: CGFloat = 13
+    /// Body-level sizes follow the text-size setting (`AeroricTypeScale`):
+    /// secondary = body − 1, caption = body − 2. Headings below are fixed.
+    public static var caption: CGFloat { body - 2 }
+    public static var secondary: CGFloat { body - 1 }
+    public static var body: CGFloat { AeroricTypeScale.shared.textSize }
+    /// Code, diffs and inline monospaced text.
+    public static var code: CGFloat { AeroricTypeScale.shared.codeSize }
     public static let headline: CGFloat = 15
     public static let title: CGFloat = 17
     public static let largeTitle: CGFloat = 22
