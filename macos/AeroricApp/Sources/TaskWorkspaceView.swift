@@ -609,12 +609,12 @@ struct TaskWorkspaceView: View {
         let value = draftBook[scope] ?? NewSessionDraft(submissionID: "unopened")
         let configurations = services.sessionConfigurations(projectID: scope.projectID)
         let reasons = sessionBlockingReasons(value, scope: scope)
-        return NewSessionComposer(
+        return NewSessionHome(
             draft: Binding(
                 get: { draftBook[scope] ?? NewSessionDraft(submissionID: "unopened") },
                 set: { value in draftBook.edit(scope) { $0 = value } }
             ),
-            projectName: project?.name,
+            projectID: project?.id,
             projects: services.taskStore.projects,
             configurations: configurations,
             blockingReasons: reasons,
