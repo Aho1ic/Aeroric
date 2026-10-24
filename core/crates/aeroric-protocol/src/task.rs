@@ -148,6 +148,19 @@ impl PermissionMode {
         PermissionMode::AutoEdit,
         PermissionMode::FullAccess,
     ];
+
+    /// 权限强度序:`Ask` < `AutoEdit` < `FullAccess`。
+    ///
+    /// 存在的理由只有一个:队列里的任务按**入队那一刻**的权限执行,任何后续控制
+    /// 命令都不得把它抬到入队值之上(AP7 / P9-01)。比较用整数序,避免各处
+    /// 自己写一遍 match。
+    pub fn rank(&self) -> u8 {
+        match self {
+            PermissionMode::Ask => 0,
+            PermissionMode::AutoEdit => 1,
+            PermissionMode::FullAccess => 2,
+        }
+    }
 }
 
 /// Authoritative task snapshot. `revision` and `generation` are decimal strings so

@@ -174,6 +174,11 @@ pub struct HostWiring {
     /// `Arc` 之后就不可变了,而且 `handshake` 与 remote 面必须落在**同一个**
     /// 集合里,否则认证过的连接看不到这些方法。
     pub remote: Option<RemotePlaneInjection>,
+    /// AP7:外部 Agent 适配器探测结果。给了才注册 `adapters.capabilities` 与
+    /// `session.control`,并把探测到的能力**如实**写进握手清单——没给意味着这个宿主
+    /// 形态没有结构化会话控制面(`session.control` = method-not-found),而不是
+    /// 一个会假装工作的空壳。
+    pub adapters: Option<Arc<crate::adapter_services::AdapterInjection>>,
 }
 
 /// remote plane 的装配参数(持有 core 的 `RemoteState` 与宿主 handle)。
@@ -287,6 +292,9 @@ impl HostServices {
     ) -> Arc<Self> {
         let mut set = ServiceSet::new();
         let mut capabilities: Vec<aeroric_protocol::capability::Capability> = Vec::new();
+        // AP7 适配器探测面。必须在 handshake 闭包捕获 `capabilities` **之前**读懂,
+        // 否则广告会落在快照之后(实测:握手应答里根本没有 session-controls)。
+        let adapters = wiring.adapters.take();
         crate::services::register_read_services(&mut set, Arc::clone(&context));
         crate::connection_services::register_connection_services(&mut set, Arc::clone(&context));
         crate::infrastructure_services::register_infrastructure_services(
@@ -387,6 +395,15 @@ impl HostServices {
                 note: None,
             });
         }
+        let capabilities = {
+            let mut advertised = capabilities;
+            if let Some(adapters) = adapters.as_ref() {
+                // 能力清单与注册面用**同一份**探测结果:广告了却没注册(或反之)
+                // 在这里就不可能发生。
+                advertised.extend(crate::adapter_services::adapter_capabilities(adapters));
+            }
+            advertised
+        };
         {
             let token = Arc::clone(&token);
             let capabilities = capabilities.clone();
@@ -411,6 +428,10 @@ impl HostServices {
         }
         if let Some(remote) = wiring.remote.take() {
             crate::remote_headless::register_remote_services(&mut set, remote.state, remote.handle);
+        }
+        if let Some(adapters) = adapters.clone() {
+            crate::adapter_services::register_adapter_services(&mut set, Arc::clone(&adapters));
+            crate::adapter_services::register_session_control_services(&mut set, adapters);
         }
         Arc::new(Self {
             token,

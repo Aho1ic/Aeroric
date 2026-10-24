@@ -2,6 +2,7 @@
 //! deliberately no second daemon. Startup order is lock -> data compat ->
 //! runtime -> listener -> ready (P3-06).
 
+pub mod adapter_services;
 pub mod auth;
 pub mod codec;
 pub mod connection_services;
