@@ -10,7 +10,7 @@ enum ToolsConnectionsReviewFixtures {
     static let connectionID = "demo-connection"
     static let externalID = "demo-external-tool"
     static let history = ["demo-history-write · 固定虚构历史，不代表本次执行或已回滚"]
-    static let executorNotice = "Codex、Claude Code、oh-my-pi（OMP）、DeepSeek Harness（DSH）与 custom：仅虚构支持预设，未验证本机适配。Aeroric 不是第五执行器。"
+    static let executorNotice = "Codex、Claude Code、oh-my-pi（OMP）、DSH 与 custom：仅虚构支持预设，未验证本机适配。Aeroric 不是第五执行器。"
 
     static let catalog: [ToolsConnectionsReviewCatalogItem] = {
         let target = TConnReviewIdentity().target

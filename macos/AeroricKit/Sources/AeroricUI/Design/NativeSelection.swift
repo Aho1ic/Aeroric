@@ -178,7 +178,7 @@ public struct NativeHarnessPicker: NSViewRepresentable {
         Harness(id: "codex", title: "Codex", asset: "HarnessCodex"),
         Harness(id: "claude", title: "Claude Code", asset: "HarnessClaude"),
         Harness(id: "omp", title: "oh-my-pi", asset: "HarnessOMP"),
-        Harness(id: "dsh", title: "DeepSeek Harness", asset: "HarnessDSH"),
+        Harness(id: "dsh", title: "DSH", asset: "HarnessDSH"),
     ]
 
     @Binding private var selection: String

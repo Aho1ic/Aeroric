@@ -85,7 +85,7 @@ public struct OnboardingView: View {
         switch step {
         case .welcome:
             VStack(alignment: .leading, spacing: AeroricSpace.l) {
-                point("rectangle.3.group", "在一个窗口里运行 Claude Code、Codex、DeepSeek Harness 和 oh-my-pi")
+                point("rectangle.3.group", "在一个窗口里运行 Claude Code、Codex、DSH 和 oh-my-pi")
                 point("eye", "会话、工具调用与审批都以原生界面呈现")
                 point("lock.shield", "数据留在本机；读取你的已有会话前一定先问你")
             }
