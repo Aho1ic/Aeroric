@@ -22,6 +22,7 @@ pub mod dsh;
 pub mod export;
 pub mod history;
 pub mod hooks;
+pub mod import;
 pub mod omp;
 pub mod parser;
 pub mod resume;

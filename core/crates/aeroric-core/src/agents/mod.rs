@@ -6,6 +6,7 @@
 //! `environment.rs` 的 login-shell 环境合并。P3-05 起 [`dsh_host`] 把 DSH 结构化
 //! 宿主按职责片迁入同一模块树。
 
+pub mod detect;
 pub mod dsh_host;
 pub mod environment;
 pub mod families;

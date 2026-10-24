@@ -1,0 +1,327 @@
+use super::*;
+use std::time::{Duration, SystemTime};
+
+/// A throwaway home + data dir. Never the real home.
+struct Scratch {
+    root: PathBuf,
+}
+
+impl Scratch {
+    fn new(name: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "aeroric-import-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        Self { root }
+    }
+    fn home(&self) -> PathBuf {
+        self.root.join("home")
+    }
+    fn store(&self) -> ImportStore {
+        ImportStore::new(&self.root.join("data"))
+    }
+    fn write(&self, relative: &str, text: &str) -> PathBuf {
+        let path = self.home().join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, text).unwrap();
+        path
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+const CLAUDE: &str = concat!(
+    r#"{"type":"user","cwd":"/work/app","timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"<command-name>init</command-name>"}}"#,
+    "\n",
+    r#"{"type":"user","cwd":"/work/app","message":{"role":"user","content":[{"type":"text","text":"修复登录页\n细节略"}]}}"#,
+    "\n",
+    r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"好的"}]}}"#,
+    "\n"
+);
+
+const CODEX: &str = concat!(
+    r#"{"timestamp":"2026-10-02T09:00:00Z","type":"session_meta","payload":{"cwd":"/work/other/sub"}}"#,
+    "\n",
+    r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>x</environment_context>"}]}}"#,
+    "\n",
+    r#"{"type":"event_msg","payload":{"type":"user_message","message":"加一个测试"}}"#,
+    "\n"
+);
+
+fn projects() -> Vec<(String, String)> {
+    vec![
+        ("p-app".to_string(), "/work/app".to_string()),
+        ("p-other".to_string(), "/work/other".to_string()),
+    ]
+}
+
+#[test]
+fn nothing_is_read_without_a_grant() {
+    let scratch = Scratch::new("ungranted");
+    scratch.write(".claude/projects/-work-app/s1.jsonl", CLAUDE);
+    let store = scratch.store();
+    let report = store.scan(&projects()).unwrap();
+    assert_eq!(report, ScanReport::default());
+    assert!(store.index().is_empty());
+}
+
+#[test]
+fn granted_sessions_are_indexed_with_cwd_title_and_project() {
+    let scratch = Scratch::new("grant");
+    let claude = scratch.write(".claude/projects/-work-app/s1.jsonl", CLAUDE);
+    scratch.write(
+        ".claude/projects/-work-app/s1/subagents/worker-1.jsonl",
+        CLAUDE,
+    );
+    scratch.write(".codex/sessions/2026/10/02/rollout-a.jsonl", CODEX);
+    scratch.write(".codex/sessions/2026/10/02/notes.jsonl", CODEX);
+    let store = scratch.store();
+    store
+        .grant(
+            ImportAgent::Claude,
+            ImportAgent::Claude.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    store
+        .grant(
+            ImportAgent::Codex,
+            ImportAgent::Codex.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    let report = store.scan(&projects()).unwrap();
+    assert_eq!(
+        report.added, 2,
+        "subagent transcripts and non-rollout files are not sessions"
+    );
+
+    let index = store.index();
+    let claude_entry = index
+        .iter()
+        .find(|s| s.agent == ImportAgent::Claude)
+        .unwrap();
+    assert_eq!(claude_entry.id, session_id(ImportAgent::Claude, &claude));
+    assert_eq!(claude_entry.cwd.as_deref(), Some("/work/app"));
+    assert_eq!(
+        claude_entry.title, "修复登录页",
+        "injected <…> blocks are skipped, first line only"
+    );
+    assert_eq!(
+        claude_entry.first_at.as_deref(),
+        Some("2026-10-01T10:00:00Z")
+    );
+    assert_eq!(claude_entry.project_id.as_deref(), Some("p-app"));
+
+    let codex_entry = index
+        .iter()
+        .find(|s| s.agent == ImportAgent::Codex)
+        .unwrap();
+    assert_eq!(codex_entry.title, "加一个测试");
+    assert_eq!(
+        codex_entry.project_id.as_deref(),
+        Some("p-other"),
+        "a sub-directory belongs to its project"
+    );
+}
+
+#[test]
+fn rescans_are_incremental_and_ids_are_stable() {
+    let scratch = Scratch::new("incremental");
+    let first = scratch.write(".claude/projects/-work-app/s1.jsonl", CLAUDE);
+    scratch.write(".claude/projects/-work-app/s2.jsonl", CLAUDE);
+    let store = scratch.store();
+    store
+        .grant(
+            ImportAgent::Claude,
+            ImportAgent::Claude.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    store.scan(&projects()).unwrap();
+    let ids: Vec<String> = store.index().iter().map(|s| s.id.clone()).collect();
+
+    let again = store.scan(&projects()).unwrap();
+    assert_eq!((again.added, again.updated, again.unchanged), (0, 0, 2));
+
+    fs::write(&first, format!("{CLAUDE}{CLAUDE}")).unwrap();
+    let changed = store.scan(&projects()).unwrap();
+    assert_eq!((changed.updated, changed.unchanged), (1, 1));
+    let mut after: Vec<String> = store.index().iter().map(|s| s.id.clone()).collect();
+    let mut before = ids;
+    after.sort();
+    before.sort();
+    assert_eq!(after, before, "ids are deterministic");
+
+    fs::remove_file(&first).unwrap();
+    let removed = store.scan(&projects()).unwrap();
+    assert_eq!(removed.removed, 1);
+    assert_eq!(store.index().len(), 1);
+}
+
+#[test]
+fn source_files_are_never_modified() {
+    let scratch = Scratch::new("readonly");
+    let path = scratch.write(".claude/projects/-work-app/s1.jsonl", CLAUDE);
+    let old = SystemTime::now() - Duration::from_secs(3600);
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let before = fs::metadata(&path).unwrap();
+    let store = scratch.store();
+    store
+        .grant(
+            ImportAgent::Claude,
+            ImportAgent::Claude.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    store.scan(&projects()).unwrap();
+    let id = store.index()[0].id.clone();
+    store.messages(&id).unwrap();
+    let after = fs::metadata(&path).unwrap();
+    assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+    assert_eq!(before.len(), after.len());
+    assert_eq!(fs::read_to_string(&path).unwrap(), CLAUDE);
+}
+
+#[test]
+fn messages_parse_and_unmatched_cwd_stays_unassigned() {
+    let scratch = Scratch::new("messages");
+    scratch.write(
+        ".claude/projects/-elsewhere/s1.jsonl",
+        &CLAUDE.replace("/work/app", "/elsewhere"),
+    );
+    let store = scratch.store();
+    store
+        .grant(
+            ImportAgent::Claude,
+            ImportAgent::Claude.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    store.scan(&projects()).unwrap();
+    let entry = store.index()[0].clone();
+    assert_eq!(entry.project_id, None);
+    let (_, messages) = store.messages(&entry.id).unwrap();
+    assert!(messages.iter().any(|m| m.role == "assistant"));
+}
+
+#[test]
+fn oversized_sessions_are_listed_but_not_read() {
+    let scratch = Scratch::new("large");
+    let path = scratch.write(".claude/projects/-work-app/big.jsonl", CLAUDE);
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(MAX_SESSION_BYTES + 1)
+        .unwrap();
+    let store = scratch.store();
+    store
+        .grant(
+            ImportAgent::Claude,
+            ImportAgent::Claude.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    store.scan(&projects()).unwrap();
+    let entry = store.index()[0].clone();
+    assert!(entry.too_large);
+    assert_eq!(entry.title, "big");
+    assert_eq!(
+        store.messages(&entry.id).unwrap_err(),
+        ImportError::TooLarge
+    );
+}
+
+#[test]
+fn revoke_clears_the_index_and_blocks_reads() {
+    let scratch = Scratch::new("revoke");
+    let path = scratch.write(".claude/projects/-work-app/s1.jsonl", CLAUDE);
+    scratch.write(".codex/sessions/rollout-a.jsonl", CODEX);
+    let store = scratch.store();
+    store
+        .grant(
+            ImportAgent::Claude,
+            ImportAgent::Claude.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    store
+        .grant(
+            ImportAgent::Codex,
+            ImportAgent::Codex.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    store.scan(&projects()).unwrap();
+    let claude_id = session_id(ImportAgent::Claude, &path);
+    store.revoke(ImportAgent::Claude).unwrap();
+    assert!(store.index().iter().all(|s| s.agent == ImportAgent::Codex));
+    assert_eq!(
+        store.messages(&claude_id).unwrap_err(),
+        ImportError::UnknownSession(claude_id)
+    );
+    assert!(path.exists(), "revoking never touches source files");
+    assert_eq!(
+        store.scan(&projects()).unwrap().added,
+        0,
+        "a revoked agent is not scanned again"
+    );
+}
+
+#[test]
+fn estimate_counts_without_reading_or_indexing() {
+    let scratch = Scratch::new("estimate");
+    scratch.write(".codex/sessions/2026/rollout-a.jsonl", CODEX);
+    scratch.write(".codex/sessions/2026/rollout-b.jsonl", CODEX);
+    let estimate = estimate(
+        ImportAgent::Codex,
+        &ImportAgent::Codex.default_root(&scratch.home()),
+    );
+    assert!(estimate.root_exists);
+    assert_eq!(estimate.sessions, 2);
+    assert_eq!(estimate.bytes, 2 * CODEX.len() as u64);
+    assert!(estimate.latest_ms.is_some());
+    assert!(
+        !scratch.root.join("data").exists(),
+        "estimate writes nothing"
+    );
+    let missing = super::estimate(
+        ImportAgent::Claude,
+        &ImportAgent::Claude.default_root(&scratch.home()),
+    );
+    assert!(!missing.root_exists);
+    assert_eq!(missing.sessions, 0);
+}
+
+#[test]
+fn project_assignment_prefers_the_longest_match() {
+    let projects = vec![
+        ("outer".to_string(), "/work".to_string()),
+        ("inner".to_string(), "/work/app".to_string()),
+    ];
+    assert_eq!(
+        assign_project(Some("/work/app/src"), &projects).as_deref(),
+        Some("inner")
+    );
+    assert_eq!(
+        assign_project(Some("/work/apparel"), &projects).as_deref(),
+        Some("outer"),
+        "path-component match, not string prefix"
+    );
+    assert_eq!(assign_project(None, &projects), None);
+}
