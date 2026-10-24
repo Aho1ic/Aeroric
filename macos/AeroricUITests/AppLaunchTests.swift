@@ -6,6 +6,16 @@ import XCTest
 /// the app) is exercised on every run.
 @MainActor
 final class AppLaunchTests: XCTestCase {
+    private let lifecycle = NativeUITestApplicationLifecycle()
+
+    override func tearDownWithError() throws {
+        let lifecycle = lifecycle
+        try MainActor.assumeIsolated {
+            try lifecycle.tearDown()
+        }
+        try super.tearDownWithError()
+    }
+
     func testColdLaunchShowsBootstrapIdentifiersThenCloses() throws {
         let runnerEnvironment = ProcessInfo.processInfo.environment
         var app = XCUIApplication()
@@ -21,23 +31,18 @@ final class AppLaunchTests: XCTestCase {
         // Scene assembly under testmanagerd is intermittent (G41): a launch
         // sometimes runs the event loop with zero windows. Retrying absorbs
         // it — same mitigation as ShellLifecycleTests.launchApp (fresh
-        // XCUIApplication per attempt; terminate() is asynchronous).
+        // XCUIApplication per attempt; the lifecycle barrier must succeed).
         var painted = false
         for attempt in 0..<6 {
             if attempt > 0 {
-                app.terminate()
-                let deadline = Date().addingTimeInterval(5)
-                while app.state == .runningForeground || app.state == .runningBackground,
-                      Date() < deadline {
-                    Thread.sleep(forTimeInterval: 0.2)
-                }
+                try lifecycle.quit(app)
                 app = XCUIApplication()
                 app.launchEnvironment["AERORIC_ENV"] = runnerEnvironment["AERORIC_ENV"] ?? "ui-test"
                 if let dataDirectory = runnerEnvironment["AERORIC_DATA_DIR"] {
                     app.launchEnvironment["AERORIC_DATA_DIR"] = dataDirectory
                 }
             }
-            app.launch()
+            try lifecycle.launch(app)
             painted = app.staticTexts["bootstrap.environment"].firstMatch.waitForExistence(timeout: 10)
             if painted { break }
         }
@@ -69,7 +74,7 @@ final class AppLaunchTests: XCTestCase {
             "bootstrap.connection missing"
         )
 
-        app.terminate()
+        try lifecycle.quit(app)
         // Cold start + identifiers + close — the whole P4-01 UI surface.
     }
 }

@@ -108,7 +108,6 @@ public struct UsageDashboard: View {
             SubscriptionUsageSection(store: store, onOpenHostSettings: onOpenHostSettings)
         }
         .padding(16)
-        .accessibilityIdentifier("operations.usage")
     }
 
     private var breakdownRows: [(label: String, totals: MaintenanceClient.UsageTotals)] {
@@ -268,7 +267,6 @@ public struct NotificationCenterView: View {
             }
         }
         .padding(16)
-        .accessibilityIdentifier("operations.notifications")
     }
 }
 
@@ -612,7 +610,6 @@ public struct DiagnosticsView: View {
             }
         }
         .padding(16)
-        .accessibilityIdentifier("operations.diagnostics")
     }
 }
 

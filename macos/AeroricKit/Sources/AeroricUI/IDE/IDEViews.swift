@@ -307,6 +307,15 @@ public struct DebugPanel: View {
                             .accessibilityIdentifier("ide.debug.var.\(variable.name)")
                     }
                 }
+            } else {
+                // 没有会话时此前只剩一排按钮和两个孤零零的分组标题("调用栈"
+                // 不渲染、"断点"下面空着),看不出是"没开始调试"还是"面板坏了"。
+                PaneEmptyState(
+                    systemImage: "ladybug",
+                    title: "没有调试会话",
+                    hint: "点 start 或 attach 开始一个"
+                )
+                .accessibilityIdentifier("ide.debug.no-session")
             }
             if let diagnostic = breakpointStore.lastAdapterDiagnostic {
                 // 未知 adapter 状态可诊断。
@@ -315,17 +324,37 @@ public struct DebugPanel: View {
                     .foregroundStyle(Color.dsTextMuted)
                     .accessibilityIdentifier("ide.debug.adapter-diagnostic")
             }
-            Text("断点")
-                .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
-            ForEach(breakpointStore.breakpoints) { bp in
-                Text("\(bp.file):\(bp.line)\(bp.condition.map { " · when \($0)" } ?? "")")
-                    .font(.caption2.monospaced())
-                    .accessibilityIdentifier("ide.debug.bp.\(bp.id)")
+            if breakpointStore.breakpoints.isEmpty {
+                // 空分组标题("断点"下面什么都没有)与"面板坏了"无法区分;
+                // 没有断点是正常状态,说清楚即可。
+                Text("断点：无")
+                    .font(.caption)
+                    .foregroundStyle(Color.dsTextMuted)
+                    .accessibilityIdentifier("ide.debug.bp-empty")
+            } else {
+                Text("断点")
+                    .font(.caption)
+                    .foregroundStyle(Color.dsTextMuted)
+                ForEach(breakpointStore.breakpoints) { bp in
+                    Text("\(bp.file):\(bp.line)\(bp.condition.map { " · when \($0)" } ?? "")")
+                        .font(.caption2.monospaced())
+                        .accessibilityIdentifier("ide.debug.bp.\(bp.id)")
+                }
             }
         }
         .padding(12)
-        .accessibilityIdentifier("ide.debug-panel")
+        // No container identifier on this VStack.
+        //
+        // Measured 2026-10-14 by dumping the AX tree with the identifier
+        // present and absent: with `.accessibilityIdentifier("ide.debug-panel")`
+        // here, **every leaf below reads `ide.debug-panel`** — all eight
+        // action buttons, the empty state's image and both its texts, the
+        // breakpoint line. `ide.debug.start`, `ide.debug.no-session` and
+        // `ide.debug.bp-empty` are then unqueryable; removing the container id
+        // restores all of them. Same rule as `WorkspaceDetail` and
+        // `BootstrapInfoBlock` above — and it was violated here too, which is
+        // why the empty state this panel gained was invisible to its test.
+        // Nothing referenced `ide.debug-panel`; the leaves are what tests address.
     }
 }
 

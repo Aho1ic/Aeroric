@@ -1,32 +1,11 @@
 import SwiftUI
 
-/// P5-03 Action 1/2：项目列表（侧栏）＋任务列表。列表只渲染 store 的
-/// 镜像；时间/状态/agent 文案来自宿主快照，客户端不推断。
-public struct ProjectListView: View {
-    @Binding var projects: [TaskStore.ProjectEntry]
-    @Binding var selectedProjectID: String?
-
-    public init(projects: Binding<[TaskStore.ProjectEntry]>, selectedProjectID: Binding<String?>) {
-        self._projects = projects
-        self._selectedProjectID = selectedProjectID
-    }
-
-    public var body: some View {
-        List(selection: $selectedProjectID) {
-            ForEach(projects) { project in
-                Text(project.name)
-                    .tag(Optional(project.id))
-                    .accessibilityIdentifier("project.item.\(project.id)")
-            }
-        }
-        .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
-        .accessibilityIdentifier("project.list")
-    }
-}
-
 /// 任务列表：窗口局部过滤（filterText）作用于可见集；宿主 archive
 /// 是另一层（权威），两层边界在 TaskStore 的注释里钉死。
+///
+/// 项目作用域由调用方算好（`TaskStore.visibleTasks(inProject:)`）——
+/// 侧栏的「项目」组才是项目选择器，`ProjectListView`（一个只渲染项目名的
+/// 独立列表）在导航重做后已无调用点，随本轮删除。
 public struct TaskListView: View {
     @Binding var visibleTasks: [TaskStore.TaskEntry]
     @Binding var filterText: String
@@ -55,15 +34,33 @@ public struct TaskListView: View {
                     .accessibilityIdentifier("tasks.new")
             }
             .padding(8)
-            List(selection: $selectedTaskID) {
-                ForEach(visibleTasks) { task in
-                    TaskRow(task: task)
-                        .tag(Optional(task.id))
+            if visibleTasks.isEmpty {
+                // 空列表必须说清"为什么空"，否则与渲染失败无法区分
+                // （参考实现里没有一个是空白面板：opencode "Nothing here
+                // yet"/"Create a session to get started"、deepseek "No
+                // sessions yet"/"No matches"）。两种空法文案不同：有过滤词
+                // ⇒ 是过滤没命中；没有过滤词 ⇒ 这个项目还没有任务。
+                PaneEmptyState(
+                    systemImage: hasFilter ? "magnifyingglass" : "tray",
+                    title: hasFilter ? "没有匹配的任务" : "还没有任务",
+                    hint: hasFilter ? "换个关键词，或清空过滤条件" : "点右上角「新建任务」开始一个"
+                )
+                .accessibilityIdentifier("tasks.empty")
+            } else {
+                List(selection: $selectedTaskID) {
+                    ForEach(visibleTasks) { task in
+                        TaskRow(task: task)
+                            .tag(Optional(task.id))
+                    }
                 }
+                .listStyle(.plain)
+                .accessibilityIdentifier("tasks.list")
             }
-            .listStyle(.plain)
-            .accessibilityIdentifier("tasks.list")
         }
+    }
+
+    private var hasFilter: Bool {
+        !filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 

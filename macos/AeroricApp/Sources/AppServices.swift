@@ -49,21 +49,35 @@ final class AppServices {
     let extensionStore = ExtensionStore()
     let remoteStore = RemoteStore(client: nil)
     let maintenanceStore = MaintenanceStore(client: nil)
-    var draftPresentationRequested = false
+    /// AP7:会话控制簿记(能力探测结果 + 控制裁决)。
+    let agentToolsStore = AgentToolsStore()
+    /// AP7:外部协议只读状态(OAuth/沙箱/工具/媒体/语音)。
+    let externalProtocolStore = ExternalProtocolStore()
     /// P5-01/P5-02：模式控制器（迁移默认按旧客户端存在性）。
     let interactionModeController = InteractionModeController(
         tauriClientPresent: InteractionModeController.tauriClientPresent
     )
     /// P5-03：类型化 workspace 调用（连接附着后创建）。
     private(set) var workspaceClient: WorkspaceClient?
+    private(set) var taskSnapshotReadState: WorkspaceReadState = .notLoaded
+    private(set) var configurationReadStates: [String: WorkspaceReadState] = [:]
+    private var projectConfigurations: [String: [SessionConfiguration]] = [:]
+    private var configurationReads: [String: UUID] = [:]
+    private(set) var configurationEpoch = UUID()
     /// P5-01：选中任务的终端轮询任务（attach/detach 管理）。
     private var terminalPollTask: Task<Void, Never>?
     private(set) var terminalCoordinator: TerminalCoordinator?
+    private(set) var terminalPresentationOwner: UUID?
     /// 终端流的续看簿记（与任务镜像分开）。
     let terminalStore = TerminalStore()
     private(set) var supervisor: HostSupervisor?
     /// The live channel; retained so the sink stays wired between attempts.
     private var attachedConnection: HostConnection?
+    /// A read-only boundary, not a global resource/selection store.
+    var projectResourceReader: ProjectResourcesClient? {
+        guard phaseSnapshot == .ready, let attachedConnection else { return nil }
+        return ProjectResourcesClient(connection: attachedConnection)
+    }
     /// AP3: Persistent security-scoped bookmark store for sandboxed project access.
     private(set) var bookmarkStore: SandboxBookmarkStore?
     /// AP3: Explicit opt-in background host policy (default keepAliveOnUIQuit = false).
@@ -153,6 +167,18 @@ final class AppServices {
                     self.attachedConnection = connection
                     self.connectionStore.attach(connection: connection, supervisor: self.supervisor)
                     self.workspaceClient = WorkspaceClient(connection: connection)
+                    self.configurationReads.removeAll()
+                    self.configurationReadStates.removeAll()
+                    self.projectConfigurations.removeAll()
+                    self.configurationEpoch = UUID()
+                }
+                // AP7:能力探测走宿主真值。没有适配器面时 `capabilities()` 抛错,
+                // store 保持「未探测」——UI 因此什么都不显示,而不是显示一堆注定
+                // 失败的按钮。
+                if let report = try? await AdapterClient(connection: connection).capabilities() {
+                    await MainActor.run {
+                        self.agentToolsStore.attach(report)
+                    }
                 }
                 await self.refreshWorkspace()
             }
@@ -247,24 +273,18 @@ final class AppServices {
 
     // MARK: - P5-03 workspace（项目/任务镜像与刷新）
 
-    /// 连接就绪后刷新项目/任务镜像。失败静默（快照轮询下次再来）。
+    /// 连接就绪后读取项目/任务镜像；不把初次快照冒充实时事件覆盖。
     func refreshWorkspace() async {
-        if draftOptionsStorage == nil {
-            draftOptionsStorage = TaskDraft.Options(
-                agents: ["claude", "codex", "dsh", "omp"],
-                models: ["claude-sonnet-4-5", "gpt-5", "deepseek-chat"],
-                efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-                permissionModes: ["ask", "auto_edit", "full_access"]
-            )
-        }
         guard let client = workspaceClient else { return }
+        taskSnapshotReadState = .loading
         if let projects = try? await client.listProjects() {
             for project in projects {
                 _ = projectStore.upsertProject(id: project.id, path: project.path)
                 _ = taskStore.upsertProject(id: project.id, path: project.path)
             }
         }
-        if let tasks = try? await client.listTasks() {
+        do {
+            let tasks = try await client.listTasks()
             for task in tasks {
                 taskStore.upsertTask(TaskStore.TaskEntry(
                     id: task.id,
@@ -281,20 +301,22 @@ final class AppServices {
                     pendingGenerations[task.id] = generation
                 }
             }
+            taskSnapshotReadState = .loaded
+        } catch {
+            taskSnapshotReadState = .failed(String(describing: error))
         }
     }
 
-    /// 创建任务（TaskDraftView 提交）：task.run，taskId 由客户端铸；
+    /// 创建任务：task.run，taskId 由窗口草稿 owner 在请求前铸造；
     /// 回执后镜像一个 pending 条目（下轮刷新校正）。
     @discardableResult
-    func runTask(_ draft: TaskDraft, projectID: String) async throws -> String {
+    func runTask(_ draft: TaskDraft, projectID: String, taskId: String) async throws -> String {
         guard let client = workspaceClient else {
             throw ProjectError.notConnected
         }
         guard let project = taskStore.projects.first(where: { $0.id == projectID }) else {
             throw ProjectError.notConnected
         }
-        let taskId = UUID().uuidString
         let run = WorkspaceClient.RunRequest(
             projectPath: project.path,
             agent: draft.agent,
@@ -315,6 +337,69 @@ final class AppServices {
             agent: draft.agent
         ))
         return returned
+    }
+
+    func sessionConfigurations(projectID: String?) -> [SessionConfiguration] {
+        projectID.flatMap { projectConfigurations[$0] } ?? []
+    }
+
+    func loadSessionConfigurations(projectID: String) async {
+        guard let client = workspaceClient else {
+            configurationReadStates[projectID] = .unavailable
+            return
+        }
+        guard configurationReadStates[projectID] != .loading else { return }
+        let read = UUID()
+        configurationReads[projectID] = read
+        configurationReadStates[projectID] = .loading
+        do {
+            let catalog = try await client.configurations(projectID: projectID)
+            guard configurationReads[projectID] == read else { return }
+            projectConfigurations[projectID] = catalog.configurations.map {
+                SessionConfiguration(
+                    id: $0.id, version: $0.version, title: $0.displayName, agent: $0.agent,
+                    model: nil, effort: nil,
+                    options: .init(agents: [$0.agent], models: $0.models, efforts: $0.efforts,
+                                   permissionModes: $0.permissionModes),
+                    harness: $0.harness, blockedReasons: $0.blockedReasons,
+                    requiresModel: true, requiresPermissionIdentity: true
+                )
+            }
+            configurationReadStates[projectID] = .loaded
+        } catch {
+            guard configurationReads[projectID] == read else { return }
+            configurationReadStates[projectID] = .failed(String(describing: error))
+        }
+    }
+
+    func submissionRequest(_ draft: NewSessionDraft, projectID: String) throws -> NativeTaskSubmission {
+        guard let configurationID = draft.configurationID,
+              let configurationVersion = draft.configurationVersion,
+              let permissionAgent = draft.permissionAgent else { throw ProjectError.malformedReply }
+        return NativeTaskSubmission(
+            submissionId: draft.submissionID, projectId: projectID,
+            configurationId: configurationID, configurationVersion: configurationVersion,
+            agent: draft.task.agent, prompt: draft.task.prompt,
+            permissionMode: draft.task.permissionMode, permissionAgent: permissionAgent,
+            selectedModel: draft.task.model, reasoningEffort: draft.task.effort,
+            attachments: draft.task.attachmentPaths, worktree: draft.task.worktree,
+            recipeId: draft.recipeID, team: draft.capabilities.team,
+            review: draft.capabilities.review, evolution: draft.capabilities.evolution
+        )
+    }
+
+    func submitSession(_ draft: NewSessionDraft, projectID: String) async throws -> NativeSubmissionReceipt {
+        guard let client = workspaceClient else { throw ProjectError.notConnected }
+        let receipt = try await client.submitTask(submissionRequest(draft, projectID: projectID))
+        if receipt.state == "accepted" { await refreshWorkspace() }
+        return receipt
+    }
+
+    func inspectSubmission(_ draft: NewSessionDraft, projectID: String) async throws -> NativeSubmissionReceipt? {
+        guard let client = workspaceClient else { throw ProjectError.notConnected }
+        let receipt = try await client.submission(submissionRequest(draft, projectID: projectID))
+        if receipt?.state == "accepted" { await refreshWorkspace() }
+        return receipt
     }
 
     func cancelTask(taskId: String) async {
@@ -407,16 +492,23 @@ final class AppServices {
 
     /// 挂上选中任务的终端轮询：plan_replay（cursor 续读）50ms 一拍，
     /// 字节喂 coordinator；delegate 输入经 task.input 回填。
-    func attachTerminal(taskId: String, generation: UInt64) {
+    func attachTerminal(taskId: String, generation: UInt64, presentationOwner: UUID) {
         detachTerminal()
         guard let client = workspaceClient else { return }
         let coordinator = TerminalCoordinator(taskID: taskId, generation: generation, store: terminalStore)
         coordinator.attach(holdsLease: true)
-        coordinator.onInput = { [weak self] taskId, generation, data in
+        coordinator.onInput = { [weak self, weak coordinator] taskId, generation, data in
             guard let self, let text = String(data: Data(data), encoding: .utf8) else { return }
             let bytes = Data(text.utf8)
-            Task { [weak self] in
-                guard let self, let client = self.workspaceClient else { return }
+            Task { [weak self, weak coordinator] in
+                // Re-check at the async dispatch boundary: hiding a task
+                // must also block input queued before the visibility change.
+                // This local guard is not a host-authoritative lease ticket.
+                guard let self, let coordinator,
+                      self.terminalCoordinator === coordinator,
+                      coordinator.holdsLease, !coordinator.isHidden,
+                      coordinator.taskID == taskId, coordinator.generation == generation,
+                      self.workspaceClient != nil else { return }
                 // task.input（宿主侧 lease 短顶替语义）。
                 _ = try? await attachedConnection?.request(
                     "task.input",
@@ -429,6 +521,7 @@ final class AppServices {
             }
         }
         terminalCoordinator = coordinator
+        terminalPresentationOwner = presentationOwner
         terminalPollTask = Task { [weak self] in
             var cursor: TerminalStreamClient.Cursor = .init(bytes: 0)
             while !Task.isCancelled {
@@ -459,6 +552,17 @@ final class AppServices {
         terminalPollTask = nil
         terminalCoordinator?.detach()
         terminalCoordinator = nil
+        terminalPresentationOwner = nil
+    }
+
+    func suspendTerminalInput(presentationOwner: UUID) {
+        guard terminalPresentationOwner == presentationOwner else { return }
+        terminalCoordinator?.detach()
+    }
+
+    func detachTerminal(presentationOwner: UUID) {
+        guard terminalPresentationOwner == presentationOwner else { return }
+        detachTerminal()
     }
 
     /// UI-test hook (P4-04 acceptance: per-window selection needs real
@@ -565,15 +669,74 @@ extension AppServices: WorkspaceStateProviding {
     var protocolVersionText: String { "v\(protocolVersion)" }
     var applicationTag: String { applicationStore.environmentTag }
 
+    /// The navigation spine: the workspace's own surfaces first (grouped by
+    /// what they are for), then the user's projects.
+    ///
+    /// The workspace rows come first because the daily job is running and
+    /// watching tasks; the projects follow as the scoping dimension. That
+    /// ordering is the hierarchy the flat 12-segment strip could not express
+    /// (see `WorkspaceSection`).
     var sidebarItems: [SidebarItem] {
-        projectStore.projects.map {
-            SidebarItem(id: $0.id, title: URL(fileURLWithPath: $0.path).lastPathComponent)
+        let sections = WorkspaceSection.allCases.map { section in
+            SidebarItem(
+                id: section.sidebarID,
+                title: section.title,
+                systemImage: section.systemImage,
+                badge: section == .tasks ? openTaskCount : nil,
+                group: section.group
+            )
         }
+        let projects = projectStore.projects.map { project in
+            SidebarItem(
+                id: project.id,
+                title: URL(fileURLWithPath: project.path).lastPathComponent,
+                systemImage: "folder",
+                group: .projects,
+                children: [
+                    SidebarItem(id: SessionNavigation.draft(projectID: project.id),
+                                title: "新建会话", systemImage: "plus", group: .projects),
+                ] + taskStore.tasks.filter { task in task.projectID == project.id && !task.archived }
+                    .sorted { ($0.starred ? 0 : 1, $1.updatedAtMs ?? 0) < ($1.starred ? 0 : 1, $0.updatedAtMs ?? 0) }
+                    .map { task in
+                        SidebarItem(id: SessionNavigation.task(task.id), title: task.title,
+                                    systemImage: "bubble.left", group: .projects,
+                                    status: task.status, pinned: task.starred)
+                    }
+            )
+        }
+        return [SidebarItem(id: SessionNavigation.globalDraft, title: "新建会话",
+                            systemImage: "plus", group: .work)] + sections + projects
+    }
+
+    /// Trailing badge for the task row: how many tasks are live right now.
+    /// `nil` when there are none, so the row renders no zero.
+    ///
+    /// "Live" is the protocol's own active set — `pending`, `running`,
+    /// `input_required`, `detached` (`ProtocolModels.swift:16`,
+    /// `TaskStatus::is_active` on the core side). Never a locally invented
+    /// status list: the wire vocabulary is the authority and the client
+    /// mirrors it.
+    private var openTaskCount: Int? {
+        let live: Set<String> = ["pending", "running", "input_required", "detached"]
+        let count = taskStore.tasks.filter { live.contains($0.status) }.count
+        return count > 0 ? count : nil
+    }
+
+    /// Global mirror counts, explicitly cached. Event completeness and
+    /// freshness are not established by the current typed API.
+    var statusContext: String? {
+        guard taskSnapshotReadState == .loaded else {
+            if case .failed = taskSnapshotReadState { return "任务状态读取失败（保留缓存）" }
+            return "任务状态尚未确认"
+        }
+        let running = taskStore.tasks.filter { $0.status == "running" }.count
+        let input = taskStore.tasks.filter { $0.status == "input_required" }.count
+        return "缓存：运行中 \(running) · 待输入 \(input)"
     }
 
     var paletteCommands: [PaletteCommand] {
         [
-            PaletteCommand(id: "task.new", title: "新建任务"),
+            PaletteCommand(id: "task.new", title: "新建会话"),
             PaletteCommand(id: "project.open", title: "打开项目…"),
             PaletteCommand(id: "settings.show", title: "设置…"),
         ]

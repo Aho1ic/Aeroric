@@ -101,6 +101,12 @@ targets:
       - path: AeroricUITests
     dependencies:
       - target: AeroricNative
+      # AP8: the UI tests read shared types (ModeSwitchStep, …) from AeroricUI.
+      # Without this link `native:ui-test` does not compile at all — and since
+      # `native:ui-test` was never registered as a gate case, that breakage sat
+      # in the tree since P5-04 (87220d5c) unnoticed.
+      - package: AeroricKit
+        product: AeroricUI
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.aeroric.native.dev.uitests

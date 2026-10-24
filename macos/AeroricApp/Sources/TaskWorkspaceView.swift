@@ -9,6 +9,24 @@ import SwiftUI
 /// native 下能力已验证才直接呈现终端，否则显示状态卡与切换按钮）。
 /// 任务生命周期调用全部走 `AppServices`（类型化 workspace client），
 /// 本视图不触碰 wire 格式（INV-02 归属不变）。
+/// The workspace's surfaces, as navigation rows rather than a tab strip.
+///
+/// ## Why these are rows and not segments (2026-10-13)
+///
+/// They used to be the 12 segments of one `NativeSegmentedPicker` across the
+/// top of the detail column. Measured in the real window: 12 segments plus
+/// the leaked group title spanning 1516pt, which put "run a task" at the
+/// same visual weight as "运维" and made the daily job one of thirteen
+/// peers — the "杂乱" the user reported.
+///
+/// The reference clients under `harness/` agree on the alternative:
+/// **top-level navigation is a grouped sidebar; a tab strip is for open
+/// documents** (`opencode` `titlebar.tsx:172-186` keeps session tabs in the
+/// titlebar while navigation lives in the sidebar; `deepseek-harness`
+/// `columns.ts:21-39`; `codeg`'s sidebar is `folders / chats / recent` —
+/// `sidebar-view-mode-storage.ts:30,39`). So each surface becomes a
+/// `SidebarItem` in one of the four groups, and the grouping is what carries
+/// the hierarchy the flat strip had lost.
 enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     case tasks
     case files
@@ -21,10 +39,13 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     case extensions
     case remote
     case operations
+    case agentTools
 
-    var titleKey: LocalizedStringKey {
+    /// The row label. A plain `String` (not a `LocalizedStringKey`) because
+    /// the sidebar row model carries text, not view builders.
+    var title: String {
         switch self {
-        case .tasks: "任务"
+        case .tasks: "全部任务"
         case .files: "文件"
         case .git: "Git"
         case .ide: "IDE"
@@ -35,146 +56,730 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .extensions: "扩展"
         case .remote: "远控"
         case .operations: "运维"
+        case .agentTools: "Agent 工具"
         }
+    }
+
+    /// The sidebar row id. One namespace with the project rows, so the
+    /// selection binding carries either kind and the shell stays ignorant of
+    /// which is which.
+    var sidebarID: String { "section.\(rawValue)" }
+
+    /// Leading glyph for the navigation row.
+    var systemImage: String {
+        switch self {
+        case .tasks: "checklist"
+        case .files: "folder"
+        case .git: "arrow.triangle.branch"
+        case .ide: "ladybug"
+        case .connections: "network"
+        case .infrastructure: "shippingbox"
+        case .database: "cylinder"
+        case .notebook: "book"
+        case .extensions: "puzzlepiece.extension"
+        case .remote: "antenna.radiowaves.left.and.right"
+        case .operations: "gauge.with.dots.needle.67percent"
+        case .agentTools: "wrench.and.screwdriver"
+        }
+    }
+
+    /// Which labelled group the row sits under. The split is by *what the
+    /// surface is for*, which is the hierarchy the flat strip could not
+    /// express: the work, the project-scoped tools, and the machine-level
+    /// configuration.
+    var group: SidebarGroup {
+        switch self {
+        case .tasks: .work
+        case .files, .git, .ide, .database, .notebook, .agentTools: .tools
+        case .connections, .infrastructure, .extensions, .remote, .operations: .system
+        }
+    }
+
+    /// Resolve a sidebar row id back to its surface. `nil` for project rows
+    /// and anything unrecognised — the caller decides the fallback.
+    static func resolve(sidebarID: String?) -> WorkspaceSection? {
+        guard let sidebarID, sidebarID.hasPrefix("section.") else { return nil }
+        return WorkspaceSection(rawValue: String(sidebarID.dropFirst("section.".count)))
     }
 }
 
 struct TaskWorkspaceView: View {
     let services: AppServices
-    @State private var activeSection: WorkspaceSection = .tasks
+    /// The shell's sidebar selection. The navigation spine lives in the
+    /// shell (`ProjectSidebar`); this view renders whichever surface the
+    /// selected row names. A project row (or nothing) falls back to the task
+    /// surface, which is the app's default view.
+    @Binding var selection: String?
+    /// 本窗口的项目作用域：侧栏选中一个**项目**行时＝那个项目，否则 nil。
+    ///
+    /// 窗口局部，不进 store——`TaskStore` 由所有窗口共享，把作用域存进去会让
+    /// 两个窗口互相覆盖对方的选择（§2.4「selected project 归窗口」）。
+    @State private var scopedProjectID: String?
     /// 每窗口选中的任务 id（窗口局部状态，不进 store）。
     @State private var selectedTaskID: String?
-    @State private var draftPresented = false
-    @State private var draft = TaskWorkspaceView.emptyDraft
-    @State private var draftError: String?
+    @State private var visitedTaskIDs: Set<String> = []
+    @State private var taskProjectContexts: [String: String] = [:]
+    @State private var taskFilterText = ""
+    @State private var draftBook = NewSessionDraftBook()
+    @State private var projectContextID: String?
+    @State private var resourceBook = ProjectResourceBook()
+    @State private var taskInputGate = TaskPresentationInputGate()
+    @State private var terminalPresentationOwner = UUID()
+    @State private var visitedResourceProjects: Set<String> = []
+    @Environment(\.mainShellBudget) private var shellBudget
+    @Environment(\.mainShellNavigationEpoch) private var navigationEpoch
+    @Environment(\.mainShellInspectorWidth) private var inspectorWidthPreference
+    @AppStorage("settings.surfacePreference") private var surfaceRawValue = SurfacePreference.glass.rawValue
+    @State private var submissionCheck: String?
     @State private var sqlDraft = "SELECT 1;"
     /// native 模式下能力未验证会话的用户主动切换（不自动改全局偏好，
     /// P5-02 语义）。
-    @State private var forcedTerminal = false
-    static var emptyDraft: TaskDraft {
-        TaskDraft(
-            agent: "",
-            model: nil,
-            effort: nil,
-            permissionMode: "",
-            prompt: "",
-            attachmentPaths: [],
-            worktree: nil
-        )
+    @State private var forcedTerminalTaskIDs: Set<String> = []
+    /// Q25: bottom terminal dock. Expanded by default at 28% of the column.
+    @State private var terminalExpanded = true
+    @SceneStorage("session.terminal-fraction") private var terminalFraction =
+        Double(NativePanelGeometry.mainShell.terminalInitialFraction)
+    /// Q17: codeg auxiliary panel tabs.
+    @State private var auxiliaryTab: AuxiliaryTab = .details
+    enum AuxiliaryTab: Hashable { case details, files, changes, history }
+
+    /// Which surface the selected navigation row names. A project row or an
+    /// empty selection is the task surface — the app's default view.
+    private var activeSection: WorkspaceSection {
+        WorkspaceSection.resolve(sidebarID: selection) ?? .tasks
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            NativeSegmentedPicker(
-                selection: $activeSection,
-                groupTitle: "工作区视图",
-                segments: WorkspaceSection.allCases.map {
-                    .init(value: $0, title: $0.titleKey)
+        // Split so the type checker sees three small chains, not one large one.
+        navigationHandlers(sessionHandlers(layout))
+            .alert("原交办核对", isPresented: Binding(
+                get: { submissionCheck != nil },
+                set: { if !$0 { submissionCheck = nil } }
+            )) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text(submissionCheck ?? "")
+            }
+    }
+
+    private var showsAuxiliary: Bool {
+        !usesFullWorkspace && (shellBudget?.inspectorWidth ?? 0) > 0
+    }
+
+    /// Redesign v3: centre and auxiliary panel are separate rounded cards.
+    /// The auxiliary panel's budgeted width includes the gutter before it,
+    /// which doubles as its drag handle. It stays mounted while hidden so
+    /// its list identities survive a toggle.
+    private var layout: some View {
+        HStack(spacing: 0) {
+            RoundedShellPanel(fill: SessionPalette.canvas) {
+                VStack(spacing: 0) {
+                    previewNavigation
+                    centralContent
                 }
-            )
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            Divider().overlay(Color.dsBorder)
-            sectionContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            if let shellBudget {
+                let gap = ShellRadius.panelGap
+                let panelWidth = max(0, (shellBudget.inspectorWidth > 0
+                    ? shellBudget.inspectorWidth : NativePanelGeometry.mainShell.minimumInspectorWidth) - gap)
+                InspectorResizeHandle(width: inspectorWidthPreference,
+                                      effectiveWidth: shellBudget.inspectorWidth,
+                                      totalWidth: shellBudget.totalWidth)
+                    .frame(width: showsAuxiliary ? gap : 0)
+                    .allowsHitTesting(showsAuxiliary)
+                RoundedShellPanel(fill: SessionPalette.card) {
+                    auxiliaryPanel
+                        .frame(width: panelWidth)
+                        .frame(maxHeight: .infinity)
+                }
+                .frame(width: showsAuxiliary ? panelWidth : 0)
+                .clipped()
+                .opacity(showsAuxiliary ? 1 : 0)
+                .allowsHitTesting(showsAuxiliary)
+                .accessibilityHidden(!showsAuxiliary)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: services.draftPresentationRequested) { _, requested in
-            if requested {
-                services.draftPresentationRequested = false
-                draftPresented = true
+    }
+
+    private func sessionHandlers<Content: View>(_ content: Content) -> some View {
+        content
+        .onChange(of: auxiliaryTab, initial: true) { _, _ in syncAuxiliarySection() }
+        .onChange(of: resourceProjectID) { _, _ in syncAuxiliarySection() }
+        .onChange(of: selectedTask?.status) { _, status in
+            // Q25: a hook-reported wait expands the dock and gives the
+            // terminal focus. It never answers or confirms anything.
+            guard status == "input_required", taskSurfaceVisible else { return }
+            terminalExpanded = true
+            DispatchQueue.main.async {
+                if let coordinator = services.terminalCoordinator, coordinator.holdsLease,
+                   coordinator.taskID == selectedTaskID {
+                    coordinator.renderer.window?.makeFirstResponder(coordinator.renderer)
+                }
             }
         }
-        .onChange(of: selectedTaskID) { _, newValue in
-            forcedTerminal = false
+        .onChange(of: resourceProjectID, initial: true) { _, id in
+            if let id { visitedResourceProjects.insert(id) }
+        }
+        .onChange(of: navigationEpoch) { _, _ in
+            // An explicit task/draft navigation wins even when its sidebar
+            // value was already selected. Preserve the reusable target.
+            if SessionNavigation.taskID(selection) != nil || draftScope != nil,
+               let id = resourceProjectID { resourceBook.showTask(projectID: id) }
+        }
+        .onChange(of: taskSurfaceVisible, initial: true) { _, visible in
+            taskInputGate.update(taskID: selectedTaskID, visible: visible)
+            if !visible || selectedTaskID.map({ !taskInputGate.permits($0) }) == true {
+                services.suspendTerminalInput(presentationOwner: terminalPresentationOwner)
+            }
+            // Returning only restores reading. Never implicitly take control.
+        }
+        .onChange(of: services.configurationEpoch) { _, _ in resourceBook.invalidateSnapshots() }
+        .task(id: resourceLoadKey) { await loadCurrentResources() }
+    }
+
+    private func navigationHandlers<Content: View>(_ content: Content) -> some View {
+        content
+        .onChange(of: selection, initial: true) { _, newValue in
+            if let scope = SessionNavigation.draftScope(newValue) {
+                draftBook.open(scope)
+                if let projectID = scope.projectID {
+                    projectContextID = projectID
+                    resourceBook.showTask(projectID: projectID)
+                }
+            } else if let taskID = SessionNavigation.taskID(newValue) {
+                selectedTaskID = taskID
+                if let task = services.taskStore.tasks.first(where: { $0.id == taskID }) {
+                    projectContextID = task.projectID
+                    taskProjectContexts[taskID] = task.projectID
+                    scopedProjectID = task.projectID
+                    resourceBook.showTask(projectID: task.projectID)
+                }
+            } else if newValue == SessionNavigation.allTasks {
+                scopedProjectID = nil
+            } else if let project = services.taskStore.projects.first(where: { $0.id == newValue }) {
+                projectContextID = project.id
+                scopedProjectID = project.id
+            }
+        }
+        .focusedSceneValue(\.newSessionAction, { openNewSession() })
+        .onChange(of: selectedTask?.id, initial: true) { _, newValue in
             guard let newValue, let task = services.taskStore.tasks.first(where: { $0.id == newValue })
             else {
-                services.detachTerminal()
+                taskInputGate.leave()
+                services.detachTerminal(presentationOwner: terminalPresentationOwner)
                 return
             }
-            // generation 缺失（快照还没带会话句柄）不挂载；下轮刷新补上。
+            visitedTaskIDs.insert(task.id)
+            taskInputGate.update(taskID: task.id, visible: taskSurfaceVisible)
             if let generation = services.generation(for: task) {
-                services.attachTerminal(taskId: task.id, generation: generation)
+                services.attachTerminal(taskId: task.id, generation: generation,
+                                        presentationOwner: terminalPresentationOwner)
+                if !taskInputGate.permits(task.id) {
+                    services.suspendTerminalInput(presentationOwner: terminalPresentationOwner)
+                }
             } else {
-                services.detachTerminal()
+                services.detachTerminal(presentationOwner: terminalPresentationOwner)
             }
         }
-        .sheet(isPresented: $draftPresented) {
-            TaskDraftView(
-                options: services.draftOptions,
-                draft: $draft,
-                onSubmit: { submitted in
-                    draftError = nil
-                    guard let projectID = services.taskStore.selectedProjectID
-                        ?? services.taskStore.projects.first?.id
-                    else {
-                        draftError = "未选择项目"
-                        return
-                    }
-                    Task { @MainActor in
-                        do {
-                            _ = try await services.runTask(submitted, projectID: projectID)
-                            draftPresented = false
-                            self.draft = Self.emptyDraft
-                        } catch {
-                            draftError = String(describing: error)
-                        }
-                    }
-                },
-                onCancel: { draftPresented = false }
-            )
-            .padding(20)
-            .frame(minWidth: 420, minHeight: 380)
-            .accessibilityIdentifier("tasks.draft-sheet")
-        }
-        .alert("提交失败", isPresented: Binding(
-            get: { draftError != nil },
-            set: { if !$0 { draftError = nil } }
-        )) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text(draftError ?? "")
+        .onDisappear {
+            taskInputGate.leave()
+            services.suspendTerminalInput(presentationOwner: terminalPresentationOwner)
         }
     }
+
+    // MARK: - Auxiliary panel (Q17: 详情 / 文件 / 改动 / Git 日志)
+
+    private var auxiliaryPanel: some View {
+        VStack(spacing: 0) {
+            // v3: icon tabs across the top (codeg aux panel header).
+            HStack(spacing: 2) {
+                auxiliaryTabButton(.details, title: "详情", systemImage: "info.circle")
+                auxiliaryTabButton(.files, title: "文件", systemImage: "folder")
+                auxiliaryTabButton(.changes, title: "改动", systemImage: "plusminus")
+                auxiliaryTabButton(.history, title: "Git 日志", systemImage: "clock.arrow.circlepath")
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 40)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("辅助面板")
+            .accessibilityIdentifier("auxiliary.tabs")
+            Rectangle().fill(SessionPalette.edge).frame(height: 1)
+            ZStack {
+                auxiliaryDetails
+                    .opacity(auxiliaryTab == .details ? 1 : 0)
+                    .allowsHitTesting(auxiliaryTab == .details)
+                    .accessibilityHidden(auxiliaryTab != .details)
+                resourceInspector
+                    .opacity(auxiliaryTab == .files || auxiliaryTab == .changes ? 1 : 0)
+                    .allowsHitTesting(auxiliaryTab == .files || auxiliaryTab == .changes)
+                    .accessibilityHidden(auxiliaryTab != .files && auxiliaryTab != .changes)
+                auxiliaryHistory
+                    .opacity(auxiliaryTab == .history ? 1 : 0)
+                    .allowsHitTesting(auxiliaryTab == .history)
+                    .accessibilityHidden(auxiliaryTab != .history)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// One icon tab: capsule highlight on hover / selection, title as
+    /// tooltip and accessibility label.
+    private func auxiliaryTabButton(_ tab: AuxiliaryTab, title: String, systemImage: String) -> some View {
+        let selected = auxiliaryTab == tab
+        return Button { auxiliaryTab = tab } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected ? SessionPalette.accent : SessionPalette.secondary)
+                .frame(width: 18)
+        }
+        .buttonStyle(GhostCapsuleButtonStyle(isActive: selected, height: 28))
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("auxiliary.tab.\(title)")
+    }
+
+    /// Files and Changes share the existing per-project resource book; the
+    /// tab only chooses which of its two lists is in front.
+    private func syncAuxiliarySection() {
+        guard let id = resourceProjectID else { return }
+        switch auxiliaryTab {
+        case .files: resourceBook.edit(id) { $0.section = .files }
+        case .changes: resourceBook.edit(id) { $0.section = .git }
+        case .details, .history: break
+        }
+    }
+
+    private var auxiliaryDetails: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if let task = selectedTask, SessionNavigation.taskID(selection) != nil {
+                    detailRow("会话", task.title)
+                    detailRow("状态", SessionStatusDot.label(task.status))
+                    detailRow("Harness", task.agent ?? "—")
+                    detailRow("项目", services.taskStore.projects.first { $0.id == task.projectID }?.name ?? "原项目不可用")
+                    if let created = task.createdAtMs { detailRow("创建", Self.timestamp(created)) }
+                    if let updated = task.updatedAtMs { detailRow("更新", Self.timestamp(updated)) }
+                    detailRow("显示", forcedTerminalTaskIDs.contains(task.id)
+                              || services.interactionModeController.mode == .advanced ? "终端" : "对话")
+                } else if let scope = draftScope {
+                    detailRow("草稿", scope.projectID == nil ? "全局（未选择项目）" : "项目草稿")
+                    detailRow("项目", resourceProject?.name ?? "未选择")
+                    if let draft = draftBook[scope] {
+                        detailRow("Harness", draft.selectedHarness.isEmpty ? "未选择" : draft.selectedHarness)
+                        detailRow("组合能力", draft.capabilities.enabledNames.isEmpty
+                                  ? "未启用" : draft.capabilities.enabledNames.joined(separator: "、"))
+                    }
+                } else {
+                    Text("选择一个会话或新建会话后，这里显示它的详情。")
+                        .font(AeroricFont.ui(AeroricFont.meta))
+                        .foregroundStyle(SessionPalette.muted)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityIdentifier("auxiliary.details")
+    }
+
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(AeroricFont.ui(AeroricFont.meta))
+                .foregroundStyle(SessionPalette.muted)
+            Text(value)
+                .font(AeroricFont.ui(AeroricFont.body))
+                .foregroundStyle(SessionPalette.text)
+                .textSelection(.enabled)
+                .lineLimit(3)
+        }
+    }
+
+    private static func timestamp(_ ms: UInt64) -> String {
+        Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+            .formatted(date: .abbreviated, time: .shortened)
+    }
+
+    /// Read-only commit list from the existing `GitStore` snapshot. No new
+    /// Git query is issued here; the state notice says when nothing is loaded.
+    private var auxiliaryHistory: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let notice = services.gitStore.historyReadState.notice {
+                Text(notice)
+                    .font(AeroricFont.ui(AeroricFont.meta))
+                    .foregroundStyle(SessionPalette.muted)
+                    .padding(14)
+            }
+            List(services.gitStore.commits) { commit in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(commit.message)
+                        .font(AeroricFont.ui(AeroricFont.project))
+                        .lineLimit(2)
+                    Text("\(commit.shortHash) · \(commit.author) · \(commit.date)")
+                        .font(AeroricFont.mono(AeroricFont.meta))
+                        .foregroundStyle(SessionPalette.muted)
+                        .lineLimit(1)
+                }
+                .padding(.vertical, 3)
+                .help(commit.hash)
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+        }
+        .accessibilityIdentifier("auxiliary.history")
+    }
+
+    private var centralContent: some View {
+        ZStack {
+            // Keep the selected task's input/reading view alive while a
+            // draft or independent tool is in front of it.
+            taskContent
+                .opacity(activeSection == .tasks && draftScope == nil && !previewActive ? 1 : 0)
+                .allowsHitTesting(activeSection == .tasks && draftScope == nil && !previewActive)
+                .disabled(!taskSurfaceVisible && SessionNavigation.taskID(selection) != nil)
+                .accessibilityHidden(activeSection != .tasks || draftScope != nil || previewActive)
+            if let scope = draftScope {
+                composer(scope)
+                    .opacity(previewActive ? 0 : 1)
+                    .allowsHitTesting(!previewActive)
+                    .disabled(previewActive)
+                    .accessibilityHidden(previewActive)
+            } else if activeSection != .tasks {
+                VStack(spacing: 0) {
+                    toolContext
+                    sectionContent
+                }
+                .background(Color.dsSurface)
+                .opacity(previewActive ? 0 : 1)
+                .allowsHitTesting(!previewActive)
+                .accessibilityHidden(previewActive)
+            }
+            if previewActive, let id = resourceProjectID, let target = resourceBook.scene(id).target {
+                CentralResourcePreview(
+                    book: resourceBook, target: target,
+                    projectName: resourceProject?.name ?? "原项目不可用",
+                    projectAvailable: resourceProject != nil,
+                    onRetry: { loadPreview(target) },
+                    onOpenFile: { openPreview(.init(projectID: id, path: target.path, kind: .file)) }
+                )
+                .id(target)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var draftScope: SessionDraftScope? { SessionNavigation.draftScope(selection) }
+    private var surface: SurfacePreference { SurfacePreference(rawValue: surfaceRawValue) ?? .glass }
+    private var resourceProjectID: String? {
+        if let draftScope { return draftScope.projectID }
+        if let id = SessionNavigation.taskID(selection) {
+            return services.taskStore.tasks.first(where: { $0.id == id })?.projectID ?? taskProjectContexts[id]
+        }
+        if services.taskStore.projects.contains(where: { $0.id == selection }) { return selection }
+        return projectContextID
+    }
+    private var resourceProject: TaskStore.ProjectEntry? {
+        services.taskStore.projects.first { $0.id == resourceProjectID }
+    }
+    private var previewActive: Bool {
+        !usesFullWorkspace && (resourceProjectID.map { resourceBook.scene($0).previewActive } ?? false)
+    }
+    private var usesFullWorkspace: Bool { activeSection != .tasks && draftScope == nil }
+    private var taskSurfaceVisible: Bool {
+        activeSection == .tasks && draftScope == nil && !previewActive
+            && SessionNavigation.taskID(selection) == selectedTaskID && selectedTaskID != nil
+    }
+    private enum CentralPage: Hashable { case task, preview }
+    // MSR01 keeps the two central segments visible even before a preview
+    // target exists; the preview segment disables instead of disappearing.
+    @ViewBuilder private var previewNavigation: some View {
+        if !usesFullWorkspace {
+            let id = resourceProjectID
+            let target = id.flatMap { resourceBook.scene($0).target }
+            NativeSegmentedControl(
+                selection: Binding(
+                    get: { previewActive ? CentralPage.preview : .task },
+                    set: { page in
+                        guard let id else { return }
+                        if page == .task {
+                            resourceBook.showTask(projectID: id)
+                        } else if let target {
+                            taskInputGate.leave()
+                            services.suspendTerminalInput(presentationOwner: terminalPresentationOwner)
+                            resourceBook.select(target)
+                        }
+                    }
+                ),
+                groupTitle: "中央工作面",
+                segments: [
+                    .init(value: .task, title: "当前任务", isEnabled: true),
+                    .init(value: .preview, title: "预览", isEnabled: target != nil),
+                ]
+            )
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .accessibilityIdentifier("workspace.central-pages")
+        }
+    }
+    private var resourceInspector: some View {
+        ZStack {
+            // Keep native List identities per window × project, including
+            // their scroll/focus state, when another project is in front.
+            ForEach(visitedResourceProjects.union(resourceProjectID.map { [$0] } ?? []).sorted(), id: \.self) { id in
+                if let project = services.taskStore.projects.first(where: { $0.id == id }) {
+                    ProjectResourceInspector(
+                        book: resourceBook, projectID: id, projectName: project.name,
+                        onOpen: openPreview,
+                        onLoadDirectory: { path in
+                            Task { await resourceBook.loadDirectory(
+                                projectID: id, path: path, reader: services.projectResourceReader
+                            ) }
+                        },
+                        onRefresh: { Task { await refreshResources(project) } }
+                    )
+                    .opacity(resourceProjectID == id ? 1 : 0)
+                    .allowsHitTesting(resourceProjectID == id)
+                    .accessibilityHidden(resourceProjectID != id)
+                }
+            }
+            if resourceProject == nil {
+                PaneEmptyState(systemImage: "folder.badge.questionmark",
+                               title: resourceProjectID == nil ? "未选择项目" : "原项目不可用",
+                               hint: "资源读取需要明确的项目范围，不自动选择首项目。")
+            }
+        }
+    }
+    private struct ResourceLoadKey: Equatable {
+        let projectID: String?
+        let projectPath: String?
+        let section: ResourceListSection?
+        let visible: Bool
+        let configurationEpoch: UUID
+    }
+    private var resourceLoadKey: ResourceLoadKey {
+        ResourceLoadKey(
+            projectID: resourceProjectID, projectPath: resourceProject?.path,
+            section: resourceProjectID.map { resourceBook.scene($0).section },
+            // Resizing an already-visible inspector must not cancel reads.
+            visible: !usesFullWorkspace && (shellBudget?.inspectorWidth ?? 0) > 0,
+            configurationEpoch: services.configurationEpoch
+        )
+    }
+    private func loadCurrentResources() async {
+        guard !usesFullWorkspace, let budget = shellBudget, budget.inspectorWidth > 0,
+              let project = resourceProject else { return }
+        let scene = resourceBook.scene(project.id)
+        if scene.section == .files, (scene.directoryStates[""] ?? .notLoaded).needsAutomaticLoad {
+            await resourceBook.loadDirectory(projectID: project.id, path: "", reader: services.projectResourceReader)
+        } else if scene.section == .git, scene.gitState.needsAutomaticLoad || scene.branchState.needsAutomaticLoad {
+            await resourceBook.loadGit(projectID: project.id, projectPath: project.path, reader: services.projectResourceReader)
+        }
+    }
+    private func refreshResources(_ project: TaskStore.ProjectEntry) async {
+        if resourceBook.scene(project.id).section == .files {
+            // Refresh every already-expanded directory; never scan the tree.
+            for path in resourceBook.scene(project.id).expandedPaths.sorted() {
+                await resourceBook.loadDirectory(projectID: project.id, path: path, reader: services.projectResourceReader)
+            }
+        } else {
+            await resourceBook.loadGit(projectID: project.id, projectPath: project.path, reader: services.projectResourceReader)
+        }
+    }
+    private func openPreview(_ target: ResourcePreviewTarget) {
+        // Synchronous local guard before hiding any task/IME surface.
+        taskInputGate.leave()
+        services.suspendTerminalInput(presentationOwner: terminalPresentationOwner)
+        resourceBook.select(target)
+        loadPreview(target)
+    }
+    private func loadPreview(_ target: ResourcePreviewTarget) {
+        guard let project = services.taskStore.projects.first(where: { $0.id == target.projectID }) else { return }
+        Task {
+            await resourceBook.loadPreview(target, projectPath: project.path, reader: services.projectResourceReader)
+        }
+    }
+
+    private func openNewSession() {
+        selection = SessionNavigation.newDraftSelection(from: selection, items: services.sidebarItems)
+    }
+
+    private func composer(_ scope: SessionDraftScope) -> some View {
+        let project = services.taskStore.projects.first { $0.id == scope.projectID }
+        let value = draftBook[scope] ?? NewSessionDraft(submissionID: "unopened")
+        let configurations = services.sessionConfigurations(projectID: scope.projectID)
+        let reasons = sessionBlockingReasons(value, scope: scope)
+        return NewSessionComposer(
+            draft: Binding(
+                get: { draftBook[scope] ?? NewSessionDraft(submissionID: "unopened") },
+                set: { value in draftBook.edit(scope) { $0 = value } }
+            ),
+            projectName: project?.name,
+            projects: services.taskStore.projects,
+            configurations: configurations,
+            blockingReasons: reasons,
+            onOpenProjectDraft: { selection = SessionNavigation.draft(projectID: $0) },
+            onSubmit: { submit(scope) },
+            onCheckSubmission: { checkSubmission(scope) }
+        )
+        .task(id: [scope.projectID ?? "", services.configurationEpoch.uuidString]) {
+            if let projectID = scope.projectID { await services.loadSessionConfigurations(projectID: projectID) }
+        }
+    }
+
+    private func sessionBlockingReasons(_ value: NewSessionDraft, scope: SessionDraftScope) -> [String] {
+        var reasons = value.blockingReasons(
+            scope: scope, configurations: services.sessionConfigurations(projectID: scope.projectID),
+            projectExists: services.taskStore.projects.contains { $0.id == scope.projectID }
+        )
+        if let projectID = scope.projectID {
+            switch services.configurationReadStates[projectID] ?? .notLoaded {
+            case .loaded: break
+            case .notLoaded: reasons.append("配置目录尚未读取，当前不能发送。")
+            case .loading: reasons.append("正在读取配置目录，当前不能发送。")
+            case .unavailable: reasons.append("宿主配置目录不可用，当前不能发送。")
+            case let .failed(reason): reasons.append("配置目录读取失败，保留的选择仅供参考：\(reason)")
+            }
+        }
+        return reasons
+    }
+
+    private func submit(_ scope: SessionDraftScope) {
+        guard let projectID = scope.projectID,
+              let value = draftBook[scope],
+              sessionBlockingReasons(value, scope: scope).isEmpty,
+              let submitted = draftBook.begin(scope) else { return }
+        Task { @MainActor in
+            do {
+                let receipt = try await services.submitSession(submitted, projectID: projectID)
+                if receipt.state == "accepted", let returnedID = receipt.taskId {
+                    if draftBook.acknowledge(scope, submissionID: submitted.submissionID),
+                       SessionNavigation.draftScope(selection) == scope {
+                        selection = SessionNavigation.task(returnedID)
+                    }
+                } else {
+                    draftBook.fail(scope, submissionID: submitted.submissionID,
+                                   reason: receipt.reasons.joined(separator: "\n"),
+                                   acceptanceUnknown: receipt.state != "rejected_before_side_effect")
+                }
+            } catch {
+                // Only a verified pre-execution receipt proves refusal.
+                // RPC errors, malformed replies and disconnects remain unknown.
+                draftBook.fail(scope, submissionID: submitted.submissionID,
+                               reason: String(describing: error),
+                               acceptanceUnknown: !(error is AppServices.ProjectError))
+            }
+        }
+    }
+
+    private func checkSubmission(_ scope: SessionDraftScope) {
+        guard let value = draftBook[scope], let projectID = scope.projectID else { return }
+        Task { @MainActor in
+            do {
+                if let receipt = try await services.inspectSubmission(value, projectID: projectID) {
+                    if receipt.state == "accepted", let taskID = receipt.taskId {
+                        let cleared = draftBook.reconcileAccepted(scope, submissionID: value.submissionID)
+                        if cleared && SessionNavigation.draftScope(selection) == scope {
+                            selection = SessionNavigation.task(taskID)
+                        }
+                        submissionCheck = "已核对原交办的配置、指纹和逐项消费回执，任务：\(taskID)。"
+                    } else if receipt.state == "rejected_before_side_effect" {
+                        let reason = receipt.reasons.joined(separator: "\n")
+                        draftBook.reconcileRejected(scope, submissionID: value.submissionID, reason: reason)
+                        submissionCheck = "宿主明确拒绝且未执行。草稿已保留，修改后可重新发送：\(reason)"
+                    } else {
+                        submissionCheck = "原交办结果仍为待定或未知；保留草稿及身份，不重发。"
+                    }
+                } else {
+                    submissionCheck = "本次查询没有找到原任务；这不能证明原交办未接收，仍不重发。"
+                }
+            } catch {
+                submissionCheck = "核对失败，原草稿及提交身份保留：\(error)"
+            }
+        }
+    }
+
+    private var toolContext: some View {
+        HStack {
+            if let project = services.taskStore.projects.first(where: { $0.id == projectContextID }) {
+                Text("\(project.name) › \(activeSection.title)")
+                    .font(.system(size: 12))
+            }
+            Spacer()
+            if let task = selectedTask {
+                let project = services.taskStore.projects.first { $0.id == task.projectID }
+                Button("返回：\(project?.name ?? "原项目") · \(task.title)") {
+                    selection = SessionNavigation.task(task.id)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("workspace.return-to-task")
+            } else if selectedTaskID != nil {
+                Text("原任务当前不可用，请核对目标。").font(.caption)
+            }
+        }
+        .padding(12)
+    }
+
+    private var taskContent: some View {
+        ZStack {
+            VStack(spacing: 0) {
+                if let task = selectedTask {
+                    TaskDetailHeader(
+                        task: task,
+                        onCancel: { Task { await services.cancelTask(taskId: task.id) } },
+                        onDelete: { services.taskStore.removeTask(id: task.id) },
+                        onStar: { services.toggleStar(taskId: task.id) },
+                        onArchive: { services.toggleArchived(taskId: task.id) }
+                    )
+                }
+                ZStack {
+                    ForEach(visitedTaskIDs.sorted(), id: \.self) { taskID in
+                        if let task = services.taskStore.tasks.first(where: { $0.id == taskID }) {
+                            taskBody(task)
+                                .opacity(selectedTaskID == taskID && taskSurfaceVisible ? 1 : 0)
+                                .allowsHitTesting(selectedTaskID == taskID && taskSurfaceVisible)
+                                .disabled(selectedTaskID != taskID || !taskSurfaceVisible)
+                                .accessibilityHidden(selectedTaskID != taskID || !taskSurfaceVisible)
+                        }
+                    }
+                    if selectedTask == nil {
+                        PaneEmptyState(
+                            systemImage: "sidebar.left", title: selectedTaskID == nil ? "未选择任务" : "原任务不可用",
+                            hint: "在项目树或全部任务中选择明确目标，或新建会话"
+                        )
+                        .accessibilityIdentifier("tasks.empty-detail")
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .opacity(SessionNavigation.taskID(selection) != nil ? 1 : 0)
+            .allowsHitTesting(SessionNavigation.taskID(selection) != nil)
+            .accessibilityHidden(SessionNavigation.taskID(selection) == nil)
+            if SessionNavigation.taskID(selection) == nil {
+                TaskListView(
+                    visibleTasks: Binding(get: { visibleTasks }, set: { _ in }),
+                    filterText: $taskFilterText,
+                    selectedTaskID: Binding(
+                        get: { selectedTaskID },
+                        set: { id in
+                            selectedTaskID = id
+                            if let id { selection = SessionNavigation.task(id) }
+                        }
+                    ),
+                    onOpenDraft: { openNewSession() }
+                )
+                .background(Color.dsSurface)
+            }
+        }
+        .accessibilityIdentifier("tasks.workspace")
+    }
+
     @ViewBuilder
     private var sectionContent: some View {
         switch activeSection {
         case .tasks:
-            HSplitView {
-                TaskListView(
-                    visibleTasks: Binding(
-                        get: { services.taskStore.visibleTasks },
-                        set: { _ in }
-                    ),
-                    filterText: Binding(
-                        get: { services.taskStore.filterText },
-                        set: { services.taskStore.filterText = $0 }
-                    ),
-                    selectedTaskID: $selectedTaskID,
-                    onOpenDraft: { draftPresented = true }
-                )
-                .frame(minWidth: 240, maxWidth: 400, maxHeight: .infinity)
-
-                VStack(spacing: 0) {
-                    if let task = selectedTask {
-                        TaskDetailHeader(
-                            task: task,
-                            onCancel: { Task { await services.cancelTask(taskId: task.id) } },
-                            onDelete: { services.taskStore.removeTask(id: task.id) },
-                            onStar: { services.toggleStar(taskId: task.id) },
-                            onArchive: { services.toggleArchived(taskId: task.id) }
-                        )
-                        taskBody(task)
-                    } else {
-                        Text("选择一个任务查看详情")
-                            .foregroundStyle(Color.dsTextMuted)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .accessibilityIdentifier("tasks.empty-detail")
-                    }
-                }
-                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityIdentifier("tasks.workspace")
+            EmptyView() // The persistent taskContent is mounted once above.
         case .files:
             HSplitView {
                 FileBrowserView(store: services.fileTreeStore)
@@ -186,15 +791,8 @@ struct TaskWorkspaceView: View {
                 }
             }
         case .git:
-            HSplitView {
-                GitPanel(store: services.gitStore)
-                    .frame(minWidth: 260, maxWidth: 400, maxHeight: .infinity)
-                VStack(spacing: 0) {
-                    HistoryView(store: services.gitStore)
-                    StashView(store: services.gitStore)
-                }
+            GitPanel(store: services.gitStore)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
         case .ide:
             HSplitView {
                 ProblemsView(store: services.diagnosticsStore)
@@ -269,12 +867,8 @@ struct TaskWorkspaceView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         case .remote:
-            HSplitView {
-                RemoteAccessSettingsView(store: services.remoteStore)
-                    .frame(minWidth: 280, maxWidth: 420, maxHeight: .infinity)
-                DeviceListView(store: services.remoteStore)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+            RemoteAccessSettingsView(store: services.remoteStore)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .operations:
             HSplitView {
                 UsageDashboard(store: services.maintenanceStore)
@@ -285,6 +879,14 @@ struct TaskWorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        case .agentTools:
+            // AP7:外部 Agent 的能力面。八个区块全是**展示**:执行者是外部 Agent,
+            // 原生端不代跑工具、不代申请系统权限。
+            AgentToolsPanel(
+                store: services.externalProtocolStore,
+                controls: services.agentToolsStore
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -294,41 +896,79 @@ struct TaskWorkspaceView: View {
         }
     }
 
+    private var visibleTasks: [TaskStore.TaskEntry] {
+        let scoped = services.taskStore.tasks.filter { scopedProjectID == nil || $0.projectID == scopedProjectID }
+        let query = taskFilterText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return scoped }
+        return scoped.filter {
+            $0.title.localizedCaseInsensitiveContains(query)
+                || $0.status.localizedCaseInsensitiveContains(query)
+        }
+    }
+
     /// P5-02 SessionPresentation 接线落点：由模式＋能力验证状态决定
     /// 呈现；`forcedTerminal` 只影响本窗口本次选择（用户触发，不自动改
     /// 全局偏好）。
     @ViewBuilder
     private func taskBody(_ task: TaskStore.TaskEntry) -> some View {
         let presentation = SessionPresentation.resolve(
-            mode: forcedTerminal ? .advanced : services.interactionModeController.mode,
+            mode: forcedTerminalTaskIDs.contains(task.id) ? .advanced : services.interactionModeController.mode,
             structuredCapabilitiesVerified: services.structuredCapabilitiesVerified(task)
         )
         switch presentation {
         case .native:
-            // P5-04 兑现：DSH 会话的 native 呈现已接通（消息面板＋composer＋
-            // 审批/问题）。会话读取/发送全部走 SessionsClient 类型化调用。
-            DshSessionPanel(services: services, task: task)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        case .terminal:
-            if services.terminalCoordinator?.taskID == task.id, let coordinator = services.terminalCoordinator {
-                NativeTerminalView(coordinator: coordinator)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityIdentifier("tasks.terminal")
-            } else {
-                Text("终端未挂载（等待会话句柄）")
-                    .foregroundStyle(Color.dsTextMuted)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityIdentifier("tasks.terminal-pending")
+            // Q15-b: conversation on top, the Agent's own PTY docked below.
+            ConversationTerminalSplit(
+                terminalExpanded: $terminalExpanded,
+                terminalFraction: $terminalFraction,
+                terminalTitle: "终端 · \(task.agent ?? "Agent")"
+            ) {
+                DshSessionPanel(services: services, task: task, canSend: { taskInputGate.permits(task.id) })
+            } terminal: {
+                terminalSurface(task)
             }
-        case let .requiresAdvanced(reason):
-            VStack(spacing: 12) {
-                Text(reason)
-                    .foregroundStyle(Color.dsTextSecondary)
-                Button("切换到高级模式") { forcedTerminal = true }
-                    .accessibilityIdentifier("tasks.switch-advanced")
+        case .terminal:
+            // 终端档（interactionMode = advanced）: terminal at full height.
+            terminalSurface(task)
+        case .requiresAdvanced:
+            // Q26-a: no structured history → terminal full height, labelled.
+            VStack(spacing: 0) {
+                Label("此会话仅终端可读：宿主未提供结构化历史", systemImage: "terminal")
+                    .font(AeroricFont.ui(AeroricFont.meta))
+                    .foregroundStyle(SessionPalette.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                    .background(SessionPalette.card)
+                    .overlay(alignment: .bottom) { Rectangle().fill(SessionPalette.edge).frame(height: 1) }
+                    .accessibilityIdentifier("tasks.requires-advanced")
+                terminalSurface(task)
+            }
+        }
+    }
+
+    /// The real terminal renderer for `task`, or a pending note. Bytes are
+    /// the Agent's PTY output only; this view never synthesises a TUI.
+    @ViewBuilder
+    private func terminalSurface(_ task: TaskStore.TaskEntry) -> some View {
+        if services.terminalPresentationOwner == terminalPresentationOwner,
+           services.terminalCoordinator?.taskID == task.id, let coordinator = services.terminalCoordinator {
+            VStack(alignment: .leading, spacing: 0) {
+                if !coordinator.holdsLease {
+                    Text("只读返回：本地输入已释放；不会自动接管。宿主权威输入票据仍待接入。")
+                        .font(AeroricFont.ui(AeroricFont.meta))
+                        .foregroundStyle(SessionPalette.secondary).padding(8)
+                }
+                NativeTerminalView(coordinator: coordinator)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityIdentifier("tasks.requires-advanced")
+            .accessibilityIdentifier("tasks.terminal")
+        } else {
+            Text("终端未挂载（等待会话句柄）")
+                .font(AeroricFont.ui(AeroricFont.meta))
+                .foregroundStyle(SessionPalette.muted)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("tasks.terminal-pending")
         }
     }
 }
@@ -342,6 +982,7 @@ struct TaskWorkspaceView: View {
 struct DshSessionPanel: View {
     let services: AppServices
     let task: TaskStore.TaskEntry
+    let canSend: () -> Bool
 
     @State private var paginator = SessionPaginator()
     @State private var pendingStore = PendingRequestStore()
@@ -361,13 +1002,13 @@ struct DshSessionPanel: View {
                 onExport: { exportSession() },
                 usage: usage
             )
-            ComposerView(
-                catalog: nil,
+            // Q24-a: explicit send only; the text goes to the session input.
+            SessionContinuationComposer(
                 draft: $composerDraft,
-                attachmentPaths: $composerAttachments,
-                onSend: { text, attachments in
-                    sendMessage(text: text, attachments: attachments)
-                }
+                canSend: canSend(),
+                writesToTerminal: task.status == "input_required",
+                readOnlyReason: "当前只读；离开任务面后不会自动恢复输入或审批。",
+                onSend: { text in sendMessage(text: text, attachments: []) }
             )
         }
         .onAppear {
@@ -437,7 +1078,9 @@ struct DshSessionPanel: View {
 
     /// 发送（composer → DSH prompt；斜杠命令已在 ComposerView 早跳）。
     private func sendMessage(text: String, attachments: [String]) {
+        guard canSend() else { return }
         Task { @MainActor in
+            guard canSend() else { return }
             do {
                 try await services.sendDshPrompt(sessionTaskId: task.id, text: text)
             } catch {
@@ -448,9 +1091,11 @@ struct DshSessionPanel: View {
 
     /// 提交审批/问题回执（approval.respond；值即结果本身，无信封）。
     private func submitOutcome(eventId: String, outcome: PendingRequestStore.Outcome) {
+        guard canSend() else { return }
         pendingStore.markSubmitted(eventId: eventId)
         let payload = Self.toJSONValue(PendingRequestStore.outcomePayload(outcome))
         Task { @MainActor in
+            guard canSend() else { return }
             try? await services.respondDshOutcome(eventId: eventId, outcome: payload)
             pendingStore.resolve(eventId: eventId)
         }

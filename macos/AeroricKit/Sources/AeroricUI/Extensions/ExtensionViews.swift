@@ -175,6 +175,16 @@ public struct SkillHubView: View {
                 .accessibilityLabel("安装 Skill")
         }
         .accessibilityIdentifier("extensions.skills")
+        .overlay {
+            if store.skills.isEmpty {
+                PaneEmptyState(
+                    systemImage: "puzzlepiece.extension",
+                    title: "还没有 Skill",
+                    hint: "点「安装 Skill…」添加一个"
+                )
+                .accessibilityIdentifier("extensions.skills-empty")
+            }
+        }
     }
 }
 
@@ -255,6 +265,16 @@ public struct MCPSettingsView: View {
             Button("保存") { onSave?(store.mcpServers) }
         }
         .accessibilityIdentifier("extensions.mcp")
+        .overlay {
+            if store.mcpServers.isEmpty {
+                PaneEmptyState(
+                    systemImage: "server.rack",
+                    title: "还没有 MCP 服务器",
+                    hint: "MCP 服务器为 Agent 提供外部工具"
+                )
+                .accessibilityIdentifier("extensions.mcp-empty")
+            }
+        }
     }
 }
 
@@ -292,6 +312,16 @@ public struct HookStatusView: View {
         }
         .listStyle(.plain)
         .accessibilityIdentifier("extensions.hooks")
+        .overlay {
+            if store.hooks.isEmpty {
+                PaneEmptyState(
+                    systemImage: "link",
+                    title: "还没有 Hook",
+                    hint: "Hook 由 Agent 在任务生命周期里触发"
+                )
+                .accessibilityIdentifier("extensions.hooks-empty")
+            }
+        }
     }
 }
 

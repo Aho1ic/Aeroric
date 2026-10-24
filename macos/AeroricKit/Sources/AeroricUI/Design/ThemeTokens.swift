@@ -45,6 +45,29 @@ public enum DSTypography {
     public static let title: CGFloat = 18
 }
 
+/// Typography used by the approved main shell. The bundled JetBrains Mono
+/// face is registered by the app target; AppKit/SwiftUI still supplies glyph
+/// fallback for Chinese and system symbols. Keeping the constructor here
+/// avoids a second font vocabulary in shell, inspector and preview views.
+public enum AeroricFont {
+    public static let file: CGFloat = 12
+    public static let project: CGFloat = 12
+    public static let body: CGFloat = 13
+    public static let code: CGFloat = 12
+    public static let meta: CGFloat = 11
+    public static let title: CGFloat = 16
+
+    public static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        Font.custom("JetBrainsMono-Regular", size: size, relativeTo: .body).weight(weight)
+    }
+
+    /// Redesign 01: interface text uses the system face (SF + PingFang).
+    /// JetBrains Mono (`mono`) stays for code, diffs and the terminal only.
+    public static func ui(_ size: CGFloat = body, weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight)
+    }
+}
+
 public enum DSMotion {
     /// tokens.ts `motion.fast`
     public static let fast: TimeInterval = 0.120

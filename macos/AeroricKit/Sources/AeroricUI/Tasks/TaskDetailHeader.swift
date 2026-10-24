@@ -4,6 +4,10 @@ import SwiftUI
 /// * 取消（cancel）：只对运行中的任务；不删除记录。
 /// * 删除（delete）：移除记录；**运行中的删除必须确认**（二段确认）。
 /// * 丢弃（discard draft）：只丢弃未提交的草稿，无宿主副作用。
+///
+/// Redesign 01: one 44pt row (codeg chat header) — status dot, title, agent
+/// caption, then bare icon actions. Destructive actions stay in a menu with
+/// the same two-step confirmation for running tasks.
 public struct TaskDetailHeader: View {
     public let task: TaskStore.TaskEntry
     public var onCancel: (() -> Void)?
@@ -33,49 +37,65 @@ public struct TaskDetailHeader: View {
 
     public var body: some View {
         HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(task.title)
-                    .font(.headline)
-                    .accessibilityIdentifier("task.detail.title")
-                Text("\(task.status) · \(task.agent ?? "—")")
-                    .font(.caption)
-                    .foregroundStyle(Color.dsTextMuted)
-            }
-            Spacer()
-            if let onStar {
-                Button(task.starred ? "取消星标" : "星标") { onStar() }
-                    .accessibilityIdentifier("task.detail.star")
-            }
-            if let onArchive {
-                Button(task.archived ? "取消归档" : "归档") { onArchive() }
-                    .accessibilityIdentifier("task.detail.archive")
-            }
+            SessionStatusDot(status: task.status)
+            Text(task.title)
+                .font(AeroricFont.ui(AeroricFont.body, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityIdentifier("task.detail.title")
+            Text("\(SessionStatusDot.label(task.status)) · \(task.agent ?? "—")")
+                .font(AeroricFont.ui(AeroricFont.meta))
+                .foregroundStyle(SessionPalette.muted)
+                .lineLimit(1)
+            Spacer(minLength: 8)
             if Self.isRunning(task.status), let onCancel {
-                Button("取消任务") { onCancel() }
+                Button("停止", action: onCancel)
+                    .buttonStyle(.borderless)
+                    .font(AeroricFont.ui(AeroricFont.meta, weight: .medium))
+                    .foregroundStyle(SessionPalette.secondary)
                     .accessibilityIdentifier("task.detail.cancel")
             }
-            if let onDelete {
-                if confirmingDelete {
-                    if Self.isRunning(task.status) {
-                        Text("任务仍在运行，确定删除？")
-                            .font(.caption)
-                            .foregroundStyle(Color.dsDanger)
-                            .accessibilityIdentifier("task.detail.delete-confirm")
-                    }
-                    Button("确认删除", role: .destructive) {
-                        confirmingDelete = false
-                        onDelete()
-                    }
-                    .accessibilityIdentifier("task.detail.delete-confirm-button")
-                    Button("放弃") { confirmingDelete = false }
-                } else {
-                    Button("删除") { confirmingDelete = true }
+            if let onStar {
+                NativeIconButton(systemImage: task.starred ? "pin.fill" : "pin",
+                                 label: task.starred ? "取消置顶" : "置顶",
+                                 identifier: "task.detail.star", action: onStar)
+                    .foregroundStyle(task.starred ? SessionPalette.accent : SessionPalette.secondary)
+            }
+            Menu {
+                if let onArchive {
+                    Button(task.archived ? "取消归档" : "归档", action: onArchive)
+                        .accessibilityIdentifier("task.detail.archive")
+                }
+                if onDelete != nil {
+                    Divider()
+                    Button("删除…", role: .destructive) { confirmingDelete = true }
                         .accessibilityIdentifier("task.detail.delete")
                 }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .foregroundStyle(SessionPalette.secondary)
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("更多操作")
+            .accessibilityLabel("更多操作")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .frame(height: 44)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(SessionPalette.edge).frame(height: 1)
+        }
+        .confirmationDialog(
+            Self.isRunning(task.status) ? "任务仍在运行，确定删除？" : "删除此会话记录？",
+            isPresented: $confirmingDelete
+        ) {
+            Button("确认删除", role: .destructive) { onDelete?() }
+                .accessibilityIdentifier("task.detail.delete-confirm-button")
+            Button("放弃", role: .cancel) {}
+        } message: {
+            Text("只移除本地记录；不会替你停止或清理宿主上的其他资源。")
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("task.detail")
     }

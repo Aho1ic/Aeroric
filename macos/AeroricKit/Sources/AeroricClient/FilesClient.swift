@@ -41,19 +41,25 @@ public struct FilesClient: Sendable {
             "files.read_dir",
             params: .object(["projectId": .string(projectId), "path": .string(path)])
         )
-        guard case let .array(items)? = frame.result["entries"] else {
+        return try Self.decodeDirectory(frame.result)
+    }
+
+    static func decodeDirectory(_ result: JSONValue) throws -> [FileEntry] {
+        guard case let .array(items)? = result["entries"] else {
             throw MalformedReply.malformedReply("files.read_dir reply missing entries array")
         }
-        return items.compactMap { item in
+        return try items.map { item in
             guard case let .object(object) = item,
                   case let .string(name)? = object["name"],
-                  case let .string(path)? = object["path"]
-            else { return nil }
+                  case let .string(path)? = object["path"],
+                  let isDir = object["isDir"]?.boolValue,
+                  let isSymlink = object["isSymlink"]?.boolValue
+            else { throw MalformedReply.malformedReply("files.read_dir contains an incomplete entry") }
             return FileEntry(
                 name: name,
                 path: path,
-                isDir: object["isDir"]?.boolValue ?? false,
-                isSymlink: object["isSymlink"]?.boolValue ?? false,
+                isDir: isDir,
+                isSymlink: isSymlink,
                 modifiedAtMs: object["modifiedAtMs"]?.numberText.flatMap(UInt64.init)
             )
         }

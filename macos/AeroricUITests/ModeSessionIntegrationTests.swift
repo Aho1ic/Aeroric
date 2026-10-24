@@ -1,4 +1,5 @@
 import XCTest
+import AeroricUI
 
 /// P5-04 Action 6 acceptance: DSH composer/approval/question panels wired
 /// into `SessionPresentation` (native presentation for capability-verified
@@ -8,6 +9,16 @@ import XCTest
 /// touched by a mode switch. Env injection mirrors AppLaunchTests.
 @MainActor
 final class ModeSessionIntegrationTests: XCTestCase {
+    private let lifecycle = NativeUITestApplicationLifecycle()
+
+    override func tearDownWithError() throws {
+        let lifecycle = lifecycle
+        try MainActor.assumeIsolated {
+            try lifecycle.tearDown()
+        }
+        try super.tearDownWithError()
+    }
+
     func testPresentationVocabularyCoversNativeTerminalAndUnsupported() throws {
         // SessionPresentation.resolve 的三态词汇表已由 ModeSwitchTests 覆盖
         // 决策面；这里钉住的是 P5-04 的接线断言：DSH 会话 native 分支到达
@@ -20,8 +31,7 @@ final class ModeSessionIntegrationTests: XCTestCase {
         if let dataDirectory = runnerEnvironment["AERORIC_DATA_DIR"] {
             app.launchEnvironment["AERORIC_DATA_DIR"] = dataDirectory
         }
-        app.launch()
-        defer { app.terminate() }
+        try lifecycle.launch(app)
         // ready 态到达后任务工作区应出现（P5-03 readyContent 注入点）。
         let deadline = Date().addingTimeInterval(15)
         while !app.buttons["tasks.new"].exists, Date() < deadline {

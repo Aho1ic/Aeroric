@@ -4,6 +4,7 @@ import SwiftUI
 public struct GitPanel: View {
     let store: GitStore
     public var onAction: ((_ action: GitAction) -> Void)?
+    @State private var tab = "changes"
 
     public init(store: GitStore, onAction: ((_ action: GitAction) -> Void)? = nil) {
         self.store = store
@@ -27,15 +28,37 @@ public struct GitPanel: View {
                 .accessibilityIdentifier("git.push")
             }
             .padding(8)
-            HSplitView {
-                ChangeList(store: store, onAction: onAction)
-                    .frame(minWidth: 240, maxWidth: 360)
-                VStack(spacing: 0) {
+            .disabled(onAction == nil || store.changesReadState != .loaded)
+            .help(onAction == nil ? "本页尚未接通 Git 操作" : "Git 操作")
+            NativeSegmentedPicker(selection: $tab, groupTitle: "Git 内容", segments: [
+                .init(value: "changes", title: "更改"),
+                .init(value: "history", title: "历史"),
+                .init(value: "stash", title: "贮藏"),
+            ])
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+            Group {
+                switch tab {
+                case "history":
                     HistoryView(store: store)
-                    DiffView(diffText: store.diffText)
+                case "stash":
+                    StashView(store: store, onAction: onAction)
+                default:
+                    HSplitView {
+                        ChangeList(store: store, onAction: onAction)
+                            .frame(minWidth: 240, maxWidth: 360)
+                        Group {
+                            if store.changesReadState == .loaded {
+                                DiffView(diffText: store.diffText)
+                            } else {
+                                Text("尚未加载 diff").foregroundStyle(Color.dsTextSecondary)
+                            }
+                        }
+                        .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
-                .frame(minWidth: 320, maxWidth: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .accessibilityIdentifier("git.panel")
     }
@@ -70,19 +93,38 @@ public struct ChangeList: View {
     }
 
     public var body: some View {
-        List {
-            Section("Staged") {
-                ForEach(store.stagedChanges) { change in
-                    changeRow(change, staged: true)
+        if let notice = store.changesReadState.notice {
+            VStack(spacing: 8) {
+                Text(notice).font(.callout).foregroundStyle(Color.dsTextSecondary)
+                if !store.changes.isEmpty {
+                    Text("保留 \(store.changes.count) 条旧变更；尚未核实当前仓库。").font(.caption)
                 }
             }
-            Section("Changes") {
-                ForEach(store.unstagedChanges) { change in
-                    changeRow(change, staged: false)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if store.stagedChanges.isEmpty && store.unstagedChanges.isEmpty {
+            // 空仓库/干净工作区此前渲染两个空 Section 标题——与"渲染失败"无法
+            // 区分(参考实现里没有一个空白面板)。
+            PaneEmptyState(
+                systemImage: "checkmark.circle",
+                title: "工作区干净",
+                hint: "没有已暂存或未暂存的更改"
+            )
+            .accessibilityIdentifier("git.changes-empty")
+        } else {
+            List {
+                Section("Staged") {
+                    ForEach(store.stagedChanges) { change in
+                        changeRow(change, staged: true)
+                    }
+                }
+                Section("Changes") {
+                    ForEach(store.unstagedChanges) { change in
+                        changeRow(change, staged: false)
+                    }
                 }
             }
+            .accessibilityIdentifier("git.changes")
         }
-        .accessibilityIdentifier("git.changes")
     }
 
     @ViewBuilder
@@ -104,9 +146,11 @@ public struct ChangeList: View {
             Spacer()
             if staged {
                 Button("Unstage") { onAction?(.unstage(path: change.path)) }
+                    .disabled(onAction == nil)
                     .font(.caption2)
             } else {
                 Button("Stage") { onAction?(.stage(path: change.path)) }
+                    .disabled(onAction == nil)
                     .font(.caption2)
             }
         }
@@ -209,10 +253,11 @@ public struct DiffView: View {
     }
 
     public var body: some View {
-        ScrollView {
-            Text(diffText.isEmpty ? "无更改" : diffText)
+        ScrollView([.horizontal, .vertical]) {
+            Text(diffText.isEmpty ? "选择变更以查看 diff" : diffText)
                 .font(.caption2.monospaced())
                 .textSelection(.enabled)
+                .fixedSize(horizontal: true, vertical: true)
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -228,22 +273,39 @@ public struct HistoryView: View {
     }
 
     public var body: some View {
-        List(store.commits) { commit in
-            HStack(spacing: 6) {
-                Text(commit.shortHash)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(Color.dsAccent)
-                Text(commit.message)
-                    .font(.caption)
-                    .lineLimit(1)
-                Spacer()
-                Text("\(commit.author) · \(commit.date)")
-                    .font(.caption2)
-                    .foregroundStyle(Color.dsTextMuted)
+        if let notice = store.historyReadState.notice, store.commits.isEmpty {
+            Text(notice).foregroundStyle(Color.dsTextSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if store.commits.isEmpty {
+            PaneEmptyState(
+                systemImage: "clock.arrow.circlepath",
+                title: "还没有提交",
+                hint: "这个仓库的历史为空"
+            )
+            .accessibilityIdentifier("git.history-empty")
+        } else {
+            VStack(spacing: 6) {
+                if let notice = store.historyReadState.notice {
+                    Text(notice).font(.caption).foregroundStyle(Color.dsTextSecondary)
+                }
+                List(store.commits) { commit in
+                HStack(spacing: 6) {
+                    Text(commit.shortHash)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(Color.dsAccent)
+                    Text(commit.message)
+                        .font(.caption)
+                        .lineLimit(1)
+                    Spacer()
+                    Text("\(commit.author) · \(commit.date)")
+                        .font(.caption2)
+                        .foregroundStyle(Color.dsTextMuted)
+                }
+                .accessibilityIdentifier("git.commit.\(commit.shortHash)")
             }
-            .accessibilityIdentifier("git.commit.\(commit.shortHash)")
+            .accessibilityIdentifier("git.history")
+            }
         }
-        .accessibilityIdentifier("git.history")
     }
 }
 
@@ -296,6 +358,11 @@ public struct StashView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let notice = store.stashReadState.notice {
+                Text(notice).font(.caption).foregroundStyle(Color.dsTextSecondary)
+            } else if store.stashEntries.isEmpty {
+                Text("暂无贮藏").font(.caption).foregroundStyle(Color.dsTextSecondary)
+            }
             HStack {
                 TextField("stash 信息…", text: $stashMessage)
                     .textFieldStyle(.roundedBorder)
@@ -305,6 +372,7 @@ public struct StashView: View {
                 }
                 .accessibilityIdentifier("git.stash-push")
             }
+            .disabled(onAction == nil || store.stashReadState != .loaded)
             List(store.stashEntries) { entry in
                 HStack {
                     Text("stash@{\(entry.index)}")
@@ -315,10 +383,12 @@ public struct StashView: View {
                         .lineLimit(1)
                     Spacer()
                     Button("Apply") { onAction?(.stashApply(index: entry.index)) }
+                        .disabled(onAction == nil || store.stashReadState != .loaded)
                         .font(.caption2)
                         .accessibilityIdentifier("git.stash-apply.\(entry.index)")
                     // drop 需独立确认（二段确认）。
                     Button("Drop") { onAction?(.stashDrop(index: entry.index)) }
+                        .disabled(onAction == nil || store.stashReadState != .loaded)
                         .font(.caption2)
                         .accessibilityIdentifier("git.stash-drop.\(entry.index)")
                 }

@@ -27,6 +27,17 @@ public struct DatabaseSidebar: View {
             .accessibilityIdentifier("database.connection.\(connection.id)")
         }
         .accessibilityIdentifier("database.sidebar")
+        // 空连接列表此前是一块纯黑矩形——与"渲染失败"无法区分。
+        .overlay {
+            if store.connections.isEmpty {
+                PaneEmptyState(
+                    systemImage: "cylinder.split.1x2",
+                    title: "还没有数据库连接",
+                    hint: "添加一个连接后在这里选择"
+                )
+                .accessibilityIdentifier("database.sidebar-empty")
+            }
+        }
     }
 }
 

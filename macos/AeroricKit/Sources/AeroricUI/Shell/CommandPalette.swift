@@ -78,9 +78,9 @@ public struct CommandPalette: View {
         }
         .frame(width: 520)
         .frame(maxHeight: 380)
-        .clipShape(RoundedRectangle(cornerRadius: DSRadius.lg))
+        .clipShape(RoundedRectangle(cornerRadius: ShellRadius.card, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: DSRadius.lg)
+            RoundedRectangle(cornerRadius: ShellRadius.card, style: .continuous)
                 .strokeBorder(Color.dsBorder.opacity(0.6), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.18), radius: 18, y: 6)

@@ -68,6 +68,9 @@ public final class GitStore {
     public private(set) var conflictPaths: Set<String> = []
     /// diff 内容（原始 diff 不截断；可下载到用户指定位置）。
     public private(set) var diffText: String = ""
+    public private(set) var changesReadState: WorkspaceReadState = .notLoaded
+    public private(set) var historyReadState: WorkspaceReadState = .notLoaded
+    public private(set) var stashReadState: WorkspaceReadState = .notLoaded
 
     public init() {}
 
@@ -82,10 +85,12 @@ public final class GitStore {
     public func ingest(changes: [Change], conflictPaths: Set<String>) {
         self.changes = changes
         self.conflictPaths = conflictPaths
+        changesReadState = .loaded
     }
 
     public func ingest(commits: [Commit]) {
         self.commits = commits
+        historyReadState = .loaded
     }
 
     public func ingest(branches: [Branch]) {
@@ -94,9 +99,22 @@ public final class GitStore {
 
     public func ingest(stash: [StashEntry]) {
         self.stashEntries = stash
+        stashReadState = .loaded
     }
 
     public func setDiff(_ text: String) {
         diffText = text
+    }
+
+    public func beginRead() {
+        changesReadState = .loading
+        historyReadState = .loading
+        stashReadState = .loading
+    }
+
+    public func failRead(_ reason: String) {
+        changesReadState = .failed(reason)
+        historyReadState = .failed(reason)
+        stashReadState = .failed(reason)
     }
 }

@@ -4,7 +4,7 @@ import os
 /// Root shell: TitleBar (top safe area) + Sidebar + Detail, with StatusBar
 /// hung via `safeAreaInset(.bottom)` (the primuse lesson: a plain VStack
 /// row would cut the material off behind floating chrome). Layout policy
-/// (P4-04 Action 1): sidebar initial 220pt, range 180–360pt; main window
+/// sidebar initial 320pt, range 180–360pt; main window
 /// minimum 1000×640pt. Secondary surfaces compress first via the sidebar
 /// visibility toggle and the width drag handle.
 public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
@@ -14,87 +14,149 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
     /// does. Ids outside the registered set are ignored by the router.
     let onCommand: (PaletteCommand) -> Void
     /// P5-03 接线：ready 态正文（透传给 WorkspaceDetail；shell 不解析）。
-    let readyContent: AnyView?
+    ///
+    /// It receives the window's sidebar selection as a **binding**, not a
+    /// value: the navigation spine is the shell's, so the app maps a row id
+    /// onto its own surface and renders it — the shell never learns what a
+    /// row means (INV-02 归属不变). A value would force the app to mirror
+    /// the selection into its own state and keep the two in sync.
+    let readyContent: ((Binding<String?>) -> AnyView)?
+    let initialSelection: String?
 
     // Per-window state: WindowGroup copies the content view per window, so
     // each window owns its sidebar selection and palette presentation; the
     // focused window's bindings are exposed to AppCommands via
     // `focusedSceneValue` (below).
+    //
+    // The App injects the initial destination. Data arrival never chooses
+    // a first project or replaces an explicit user target.
     @State private var selection: String?
+    @State private var navigationEpoch: UInt64 = 0
     @State private var palettePresented = false
 
-    @State private var sidebarWidth: CGFloat = 220
-    @State private var sidebarVisible = true
+    @SceneStorage("workspace.preferred-sidebar-width") private var sidebarWidth: Double = 240
+    @SceneStorage("workspace.inspector-visible") private var inspectorVisible = false
+    /// Dragged auxiliary-panel width; 0 = first opening (0.45 of the window).
+    @SceneStorage("workspace.inspector-width") private var inspectorWidth: Double = 0
+    @SceneStorage("workspace.expanded-projects") private var expandedProjectJSON = ""
+    @AppStorage("settings.surfacePreference") private var surfaceRawValue = SurfacePreference.glass.rawValue
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Collapsed = the 56pt icon rail, never a hidden column.
+    ///
+    /// This replaced a `sidebarVisible` flag that was written once and never
+    /// toggled: the sidebar was always shown, so its `.transition` and
+    /// `.animation` were dead code and the window had no way to give the
+    /// content more room. The reference clients all treat collapsing as a
+    /// **rail** rather than a hide (`opencode` `w-16`; `deepseek-harness`
+    /// `SIDEBAR_COLLAPSED = 56`; `ZCode` `WorkspaceSidebarCollapsedRail`),
+    /// because hiding the column loses the navigation entirely.
+    @State private var sidebarCollapsed = false
 
     public init(
         state: State,
         onCommand: @escaping (PaletteCommand) -> Void = { _ in },
-        readyContent: (() -> AnyView)? = nil
+        initialSelection: String? = nil,
+        readyContent: ((Binding<String?>) -> AnyView)? = nil
     ) {
         self.state = state
         self.onCommand = onCommand
-        self.readyContent = readyContent?()
+        self.initialSelection = initialSelection
+        self.readyContent = readyContent
     }
 
     public var body: some View {
-        HStack(spacing: 0) {
-            if sidebarVisible {
-                ProjectSidebar(
-                    selection: $selection,
-                    items: state.sidebarItems,
-                    width: sidebarWidth
-                )
-                .transition(.move(edge: .leading).combined(with: .opacity))
+        GeometryReader { geometry in
+            let gap = ShellRadius.panelGap
+            // Redesign v3: rounded floating panels on the gutter colour. The
+            // budget sees the width left after the three outer/inner gutters;
+            // the inspector's own gutter is part of its budgeted width.
+            let budget = NativePanelGeometry.mainShellBudget(
+                totalWidth: max(0, geometry.size.width - 3 * gap), preferredSidebarWidth: sidebarWidth,
+                inspectorVisible: inspectorVisible, sidebarCollapsed: sidebarCollapsed,
+                preferredInspectorWidth: inspectorWidth > 0 ? inspectorWidth : nil
+            )
+            let railShown = sidebarCollapsed || budget.sidebarAutoCollapsed
+            HStack(spacing: 0) {
+                RoundedShellPanel(fill: SessionPalette.sidebar.opacity(0)) {
+                    ProjectSidebar(
+                        selection: navigationSelection, items: state.sidebarItems,
+                        width: budget.sidebarWidth, collapsed: railShown,
+                        expandedProjects: expandedProjects,
+                        onNewProjectTask: { navigationSelection.wrappedValue = SessionNavigation.draft(projectID: $0) },
+                        onMoveSelection: moveSidebarSelection
+                    )
+                }
+                Group {
+                    if railShown {
+                        Color.clear
+                    } else {
+                        SidebarResizeHandle(width: $sidebarWidth, effectiveWidth: budget.sidebarWidth)
+                    }
+                }
+                .frame(width: gap)
+                WorkspaceDetail(state: state, selection: navigationSelection, readyContent: readyContent)
+                    .frame(width: max(0, budget.contentWidth))
             }
-            WorkspaceDetail(state: state, selection: selection, readyContent: readyContent)
+            .padding(.horizontal, gap)
+            .padding(.bottom, gap)
+            .environment(\.mainShellBudget, budget)
+            .environment(\.mainShellNavigationEpoch, navigationEpoch)
+            .environment(\.mainShellInspectorWidth, $inspectorWidth)
         }
-        // The drag handle lives on the whole HStack's overlay so crossing
-        // into the detail's scroll views never steals the gesture (the
-        // primuse placement, MacContentView :246).
-        .overlay(alignment: .leading) {
-            if sidebarVisible {
-                SidebarResizeHandle(width: $sidebarWidth)
-                    .frame(width: 10)
-                    .frame(maxHeight: .infinity)
-                    .offset(x: sidebarWidth - 5)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                NativeIconButton(systemImage: "sidebar.left", label: "切换侧栏",
+                                 identifier: "workspace.toggle-sidebar") { sidebarCollapsed.toggle() }
+            }
+            ToolbarItem(placement: .navigation) {
+                breadcrumb
+            }
+            ToolbarItemGroup(placement: .primaryAction) {
+                Toggle(isOn: $inspectorVisible) { Image(systemName: "sidebar.right") }
+                    .toggleStyle(.button)
+                    .help("辅助面板（详情 / 文件 / 改动 / Git 日志）")
+                    .accessibilityLabel("辅助面板")
+                    .accessibilityIdentifier("workspace.toggle-inspector")
+                NativeIconButton(systemImage: "command", label: "命令面板 ⌘K",
+                                 identifier: "workspace.command-palette") { palettePresented = true }
+                NativeIconButton(systemImage: "square.and.pencil", label: "新建会话 ⌘N",
+                                 identifier: "workspace.new-session") { openDraft() }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            TitleBar(title: "Aeroric")
-        }
+        .toolbarBackground(SessionPalette.gutter, for: .windowToolbar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             StatusBar(
                 phase: state.phaseSnapshot,
                 phaseText: state.phaseText,
-                environmentLabel: state.environmentLabel
+                environmentLabel: state.environmentLabel,
+                context: state.statusContext
             )
         }
-        .background(NativeMaterial.underWindowBackground.ignoresSafeArea())
-        // Keyboard behavior for the sidebar (ADR-001 §4 concerns chrome, not
-        // behavior): the system List draws the selection, these window-level
-        // key equivalents only move the binding — measured 2026-10-02, the
-        // sidebar List neither exposes its selection state through the
-        // accessibility tree nor moves List(selection:) on arrow keys by
-        // itself. Hidden buttons are the CommandPalette escape-button
-        // precedent. Disabled while the palette is presented so typing there
-        // never moves the sidebar.
-        .background {
-            Group {
-                Button("") { moveSidebarSelection(.up) }
-                    .keyboardShortcut(.upArrow, modifiers: [])
-                    .hidden()
-                Button("") { moveSidebarSelection(.down) }
-                    .keyboardShortcut(.downArrow, modifiers: [])
-                    .hidden()
-            }
-            .disabled(palettePresented)
-        }
-        .animation(.easeInOut(duration: DSMotion.normal), value: sidebarVisible)
-        .frame(minWidth: 1000, minHeight: 640)
+        .background(SessionPalette.gutter.ignoresSafeArea())
+        .foregroundStyle(SessionPalette.text)
+        // Arrow handling stays on the sidebar List; editors retain their
+        // own cursor keys.
+        .animation(reduceMotion ? nil : .easeInOut(duration: DSMotion.normal), value: sidebarCollapsed)
+        .font(AeroricFont.ui(AeroricFont.body))
+        .frame(minWidth: NativePanelGeometry.mainShell.minimumWindowWidth,
+               minHeight: NativePanelGeometry.mainShell.minimumWindowHeight)
         .focusedValue(\.palettePresentation, $palettePresented)
-        .focusedValue(\.workspaceSelection, $selection)
-        .focusedSceneValue(\.workspaceSelection, $selection)
+        .focusedValue(\.workspaceSelection, navigationSelection)
+        .focusedSceneValue(\.workspaceSelection, navigationSelection)
         .focusedValue(\.workspaceActivity, true)
+        .focusedValue(\.sidebarCollapse, $sidebarCollapsed)
+        // Fill only the initial destination; never override a user target.
+        .onAppear {
+            if selection == nil {
+                selection = initialSelection
+            }
+            if expandedProjectJSON.isEmpty {
+                let current = state.sidebarItems.first {
+                    $0.group == .projects && ($0.id == selection || $0.children?.contains { $0.id == selection } == true)
+                }
+                expandedProjects.wrappedValue = Set(current.map { [$0.id] } ?? [])
+            }
+        }
         .overlay {
             if palettePresented {
                 CommandPalette(
@@ -108,20 +170,87 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
     }
 
     private func handleCommand(_ command: PaletteCommand) {
-        onCommand(command)
+        if command.id == "task.new" { openDraft() }
+        else { onCommand(command) }
+    }
+
+    /// "项目 / 会话" crumb after the traffic lights. The current item title
+    /// keeps the `detail.selection` identifier the launch tests read.
+    private var breadcrumb: some View {
+        let current = SidebarOrdering.item(id: selection, in: state.sidebarItems)
+        let project = state.sidebarItems.first {
+            $0.group == .projects && $0.id != selection
+                && $0.children?.contains { $0.id == selection } == true
+        }
+        let title = current?.title ?? "Aeroric"
+        return HStack(spacing: 6) {
+            if let project {
+                Text(project.title)
+                    .foregroundStyle(SessionPalette.secondary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(SessionPalette.muted)
+                    .accessibilityHidden(true)
+            }
+            Text(title)
+                .fontWeight(.medium)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .accessibilityValue(title)
+                .accessibilityIdentifier("detail.selection")
+        }
+        .font(AeroricFont.ui(AeroricFont.body))
+        .frame(maxWidth: 360, alignment: .leading)
+    }
+
+    private var surface: SurfacePreference { SurfacePreference(rawValue: surfaceRawValue) ?? .glass }
+    private var navigationSelection: Binding<String?> {
+        Binding(get: { selection }, set: {
+            selection = $0
+            navigationEpoch &+= 1 // Reselecting the current task also leaves preview.
+        })
+    }
+
+    private var expandedProjects: Binding<Set<String>> {
+        Binding(
+            get: {
+                guard let data = expandedProjectJSON.data(using: .utf8),
+                      let ids = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+                return Set(ids)
+            },
+            set: { ids in
+                if let data = try? JSONEncoder().encode(ids.sorted()),
+                   let json = String(data: data, encoding: .utf8) { expandedProjectJSON = json }
+            }
+        )
+    }
+
+    private func openDraft() {
+        navigationSelection.wrappedValue = SessionNavigation.newDraftSelection(from: selection, items: state.sidebarItems)
     }
 
     private func moveSidebarSelection(_ direction: MoveCommandDirection) {
-        let items = state.sidebarItems
+        // `SidebarOrdering.rendered`, not `state.sidebarItems`: the app
+        // supplies rows grouped arbitrarily (workspace surfaces then
+        // projects) while the sidebar draws them bucketed. Walking the
+        // supplied order moved the highlight to a row that is not visually
+        // adjacent — measured 2026-10-13, ↓ from 任务 landed on Git because
+        // Git is third in the supplied array but three groups down on screen.
+        guard !palettePresented else { return }
+        let navigationItems = state.sidebarItems.filter { $0.group == .work || $0.group == .projects }
+        let items = sidebarCollapsed
+            ? SidebarOrdering.rendered(navigationItems)
+            : SidebarOrdering.rendered(navigationItems, expanded: expandedProjects.wrappedValue)
         guard !items.isEmpty else { return }
         let currentIndex = selection.flatMap { id in items.firstIndex(where: { $0.id == id }) }
         switch direction {
         case .down:
             let next = currentIndex.map { min($0 + 1, items.count - 1) } ?? 0
-            selection = items[next].id
+            navigationSelection.wrappedValue = items[next].id
         case .up:
             let previous = currentIndex.map { max($0 - 1, 0) } ?? 0
-            selection = items[previous].id
+            navigationSelection.wrappedValue = items[previous].id
         default:
             break
         }
@@ -130,19 +259,27 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
 
 /// Drag handle for the sidebar width. Clamps to the P4-04 range 180–360pt.
 struct SidebarResizeHandle: View {
-    @Binding var width: CGFloat
+    @Binding var width: Double
+    let effectiveWidth: CGFloat
+    @State private var dragStartWidth: CGFloat?
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 1)
-            .fill(Color.dsBorder.opacity(0.4))
-            .frame(width: 3)
+        // Redesign v3: the gutter between rounded panels is the handle.
+        Color.clear
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
-                        width = min(360, max(180, width + value.translation.width))
+                        if dragStartWidth == nil { dragStartWidth = effectiveWidth }
+                        width = min(NativePanelGeometry.mainShell.maximumSidebarWidth,
+                                    max(NativePanelGeometry.mainShell.minimumSidebarWidth,
+                                        (dragStartWidth ?? effectiveWidth) + value.translation.width))
                     }
+                    .onEnded { _ in dragStartWidth = nil }
             )
             .accessibilityIdentifier("sidebar.resize.handle")
             .accessibilityLabel("调整侧栏宽度")
@@ -172,10 +309,30 @@ public struct WorkspaceActivityKey: FocusedValueKey {
     public typealias Value = Bool
 }
 
+/// The focused workspace window's sidebar collapse state. The View-menu
+/// command flips this binding; multiple windows each register their own, so
+/// the toggle lands on the window the user is looking at.
+public struct SidebarCollapseKey: FocusedValueKey {
+    public typealias Value = Binding<Bool>
+}
+
+public struct NewSessionActionKey: FocusedValueKey {
+    public typealias Value = () -> Void
+}
+
 public extension FocusedValues {
+    var newSessionAction: (() -> Void)? {
+        get { self[NewSessionActionKey.self] }
+        set { self[NewSessionActionKey.self] = newValue }
+    }
     var palettePresentation: Binding<Bool>? {
         get { self[PalettePresentationKey.self] }
         set { self[PalettePresentationKey.self] = newValue }
+    }
+
+    var sidebarCollapse: Binding<Bool>? {
+        get { self[SidebarCollapseKey.self] }
+        set { self[SidebarCollapseKey.self] = newValue }
     }
 
     var workspaceSelection: Binding<String?>? {

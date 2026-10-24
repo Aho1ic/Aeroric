@@ -169,8 +169,14 @@ public struct WorkspaceClient: Sendable {
                 "prompt": .string(prompt),
                 "taskId": .string(taskId),
             ]
-            if let model { object["model"] = .string(model) }
-            if let effort { object["effort"] = .string(effort) }
+            if let model {
+                object["selectedModel"] = .string(model)
+                object["model"] = .string(model) // Existing client compatibility alias.
+            }
+            if let effort {
+                object["reasoningEffort"] = .string(effort)
+                object["effort"] = .string(effort)
+            }
             if let permissionMode { object["permissionMode"] = .string(permissionMode) }
             if let worktree { object["worktree"] = .string(worktree) }
             if !attachmentPaths.isEmpty {
@@ -196,6 +202,62 @@ public struct WorkspaceClient: Sendable {
             "task.cancel",
             params: .object(["taskId": .string(taskId)])
         )
+    }
+
+    /// Versioned directory scoped to an explicit project. No raw settings IO.
+    public func configurations(projectID: String) async throws -> NativeConfigurationCatalog {
+        let frame = try await connection.request(
+            "agent.configurations", params: .object(["projectId": .string(projectID)])
+        )
+        return try Self.decodeConfigurations(frame.result, projectID: projectID)
+    }
+
+    static func decodeConfigurations(_ value: JSONValue, projectID: String) throws -> NativeConfigurationCatalog {
+        let catalog: NativeConfigurationCatalog = try decodeSubmissionValue(value)
+        guard catalog.schemaVersion == 1, catalog.projectId == projectID,
+              !catalog.revision.isEmpty, Quantity(catalog.asOf) != nil,
+              Set(catalog.configurations.map(\.id)).count == catalog.configurations.count,
+              catalog.configurations.allSatisfy({
+                  !$0.id.isEmpty && !$0.agent.isEmpty && $0.version == catalog.revision
+                  && ["codex", "claude", "omp", "dsh", "claude_gpt55"].contains($0.harness)
+              })
+        else { throw MalformedReply("invalid configuration directory identity/version") }
+        return catalog
+    }
+
+    public func submitTask(_ request: NativeTaskSubmission) async throws -> NativeSubmissionReceipt {
+        let frame = try await connection.request("task.run", params: request.json)
+        return try Self.decodeSubmissionReceipt(frame.result, request: request)
+    }
+
+    static func decodeSubmissionReceipt(_ value: JSONValue, request: NativeTaskSubmission) throws -> NativeSubmissionReceipt {
+        let receipt: NativeSubmissionReceipt = try decodeSubmissionValue(value)
+        guard receipt.matches(request) else { throw MalformedReply("submission receipt does not match original options") }
+        return receipt
+    }
+
+    public func submission(_ request: NativeTaskSubmission) async throws -> NativeSubmissionReceipt? {
+        let frame = try await connection.request("task.submission.get", params: .object([
+            "submissionId": .string(request.submissionId), "fingerprint": .string(request.fingerprint),
+        ]))
+        return try Self.decodeSubmissionLookup(frame.result, request: request)
+    }
+
+    static func decodeSubmissionLookup(_ value: JSONValue, request: NativeTaskSubmission) throws -> NativeSubmissionReceipt? {
+        let lookup: NativeSubmissionLookup = try decodeSubmissionValue(value)
+        guard lookup.schemaVersion == 1, lookup.submissionId == request.submissionId,
+              lookup.fingerprint == request.fingerprint,
+              lookup.receipt.map({ $0.matches(request) }) ?? true
+        else { throw MalformedReply("submission lookup does not match original identity") }
+        return lookup.receipt
+    }
+
+    private static func decodeSubmissionValue<T: Decodable>(_ value: JSONValue) throws -> T {
+        do {
+            return try JSONDecoder().decode(T.self, from: JSONSerialization.data(withJSONObject: value.foundationObject))
+        } catch {
+            throw MalformedReply("invalid typed submission reply")
+        }
     }
 
     public struct MalformedReply: Error, Equatable {

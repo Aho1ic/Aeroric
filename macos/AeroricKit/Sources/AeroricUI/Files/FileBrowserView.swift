@@ -259,20 +259,44 @@ public struct SearchPanel: View {
                     .accessibilityIdentifier("files.search.submit")
             }
             .padding(8)
-            List(matches) { match in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(match.path):\(match.line)")
+            if matches.isEmpty {
+                // AP8 2026-10-13: 与连接面板同一缺陷——空结果与"渲染失败"在视觉上
+                // 无法区分。`Files` 工作区给 SearchPanel 传的是硬编码的 `matches: []`
+                // （见 TaskWorkspaceView），所以这里**总是**空的，必须说清是"还没有结果"。
+                VStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 24))
+                        .foregroundStyle(Color.dsTextMuted)
+                    Text("没有搜索结果")
+                        .font(.callout)
+                        .foregroundStyle(Color.dsTextSecondary)
+                    Text("输入关键词后按回车或点「搜索」")
                         .font(.caption)
                         .foregroundStyle(Color.dsTextMuted)
-                    Text(match.excerpt)
-                        .font(.caption.monospaced())
-                        .lineLimit(2)
                 }
-                .accessibilityIdentifier("files.search.result.\(match.id)")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("files.search.empty")
+            } else {
+                List(matches) { match in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(match.path):\(match.line)")
+                            .font(.caption)
+                            .foregroundStyle(Color.dsTextMuted)
+                        Text(match.excerpt)
+                            .font(.caption.monospaced())
+                            .lineLimit(2)
+                    }
+                    .accessibilityIdentifier("files.search.result.\(match.id)")
+                }
+                .accessibilityIdentifier("files.search.results")
             }
-            .accessibilityIdentifier("files.search.results")
         }
-        .accessibilityIdentifier("files.search")
+        // No panel-level identifier here: a container identifier **replaces**
+        // every descendant identifier in the AX tree, so `files.search.query`,
+        // `files.search.empty` and `files.search.results` would all read as the
+        // container id and none would be addressable. Measured 2026-10-14;
+        // same rule as `WorkspaceDetail` / `BootstrapInfoBlock` / `DebugPanel`.
+        // Identifiers live on the leaves only. See G51.
     }
 }
 

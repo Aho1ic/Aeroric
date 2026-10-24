@@ -20,13 +20,23 @@ let package = Package(
             url: "https://github.com/migueldeicaza/SwiftTerm.git",
             .exact("1.2.5")
         ),
+        // Redesign 01 (Q23): Markdown rendering for the conversation view.
+        // MIT, pinned exactly like SwiftTerm.
+        .package(
+            url: "https://github.com/gonzalezreal/swift-markdown-ui.git",
+            .exact("2.4.1")
+        ),
     ],
     targets: [
         .target(name: "AeroricProtocol"),
         .target(name: "AeroricClient", dependencies: ["AeroricProtocol"]),
         .target(
             name: "AeroricUI",
-            dependencies: ["AeroricProtocol", "AeroricClient", .product(name: "SwiftTerm", package: "SwiftTerm")]
+            dependencies: [
+                "AeroricProtocol", "AeroricClient",
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
+                .product(name: "MarkdownUI", package: "swift-markdown-ui"),
+            ]
         ),
         .testTarget(name: "AeroricProtocolTests", dependencies: ["AeroricProtocol"]),
         .testTarget(name: "AeroricClientTests", dependencies: ["AeroricClient", "AeroricProtocol"]),

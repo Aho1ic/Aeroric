@@ -57,13 +57,30 @@ public final class TaskStore {
 
     public private(set) var projects: [ProjectEntry] = []
     public private(set) var tasks: [TaskEntry] = []
-    /// 每窗口选中的项目（§2.4：selected project 归窗口）。
-    public var selectedProjectID: String?
     /// 窗口局部过滤（TaskListView 消费；不是宿主 archive）。
     public var filterText: String = "" {
         didSet { rebuildVisible() }
     }
     public private(set) var visibleTasks: [TaskEntry] = []
+
+    /// 按项目作用域 + 窗口过滤词算出的可见集，**不写回任何状态**。
+    ///
+    /// 项目作用域刻意做成纯函数而不是 store 上的一个字段：侧栏选中的项目是
+    /// **窗口局部**的（§2.4「selected project 归窗口」），而 `TaskStore` 由所有
+    /// 窗口共享——把作用域存进来会让两个窗口互相覆盖对方的选择。此前
+    /// `selectedProjectID` 正是这样一个字段：它被声明、被注释为「归窗口」，
+    /// 却**从不参与过滤**（全仓没有任何写入点），于是侧栏里选项目对列表毫无
+    /// 影响。改成纯函数后，调用方（每窗口一个 `TaskWorkspaceView`）自己持有
+    /// 那个 id，语义与注释终于一致。
+    public func visibleTasks(inProject projectID: String?) -> [TaskEntry] {
+        let scoped = projectID.map { id in tasks.filter { $0.projectID == id } } ?? tasks
+        let trimmed = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return scoped }
+        return scoped.filter {
+            $0.title.localizedCaseInsensitiveContains(trimmed)
+                || $0.status.localizedCaseInsensitiveContains(trimmed)
+        }
+    }
 
     public init() {}
 

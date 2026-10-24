@@ -9,27 +9,50 @@ public struct ConnectionList: View {
     }
 
     public var body: some View {
-        List(store.connections, selection: Binding(
-            get: { store.selectedID },
-            set: { store.select($0 ?? "") }
-        )) { connection in
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(connection.name)
+        Group {
+            if store.connections.isEmpty {
+                // AP8: without this the pane is an unexplained black rectangle —
+                // measured 2026-10-13 in the real window, where an empty
+                // connection list and a failed render looked identical. An empty
+                // list is a state the product must *say*, not leave blank.
+                VStack(spacing: 8) {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 24))
+                        .foregroundStyle(Color.dsTextMuted)
+                    Text("暂无 SSH 连接")
+                        .font(.callout)
+                        .foregroundStyle(Color.dsTextSecondary)
+                    Text("在下方填写名称、主机与用户名后保存")
                         .font(.caption)
-                    if connection.hasPassword {
-                        Image(systemName: "lock.fill")
+                        .foregroundStyle(Color.dsTextMuted)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("connections.list-empty")
+            } else {
+                List(store.connections, selection: Binding(
+                    get: { store.selectedID },
+                    set: { store.select($0 ?? "") }
+                )) { connection in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(connection.name)
+                                .font(.caption)
+                            if connection.hasPassword {
+                                Image(systemName: "lock.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(Color.dsTextMuted)
+                            }
+                        }
+                        Text("\(connection.username)@\(connection.host):\(connection.port)")
                             .font(.caption2)
                             .foregroundStyle(Color.dsTextMuted)
                     }
+                    .accessibilityIdentifier("connections.item.\(connection.id)")
                 }
-                Text("\(connection.username)@\(connection.host):\(connection.port)")
-                    .font(.caption2)
-                    .foregroundStyle(Color.dsTextMuted)
+                .accessibilityIdentifier("connections.list")
             }
-            .accessibilityIdentifier("connections.item.\(connection.id)")
         }
-        .accessibilityIdentifier("connections.list")
     }
 }
 
@@ -192,6 +215,27 @@ public struct SFTPBrowser: View {
                     .padding(.vertical, 4)
                     .accessibilityIdentifier("connections.remote-cwd")
             }
+            if entries.isEmpty {
+                // Same defect as the connection list: an unlabelled black pane is
+                // indistinguishable from a failed render. Measured 2026-10-13 —
+                // this was the ~60%-of-window void in the SSH workspace.
+                VStack(spacing: 8) {
+                    Image(systemName: "folder.badge.questionmark")
+                        .font(.system(size: 24))
+                        .foregroundStyle(Color.dsTextMuted)
+                    Text("没有可浏览的文件")
+                        .font(.callout)
+                        .foregroundStyle(Color.dsTextSecondary)
+                    Text(store.remoteCWD == nil
+                         ? "选择或新建一个连接后浏览远程文件"
+                         : "此目录为空")
+                        .font(.caption)
+                        .foregroundStyle(Color.dsTextMuted)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("connections.sftp-empty")
+            } else {
             List(entries) { entry in
                 HStack(spacing: 6) {
                     Image(systemName: entry.isDir ? "folder" : "doc")
@@ -215,8 +259,8 @@ public struct SFTPBrowser: View {
                 .accessibilityIdentifier("connections.sftp.\(entry.path)")
             }
             .accessibilityIdentifier("connections.sftp")
+            }
         }
-        .accessibilityIdentifier("connections.sftp-browser")
     }
 }
 

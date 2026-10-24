@@ -5,6 +5,16 @@ import XCTest
 /// TextKit 自身保证，XCTest 只断言表面挂载）。
 @MainActor
 final class EditorTests: XCTestCase {
+    private let lifecycle = NativeUITestApplicationLifecycle()
+
+    override func tearDownWithError() throws {
+        let lifecycle = lifecycle
+        try MainActor.assumeIsolated {
+            try lifecycle.tearDown()
+        }
+        try super.tearDownWithError()
+    }
+
     func testAppLaunchesWithEditorPackageMounted() throws {
         let app = XCUIApplication()
         let runnerEnvironment = ProcessInfo.processInfo.environment
@@ -12,8 +22,7 @@ final class EditorTests: XCTestCase {
         if let dataDirectory = runnerEnvironment["AERORIC_DATA_DIR"] {
             app.launchEnvironment["AERORIC_DATA_DIR"] = dataDirectory
         }
-        app.launch()
-        defer { app.terminate() }
+        try lifecycle.launch(app)
         // 任务工作区在 ready 后出现（P5-03 readyContent 注入点）；编辑器表面
         // 挂载断言随 P6-02 的 App 场景接线（P6-02 交付的是编辑器组件面）。
         let deadline = Date().addingTimeInterval(15)

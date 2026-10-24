@@ -1,12 +1,16 @@
 import SwiftUI
 
-/// P5-04 Action 1/4：会话视图（原生消息面板）。消息列表＋分页加载＋
-/// 会话操作（export/copy）；分页不跳动、未知事件不使解码失败。
+/// Redesign 01 conversation column (Agents-Anywhere timeline width, codeg
+/// structured messages). Renders host-supplied history only; it never
+/// synthesises or re-renders the live TUI, which stays in the terminal.
 public struct SessionView: View {
     let paginator: SessionPaginator
     var onLoadMore: (() -> Void)?
     var onExport: (() -> Void)?
     var usage: SessionUsage?
+
+    /// Agents-Anywhere `max-w-[48rem]`.
+    public static let columnWidth: CGFloat = 768
 
     public init(
         paginator: SessionPaginator,
@@ -21,33 +25,51 @@ public struct SessionView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                if let onExport {
-                    Button("导出 Markdown") { onExport() }
-                        .accessibilityIdentifier("session.export")
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+        ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
+                LazyVStack(alignment: .leading, spacing: 20) {
                     if paginator.canLoadMore {
                         Button("加载更早消息") { onLoadMore?() }
+                            .buttonStyle(.borderless)
+                            .font(AeroricFont.ui(AeroricFont.meta))
+                            .frame(maxWidth: .infinity)
                             .accessibilityIdentifier("session.load-more")
+                    }
+                    if paginator.messages.isEmpty {
+                        Text(paginator.isLoadingPage ? "正在读取会话历史…" : "宿主尚未提供此会话的结构化历史。")
+                            .font(AeroricFont.ui(AeroricFont.meta))
+                            .foregroundStyle(SessionPalette.muted)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 40)
                     }
                     ForEach(Array(paginator.messages.enumerated()), id: \.offset) { index, message in
                         MessageRow(message: message)
+                            .id(index)
                             .accessibilityIdentifier("session.message-row.\(index)")
                     }
                 }
-                .padding(12)
+                .padding(.horizontal, 24)
+                .padding(.top, 20)
+                .padding(.bottom, 24)
+                .frame(maxWidth: Self.columnWidth)
+                .frame(maxWidth: .infinity)
+            }
+            .onChange(of: paginator.messages.count) { _, count in
+                guard count > 0 else { return }
+                proxy.scrollTo(count - 1, anchor: .bottom)
             }
             .accessibilityIdentifier("session.messages")
-            if let usage {
-                UsagePanel(usage: usage)
+        }
+        .overlay(alignment: .topTrailing) {
+            if let onExport {
+                NativeIconButton(systemImage: "square.and.arrow.up", label: "导出 Markdown",
+                                 identifier: "session.export", action: onExport)
+                    .foregroundStyle(SessionPalette.secondary)
+                    .padding(8)
             }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let usage { UsagePanel(usage: usage) }
         }
         .accessibilityIdentifier("session.view")
     }
@@ -62,24 +84,106 @@ public struct UsagePanel: View {
     }
 
     public var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 14) {
             if let duration = usage.durationSecs {
-                LabeledContent("耗时") { Text(String(format: "%.1fs", duration)) }
+                Text("耗时 \(String(format: "%.1fs", duration))")
             }
             if let total = usage.totalTokens {
-                LabeledContent("Token") { Text("\(total)") }
+                Text("Token \(total)")
             }
             if let context = usage.contextTokens {
-                LabeledContent("上下文") { Text("\(context)") }
+                Text("上下文 \(context)")
             }
             Spacer()
         }
-        .font(.caption)
-        .foregroundStyle(Color.dsTextSecondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color.dsSurface.opacity(0.55))
+        .font(AeroricFont.ui(AeroricFont.meta))
+        .monospacedDigit()
+        .foregroundStyle(SessionPalette.muted)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 4)
         .accessibilityIdentifier("session.usage")
+    }
+}
+
+/// Continuation input under the conversation (Q24-a). Only an explicit
+/// press of send writes the text into the session; `writesToTerminal`
+/// labels the case where the TUI is waiting for input and the text will
+/// land in whatever prompt it is showing.
+public struct SessionContinuationComposer: View {
+    @Binding var draft: String
+    let canSend: Bool
+    let writesToTerminal: Bool
+    let readOnlyReason: String?
+    let onSend: (String) -> Void
+    @FocusState private var focused: Bool
+
+    public init(draft: Binding<String>, canSend: Bool, writesToTerminal: Bool,
+                readOnlyReason: String? = nil, onSend: @escaping (String) -> Void) {
+        _draft = draft
+        self.canSend = canSend
+        self.writesToTerminal = writesToTerminal
+        self.readOnlyReason = readOnlyReason
+        self.onSend = onSend
+    }
+
+    private var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField(canSend ? "继续对话…" : (readOnlyReason ?? "当前只读"),
+                          text: $draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(AeroricFont.ui(AeroricFont.body))
+                    .lineLimit(1...6)
+                    .focused($focused)
+                    .disabled(!canSend)
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.contains(.command) else { return .ignored }
+                        send()
+                        return .handled
+                    }
+                    .accessibilityLabel("续聊输入")
+                    .accessibilityIdentifier("session.continue.input")
+                Button(action: send) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 28, height: 28)
+                        .background(canSend && !trimmed.isEmpty ? SessionPalette.accent : SessionPalette.muted.opacity(0.5),
+                                    in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSend || trimmed.isEmpty)
+                .help("发送（⌘↩）")
+                .accessibilityLabel("发送")
+                .accessibilityIdentifier("session.continue.send")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(SessionPalette.input, in: RoundedRectangle(cornerRadius: ShellRadius.composer, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: ShellRadius.composer, style: .continuous)
+                    .strokeBorder(focused ? SessionPalette.accent.opacity(0.6) : SessionPalette.edge, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+            if writesToTerminal && canSend {
+                Label("Agent 正在等待输入：发送的文字将原样输入到终端", systemImage: "exclamationmark.circle")
+                    .font(AeroricFont.ui(AeroricFont.meta))
+                    .foregroundStyle(SessionPalette.amber)
+                    .accessibilityIdentifier("session.continue.terminal-hint")
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 10)
+        .frame(maxWidth: SessionView.columnWidth + 48)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func send() {
+        guard canSend, !trimmed.isEmpty else { return }
+        onSend(draft)
+        draft = ""
     }
 }
 

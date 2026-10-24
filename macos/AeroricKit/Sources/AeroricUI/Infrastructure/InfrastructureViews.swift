@@ -65,6 +65,18 @@ public struct ImageList: View {
             .accessibilityIdentifier("infrastructure.image.\(image.id)")
         }
         .accessibilityIdentifier("infrastructure.images")
+        // 空镜像列表此前是一块纯黑矩形——与"渲染失败"无法区分(与 PortInspector
+        // 同一类缺陷;daemon 不可用是另一条分支,已在 DockerPanel 处理)。
+        .overlay {
+            if store.images.isEmpty {
+                PaneEmptyState(
+                    systemImage: "shippingbox",
+                    title: "还没有镜像",
+                    hint: "本机没有可用的 Docker 镜像"
+                )
+                .accessibilityIdentifier("infrastructure.images-empty")
+            }
+        }
     }
 }
 
@@ -173,6 +185,16 @@ public struct PortInspector: View {
             .accessibilityIdentifier("infrastructure.port.\(port.port)")
         }
         .accessibilityIdentifier("infrastructure.ports")
+        .overlay {
+            if store.ports.isEmpty {
+                PaneEmptyState(
+                    systemImage: "network.slash",
+                    title: "没有监听中的端口",
+                    hint: "本机当前没有端口被占用"
+                )
+                .accessibilityIdentifier("infrastructure.ports-empty")
+            }
+        }
     }
 }
 

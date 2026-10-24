@@ -13,7 +13,7 @@ enum WorkspaceActions {
     static func route(_ services: AppServices) -> (PaletteCommand) -> Void {
         { command in
             switch command.id {
-            case "task.new": services.draftPresentationRequested = true
+            // The shell handles task.new using its window-local selection.
             case "project.open": openProjectPanel(services: services)
             case "settings.show": SettingsWindowController.shared.show(state: services)
             default:
@@ -84,14 +84,14 @@ struct AeroricCommands: Commands {
     @FocusedValue(\.palettePresentation) private var palettePresentation
     @FocusedValue(\.workspaceSelection) private var workspaceSelection
     @FocusedValue(\.workspaceActivity) private var workspaceActivity
+    @FocusedValue(\.sidebarCollapse) private var sidebarCollapse
+    @FocusedValue(\.newSessionAction) private var newSessionAction
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("新建任务") {
-                services.draftPresentationRequested = true
-            }
+            Button("新建会话") { newSessionAction?() }
             .keyboardShortcut("n")
-            .disabled(workspaceActivity != true)
+            .disabled(newSessionAction == nil)
 
             Button("打开项目…") {
                 WorkspaceActions.openProjectPanel(
@@ -130,6 +130,19 @@ struct AeroricCommands: Commands {
             }
             .keyboardShortcut("k")
             .disabled(palettePresentation == nil)
+
+            Divider()
+
+            // ⌃⌘S is the system's sidebar-toggle chord (Finder, Mail, Notes
+            // all use it), so it is not a new convention to learn. The
+            // command targets the focused window through the same
+            // focused-value channel as the palette, so with several windows
+            // open it collapses the one being looked at.
+            Button(sidebarCollapse?.wrappedValue == true ? "展开侧栏" : "折叠侧栏") {
+                sidebarCollapse?.wrappedValue.toggle()
+            }
+            .keyboardShortcut("s", modifiers: [.command, .control])
+            .disabled(sidebarCollapse == nil)
         }
     }
 }

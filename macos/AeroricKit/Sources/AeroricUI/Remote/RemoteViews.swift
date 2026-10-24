@@ -17,6 +17,9 @@ public final class RemoteStore: ObservableObject {
     @Published public private(set) var devices: [RemoteClient.DeviceView]
     @Published public private(set) var pairing: RemoteClient.PairingInvite?
     @Published public private(set) var lastError: String?
+    @Published public private(set) var readState: WorkspaceReadState
+    /// A ready main connection does not imply an assembled remote client.
+    public var canControl: Bool { client != nil && readState == .loaded }
 /// 审计行(`<ts>\t<event>\t<payload>` 的原始文本;只读展示)。
     @Published public private(set) var auditLines: [String]
     /// AP6:推送登记状态(设备表 + 计数 + 退避窗口)。
@@ -37,6 +40,7 @@ public final class RemoteStore: ObservableObject {
         auditLines: [String] = []
     ) {
         self.client = client
+        self.readState = client == nil ? .unavailable : .notLoaded
         self.status = status
         self.devices = devices
         self.auditLines = auditLines
@@ -46,6 +50,7 @@ public final class RemoteStore: ObservableObject {
     /// 生产构造：审计行从磁盘读（调用方给读取闭包，避免 Kit 依赖路径解析）。
     public init(client: RemoteClient?, auditReader: @escaping () -> [String]) {
         self.client = client
+        self.readState = client == nil ? .unavailable : .notLoaded
         self.status = .offline()
         self.devices = []
         self.auditLines = auditReader()
@@ -55,14 +60,17 @@ public final class RemoteStore: ObservableObject {
 /// 刷新状态+设备表(+AP6 推送状态)。
     public func refresh() async {
         guard let client = clientForWrite() else { return }
+        readState = .loading
         do {
             status = try await client.status()
             devices = try await client.listDevices()
             // 推送状态与远程面同批读:RPC 失败不该让整个面板空白,所以单独兜住。
             pushStatus = (try? await client.pushStatus()) ?? pushStatus
             lastError = nil
+            readState = .loaded
         } catch {
             lastError = String(describing: error)
+            readState = .failed(String(describing: error))
         }
         auditLines = auditReader()
     }
@@ -203,6 +211,12 @@ public struct RemoteAccessSettingsView: View {
 
     public var body: some View {
         Form {
+            Section("远控能力") {
+                Text(store.readState.notice ?? "已读取远控服务与设备状态")
+                    .font(.callout)
+                    .foregroundStyle(Color.dsTextSecondary)
+                    .accessibilityIdentifier("remote.capability")
+            }
             Section("服务") {
                 Toggle("启用远程访问", isOn: Binding(
                     get: { store.status.enabled && store.status.running },
@@ -212,13 +226,16 @@ public struct RemoteAccessSettingsView: View {
                         }
                     }
                 ))
+                .disabled(!store.canControl)
                 .accessibilityIdentifier("remote.enable")
                 HStack {
-                    Text(store.status.running ? "运行中" : "已停止")
+                    Text(store.readState == .loaded ? (store.status.running ? "运行中" : "已停止") : "服务状态未核实")
                         .font(.caption)
                         .foregroundStyle(store.status.running ? Color.dsSuccess : Color.dsTextSecondary)
-                    Text(":\(store.status.port)")
+                    if store.readState == .loaded {
+                        Text(":\(store.status.port)")
                         .font(.caption.monospaced())
+                    }
                     if store.status.networkExposed {
                         Text("已暴露到网络")
                             .font(.caption)
@@ -227,14 +244,16 @@ public struct RemoteAccessSettingsView: View {
                 }
                 .accessibilityIdentifier("remote.status-line")
                 Button("生成配对二维码") { showPairing = true }
-                    .disabled(!store.status.running)
+                    .disabled(!store.canControl || !store.status.running)
                     .accessibilityIdentifier("remote.pair-button")
             }
 
             Section("Relay / 公网端点") {
                 TextField("Relay URL（wss://，留空不用 relay）", text: $relayURL)
+                    .disabled(!store.canControl)
                     .accessibilityIdentifier("remote.relay-url")
                 SecureField("Relay 共享口令", text: $relayToken)
+                    .disabled(!store.canControl)
                     .accessibilityIdentifier("remote.relay-token")
                 Button("保存配置") {
                     Task {
@@ -245,6 +264,7 @@ public struct RemoteAccessSettingsView: View {
                         )
                     }
                 }
+                .disabled(!store.canControl)
                 .accessibilityIdentifier("remote.config-save")
             }
 
@@ -257,7 +277,9 @@ public struct RemoteAccessSettingsView: View {
                     .accessibilityIdentifier("remote.error")
             }
         }
+        .formStyle(.grouped)
         .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityIdentifier("settings.remote")
         .task { await store.refresh() }
         .sheet(isPresented: $showPairing) {
@@ -449,7 +471,8 @@ public struct DeviceListView: View {
     public var body: some View {
         Section("已配对设备") {
             if store.devices.isEmpty {
-                Text("暂无设备").font(.caption).foregroundStyle(Color.dsTextSecondary)
+                Text(store.readState == .loaded ? "暂无设备" : (store.readState.notice ?? "设备列表尚未核实"))
+                    .font(.caption).foregroundStyle(Color.dsTextSecondary)
             }
             ForEach(store.devices, id: \.id) { device in
                 HStack {
@@ -464,6 +487,7 @@ public struct DeviceListView: View {
                         Text("在线").font(.caption).foregroundStyle(Color.dsSuccess)
                     }
                     Button("撤销") { pendingRevoke = device }
+                        .disabled(!store.canControl)
                         .accessibilityIdentifier("remote.revoke.\(device.id)")
                 }
             }
