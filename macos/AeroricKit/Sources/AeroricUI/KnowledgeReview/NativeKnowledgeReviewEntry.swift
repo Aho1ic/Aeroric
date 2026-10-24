@@ -258,7 +258,7 @@ public struct NativeKnowledgeReviewRefusalView: View {
                 VStack(alignment: .leading, spacing: NativePanelGeometry.panelGap) {
                     Label("知识审阅未启动", systemImage: "exclamationmark.shield")
                         .font(.title2.bold())
-                        .foregroundStyle(Color.dsWarning)
+                        .foregroundStyle(AeroricColor.warning)
                         .accessibilityIdentifier("knowledgeReview.refusal.title")
                     Text("只读拒绝页 · 未进入知识样例或产品工作区")
                         .accessibilityIdentifier("knowledgeReview.refusal.notice")
@@ -268,7 +268,7 @@ public struct NativeKnowledgeReviewRefusalView: View {
                             .accessibilityIdentifier("knowledgeReview.refusal.reason.\(reason.rawValue)")
                     }
                     Text("请在获准测试环境中重新提供单一、有效的审阅请求。本页不修改偏好或业务资料。")
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                 }
                 .padding(NativePanelGeometry.panelInset * 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -276,7 +276,7 @@ public struct NativeKnowledgeReviewRefusalView: View {
         }
         .padding(NativePanelGeometry.panelInset)
         .frame(minWidth: 320, minHeight: 240)
-        .foregroundStyle(Color.dsText)
+        .foregroundStyle(AeroricColor.text)
         .background(NativePanelFoundation(preference: .classic))
     }
 }

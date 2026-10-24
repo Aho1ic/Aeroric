@@ -190,11 +190,11 @@ public struct NativeWorkArrangementsReviewRefusalView: View {
                 VStack(alignment: .leading, spacing: NativePanelGeometry.panelGap) {
                     Text("工作安排审阅未启动")
                         .font(.title2.bold())
-                        .foregroundStyle(Color.dsWarning)
+                        .foregroundStyle(AeroricColor.warning)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("workArrangementsReview.refusal.title")
                     Text("离线工作安排示例 · 全部为虚构数据")
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("workArrangementsReview.refusal.fixture")
                     Text("只读拒绝页 · 未进入工作安排样例或产品工作区，未启动宿主。")
@@ -206,7 +206,7 @@ public struct NativeWorkArrangementsReviewRefusalView: View {
                             .accessibilityIdentifier("workArrangementsReview.refusal.reason.\(reason.rawValue)")
                     }
                     Text("请在获准测试上下文中重新提供单一、有效的审阅请求。本页不修改偏好或业务资料，也不会创建数据目录。")
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("workArrangementsReview.refusal.isolation")
                 }
@@ -215,14 +215,14 @@ public struct NativeWorkArrangementsReviewRefusalView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(
-                Color.dsTextBackground,
+                AeroricColor.layer1,
                 in: RoundedRectangle(cornerRadius: NativePanelGeometry.panelRadius, style: .continuous)
             )
             .padding(NativePanelGeometry.panelInset)
         }
         .padding(NativePanelGeometry.panelInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .foregroundStyle(Color.dsText)
+        .foregroundStyle(AeroricColor.text)
         .background(NativePanelFoundation(preference: .classic))
     }
 }

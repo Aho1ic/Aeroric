@@ -84,7 +84,7 @@ public struct TaskDraftView: View {
             field("提示词") {
                 TextEditor(text: $draft.prompt)
                     .frame(minHeight: 72)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.dsBorder))
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(AeroricColor.separator2))
             }
             field("附件") {
                 HStack {
@@ -100,7 +100,7 @@ public struct TaskDraftView: View {
             ForEach(Array(validationErrors.sorted(by: { $0.key < $1.key })), id: \.key) { field, message in
                 Text("\(field): \(message)")
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
                     .accessibilityIdentifier("draft.error.\(field)")
             }
             HStack {

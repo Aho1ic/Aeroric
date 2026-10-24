@@ -61,7 +61,7 @@ public struct NativeTaskDeliverablesReviewView: View {
                 }
             }
             .padding(NativePanelGeometry.panelInset)
-            .foregroundStyle(Color.dsText)
+            .foregroundStyle(AeroricColor.text)
             .background {
                 NativePanelFoundation(
                     preference: surface,
@@ -69,7 +69,7 @@ public struct NativeTaskDeliverablesReviewView: View {
                 )
             }
             .animation(
-                reduceMotion ? nil : .easeInOut(duration: DSMotion.fast),
+                reduceMotion ? nil : .easeInOut(duration: AeroricMotion.quick),
                 value: store.selectedVersionID
             )
             .transaction { transaction in
@@ -89,13 +89,13 @@ public struct NativeTaskDeliverablesReviewView: View {
                     .font(.title2.bold())
                     .accessibilityIdentifier("taskDeliverablesReview.task")
                 Text(TaskDeliverablesReviewFixtures.offlineNotice)
-                    .font(.system(size: DSTypography.meta, weight: .semibold))
-                    .foregroundStyle(Color.dsWarning)
+                    .font(.system(size: AeroricType.secondary, weight: .semibold))
+                    .foregroundStyle(AeroricColor.warning)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("taskDeliverablesReview.offlineNotice")
                 Text(TaskDeliverablesReviewFixtures.acceptanceBoundary)
-                    .font(.system(size: DSTypography.meta))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("taskDeliverablesReview.acceptanceBoundary")
             }
@@ -115,8 +115,8 @@ public struct NativeTaskDeliverablesReviewView: View {
                 }
             }
             Text(store.scenarioSummary)
-                .font(.system(size: DSTypography.meta))
-                .foregroundStyle(Color.dsTextSecondary)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("taskDeliverablesReview.scenario.instruction")
         }
@@ -158,7 +158,7 @@ public struct NativeTaskDeliverablesReviewView: View {
                 .accessibilityIdentifier("taskDeliverablesReview.collection.title")
             if store.visibleDeliverables.isEmpty {
                 Text("暂无已提交成果；不会编造安装包或成果。")
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("taskDeliverablesReview.collection.empty")
             } else {
@@ -168,11 +168,11 @@ public struct NativeTaskDeliverablesReviewView: View {
                             Text(item.title)
                                 .lineLimit(2)
                             Text("\(item.kind.title) · \(item.collectionState.title)")
-                                .font(.system(size: DSTypography.meta))
-                                .foregroundStyle(Color.dsTextSecondary)
+                                .font(.system(size: AeroricType.secondary))
+                                .foregroundStyle(AeroricColor.textSecondary)
                             Text("\(item.sourcePackage) · \(item.submittedBy)")
-                                .font(.system(size: DSTypography.meta))
-                                .foregroundStyle(Color.dsTextSecondary)
+                                .font(.system(size: AeroricType.secondary))
+                                .foregroundStyle(AeroricColor.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .tag(item.id)
@@ -192,8 +192,8 @@ public struct NativeTaskDeliverablesReviewView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.title)
                             Text(item.collectionState.title)
-                                .font(.system(size: DSTypography.meta))
-                                .foregroundStyle(Color.dsTextSecondary)
+                                .font(.system(size: AeroricType.secondary))
+                                .foregroundStyle(AeroricColor.textSecondary)
                             Button("明确加入示例清单") {
                                 _ = store.includeExampleTemporaryRecord()
                             }
@@ -208,8 +208,8 @@ public struct NativeTaskDeliverablesReviewView: View {
 
             if let selected = store.selectedDeliverable {
                 Text(selected.description)
-                    .font(.system(size: DSTypography.meta))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("taskDeliverablesReview.collection.description")
                 ViewThatFits(in: .horizontal) {
@@ -243,8 +243,8 @@ public struct NativeTaskDeliverablesReviewView: View {
                 DisclosureGroup("已移出清单 · 原事实保留") {
                     ForEach(store.deliverables.filter { $0.collectionState == .hidden }) { item in
                         Text("\(item.title) · \(item.collectionState.title)")
-                            .font(.system(size: DSTypography.meta))
-                            .foregroundStyle(Color.dsTextSecondary)
+                            .font(.system(size: AeroricType.secondary))
+                            .foregroundStyle(AeroricColor.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -253,7 +253,7 @@ public struct NativeTaskDeliverablesReviewView: View {
     }
 
     private var organizationEditor: some View {
-        VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+        VStack(alignment: .leading, spacing: AeroricSpace.m) {
             Text("本地整理草稿")
                 .font(.subheadline.weight(.semibold))
             TextField(
@@ -285,7 +285,7 @@ public struct NativeTaskDeliverablesReviewView: View {
             }
             .modifier(shortActionStyle)
         }
-        .padding(.top, DSSpacing.v(2))
+        .padding(.top, AeroricSpace.m)
         .accessibilityIdentifier("taskDeliverablesReview.organization.editor")
     }
 
@@ -316,13 +316,13 @@ public struct NativeTaskDeliverablesReviewView: View {
                         .font(.subheadline.weight(.semibold))
                         .accessibilityIdentifier("taskDeliverablesReview.version.selected")
                     Text("来源：\(version.source)")
-                        .font(.system(size: DSTypography.meta))
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(version.readback.title)
-                        .font(.system(size: DSTypography.meta, weight: .medium))
+                        .font(.system(size: AeroricType.secondary, weight: .medium))
                         .foregroundStyle(
-                            version.readback == .embedded ? Color.dsAccent : Color.dsWarning
+                            version.readback == .embedded ? AeroricColor.accent : AeroricColor.warning
                         )
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("taskDeliverablesReview.version.readback")
@@ -338,8 +338,8 @@ public struct NativeTaskDeliverablesReviewView: View {
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                             Text(current.note)
-                                .font(.system(size: DSTypography.meta))
-                                .foregroundStyle(Color.dsTextSecondary)
+                                .font(.system(size: AeroricType.secondary))
+                                .foregroundStyle(AeroricColor.textSecondary)
                         }
                         .accessibilityIdentifier("taskDeliverablesReview.currentWorkFile")
                     }
@@ -354,8 +354,8 @@ public struct NativeTaskDeliverablesReviewView: View {
                                     )
                                     .font(.subheadline.weight(.medium))
                                     Text(operation.detail)
-                                        .font(.system(size: DSTypography.meta))
-                                        .foregroundStyle(Color.dsTextSecondary)
+                                        .font(.system(size: AeroricType.secondary))
+                                        .foregroundStyle(AeroricColor.textSecondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
@@ -365,7 +365,7 @@ public struct NativeTaskDeliverablesReviewView: View {
                 }
             } else {
                 Text("请选择一个已收录成果。")
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
             }
         }
     }
@@ -378,24 +378,24 @@ public struct NativeTaskDeliverablesReviewView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(NativePanelGeometry.panelInset)
-                .background(Color.dsTextBackground, in: RoundedRectangle(cornerRadius: DSRadius.sm))
+                .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.s))
                 .overlay {
-                    RoundedRectangle(cornerRadius: DSRadius.sm)
+                    RoundedRectangle(cornerRadius: AeroricRadius.s)
                         .strokeBorder(
-                            Color.dsBorder,
+                            AeroricColor.separator2,
                             lineWidth: increaseContrast ? 1 : 0.5
                         )
                         .allowsHitTesting(false)
                 }
                 .accessibilityIdentifier("taskDeliverablesReview.reading.content")
         } else {
-            VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+            VStack(alignment: .leading, spacing: AeroricSpace.m) {
                 Text("无法安全被动呈现该格式")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.dsWarning)
+                    .foregroundStyle(AeroricColor.warning)
                 Text(version.limitation ?? "没有可回看的内容；不调用外部解码器。")
-                    .font(.system(size: DSTypography.meta))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityIdentifier("taskDeliverablesReview.reading.unavailable")
@@ -404,22 +404,22 @@ public struct NativeTaskDeliverablesReviewView: View {
 
     private func checks(for version: TaskDeliverableVersion) -> some View {
         DisclosureGroup("检查适用性与限制") {
-            VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+            VStack(alignment: .leading, spacing: AeroricSpace.m) {
                 ForEach(version.checks) { check in
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(check.title) · \(check.result.title)")
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(checkColor(check.result))
                         Text("范围：\(check.scope)\n依据：\(check.evidence)")
-                            .font(.system(size: DSTypography.meta))
-                            .foregroundStyle(Color.dsTextSecondary)
+                            .font(.system(size: AeroricType.secondary))
+                            .foregroundStyle(AeroricColor.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 if let limitation = version.limitation {
                     Text("限制：\(limitation)")
-                        .font(.system(size: DSTypography.meta))
-                        .foregroundStyle(Color.dsWarning)
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -459,8 +459,8 @@ public struct NativeTaskDeliverablesReviewView: View {
                 .font(.headline)
                 .accessibilityIdentifier("taskDeliverablesReview.feedback.title")
             Text(store.draftSummary)
-                .font(.system(size: DSTypography.meta))
-                .foregroundStyle(Color.dsAccent)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.accent)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("taskDeliverablesReview.feedback.anchor")
 
@@ -486,7 +486,7 @@ public struct NativeTaskDeliverablesReviewView: View {
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 90, maxHeight: 150)
                 .padding(NativePanelGeometry.panelInset)
-                .background(Color.dsTextBackground, in: RoundedRectangle(cornerRadius: DSRadius.sm))
+                .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.s))
                 .accessibilityLabel("成果反馈草稿")
                 .accessibilityIdentifier("taskDeliverablesReview.feedback.editor")
 
@@ -524,7 +524,7 @@ public struct NativeTaskDeliverablesReviewView: View {
 
             if store.feedbacks.isEmpty {
                 Text("尚无发送意图；空草稿不会生成反馈。")
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .accessibilityIdentifier("taskDeliverablesReview.feedback.empty")
             } else {
                 NativeSelectionList(selection: feedbackSelection) {
@@ -532,8 +532,8 @@ public struct NativeTaskDeliverablesReviewView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("\(item.id) · \(item.recipient.title)")
                             Text("\(item.versionID) · \(item.location.title) · \(item.state.title)")
-                                .font(.system(size: DSTypography.meta))
-                                .foregroundStyle(Color.dsTextSecondary)
+                                .font(.system(size: AeroricType.secondary))
+                                .foregroundStyle(AeroricColor.textSecondary)
                         }
                         .tag(item.id)
                         .accessibilityIdentifier(
@@ -549,20 +549,20 @@ public struct NativeTaskDeliverablesReviewView: View {
                 }
             }
             Text(store.feedback)
-                .font(.system(size: DSTypography.meta))
-                .foregroundStyle(Color.dsTextSecondary)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("taskDeliverablesReview.feedback.status")
         }
     }
 
     private func feedbackDetails(_ item: TaskDeliverablesReviewFeedback) -> some View {
-        VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+        VStack(alignment: .leading, spacing: AeroricSpace.m) {
             Text(verbatim: item.text)
                 .fixedSize(horizontal: false, vertical: true)
             Text("原关联：\(item.deliverableID.rawValue) / \(item.versionID) / \(item.location.title)")
-                .font(.system(size: DSTypography.meta))
-                .foregroundStyle(Color.dsTextSecondary)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             ViewThatFits(in: .horizontal) {
                 HStack {
@@ -604,15 +604,15 @@ public struct NativeTaskDeliverablesReviewView: View {
                 }
             ) { event in
                 Text("\(event.kind.title)：\(event.detail)")
-                    .font(.system(size: DSTypography.meta))
+                    .font(.system(size: AeroricType.secondary))
                     .foregroundStyle(
-                        event.kind == .verification ? Color.dsAccent : Color.dsTextSecondary
+                        event.kind == .verification ? AeroricColor.accent : AeroricColor.textSecondary
                     )
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("taskDeliverablesReview.evidence.\(event.id)")
             }
         }
-        .padding(.top, DSSpacing.v(2))
+        .padding(.top, AeroricSpace.m)
     }
 
     private var continuationPanel: some View {
@@ -621,9 +621,9 @@ public struct NativeTaskDeliverablesReviewView: View {
                 .font(.headline)
                 .accessibilityIdentifier("taskDeliverablesReview.continuation.title")
             Text(store.continuationSummary)
-                .font(.system(size: DSTypography.meta))
+                .font(.system(size: AeroricType.secondary))
                 .foregroundStyle(
-                    store.conditions.blockers.isEmpty ? Color.dsAccent : Color.dsWarning
+                    store.conditions.blockers.isEmpty ? AeroricColor.accent : AeroricColor.warning
                 )
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("taskDeliverablesReview.continuation.summary")
@@ -633,8 +633,8 @@ public struct NativeTaskDeliverablesReviewView: View {
                         Text("\(round.id) · \(round.state.title)")
                             .font(.subheadline.weight(.medium))
                         Text(round.detail)
-                            .font(.system(size: DSTypography.meta))
-                            .foregroundStyle(Color.dsTextSecondary)
+                            .font(.system(size: AeroricType.secondary))
+                            .foregroundStyle(AeroricColor.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -653,15 +653,15 @@ public struct NativeTaskDeliverablesReviewView: View {
                         ? "授权、资源、监督、执行核实满足；仍不启动真实执行。"
                         : store.conditions.blockers.joined(separator: "\n")
                 )
-                .font(.system(size: DSTypography.meta))
-                .foregroundStyle(Color.dsTextSecondary)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
             DisclosureGroup("本窗口记录与示例依据") {
                 ForEach(store.records) { record in
                     Text("\(record.isExampleEvent ? "示例事实" : "本地意图")：\(record.text)")
-                        .font(.system(size: DSTypography.meta))
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -711,8 +711,8 @@ public struct NativeTaskDeliverablesReviewView: View {
             Text(
                 "系统辅助偏好始终优先；这些开关只强化本窗口示例，不修改系统设置。当前面板：\(effectiveSurface == .glass ? "Material" : "Classic")。"
             )
-            .font(.system(size: DSTypography.meta))
-            .foregroundStyle(Color.dsTextSecondary)
+            .font(.system(size: AeroricType.secondary))
+            .foregroundStyle(AeroricColor.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("taskDeliverablesReview.appearance.boundary")
         }
@@ -800,9 +800,9 @@ public struct NativeTaskDeliverablesReviewView: View {
 
     private func checkColor(_ result: TaskCheckResult) -> Color {
         switch result {
-        case .passed: .dsSuccess
-        case .pending, .unknown: .dsWarning
-        case .notRun: .dsTextSecondary
+        case .passed: AeroricColor.success
+        case .pending, .unknown: AeroricColor.warning
+        case .notRun: AeroricColor.textSecondary
         }
     }
 }

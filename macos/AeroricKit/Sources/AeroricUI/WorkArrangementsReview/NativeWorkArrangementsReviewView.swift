@@ -79,7 +79,7 @@ public struct NativeWorkArrangementsReviewView: View {
         WAReviewPanel(title: "星图项目 · 虚构工作安排", id: "header", presentation: presentation) {
             WAReviewText(
                 WorkArrangementsReviewFixtures.disclaimer, id: "disclaimer",
-                color: .dsAccent
+                color: AeroricColor.accent
             )
             HStack {
                 Menu {
@@ -170,7 +170,7 @@ public struct NativeWorkArrangementsReviewView: View {
             selectionList
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
-                .background(Color.dsTextBackground)
+                .background(AeroricColor.layer1)
                 .frame(height: store.section == .rule ? 120 : 300)
             WAReviewActions {
                 WAReviewAction("新建目标", id: "todo.new", presentation: presentation) {
@@ -194,14 +194,14 @@ public struct NativeWorkArrangementsReviewView: View {
                 get: { store.selectedTodoID }, set: { store.selectedTodoID = $0 }
             )) {
                 ForEach(store.todos) { todo in
-                    VStack(alignment: .leading, spacing: DSSpacing.v(1)) {
+                    VStack(alignment: .leading, spacing: AeroricSpace.xs) {
                         Text(todo.title)
                             .accessibilityIdentifier("workArrangementsReview.todo.\(todo.id).title")
                         Text("\(todo.source.rawValue) · \(todo.intent.rawValue)")
                             .font(.caption)
                             .accessibilityIdentifier("workArrangementsReview.todo.\(todo.id).summary")
                     }
-                    .padding(.vertical, DSSpacing.v(1))
+                    .padding(.vertical, AeroricSpace.xs)
                     .tag(todo.id)
                 }
             }
@@ -210,20 +210,20 @@ public struct NativeWorkArrangementsReviewView: View {
                 get: { store.selectedRunID }, set: { store.selectedRunID = $0 }
             )) {
                 ForEach(store.executions) { run in
-                    VStack(alignment: .leading, spacing: DSSpacing.v(1)) {
+                    VStack(alignment: .leading, spacing: AeroricSpace.xs) {
                         Text(run.basis.goal)
                             .accessibilityIdentifier("workArrangementsReview.run.\(run.id).title")
                         Text("\(run.id) · \(run.phase.rawValue)")
                             .font(.caption)
                             .accessibilityIdentifier("workArrangementsReview.run.\(run.id).summary")
                     }
-                    .padding(.vertical, DSSpacing.v(1))
+                    .padding(.vertical, AeroricSpace.xs)
                     .tag(run.id)
                 }
             }
         case .rule:
             NativeSelectionList(selection: $selectedRuleID) {
-                VStack(alignment: .leading, spacing: DSSpacing.v(1)) {
+                VStack(alignment: .leading, spacing: AeroricSpace.xs) {
                     Text("星图项目范围规则 · v\(store.rule.revision)")
                         .accessibilityIdentifier("workArrangementsReview.rule.row.title")
                     Text(store.rule.enabled ? "已启用（示例）" : "尚未启用")
@@ -300,7 +300,7 @@ private struct WAReviewTodoDetail: View {
                     "规则范围预览：\(store.previewReason(for: todo) ?? "条件匹配；匹配本身不授予运行权")",
                     id: "todo.detail.preview"
                 )
-                WAReviewText(itemBlockers, id: "todo.detail.blockers", color: .dsWarning)
+                WAReviewText(itemBlockers, id: "todo.detail.blockers", color: AeroricColor.warning)
             }
             WAReviewActions {
                 WAReviewAction("交给 Agent（示例）", id: "todo.assign", presentation: presentation) {
@@ -349,7 +349,7 @@ private struct WAReviewTodoDetail: View {
                 WAReviewText(
                     store.isTechnicallyComplete(todo.id) ? "技术完成（示例）" : "技术核验未齐 · 执行结束不等于完成",
                     id: "todo.proof.technical",
-                    color: store.isTechnicallyComplete(todo.id) ? .dsSuccess : .dsWarning
+                    color: store.isTechnicallyComplete(todo.id) ? AeroricColor.success : AeroricColor.warning
                 )
                 WAReviewText(
                     "核验关联：\(todo.proof.runID ?? "尚无")\n整合：\(todo.proof.integration.rawValue)\n"
@@ -379,7 +379,7 @@ private struct WAReviewTodoDetail: View {
                 "先在关联执行中载入结束及安全收束，再载入目标核验。失败、停止、未知及缺监督均不能替代成功依据。",
                 id: "todo.proof.help"
             )
-            .background(Color.dsTextBackground)
+            .background(AeroricColor.layer1)
         }
     }
 
@@ -424,7 +424,7 @@ private struct WAReviewRunDetail: View {
     var body: some View {
         WAReviewPanel(title: "执行详情 · \(run.id)", id: "run.detail", presentation: presentation) {
             WAReviewReading(presentation: presentation) {
-                WAReviewText(run.phase.rawValue, id: "run.detail.phase", color: .dsAccent)
+                WAReviewText(run.phase.rawValue, id: "run.detail.phase", color: AeroricColor.accent)
                 WAReviewText(
                     "关联目标：\(store.todo(run.todoID)?.title ?? "直接执行 · 无需待办")\n\(run.basis.summary)",
                     id: "run.detail.basis"
@@ -455,7 +455,7 @@ private struct WAReviewRunDetail: View {
                 "退出、请求停止或未知回执均不证明安全释放；原执行、副作用与相关占用须载入安全收束记录。历史与成果不回滚，在途原目标及配置不被规则编辑静默替换。",
                 id: "run.detail.boundary"
             )
-            .background(Color.dsTextBackground)
+            .background(AeroricColor.layer1)
             if let todoID = run.todoID {
                 WAReviewAction("查看关联目标", id: "run.todo.open", presentation: presentation) {
                     store.selectedTodoID = todoID
@@ -541,12 +541,12 @@ private struct WAReviewContext: View {
         WAReviewPanel(title: "当前依据、阻塞与事件", id: "context", presentation: presentation) {
             WAReviewReading(presentation: presentation) {
                 WAReviewText(WorkArrangementsReviewFixtures.explanation(for: store.scenario), id: "context.explanation")
-                WAReviewText(store.message, id: "context.message", color: .dsAccent)
+                WAReviewText(store.message, id: "context.message", color: AeroricColor.accent)
                 WAReviewText(
                     store.currentBlockers.isEmpty
                         ? "当前规则准入无阻塞；这不是已运行或目标已完成。"
                         : "当前规则阻塞：\n" + store.currentBlockers.joined(separator: "\n"),
-                    id: "context.blockers", color: .dsWarning
+                    id: "context.blockers", color: AeroricColor.warning
                 )
                 WAReviewText(launchDescription, id: "context.launchIntent")
                 WAReviewText(
@@ -579,7 +579,7 @@ private struct WAReviewContext: View {
                 "仅本窗口内存。App、Preview、真实交互/材质、AX/键盘、窄窗与关闭重开生命周期均 NOT RUN / DEFERRED。",
                 id: "context.deferred"
             )
-            .background(Color.dsTextBackground)
+            .background(AeroricColor.layer1)
         }
     }
 
@@ -594,14 +594,14 @@ private struct WAReviewContext: View {
         switch store.scenario {
         case .w1:
             WAReviewText("目标中审阅两次不同结果及独立验收；执行列表保留无需待办的直接执行。", id: "records.w1")
-                .background(Color.dsTextBackground)
+                .background(AeroricColor.layer1)
         case .w2:
             WAReviewAction("载入新增示例记录", id: "records.arrival", presentation: presentation) {
                 store.loadArrivalRecord()
             }
         case .w3:
             WAReviewText("在规则详情分别暂停、请求停止及明确恢复；在执行详情载入未知或安全收束回执。", id: "records.w3")
-                .background(Color.dsTextBackground)
+                .background(AeroricColor.layer1)
         case .w4:
             WAReviewActions {
                 WAReviewAction("载入撤权示例记录", id: "records.revocation", presentation: presentation) {
@@ -806,7 +806,7 @@ private struct WAReviewTodoSheet: View {
                 "来源：\(draft.source.rawValue)\n\(draft.category.rawValue)\n创建不授予任何执行权；取消直接丢弃本地草稿。",
                 id: "draft.todo.boundary"
             )
-            WAReviewText(feedback, id: "draft.todo.feedback", color: .dsWarning)
+            WAReviewText(feedback, id: "draft.todo.feedback", color: AeroricColor.warning)
         } actions: {
             Button("取消", role: .cancel) { dismiss() }
                 .keyboardShortcut(.cancelAction)
@@ -864,7 +864,7 @@ private struct WAReviewRuleSheet: View {
                     )
                 }
             }
-            WAReviewText(feedback, id: "draft.rule.feedback", color: .dsWarning)
+            WAReviewText(feedback, id: "draft.rule.feedback", color: AeroricColor.warning)
         } actions: {
             Button("取消", role: .cancel) { dismiss() }
                 .keyboardShortcut(.cancelAction)
@@ -948,7 +948,7 @@ private struct WAReviewBatchSheet: View {
                 "已选 \(draft.selected.count) 项，排除 \(draft.excluded.count) 项；确认时 Store 重核本窗口 generation、对象集合与规则版本。",
                 id: "draft.batch.count"
             )
-            WAReviewText(feedback, id: "draft.batch.feedback", color: .dsWarning)
+            WAReviewText(feedback, id: "draft.batch.feedback", color: AeroricColor.warning)
         } actions: {
             Button("取消", role: .cancel) { dismiss() }
                 .keyboardShortcut(.cancelAction)
@@ -995,7 +995,7 @@ private struct WAReviewPresentation {
     let reduceMotion: Bool
 
     var animation: Animation? {
-        let duration = DSMotion.duration(DSMotion.normal, reduceMotion: reduceMotion)
+        let duration = AeroricMotion.duration(AeroricMotion.standard, reduceMotion: reduceMotion)
         return reduceMotion ? nil : .easeInOut(duration: duration)
     }
 }
@@ -1003,9 +1003,9 @@ private struct WAReviewPresentation {
 private struct WAReviewText: View {
     let text: String
     let id: String
-    var color: Color = .dsText
+    var color: Color = AeroricColor.text
 
-    init(_ text: String, id: String, color: Color = .dsText) {
+    init(_ text: String, id: String, color: Color = AeroricColor.text) {
         self.text = text
         self.id = id
         self.color = color
@@ -1062,11 +1062,11 @@ private struct WAReviewReading<Content: View>: View {
         VStack(alignment: .leading, spacing: NativePanelGeometry.panelGap) { content }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(NativePanelGeometry.panelInset)
-            .background(Color.dsTextBackground, in: RoundedRectangle(cornerRadius: DSRadius.sm))
+            .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.s))
             .overlay {
                 let outline = NativePanelGeometry.outline(increasedContrast: presentation.increaseContrast)
-                RoundedRectangle(cornerRadius: DSRadius.sm)
-                    .strokeBorder(Color.dsBorder.opacity(outline.opacity), lineWidth: outline.width)
+                RoundedRectangle(cornerRadius: AeroricRadius.s)
+                    .strokeBorder(AeroricColor.separator2.opacity(outline.opacity), lineWidth: outline.width)
                     .allowsHitTesting(false)
             }
     }
@@ -1130,7 +1130,7 @@ private struct WAReviewAction: View {
             Text(title).fixedSize(horizontal: false, vertical: true)
         }
         .modifier(WAReviewShortButtonStyle(presentation: presentation))
-        .tint(destructive ? Color.dsDanger : Color.dsAccent)
+        .tint(destructive ? AeroricColor.danger : AeroricColor.accent)
         .disabled(!enabled)
         .accessibilityIdentifier("workArrangementsReview.\(id)")
     }
@@ -1177,7 +1177,7 @@ private struct WAReviewSheetLayout<Content: View, Actions: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: NativePanelGeometry.panelGap) {
             WAReviewText(title, id: "\(id).heading").font(.headline)
-            WAReviewText(WorkArrangementsReviewFixtures.disclaimer, id: "\(id).disclaimer", color: .dsAccent)
+            WAReviewText(WorkArrangementsReviewFixtures.disclaimer, id: "\(id).disclaimer", color: AeroricColor.accent)
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: NativePanelGeometry.panelGap) { content }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1187,7 +1187,7 @@ private struct WAReviewSheetLayout<Content: View, Actions: View>: View {
             WAReviewActions { actions }
         }
         .padding(NativePanelGeometry.panelInset)
-        .background(Color.dsTextBackground)
+        .background(AeroricColor.layer1)
         .transaction { transaction in
             if presentation.reduceMotion {
                 transaction.animation = nil

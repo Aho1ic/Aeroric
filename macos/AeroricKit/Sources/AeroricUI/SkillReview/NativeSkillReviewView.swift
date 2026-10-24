@@ -68,8 +68,8 @@ public struct NativeSkillReviewView: View {
                 }
             }
         }
-        .font(.system(size: DSTypography.body))
-        .foregroundStyle(Color.dsText)
+        .font(.system(size: AeroricType.body))
+        .foregroundStyle(AeroricColor.text)
         .frame(minWidth: 360, minHeight: 420)
         .background {
             NativePanelFoundation(preference: surface, reduceTransparency: transparency).ignoresSafeArea()
@@ -97,7 +97,7 @@ public struct NativeSkillReviewView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("离线技能审阅 · 全部为示例")
                 .font(.headline)
-                .foregroundStyle(Color.dsAccent)
+                .foregroundStyle(AeroricColor.accent)
                 .accessibilityIdentifier("skillReview.notice")
             ViewThatFits(in: .horizontal) {
                 HStack { projectPicker; headerActions }
@@ -165,7 +165,7 @@ public struct NativeSkillReviewView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(item.proposal.title + "（示例）").fontWeight(.medium)
                         Text(item.contentState == .discarded ? item.contentState.title : item.consentTitle)
-                            .font(.caption).foregroundStyle(Color.dsTextSecondary)
+                            .font(.caption).foregroundStyle(AeroricColor.textSecondary)
                     }
                     .tag(item.id)
                     .accessibilityElement(children: .combine)
@@ -177,7 +177,7 @@ public struct NativeSkillReviewView: View {
             .frame(height: 320)
         }
         Text("统一管理不等于所有项目启用；本窗口不管理真实技能。")
-            .font(.caption).foregroundStyle(Color.dsTextSecondary)
+            .font(.caption).foregroundStyle(AeroricColor.textSecondary)
     }
 
     @ViewBuilder private var detail: some View {
@@ -334,7 +334,7 @@ public struct NativeSkillReviewView: View {
             action("Stop：停止当前工作意图（示例）", "work.stop", enabled: store.canMutateProject) { store.requestStop() }
             readout("work.stopState", "Stop 状态（示例）", store.stopRequested ? "已要求停止；不得再继续选用。" : "未请求 Stop。")
             Text("技能后续使用受阻不等于任务完成/失败；不自动 fallback、重启或回放，不承诺清除已消费上下文。")
-                .font(.caption).foregroundStyle(Color.dsTextSecondary)
+                .font(.caption).foregroundStyle(AeroricColor.textSecondary)
         }
     }
 
@@ -434,7 +434,7 @@ public struct NativeSkillReviewView: View {
                 .padding(8)
         }
         .frame(minHeight: 120, maxHeight: 240)
-        .background(Color.dsTextBackground, in: RoundedRectangle(cornerRadius: DSRadius.sm))
+        .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.s))
     }
 
     private func readout(_ id: String, _ label: String, _ value: String,
@@ -442,7 +442,7 @@ public struct NativeSkillReviewView: View {
         Label {
             Text(label + "：" + value).fixedSize(horizontal: false, vertical: true)
         } icon: { Image(systemName: symbol ?? tone.symbol) }
-            .font(.system(size: DSTypography.meta))
+            .font(.system(size: AeroricType.secondary))
             .foregroundStyle(tone.color)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(label)).accessibilityValue(Text(value))
@@ -460,11 +460,11 @@ private enum SkillReviewTone {
     case normal, accent, success, warning, danger
     var color: Color {
         switch self {
-        case .normal: .dsTextSecondary
-        case .accent: .dsAccent
-        case .success: .dsSuccess
-        case .warning: .dsWarning
-        case .danger: .dsDanger
+        case .normal: AeroricColor.textSecondary
+        case .accent: AeroricColor.accent
+        case .success: AeroricColor.success
+        case .warning: AeroricColor.warning
+        case .danger: AeroricColor.danger
         }
     }
     var symbol: String {
@@ -514,7 +514,7 @@ private struct SkillReviewEditSheet: View {
                         .textFieldStyle(.roundedBorder).accessibilityIdentifier("skillReview.edit.name")
                     TextEditor(text: $draft.version.content)
                         .frame(minHeight: 180)
-                        .background(Color.dsTextBackground)
+                        .background(AeroricColor.layer1)
                         .accessibilityLabel("方法正文（示例）")
                         .accessibilityIdentifier("skillReview.edit.content")
                     TextField("适用前提（示例）", text: $draft.version.conditions)
@@ -529,13 +529,13 @@ private struct SkillReviewEditSheet: View {
                               glass: surface == .glass) { store.apply(draft) }.keyboardShortcut(.defaultAction)
         }
         .padding(16)
-        .background(Color.dsTextBackground)
+        .background(AeroricColor.layer1)
     }
 }
 
 enum SkillReviewMotionPolicy {
     static func transaction(reduceMotion: Bool) -> Transaction {
-        var value = Transaction(animation: reduceMotion ? nil : .easeInOut(duration: DSMotion.duration(DSMotion.fast, reduceMotion: false)))
+        var value = Transaction(animation: reduceMotion ? nil : .easeInOut(duration: AeroricMotion.duration(AeroricMotion.quick, reduceMotion: false)))
         value.disablesAnimations = reduceMotion
         return value
     }

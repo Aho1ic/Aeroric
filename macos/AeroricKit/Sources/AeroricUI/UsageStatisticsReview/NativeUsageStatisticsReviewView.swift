@@ -32,8 +32,8 @@ public struct NativeUsageStatisticsReviewView: View {
             : .system(.caption, design: .monospaced)
     }
     private let partNames = ["新增输入", "输出", "缓存读取", "未拆分"]
-    private let partColors: [Color] = [.dsAccent, Color(nsColor: .systemPurple),
-                                       Color(nsColor: .systemTeal), .dsTextMuted]
+    private let partColors: [Color] = [AeroricColor.accent, Color(nsColor: .systemPurple),
+                                       Color(nsColor: .systemTeal), AeroricColor.textTertiary]
 
     public var body: some View {
         GeometryReader { geometry in
@@ -57,12 +57,12 @@ public struct NativeUsageStatisticsReviewView: View {
                     .padding(24)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .background(Color.dsCanvas, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .background(AeroricColor.canvas, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
             .padding(NativePanelGeometry.panelInset)
         }
         .font(.system(size: 13))
-        .foregroundStyle(Color.dsText)
+        .foregroundStyle(AeroricColor.text)
         .background(NativePanelFoundation(preference: surface, reduceTransparency: presentation.opaque))
         .transaction {
             if presentation.disableAnimation { $0.animation = nil; $0.disablesAnimations = true }
@@ -84,17 +84,17 @@ public struct NativeUsageStatisticsReviewView: View {
             note("设置视觉上下文；其他分类未接入。\n独立离线样例，不是正式设置窗口。", "settings.boundary")
                 .padding(12)
         }
-        .background(Color.dsSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(AeroricColor.canvas, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var heading: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("设置 / 使用统计").font(.caption).foregroundStyle(Color.dsTextSecondary)
+            Text("设置 / 使用统计").font(.caption).foregroundStyle(AeroricColor.textSecondary)
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("使用统计").font(.system(size: 22, weight: .semibold))
                         .accessibilityIdentifier(id("title"))
-                    Text("用量、来源与覆盖，按需查看。").foregroundStyle(Color.dsTextSecondary)
+                    Text("用量、来源与覆盖，按需查看。").foregroundStyle(AeroricColor.textSecondary)
                 }
                 Spacer()
                 NativeIconButton(systemImage: "arrow.clockwise", label: "刷新内存统计",
@@ -151,18 +151,18 @@ public struct NativeUsageStatisticsReviewView: View {
     private func metric(_ title: String, _ value: String, _ detail: String, _ key: String,
                         _ icon: String, compact: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: icon).font(.caption).foregroundStyle(Color.dsTextSecondary)
+            Label(title, systemImage: icon).font(.caption).foregroundStyle(AeroricColor.textSecondary)
             Text(value)
                 .font(.system(size: compact ? 18 : 27, weight: .medium, design: .rounded)).monospacedDigit()
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier(id("card.\(key).value"))
-            Text(detail).font(.system(size: 10)).foregroundStyle(Color.dsTextSecondary)
+            Text(detail).font(.system(size: 10)).foregroundStyle(AeroricColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14).frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)
-        .background(Color.dsSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(AeroricColor.canvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(Color.dsBorder, lineWidth: presentation.strongContrast ? 1 : 0.5))
+            .strokeBorder(AeroricColor.separator2, lineWidth: presentation.strongContrast ? 1 : 0.5))
     }
 
     private var chartPanel: some View {
@@ -199,7 +199,7 @@ public struct NativeUsageStatisticsReviewView: View {
                 HStack(spacing: 10) {
                     Text(row.title).font(technicalFont).frame(width: 110, alignment: .leading)
                     ProgressView(value: Double(row.tokens), total: Double(max(store.breakdown.map(\.tokens).max() ?? 1, 1)))
-                        .tint(Color.dsAccent)
+                        .tint(AeroricColor.accent)
                     Text(USReviewFormat.number(row.tokens)).font(.system(.body, design: .rounded)).monospacedDigit()
                         .frame(width: 62, alignment: .trailing)
                 }.accessibilityIdentifier(id("breakdown.\(row.id)"))
@@ -220,13 +220,13 @@ public struct NativeUsageStatisticsReviewView: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("\(usage.id) · \(usage.executor)").font(technicalFont)
-                        Text(usage.relation).font(.caption).foregroundStyle(Color.dsTextSecondary)
+                        Text(usage.relation).font(.caption).foregroundStyle(AeroricColor.textSecondary)
                         Text("\(usage.api ?? "缺 API") / \(usage.model ?? "缺模型") · \(usage.revision)").font(technicalFont)
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 4) {
                         Text(USReviewFormat.number(usage.tokens.value)).monospacedDigit()
-                        Text(usage.tokens.basis.rawValue).font(.caption).foregroundStyle(Color.dsTextSecondary)
+                        Text(usage.tokens.basis.rawValue).font(.caption).foregroundStyle(AeroricColor.textSecondary)
                     }
                 }.accessibilityIdentifier(id("detail.\(usage.id)"))
                 Divider()
@@ -304,7 +304,7 @@ public struct NativeUsageStatisticsReviewView: View {
                         Text("来源报告：\(money.display) · 已报告，未核对 · \(money.source)")
                     }
                     if snapshot.costs.amounts.isEmpty && snapshot.costs.reported.isEmpty {
-                        Text("费用尚未取得；不是零").foregroundStyle(Color.dsTextSecondary)
+                        Text("费用尚未取得；不是零").foregroundStyle(AeroricColor.textSecondary)
                     }
                     note("截至 \(snapshot.asOf ?? "尚无成功值") · \(snapshot.price.version)；旧快照值拷贝不暗改", "snapshot.\(snapshot.id)")
                 }
@@ -376,7 +376,7 @@ public struct NativeUsageStatisticsReviewView: View {
             note(store.resourcePreset.title, "resource.status")
             note(store.resourceProjection.independentWork, "independentWork")
             ForEach(Array(store.resourceProjection.reasons.enumerated()), id: \.offset) { index, reason in
-                Label(reason, systemImage: "exclamationmark.triangle").foregroundStyle(Color.dsWarning)
+                Label(reason, systemImage: "exclamationmark.triangle").foregroundStyle(AeroricColor.warning)
                     .accessibilityIdentifier(id("resource.reason.\(index)"))
             }
             valueRow("原执行", store.resourceProjection.execution.rawValue)
@@ -452,13 +452,13 @@ public struct NativeUsageStatisticsReviewView: View {
     private func id(_ key: String) -> String { "usReview." + key }
     private func note(_ value: String, _ key: String) -> some View {
         Text(value).font(.caption)
-            .foregroundStyle(presentation.strongContrast ? Color.dsText : Color.dsTextSecondary)
+            .foregroundStyle(presentation.strongContrast ? AeroricColor.text : AeroricColor.textSecondary)
             .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             .accessibilityIdentifier(id(key))
     }
     private func valueRow(_ title: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(Color.dsTextSecondary)
+            Text(title).font(.caption).foregroundStyle(AeroricColor.textSecondary)
             Text(value).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
         }
     }

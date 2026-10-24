@@ -228,7 +228,7 @@ public struct NativeVisualFoundationReviewView: View {
     }
 
     private var motionDuration: TimeInterval {
-        DSMotion.duration(DSMotion.normal, reduceMotion: effectiveReduceMotion)
+        AeroricMotion.duration(AeroricMotion.standard, reduceMotion: effectiveReduceMotion)
     }
 
     private var effectiveSurface: SurfacePreference {
@@ -246,8 +246,8 @@ public struct NativeVisualFoundationReviewView: View {
             harnessReadout
             sampleArea
         }
-        .font(.system(size: DSTypography.body))
-        .foregroundStyle(Color.dsText)
+        .font(.system(size: AeroricType.body))
+        .foregroundStyle(AeroricColor.text)
         // Fixture dimensions describe the standard window's OUTER frame.
         // A 600pt content minimum would add the native titlebar on top.
         .frame(minWidth: 400)
@@ -331,8 +331,8 @@ public struct NativeVisualFoundationReviewView: View {
         VStack(alignment: .leading, spacing: NativePanelGeometry.panelInset) {
             HStack(spacing: 4) {
                 Text("项目")
-                    .font(.system(size: DSTypography.label, weight: .semibold))
-                    .foregroundStyle(Color.dsTextMuted)
+                    .font(.system(size: AeroricType.caption, weight: .semibold))
+                    .foregroundStyle(AeroricColor.textTertiary)
                 Spacer(minLength: 4)
                 NativeIconButton(systemImage: "plus",
                                  label: "新建任务样本",
@@ -347,7 +347,7 @@ public struct NativeVisualFoundationReviewView: View {
             NativeSelectionList(selection: $selectedRow) {
                 ForEach(Self.sidebarRows, id: \.id) { row in
                     Text(row.title)
-                        .font(.system(size: DSTypography.body))
+                        .font(.system(size: AeroricType.body))
                         .lineLimit(1)
                         .frame(height: NativePanelGeometry.navigationRowHeight, alignment: .leading)
                         .tag(row.id)
@@ -364,7 +364,7 @@ public struct NativeVisualFoundationReviewView: View {
         VStack(alignment: .leading, spacing: NativePanelGeometry.panelInset) {
             HStack(spacing: 8) {
                 Text("工作区样本")
-                    .font(.system(size: DSTypography.title, weight: .semibold))
+                    .font(.system(size: AeroricType.title, weight: .semibold))
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 NativeIconButton(systemImage: "arrow.clockwise",
@@ -378,11 +378,11 @@ public struct NativeVisualFoundationReviewView: View {
             }
             TextField("单行输入样本", text: $filterText)
                 .textFieldStyle(.plain)
-                .padding(.horizontal, DSSpacing.v(3))
-                .padding(.vertical, DSSpacing.v(2))
-                .background(Color.dsTextBackground, in: Capsule())
+                .padding(.horizontal, AeroricSpace.l)
+                .padding(.vertical, AeroricSpace.m)
+                .background(AeroricColor.layer1, in: Capsule())
                 .overlay {
-                    Capsule().strokeBorder(Color.dsBorder, lineWidth: 0.5)
+                    Capsule().strokeBorder(AeroricColor.separator2, lineWidth: 0.5)
                         .allowsHitTesting(false)
                 }
                 .accessibilityLabel("单行输入样本")
@@ -390,14 +390,14 @@ public struct NativeVisualFoundationReviewView: View {
             // Multi-line input on an opaque reading surface — the same rule
             // the terminal/editor panes follow (no per-row translucency).
             TextEditor(text: $draftText)
-                .font(.system(size: DSTypography.body))
+                .font(.system(size: AeroricType.body))
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 64)
                 .padding(NativePanelGeometry.panelInset)
-                .background(Color.dsTextBackground, in: readingShape)
+                .background(AeroricColor.layer1, in: readingShape)
                 .overlay {
                     readingShape
-                        .strokeBorder(Color.dsBorder.opacity(0.6), lineWidth: 0.5)
+                        .strokeBorder(AeroricColor.separator2.opacity(0.6), lineWidth: 0.5)
                         .allowsHitTesting(false)
                 }
                 .accessibilityLabel("多行输入样本")
@@ -406,7 +406,7 @@ public struct NativeVisualFoundationReviewView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Self.scrollRows, id: \.id) { row in
                         Text(row.title)
-                            .font(.system(size: DSTypography.meta))
+                            .font(.system(size: AeroricType.secondary))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .accessibilityIdentifier(row.identifier)
                     }
@@ -414,7 +414,7 @@ public struct NativeVisualFoundationReviewView: View {
             }
             .frame(maxHeight: .infinity)
             .padding(NativePanelGeometry.panelInset)
-            .background(Color.dsTextBackground, in: readingShape)
+            .background(AeroricColor.layer1, in: readingShape)
             // No identifier on the ScrollView itself: a container identifier
             // replaces its leaves' identifiers (G51), and the rows above must
             // stay individually queryable.
@@ -443,12 +443,12 @@ public struct NativeVisualFoundationReviewView: View {
                 }
                 .accessibilityIdentifier("review.motion.play")
                 Capsule(style: .continuous)
-                    .fill(Color.dsAccent.opacity(0.7))
+                    .fill(AeroricColor.accent.opacity(0.7))
                     .frame(width: pulseExpanded ? 72 : 16, height: 6)
                     .accessibilityHidden(true)
                 Text(lastAction)
-                    .font(.system(size: DSTypography.label))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .accessibilityLabel("最后操作")
                     .accessibilityValue(Text(lastAction))
                     .accessibilityIdentifier("review.action.last")
@@ -464,23 +464,23 @@ public struct NativeVisualFoundationReviewView: View {
     private var inspectorSample: some View {
         VStack(alignment: .leading, spacing: NativePanelGeometry.panelInset) {
             Text("检查器样本")
-                .font(.system(size: DSTypography.title, weight: .semibold))
+                .font(.system(size: AeroricType.title, weight: .semibold))
                 .lineLimit(1)
             ForEach(Self.inspectorRows, id: \.key) { row in
                 HStack(spacing: 8) {
                     Text(row.key)
-                        .font(.system(size: DSTypography.meta))
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.textSecondary)
                     Spacer(minLength: 4)
                     Text(row.value)
-                        .font(.system(size: DSTypography.meta))
+                        .font(.system(size: AeroricType.secondary))
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
             Text("已连接 · 样本")
-                .font(.system(size: DSTypography.label))
-                .foregroundStyle(Color.dsTextMuted)
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
         }
         .padding(NativePanelGeometry.panelInset)
     }
@@ -488,11 +488,11 @@ public struct NativeVisualFoundationReviewView: View {
     // MARK: - Harness (test injection, never product UI)
 
     private var harnessControls: some View {
-        VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+        VStack(alignment: .leading, spacing: AeroricSpace.m) {
             HStack {
                 Text("审阅控制（测试注入）")
-                    .font(.system(size: DSTypography.label, weight: .semibold))
-                    .foregroundStyle(Color.dsTextMuted)
+                    .font(.system(size: AeroricType.caption, weight: .semibold))
+                    .foregroundStyle(AeroricColor.textTertiary)
                 Spacer()
                 NativeIconButton(systemImage: "questionmark",
                                  label: "帮助样本",
@@ -505,25 +505,25 @@ public struct NativeVisualFoundationReviewView: View {
                     .disabled(true)
             }
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: DSSpacing.v(3)) {
+                HStack(spacing: AeroricSpace.l) {
                     samplePicker
                     surfacePicker
                     appearancePicker
                 }
-                VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+                VStack(alignment: .leading, spacing: AeroricSpace.m) {
                     samplePicker
-                    HStack(spacing: DSSpacing.v(2)) {
+                    HStack(spacing: AeroricSpace.m) {
                         surfacePicker
                         appearancePicker
                     }
                 }
             }
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: DSSpacing.v(3)) { injectionToggles }
-                VStack(alignment: .leading, spacing: DSSpacing.v(1)) { injectionToggles }
+                HStack(spacing: AeroricSpace.l) { injectionToggles }
+                VStack(alignment: .leading, spacing: AeroricSpace.xs) { injectionToggles }
             }
         }
-        .padding(DSSpacing.v(2))
+        .padding(AeroricSpace.m)
     }
 
     // Every adjacent choice reuses the shared system picker. Tests address
@@ -607,7 +607,7 @@ public struct NativeVisualFoundationReviewView: View {
                 leaf("review.focus.icon", "刷新按钮键盘焦点", refreshHasFocus ? "on" : "off")
                 leaf("review.process.pid", "审阅进程", String(ProcessInfo.processInfo.processIdentifier))
             }
-            .padding(.horizontal, DSSpacing.v(2))
+            .padding(.horizontal, AeroricSpace.m)
         }
         .frame(height: NativePanelGeometry.statusBarHeight)
     }
@@ -624,9 +624,9 @@ public struct NativeVisualFoundationReviewView: View {
 
     private func leaf(_ identifier: String, _ title: String, _ value: String) -> some View {
         Text("\(title)：\(value)")
-            .font(.system(size: DSTypography.label))
+            .font(.system(size: AeroricType.caption))
             .monospacedDigit()
-            .foregroundStyle(Color.dsTextSecondary)
+            .foregroundStyle(AeroricColor.textSecondary)
             .accessibilityLabel(Text(title))
             .accessibilityValue(Text(value))
             .accessibilityIdentifier(identifier)

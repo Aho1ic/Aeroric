@@ -196,7 +196,7 @@ private struct EvolutionReviewWindowSizer: NSViewRepresentable {
 enum EvolutionReviewMotionPolicy {
     static func transaction(reduceMotion: Bool) -> Transaction {
         var transaction = Transaction(animation: reduceMotion ? nil : .easeInOut(
-            duration: DSMotion.duration(DSMotion.normal, reduceMotion: false)
+            duration: AeroricMotion.duration(AeroricMotion.standard, reduceMotion: false)
         ))
         transaction.disablesAnimations = reduceMotion
         return transaction
@@ -248,7 +248,7 @@ public struct NativeEvolutionReviewView: View {
     }
 
     private var motionDuration: TimeInterval {
-        DSMotion.duration(DSMotion.normal, reduceMotion: effectiveReduceMotion)
+        AeroricMotion.duration(AeroricMotion.standard, reduceMotion: effectiveReduceMotion)
     }
 
     /// Narrow windows go vertical and open the phase selector / details on
@@ -270,8 +270,8 @@ public struct NativeEvolutionReviewView: View {
             band
             readout
         }
-        .font(.system(size: DSTypography.body))
-        .foregroundStyle(Color.dsText)
+        .font(.system(size: AeroricType.body))
+        .foregroundStyle(AeroricColor.text)
         .frame(minWidth: 380)
         .background {
             NativePanelFoundation(preference: surface,
@@ -302,35 +302,35 @@ public struct NativeEvolutionReviewView: View {
 
     private var header: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: DSSpacing.v(3)) { headerIdentity; Spacer(minLength: 8); headerControls }
-            VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+            HStack(spacing: AeroricSpace.l) { headerIdentity; Spacer(minLength: 8); headerControls }
+            VStack(alignment: .leading, spacing: AeroricSpace.m) {
                 headerIdentity
                 headerControls
             }
         }
-        .padding(DSSpacing.v(2))
+        .padding(AeroricSpace.m)
     }
 
     private var headerIdentity: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(store.sample.taskName)
-                .font(.system(size: DSTypography.title, weight: .semibold))
+                .font(.system(size: AeroricType.title, weight: .semibold))
                 .lineLimit(1)
                 .accessibilityIdentifier("evolutionReview.taskName")
-            HStack(spacing: DSSpacing.v(2)) {
+            HStack(spacing: AeroricSpace.m) {
                 Text("离线审阅 · 非真实任务")
-                    .font(.system(size: DSTypography.label, weight: .semibold))
-                    .foregroundStyle(Color.dsWarning)
-                    .padding(.horizontal, DSSpacing.v(2))
+                    .font(.system(size: AeroricType.caption, weight: .semibold))
+                    .foregroundStyle(AeroricColor.warning)
+                    .padding(.horizontal, AeroricSpace.m)
                     .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.dsWarning.opacity(0.14)))
-                    .overlay(Capsule().strokeBorder(Color.dsWarning.opacity(0.5), lineWidth: 0.5))
+                    .background(Capsule().fill(AeroricColor.warning.opacity(0.14)))
+                    .overlay(Capsule().strokeBorder(AeroricColor.warning.opacity(0.5), lineWidth: 0.5))
                     .accessibilityLabel("离线审阅 · 非真实任务")
                     .accessibilityValue(Text("离线审阅 · 非真实任务"))
                     .accessibilityIdentifier("evolutionReview.offlineBadge")
                 Text("\(store.scenario.code) \(store.scenario.title)")
-                    .font(.system(size: DSTypography.label))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .lineLimit(1)
                     .accessibilityLabel("当前场景")
                     .accessibilityValue(Text("\(store.scenario.code) \(store.scenario.title)"))
@@ -341,8 +341,8 @@ public struct NativeEvolutionReviewView: View {
 
     private var headerControls: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: DSSpacing.v(2)) { scenarioControls; appearanceControls }
-            VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+            HStack(spacing: AeroricSpace.m) { scenarioControls; appearanceControls }
+            VStack(alignment: .leading, spacing: AeroricSpace.m) {
                 scenarioControls
                 appearanceControls
             }
@@ -350,7 +350,7 @@ public struct NativeEvolutionReviewView: View {
     }
 
     private var scenarioControls: some View {
-        HStack(spacing: DSSpacing.v(2)) {
+        HStack(spacing: AeroricSpace.m) {
             Picker("场景", selection: Binding(get: { store.scenario }, set: { store.load($0) })) {
                 ForEach(EvolutionReviewScenarioID.allCases) { scenario in
                     Text(scenario.menuTitle).tag(scenario)
@@ -371,7 +371,7 @@ public struct NativeEvolutionReviewView: View {
     }
 
     private var appearanceControls: some View {
-        HStack(spacing: DSSpacing.v(2)) {
+        HStack(spacing: AeroricSpace.m) {
             NativeSegmentedPicker(
                 selection: $appearance,
                 groupTitle: "外观",
@@ -397,11 +397,11 @@ public struct NativeEvolutionReviewView: View {
         GlassPanel(preference: surface,
                    reduceTransparency: injectReduceTransparency ? true : nil,
                    increaseContrast: injectIncreaseContrast ? true : nil) {
-            VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
-                HStack(spacing: DSSpacing.v(2)) {
+            VStack(alignment: .leading, spacing: AeroricSpace.m) {
+                HStack(spacing: AeroricSpace.m) {
                     Text("角色摘要（示例）")
-                        .font(.system(size: DSTypography.label, weight: .semibold))
-                        .foregroundStyle(Color.dsTextMuted)
+                        .font(.system(size: AeroricType.caption, weight: .semibold))
+                        .foregroundStyle(AeroricColor.textTertiary)
                     Spacer(minLength: 4)
                     Button("配置角色") {
                         store.beginRoleConfiguration()
@@ -412,12 +412,12 @@ public struct NativeEvolutionReviewView: View {
                     .accessibilityIdentifier("evolutionReview.roleConfig.open")
                 }
                 ForEach(EvolutionReviewRole.allCases) { role in
-                    HStack(spacing: DSSpacing.v(2)) {
+                    HStack(spacing: AeroricSpace.m) {
                         Text(role.title)
-                            .font(.system(size: DSTypography.meta, weight: .semibold))
+                            .font(.system(size: AeroricType.secondary, weight: .semibold))
                             .frame(width: 48, alignment: .leading)
                         Text(store.bindingSummary(for: role))
-                            .font(.system(size: DSTypography.meta))
+                            .font(.system(size: AeroricType.secondary))
                             .lineLimit(1)
                             .accessibilityLabel(Text("\(role.title)绑定"))
                             .accessibilityValue(Text(store.bindingSummary(for: role)))
@@ -425,15 +425,15 @@ public struct NativeEvolutionReviewView: View {
                         Spacer(minLength: 4)
                         if !isCompact {
                             Text(role.authorityNote)
-                                .font(.system(size: DSTypography.label))
-                                .foregroundStyle(Color.dsTextMuted)
+                                .font(.system(size: AeroricType.caption))
+                                .foregroundStyle(AeroricColor.textTertiary)
                                 .lineLimit(1)
                         }
                     }
                 }
                 Text(store.governanceProcessNote)
-                    .font(.system(size: DSTypography.label))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .accessibilityLabel("治理进程说明")
                     .accessibilityValue(Text(store.governanceProcessNote))
                     .accessibilityIdentifier("evolutionReview.governance.processNote")
@@ -448,11 +448,11 @@ public struct NativeEvolutionReviewView: View {
 
     private var reviewControls: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: DSSpacing.v(3)) { reviewControlLabel; sizePicker; injectionControls }
-            VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+            HStack(spacing: AeroricSpace.l) { reviewControlLabel; sizePicker; injectionControls }
+            VStack(alignment: .leading, spacing: AeroricSpace.m) {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: DSSpacing.v(3)) { reviewControlLabel; sizePicker }
-                    VStack(alignment: .leading, spacing: DSSpacing.v(1)) {
+                    HStack(spacing: AeroricSpace.l) { reviewControlLabel; sizePicker }
+                    VStack(alignment: .leading, spacing: AeroricSpace.xs) {
                         reviewControlLabel
                         sizePicker
                     }
@@ -460,13 +460,13 @@ public struct NativeEvolutionReviewView: View {
                 injectionControls
             }
         }
-        .padding(DSSpacing.v(2))
+        .padding(AeroricSpace.m)
     }
 
     private var reviewControlLabel: some View {
         Text("审阅控制（样例注入）")
-            .font(.system(size: DSTypography.label, weight: .semibold))
-            .foregroundStyle(Color.dsTextMuted)
+            .font(.system(size: AeroricType.caption, weight: .semibold))
+            .foregroundStyle(AeroricColor.textTertiary)
     }
 
     private var sizePicker: some View {
@@ -482,10 +482,10 @@ public struct NativeEvolutionReviewView: View {
 
     private var injectionControls: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: DSSpacing.v(2)) { injectionToggles }
-            VStack(alignment: .leading, spacing: DSSpacing.v(1)) { injectionToggles }
+            HStack(spacing: AeroricSpace.m) { injectionToggles }
+            VStack(alignment: .leading, spacing: AeroricSpace.xs) { injectionToggles }
         }
-        .font(.system(size: DSTypography.label))
+        .font(.system(size: AeroricType.caption))
     }
 
     @ViewBuilder private var injectionToggles: some View {
@@ -651,7 +651,7 @@ public struct NativeEvolutionReviewView: View {
                 leaf("evolutionReview.process.pid", "审阅进程",
                      String(ProcessInfo.processInfo.processIdentifier))
             }
-            .padding(.horizontal, DSSpacing.v(2))
+            .padding(.horizontal, AeroricSpace.m)
         }
         .frame(height: NativePanelGeometry.statusBarHeight)
     }
@@ -667,9 +667,9 @@ public struct NativeEvolutionReviewView: View {
 
     private func leaf(_ identifier: String, _ title: String, _ value: String) -> some View {
         Text("\(title)：\(value)")
-            .font(.system(size: DSTypography.label))
+            .font(.system(size: AeroricType.caption))
             .monospacedDigit()
-            .foregroundStyle(Color.dsTextSecondary)
+            .foregroundStyle(AeroricColor.textSecondary)
             .accessibilityLabel(Text(title))
             .accessibilityValue(Text(value))
             .accessibilityIdentifier(identifier)
@@ -714,8 +714,8 @@ private struct EvolutionReviewPhaseListPanel: View {
             )
             .fixedSize()
             Text(store.track.note)
-                .font(.system(size: DSTypography.label))
-                .foregroundStyle(Color.dsTextMuted)
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
             NativeSelectionList(selection: Binding(
                 get: { store.selectedPhaseID },
                 set: { id in
@@ -730,12 +730,12 @@ private struct EvolutionReviewPhaseListPanel: View {
                 ForEach(store.phases) { phase in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(phase.title)
-                            .font(.system(size: DSTypography.body))
+                            .font(.system(size: AeroricType.body))
                             .lineLimit(1)
                             .accessibilityIdentifier("evolutionReview.phase.\(phase.id)")
                         Text("\(phase.state.title) · \(phase.governance.title)")
-                            .font(.system(size: DSTypography.label))
-                            .foregroundStyle(Color.dsTextSecondary)
+                            .font(.system(size: AeroricType.caption))
+                            .foregroundStyle(AeroricColor.textSecondary)
                             .lineLimit(1)
                     }
                     .frame(height: NativePanelGeometry.navigationRowHeight, alignment: .leading)
@@ -756,10 +756,10 @@ private struct EvolutionReviewCompactSelectorPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: NativePanelGeometry.panelInset) {
-            HStack(spacing: DSSpacing.v(2)) {
+            HStack(spacing: AeroricSpace.m) {
                 Text("阶段")
-                    .font(.system(size: DSTypography.label, weight: .semibold))
-                    .foregroundStyle(Color.dsTextMuted)
+                    .font(.system(size: AeroricType.caption, weight: .semibold))
+                    .foregroundStyle(AeroricColor.textTertiary)
                 Picker("阶段", selection: Binding(
                     get: { store.selectedPhaseID ?? store.phases.first?.id ?? "" },
                     set: { store.selectPhase($0) }
@@ -796,7 +796,7 @@ private struct EvolutionReviewPhaseDetailPanel: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: DSSpacing.v(3)) {
+            VStack(alignment: .leading, spacing: AeroricSpace.l) {
                 if let phase = store.selectedPhase {
                     phaseHeader(phase)
                     requirementsSection(phase)
@@ -808,8 +808,8 @@ private struct EvolutionReviewPhaseDetailPanel: View {
                     notesSection
                 } else {
                     Text("未选择阶段")
-                        .font(.system(size: DSTypography.body))
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .font(.system(size: AeroricType.body))
+                        .foregroundStyle(AeroricColor.textSecondary)
                 }
             }
             .padding(NativePanelGeometry.panelInset)
@@ -819,26 +819,26 @@ private struct EvolutionReviewPhaseDetailPanel: View {
     }
 
     private func phaseHeader(_ phase: EvolutionReviewPhase) -> some View {
-        VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
-            HStack(spacing: DSSpacing.v(2)) {
+        VStack(alignment: .leading, spacing: AeroricSpace.m) {
+            HStack(spacing: AeroricSpace.m) {
                 Text(phase.title)
-                    .font(.system(size: DSTypography.title, weight: .semibold))
+                    .font(.system(size: AeroricType.title, weight: .semibold))
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 chip(phase.state.title, color: stateColor(phase.state))
                 chip(phase.governance.title, color: governanceColor(phase.governance))
             }
-            HStack(spacing: DSSpacing.v(2)) {
+            HStack(spacing: AeroricSpace.m) {
                 Text("产物版本：\(phase.productVersion)")
-                    .font(.system(size: DSTypography.meta))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textSecondary)
                 Text(phase.track.title)
-                    .font(.system(size: DSTypography.meta))
-                    .foregroundStyle(Color.dsTextMuted)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textTertiary)
             }
             Text(phase.summary)
-                .font(.system(size: DSTypography.meta))
-                .foregroundStyle(Color.dsTextSecondary)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -846,22 +846,22 @@ private struct EvolutionReviewPhaseDetailPanel: View {
     private func requirementsSection(_ phase: EvolutionReviewPhase) -> some View {
         section("既定要求") {
             ForEach(phase.requirements) { requirement in
-                HStack(alignment: .firstTextBaseline, spacing: DSSpacing.v(2)) {
+                HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.m) {
                     Image(systemName: requirement.satisfied ? "checkmark.circle" : "exclamationmark.circle")
-                        .foregroundStyle(requirement.satisfied ? Color.dsSuccess : Color.dsWarning)
+                        .foregroundStyle(requirement.satisfied ? AeroricColor.success : AeroricColor.warning)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(requirement.title)
-                            .font(.system(size: DSTypography.meta))
+                            .font(.system(size: AeroricType.secondary))
                         if let note = requirement.note {
                             Text(note)
-                                .font(.system(size: DSTypography.label))
-                                .foregroundStyle(Color.dsTextMuted)
+                                .font(.system(size: AeroricType.caption))
+                                .foregroundStyle(AeroricColor.textTertiary)
                         }
                     }
                     Spacer(minLength: 4)
                     Text(requirement.satisfied ? "已满足" : "未满足")
-                        .font(.system(size: DSTypography.label))
-                        .foregroundStyle(requirement.satisfied ? Color.dsSuccess : Color.dsWarning)
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(requirement.satisfied ? AeroricColor.success : AeroricColor.warning)
                 }
             }
         }
@@ -875,29 +875,29 @@ private struct EvolutionReviewPhaseDetailPanel: View {
                         Button {
                             onOpenDetail(.opinion(phaseID: phase.id, opinionID: opinion.id))
                         } label: {
-                            HStack(alignment: .firstTextBaseline, spacing: DSSpacing.v(2)) {
+                            HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.m) {
                                 chip(opinion.resolutionNote == nil ? opinion.severity.title : "历史 · 已处理",
                                      color: opinion.resolutionNote == nil
-                                        ? severityColor(opinion.severity) : Color.dsTextSecondary)
+                                        ? severityColor(opinion.severity) : AeroricColor.textSecondary)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(opinion.title)
-                                        .font(.system(size: DSTypography.meta))
+                                        .font(.system(size: AeroricType.secondary))
                                         .lineLimit(2)
                                     Text("\(opinion.sourceRole.title) · \(opinion.sourceKind.title)")
-                                        .font(.system(size: DSTypography.label))
-                                        .foregroundStyle(Color.dsTextMuted)
+                                        .font(.system(size: AeroricType.caption))
+                                        .foregroundStyle(AeroricColor.textTertiary)
                                         .lineLimit(1)
                                     if let resolution = opinion.resolutionNote {
                                         Text(resolution)
-                                            .font(.system(size: DSTypography.label))
-                                            .foregroundStyle(Color.dsTextSecondary)
+                                            .font(.system(size: AeroricType.caption))
+                                            .foregroundStyle(AeroricColor.textSecondary)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
                                 }
                                 Spacer(minLength: 4)
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: DSTypography.label))
-                                    .foregroundStyle(Color.dsTextMuted)
+                                    .font(.system(size: AeroricType.caption))
+                                    .foregroundStyle(AeroricColor.textTertiary)
                             }
                             .contentShape(Rectangle())
                         }
@@ -917,28 +917,28 @@ private struct EvolutionReviewPhaseDetailPanel: View {
                         Button {
                             onOpenDetail(.evidence(phaseID: phase.id, evidenceID: evidence.id))
                         } label: {
-                            HStack(alignment: .firstTextBaseline, spacing: DSSpacing.v(2)) {
+                            HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.m) {
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text("\(evidence.title) · \(evidence.version)")
-                                        .font(.system(size: DSTypography.meta))
+                                        .font(.system(size: AeroricType.secondary))
                                         .lineLimit(1)
                                     Text("\(evidence.kind.title) · \(evidence.sourceRole.title)")
-                                        .font(.system(size: DSTypography.label))
-                                        .foregroundStyle(Color.dsTextMuted)
+                                        .font(.system(size: AeroricType.caption))
+                                        .foregroundStyle(AeroricColor.textTertiary)
                                         .lineLimit(1)
                                 }
                                 Spacer(minLength: 4)
                                 Text("虚构样例")
-                                    .font(.system(size: DSTypography.label))
-                                    .foregroundStyle(Color.dsTextMuted)
+                                    .font(.system(size: AeroricType.caption))
+                                    .foregroundStyle(AeroricColor.textTertiary)
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: DSTypography.label))
-                                    .foregroundStyle(Color.dsTextMuted)
+                                    .font(.system(size: AeroricType.caption))
+                                    .foregroundStyle(AeroricColor.textTertiary)
                             }
-                            .padding(DSSpacing.v(2))
+                            .padding(AeroricSpace.m)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.dsTextBackground,
-                                        in: RoundedRectangle(cornerRadius: DSRadius.sm, style: .continuous))
+                            .background(AeroricColor.layer1,
+                                        in: RoundedRectangle(cornerRadius: AeroricRadius.s, style: .continuous))
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -957,20 +957,20 @@ private struct EvolutionReviewPhaseDetailPanel: View {
                         Button {
                             onOpenDetail(.dependency(phaseID: phase.id, dependencyID: dependency.id))
                         } label: {
-                            HStack(alignment: .firstTextBaseline, spacing: DSSpacing.v(2)) {
+                            HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.m) {
                                 chip(dependency.state.title, color: dependencyColor(dependency.state))
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(dependency.title)
-                                        .font(.system(size: DSTypography.meta))
+                                        .font(.system(size: AeroricType.secondary))
                                     Text(dependency.reason)
-                                        .font(.system(size: DSTypography.label))
-                                        .foregroundStyle(Color.dsTextMuted)
+                                        .font(.system(size: AeroricType.caption))
+                                        .foregroundStyle(AeroricColor.textTertiary)
                                         .lineLimit(2)
                                 }
                                 Spacer(minLength: 4)
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: DSTypography.label))
-                                    .foregroundStyle(Color.dsTextMuted)
+                                    .font(.system(size: AeroricType.caption))
+                                    .foregroundStyle(AeroricColor.textTertiary)
                             }
                             .contentShape(Rectangle())
                         }
@@ -987,45 +987,45 @@ private struct EvolutionReviewPhaseDetailPanel: View {
             if !phase.candidates.isEmpty {
                 section("工具候选（能力改进）") {
                     ForEach(phase.candidates) { candidate in
-                        VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+                        VStack(alignment: .leading, spacing: AeroricSpace.m) {
                             Button {
                                 onOpenDetail(.candidate(phaseID: phase.id, candidateID: candidate.id))
                             } label: {
-                                HStack(alignment: .firstTextBaseline, spacing: DSSpacing.v(2)) {
+                                HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.m) {
                                     Text(candidate.title)
-                                        .font(.system(size: DSTypography.meta, weight: .semibold))
+                                        .font(.system(size: AeroricType.secondary, weight: .semibold))
                                     Spacer(minLength: 4)
                                     chip(candidate.trial.title, color: trialColor(candidate.trial))
                                     Image(systemName: "chevron.right")
-                                        .font(.system(size: DSTypography.label))
-                                        .foregroundStyle(Color.dsTextMuted)
+                                        .font(.system(size: AeroricType.caption))
+                                        .foregroundStyle(AeroricColor.textTertiary)
                                 }
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("evolutionReview.candidate.\(candidate.id)")
 
-                            HStack(spacing: DSSpacing.v(2)) {
+                            HStack(spacing: AeroricSpace.m) {
                                 gateChip("验证", candidate.verification)
                                 gateChip("必要评审", candidate.requiredReview)
                                 gateChip("既有审批", candidate.approval)
                             }
                             if let reason = store.gateReason(for: candidate) {
                                 Text(reason)
-                                    .font(.system(size: DSTypography.label))
-                                    .foregroundStyle(Color.dsWarning)
+                                    .font(.system(size: AeroricType.caption))
+                                    .foregroundStyle(AeroricColor.warning)
                                     .accessibilityIdentifier("evolutionReview.candidate.\(candidate.id).gateReason")
                             }
                             if let fallback = candidate.fallbackTool {
                                 Text("回退工具：\(fallback)")
-                                    .font(.system(size: DSTypography.label))
-                                    .foregroundStyle(Color.dsTextSecondary)
+                                    .font(.system(size: AeroricType.caption))
+                                    .foregroundStyle(AeroricColor.textSecondary)
                             }
                         }
-                        .padding(DSSpacing.v(2))
+                        .padding(AeroricSpace.m)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.dsTextBackground,
-                                    in: RoundedRectangle(cornerRadius: DSRadius.sm, style: .continuous))
+                        .background(AeroricColor.layer1,
+                                    in: RoundedRectangle(cornerRadius: AeroricRadius.s, style: .continuous))
                     }
                 }
             }
@@ -1044,8 +1044,8 @@ private struct EvolutionReviewPhaseDetailPanel: View {
                         .accessibilityIdentifier("evolutionReview.action.\(action.identifierComponent)")
                     if let reason {
                         Text(reason)
-                            .font(.system(size: DSTypography.label))
-                            .foregroundStyle(Color.dsTextSecondary)
+                            .font(.system(size: AeroricType.caption))
+                            .foregroundStyle(AeroricColor.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("evolutionReview.action.\(action.identifierComponent).reason")
                     }
@@ -1057,15 +1057,15 @@ private struct EvolutionReviewPhaseDetailPanel: View {
     private var notesSection: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(store.governanceProcessNote)
-                .font(.system(size: DSTypography.label))
-                .foregroundStyle(Color.dsTextMuted)
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
             Text(store.sample.feedbackDeliveryNote)
-                .font(.system(size: DSTypography.label))
-                .foregroundStyle(Color.dsTextMuted)
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
             if let preservation = store.sample.preservationNote {
                 Text(preservation)
-                    .font(.system(size: DSTypography.label))
-                    .foregroundStyle(Color.dsTextMuted)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
             }
             if store.sample.disputeNote != nil {
                 Button("查看 Q24 用户争议裁决示例") { onOpenDetail(.dispute) }
@@ -1096,10 +1096,10 @@ private struct EvolutionReviewPhaseDetailPanel: View {
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+        VStack(alignment: .leading, spacing: AeroricSpace.m) {
             Text(title)
-                .font(.system(size: DSTypography.label, weight: .semibold))
-                .foregroundStyle(Color.dsTextMuted)
+                .font(.system(size: AeroricType.caption, weight: .semibold))
+                .foregroundStyle(AeroricColor.textTertiary)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1107,9 +1107,9 @@ private struct EvolutionReviewPhaseDetailPanel: View {
 
     private func chip(_ title: String, color: Color) -> some View {
         Text(title)
-            .font(.system(size: DSTypography.label, weight: .semibold))
+            .font(.system(size: AeroricType.caption, weight: .semibold))
             .foregroundStyle(color)
-            .padding(.horizontal, DSSpacing.v(2))
+            .padding(.horizontal, AeroricSpace.m)
             .padding(.vertical, 1)
             .background(Capsule().fill(color.opacity(0.14)))
             .overlay(Capsule().strokeBorder(color.opacity(0.5), lineWidth: 0.5))
@@ -1117,55 +1117,55 @@ private struct EvolutionReviewPhaseDetailPanel: View {
 
     private func gateChip(_ name: String, _ state: EvolutionReviewGateState) -> some View {
         Text("\(name)：\(state.title)")
-            .font(.system(size: DSTypography.label))
-            .foregroundStyle(state.isSatisfied ? Color.dsSuccess : Color.dsWarning)
-            .padding(.horizontal, DSSpacing.v(2))
+            .font(.system(size: AeroricType.caption))
+            .foregroundStyle(state.isSatisfied ? AeroricColor.success : AeroricColor.warning)
+            .padding(.horizontal, AeroricSpace.m)
             .padding(.vertical, 1)
-            .background(Capsule().fill(Color.dsText.opacity(0.06)))
+            .background(Capsule().fill(AeroricColor.text.opacity(0.06)))
     }
 
     private func stateColor(_ state: EvolutionReviewPhaseState) -> Color {
         switch state {
-        case .passed: Color.dsSuccess
-        case .pendingReflection, .pendingRemediation: Color.dsWarning
-        case .reopened: Color.dsDanger
+        case .passed: AeroricColor.success
+        case .pendingReflection, .pendingRemediation: AeroricColor.warning
+        case .reopened: AeroricColor.danger
         }
     }
 
     private func governanceColor(_ state: EvolutionReviewGovernanceState) -> Color {
         switch state {
-        case .notRequired: Color.dsTextSecondary
-        case .pendingReview: Color.dsWarning
-        case .reviewed: Color.dsSuccess
-        case .blockingCandidate: Color.dsDanger
+        case .notRequired: AeroricColor.textSecondary
+        case .pendingReview: AeroricColor.warning
+        case .reviewed: AeroricColor.success
+        case .blockingCandidate: AeroricColor.danger
         }
     }
 
     private func severityColor(_ severity: EvolutionReviewSeverity) -> Color {
         switch severity {
-        case .info: Color.dsTextSecondary
-        case .warning: Color.dsWarning
-        case .blocking: Color.dsDanger
+        case .info: AeroricColor.textSecondary
+        case .warning: AeroricColor.warning
+        case .blocking: AeroricColor.danger
         }
     }
 
     private func dependencyColor(_ state: EvolutionReviewDependencyState) -> Color {
         switch state {
-        case .waiting: Color.dsWarning
-        case .continuing: Color.dsTextSecondary
-        case .restricted: Color.dsDanger
-        case .released: Color.dsSuccess
-        case .executingUnsettled: Color.dsWarning
+        case .waiting: AeroricColor.warning
+        case .continuing: AeroricColor.textSecondary
+        case .restricted: AeroricColor.danger
+        case .released: AeroricColor.success
+        case .executingUnsettled: AeroricColor.warning
         }
     }
 
     private func trialColor(_ state: EvolutionReviewTrialState) -> Color {
         switch state {
-        case .blocked: Color.dsTextSecondary
-        case .enabled: Color.dsSuccess
-        case .trialing: Color.dsAccent
-        case .disabledAfterFailure: Color.dsDanger
-        case .fallbackActive: Color.dsWarning
+        case .blocked: AeroricColor.textSecondary
+        case .enabled: AeroricColor.success
+        case .trialing: AeroricColor.accent
+        case .disabledAfterFailure: AeroricColor.danger
+        case .fallbackActive: AeroricColor.warning
         }
     }
 }
@@ -1178,9 +1178,9 @@ private struct EvolutionReviewInspectorPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: NativePanelGeometry.panelInset) {
-            HStack(spacing: DSSpacing.v(2)) {
+            HStack(spacing: AeroricSpace.m) {
                 Text("检查器")
-                    .font(.system(size: DSTypography.title, weight: .semibold))
+                    .font(.system(size: AeroricType.title, weight: .semibold))
                 Spacer(minLength: 4)
                 NativeIconButton(systemImage: "xmark",
                                  label: "关闭检查器",
@@ -1191,8 +1191,8 @@ private struct EvolutionReviewInspectorPanel: View {
                     .id(store.detail)
             } else {
                 Text("点意见、证据或候选查看只读详情。")
-                    .font(.system(size: DSTypography.meta))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textSecondary)
             }
             Spacer(minLength: 0)
         }
@@ -1206,10 +1206,10 @@ private struct EvolutionReviewDetailSheet: View {
     let onClose: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DSSpacing.v(3)) {
+        VStack(alignment: .leading, spacing: AeroricSpace.l) {
             HStack {
                 Text("详情（只读样例）")
-                    .font(.system(size: DSTypography.title, weight: .semibold))
+                    .font(.system(size: AeroricType.title, weight: .semibold))
                 Spacer()
                 Button("关闭") { onClose() }
                     .keyboardShortcut(.cancelAction)
@@ -1222,11 +1222,11 @@ private struct EvolutionReviewDetailSheet: View {
                     .id(store.detail)
             } else {
                 Text("未选择详情")
-                    .font(.system(size: DSTypography.body))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.body))
+                    .foregroundStyle(AeroricColor.textSecondary)
             }
         }
-        .padding(DSSpacing.v(4))
+        .padding(AeroricSpace.xl)
         .frame(width: size.width, height: size.height)
     }
 }
@@ -1242,24 +1242,24 @@ private struct EvolutionReviewDetailContent: View {
         // One native scroll owner for metadata and body, in both inspector and
         // sheet. Identifiers belong to its readable leaves, never the container.
         ScrollView {
-            VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+            VStack(alignment: .leading, spacing: AeroricSpace.m) {
                 Text(detail.title)
-                    .font(.system(size: DSTypography.body, weight: .semibold))
+                    .font(.system(size: AeroricType.body, weight: .semibold))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("详情标题")
                     .accessibilityValue(Text(detail.title))
                     .accessibilityIdentifier("evolutionReview.detail.title")
                 Text(detail.kind)
-                    .font(.system(size: DSTypography.label))
-                    .foregroundStyle(Color.dsTextMuted)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
                 ForEach(detail.fields) { field in
-                    HStack(alignment: .firstTextBaseline, spacing: DSSpacing.v(2)) {
+                    HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.m) {
                         Text(field.name)
-                            .font(.system(size: DSTypography.label))
-                            .foregroundStyle(Color.dsTextSecondary)
+                            .font(.system(size: AeroricType.caption))
+                            .foregroundStyle(AeroricColor.textSecondary)
                         Spacer(minLength: 4)
                         Text(field.value)
-                            .font(.system(size: DSTypography.label))
+                            .font(.system(size: AeroricType.caption))
                             .multilineTextAlignment(.trailing)
                             .accessibilityLabel(Text("详情\(field.name)"))
                             .accessibilityValue(Text(field.value))
@@ -1267,28 +1267,28 @@ private struct EvolutionReviewDetailContent: View {
                     }
                 }
                 Text("详情正文（\(paragraphs.count) 段）")
-                    .font(.system(size: DSTypography.label))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .accessibilityLabel("详情正文摘要")
                     .accessibilityValue(Text("\(paragraphs.count) 段内嵌虚构内容"))
                     .accessibilityIdentifier("evolutionReview.detail.body")
-                VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+                VStack(alignment: .leading, spacing: AeroricSpace.m) {
                     ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
                         Text(paragraph)
-                            .font(.system(size: DSTypography.meta))
+                            .font(.system(size: AeroricType.secondary))
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .accessibilityIdentifier(paragraphIdentifier(index))
                     }
                 }
-                .padding(DSSpacing.v(2))
+                .padding(AeroricSpace.m)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.dsTextBackground,
-                            in: RoundedRectangle(cornerRadius: DSRadius.sm, style: .continuous))
+                .background(AeroricColor.layer1,
+                            in: RoundedRectangle(cornerRadius: AeroricRadius.s, style: .continuous))
                 Text(detail.fictionalMarker)
-                    .font(.system(size: DSTypography.label))
-                    .foregroundStyle(Color.dsTextMuted)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -1310,29 +1310,29 @@ private struct EvolutionReviewRoleSheet: View {
     let onClose: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DSSpacing.v(3)) {
+        VStack(alignment: .leading, spacing: AeroricSpace.l) {
             Text("角色配置（样例）")
-                .font(.system(size: DSTypography.title, weight: .semibold))
+                .font(.system(size: AeroricType.title, weight: .semibold))
             Text("示例连接A/B、示例模型1/2 均为虚构；无密钥或 URL 输入，不联网测试，不推断真实模型能力。")
-                .font(.system(size: DSTypography.label))
-                .foregroundStyle(Color.dsTextSecondary)
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: DSSpacing.v(3)) {
+                VStack(alignment: .leading, spacing: AeroricSpace.l) {
                     templateSection
                     ForEach(EvolutionReviewRole.allCases) { role in
                         roleForm(role)
                     }
                     Text(store.governanceProcessNote)
-                        .font(.system(size: DSTypography.label))
-                        .foregroundStyle(Color.dsTextMuted)
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxHeight: .infinity)
 
-            HStack(spacing: DSSpacing.v(2)) {
+            HStack(spacing: AeroricSpace.m) {
                 Spacer()
                 Button("取消") {
                     store.cancelDraft()
@@ -1352,25 +1352,25 @@ private struct EvolutionReviewRoleSheet: View {
                 .accessibilityIdentifier("evolutionReview.roleConfig.apply")
             }
             Text("应用只更新当前样例内存：\(EvolutionReviewStore.sampleOnlyNotice)")
-                .font(.system(size: DSTypography.label))
-                .foregroundStyle(Color.dsTextMuted)
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
         }
-        .padding(DSSpacing.v(4))
+        .padding(AeroricSpace.xl)
         .frame(width: size.width, height: size.height)
     }
 
     private var templateSection: some View {
-        VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+        VStack(alignment: .leading, spacing: AeroricSpace.m) {
             Text("示例全局三角色模板（只读）")
-                .font(.system(size: DSTypography.label, weight: .semibold))
-                .foregroundStyle(Color.dsTextMuted)
+                .font(.system(size: AeroricType.caption, weight: .semibold))
+                .foregroundStyle(AeroricColor.textTertiary)
             ForEach(EvolutionReviewRole.allCases) { role in
-                HStack(spacing: DSSpacing.v(2)) {
+                HStack(spacing: AeroricSpace.m) {
                     Text(role.title)
-                        .font(.system(size: DSTypography.meta, weight: .semibold))
+                        .font(.system(size: AeroricType.secondary, weight: .semibold))
                         .frame(width: 48, alignment: .leading)
                     Text(store.templateSummary(for: role))
-                        .font(.system(size: DSTypography.meta))
+                        .font(.system(size: AeroricType.secondary))
                         .accessibilityLabel(Text("\(role.title)模板"))
                         .accessibilityValue(Text(store.templateSummary(for: role)))
                         .accessibilityIdentifier("evolutionReview.roleConfig.template.\(role.identifierComponent)")
@@ -1378,22 +1378,22 @@ private struct EvolutionReviewRoleSheet: View {
                 }
             }
         }
-        .padding(DSSpacing.v(2))
+        .padding(AeroricSpace.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.dsTextBackground,
-                    in: RoundedRectangle(cornerRadius: DSRadius.sm, style: .continuous))
+        .background(AeroricColor.layer1,
+                    in: RoundedRectangle(cornerRadius: AeroricRadius.s, style: .continuous))
     }
 
     private func roleForm(_ role: EvolutionReviewRole) -> some View {
         let binding = store.draftBinding(for: role)
-        return VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
-            HStack(spacing: DSSpacing.v(2)) {
+        return VStack(alignment: .leading, spacing: AeroricSpace.m) {
+            HStack(spacing: AeroricSpace.m) {
                 Text(role.title)
-                    .font(.system(size: DSTypography.body, weight: .semibold))
+                    .font(.system(size: AeroricType.body, weight: .semibold))
                 Spacer(minLength: 4)
                 Text(store.bindingSummary(for: role))
-                    .font(.system(size: DSTypography.label))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .lineLimit(1)
             }
             Toggle("覆盖模板", isOn: Binding(
@@ -1406,17 +1406,17 @@ private struct EvolutionReviewRoleSheet: View {
 
             if binding.mode == .overriding {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: DSSpacing.v(2)) { overrideControls(role, binding: binding) }
-                    VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+                    HStack(spacing: AeroricSpace.m) { overrideControls(role, binding: binding) }
+                    VStack(alignment: .leading, spacing: AeroricSpace.m) {
                         overrideControls(role, binding: binding)
                     }
                 }
             }
         }
-        .padding(DSSpacing.v(2))
+        .padding(AeroricSpace.m)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.dsTextBackground,
-                    in: RoundedRectangle(cornerRadius: DSRadius.sm, style: .continuous))
+        .background(AeroricColor.layer1,
+                    in: RoundedRectangle(cornerRadius: AeroricRadius.s, style: .continuous))
     }
 
     @ViewBuilder

@@ -53,7 +53,7 @@ public struct NativeTaskCommunicationReviewView: View {
                 }
             }
             .padding(NativePanelGeometry.panelInset)
-            .foregroundStyle(Color.dsText)
+            .foregroundStyle(AeroricColor.text)
             .background {
                 NativePanelFoundation(
                     preference: accessibility.surface,
@@ -61,7 +61,7 @@ public struct NativeTaskCommunicationReviewView: View {
                 )
             }
             .animation(
-                accessibility.reduceMotion ? nil : .easeInOut(duration: DSMotion.fast),
+                accessibility.reduceMotion ? nil : .easeInOut(duration: AeroricMotion.quick),
                 value: store.selectedMessageID
             )
             .transaction { transaction in
@@ -78,9 +78,9 @@ public struct NativeTaskCommunicationReviewView: View {
 
     private var header: some View {
         TCReviewPanel("星图项目 · 执行中沟通", id: "header", accessibility: accessibility) {
-            TCReviewText(TaskCommunicationReviewFixtures.offlineNotice, id: "offline", color: .dsAccent)
+            TCReviewText(TaskCommunicationReviewFixtures.offlineNotice, id: "offline", color: AeroricColor.accent)
             TCReviewText("未启动 / 未经 UI 验收 · 本窗口仅供后续获准的离线审阅",
-                         id: "unaccepted", color: .dsTextSecondary)
+                         id: "unaccepted", color: AeroricColor.textSecondary)
         }
     }
 
@@ -124,7 +124,7 @@ public struct NativeTaskCommunicationReviewView: View {
         TCReviewPanel("统一输入 · \(store.composerTitle)", id: "composer", accessibility: accessibility) {
             if store.draftIsAnchored {
                 TCReviewText("用途：\(store.draft.purpose.title) · 收件人：\(store.draft.recipient.title)",
-                             id: "composer.anchor", color: .dsAccent)
+                             id: "composer.anchor", color: AeroricColor.accent)
             } else {
                 NativeSegmentedPicker(
                     selection: Binding(get: { store.draft.purpose }, set: { _ = store.setPurpose($0) }),
@@ -147,16 +147,16 @@ public struct NativeTaskCommunicationReviewView: View {
                 }
                 .pickerStyle(.menu)
             }
-            TCReviewText(store.composerBoundary, id: "composer.boundary", color: .dsTextSecondary)
+            TCReviewText(store.composerBoundary, id: "composer.boundary", color: AeroricColor.textSecondary)
             TextEditor(text: Binding(get: { store.draft.text }, set: { store.setDraftText($0) }))
                 .font(.body)
                 .scrollContentBackground(.hidden)
                 .padding(NativePanelGeometry.panelInset)
                 .frame(minHeight: 100, maxHeight: 160)
-                .background(Color.dsTextBackground, in: RoundedRectangle(cornerRadius: DSRadius.sm))
+                .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.s))
                 .overlay {
-                    RoundedRectangle(cornerRadius: DSRadius.sm)
-                        .strokeBorder(Color.dsBorder, lineWidth: accessibility.increaseContrast ? 1 : 0.5)
+                    RoundedRectangle(cornerRadius: AeroricRadius.s)
+                        .strokeBorder(AeroricColor.separator2, lineWidth: accessibility.increaseContrast ? 1 : 0.5)
                         .allowsHitTesting(false)
                 }
                 .accessibilityLabel("消息草稿，仅为本窗口示例")
@@ -213,12 +213,12 @@ public struct NativeTaskCommunicationReviewView: View {
             } else {
                 NativeSelectionList(selection: $state.selectedMessageID) {
                     ForEach(store.messages) { message in
-                        VStack(alignment: .leading, spacing: DSSpacing.v(1)) {
+                        VStack(alignment: .leading, spacing: AeroricSpace.xs) {
                             Text("M\(message.id) · \(message.recipient.shortTitle) · \(message.purpose.title)")
                                 .accessibilityIdentifier("taskCommunicationReview.message.\(message.id).row")
                             Text(message.withdrawn ? "已撤回（示例，历史保留）" : message.delivery.title)
                                 .font(.caption)
-                                .foregroundStyle(Color.dsTextSecondary)
+                                .foregroundStyle(AeroricColor.textSecondary)
                                 .accessibilityIdentifier("taskCommunicationReview.message.\(message.id).rowFact")
                         }
                         .tag(message.id)
@@ -236,7 +236,7 @@ public struct NativeTaskCommunicationReviewView: View {
                                      id: "requirement.\(message.id)")
                     }
                     TCReviewText("此列表不证明采纳或完成；普通补充不覆盖其他要求。",
-                                 id: "requirements.boundary", color: .dsTextSecondary)
+                                 id: "requirements.boundary", color: AeroricColor.textSecondary)
                 }
             }
             DisclosureGroup("本窗口意图 / 示例事件依据（不是真实回执）") {
@@ -259,7 +259,7 @@ public struct NativeTaskCommunicationReviewView: View {
                 TCReviewText(message.intent.title, id: "message.\(message.id).intent")
                 TCReviewText(message.delivery.title + "；" + message.consumptionSummary,
                              id: "message.\(message.id).delivery",
-                             color: message.delivery == .unknown ? .dsWarning : .dsText)
+                             color: message.delivery == .unknown ? AeroricColor.warning : AeroricColor.text)
                 TCReviewText(message.controlSummary, id: "message.\(message.id).control")
                 TCReviewText(message.relationSummary, id: "message.\(message.id).relation")
                 DisclosureGroup("原来源与操作 / 事件依据") {
@@ -322,7 +322,7 @@ public struct NativeTaskCommunicationReviewView: View {
                 TCReviewReading(accessibility: accessibility) {
                     TCReviewText(question.important ? "⚠︎ 重要问题：只约束相关部分" : "普通问题：集中查看",
                                  id: "question.\(question.id).importance",
-                                 color: question.important ? .dsWarning : .dsTextSecondary)
+                                 color: question.important ? AeroricColor.warning : AeroricColor.textSecondary)
                     TCReviewText(question.text, id: "question.\(question.id).text")
                     TCReviewText("原提问者：\(question.asker.title) · \(question.work)",
                                  id: "question.\(question.id).asker")
@@ -421,7 +421,7 @@ public struct NativeTaskCommunicationReviewView: View {
                     id: "member.conditions"
                 )
                 ForEach(Array(store.continuationBlockers(member).enumerated()), id: \.offset) { index, blocker in
-                    TCReviewText("等待：\(blocker)", id: "member.blocker.\(index)", color: .dsWarning)
+                    TCReviewText("等待：\(blocker)", id: "member.blocker.\(index)", color: AeroricColor.warning)
                 }
                 if store.appearance.advanced {
                     TCReviewText("本地边界序号 \(conditions.boundary) / 已用于接续 \(conditions.usedBoundary)。序号不是授权或生产回执。",
@@ -451,7 +451,7 @@ public struct NativeTaskCommunicationReviewView: View {
                     .accessibilityIdentifier("taskCommunicationReview.gate.menu")
             }
             TCReviewText("这些是外部事实的虚构替身，不是生产流程新增的批准按钮。条件有效时 Store 自动评估接续；不发送信号、不重开会话。",
-                         id: "gate.boundary", color: .dsTextSecondary)
+                         id: "gate.boundary", color: AeroricColor.textSecondary)
         }
     }
 
@@ -588,10 +588,10 @@ private struct TCReviewReading<Content: View>: View {
         VStack(alignment: .leading, spacing: NativePanelGeometry.panelGap) { content }
             .padding(NativePanelGeometry.panelInset)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.dsTextBackground, in: RoundedRectangle(cornerRadius: DSRadius.sm))
+            .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.s))
             .overlay {
-                RoundedRectangle(cornerRadius: DSRadius.sm)
-                    .strokeBorder(Color.dsBorder.opacity(outline.opacity), lineWidth: outline.width)
+                RoundedRectangle(cornerRadius: AeroricRadius.s)
+                    .strokeBorder(AeroricColor.separator2.opacity(outline.opacity), lineWidth: outline.width)
                     .allowsHitTesting(false)
             }
     }
@@ -602,7 +602,7 @@ private struct TCReviewText: View {
     let id: String
     let color: Color
 
-    init(_ text: String, id: String, color: Color = .dsText) {
+    init(_ text: String, id: String, color: Color = AeroricColor.text) {
         self.text = text
         self.id = id
         self.color = color

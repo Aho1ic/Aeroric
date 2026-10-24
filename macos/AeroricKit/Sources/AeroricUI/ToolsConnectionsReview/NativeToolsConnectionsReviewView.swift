@@ -51,11 +51,11 @@ public struct NativeToolsConnectionsReviewView: View {
                 }
                 .padding(NativePanelGeometry.panelInset)
             }
-            .foregroundStyle(Color.dsText)
+            .foregroundStyle(AeroricColor.text)
             .background {
                 NativePanelFoundation(preference: surface, reduceTransparency: reduceTransparency)
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: DSMotion.fast), value: store.selectedID)
+            .animation(reduceMotion ? nil : .easeInOut(duration: AeroricMotion.quick), value: store.selectedID)
             .transaction {
                 if reduceMotion {
                     $0.animation = nil
@@ -71,7 +71,7 @@ public struct NativeToolsConnectionsReviewView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     text(ToolsConnectionsReviewFixtures.offlineNotice, "offlineNotice")
-                        .fontWeight(.semibold).foregroundStyle(Color.dsWarning)
+                        .fontWeight(.semibold).foregroundStyle(AeroricColor.warning)
                     text(ToolsConnectionsReviewFixtures.acceptanceBoundary, "acceptanceBoundary")
                 }
                 Spacer(minLength: 0)
@@ -124,9 +124,9 @@ public struct NativeToolsConnectionsReviewView: View {
                 ForEach(store.visibleItems) { item in
                     VStack(alignment: .leading, spacing: 5) {
                         Text(item.title).fontWeight(.medium)
-                        Text(item.purpose).font(.caption).foregroundStyle(Color.dsTextSecondary)
+                        Text(item.purpose).font(.caption).foregroundStyle(AeroricColor.textSecondary)
                         Text(store.eligibility(for: item.id).title)
-                            .font(.caption).foregroundStyle(Color.dsTextSecondary)
+                            .font(.caption).foregroundStyle(AeroricColor.textSecondary)
                     }
                     .tag(item.id)
                     .accessibilityLabel("\(item.title)，\(item.purpose)，\(store.eligibility(for: item.id).title)")
@@ -207,7 +207,7 @@ public struct NativeToolsConnectionsReviewView: View {
             let projection = store.eligibility(for: store.selectedID)
             text(projection.title, "selection.reason")
             ForEach(Array(projection.reasons.enumerated()), id: \.offset) { index, reason in
-                text("受阻：\(reason)", "selection.block.\(index)").foregroundStyle(Color.dsWarning)
+                text("受阻：\(reason)", "selection.block.\(index)").foregroundStyle(AeroricColor.warning)
             }
             text("未知/未检查/过时不等于可用；不暗换目标、执行器、API 或模型；独立安全工作可继续。", "selection.boundary")
             eventButtons
@@ -269,7 +269,7 @@ public struct NativeToolsConnectionsReviewView: View {
             text(store.continuation.disposition.rawValue, "continuation.disposition")
             text(store.continuationProjection.title, "continuation.projection")
             ForEach(Array(store.continuationProjection.reasons.enumerated()), id: \.offset) { index, reason in
-                text(reason, "continuation.reasons.\(index)").foregroundStyle(Color.dsWarning)
+                text(reason, "continuation.reasons.\(index)").foregroundStyle(AeroricColor.warning)
             }
             text("条件恢复只重建条件；有效等待覆盖内可续行投影不再审批。暂停/Stop/取消须明确恢复；到限沿 Q67。未知原执行先核实，不重放或重叠替代。", "continuation.boundary")
             ForEach(Array(store.businessHistory.enumerated()), id: \.offset) { index, history in
@@ -303,7 +303,7 @@ public struct NativeToolsConnectionsReviewView: View {
                     text(result.source, "result.\(result.id).source")
                     text(result.preview, "result.\(result.id).preview")
                     ForEach(Array(result.errors.enumerated()), id: \.offset) { index, error in
-                        text(error, "result.\(result.id).errors.\(index)").foregroundStyle(Color.dsDanger)
+                        text(error, "result.\(result.id).errors.\(index)").foregroundStyle(AeroricColor.danger)
                     }
                     text(result.limits.joined(separator: "；"), "result.\(result.id).limits")
                     action(store.expandedResultIDs.contains(result.id) ? "收起内存文本" : "展开内存文本 · 不代表已读",
@@ -328,7 +328,7 @@ public struct NativeToolsConnectionsReviewView: View {
                     text("这些按钮只载入带来源的固定事实，不执行远端读取/核验/验收。关联不证明正确性。", "result.\(result.id).eventBoundary")
                 }
                 .padding(NativePanelGeometry.panelInset)
-                .background(Color.dsTextBackground, in: RoundedRectangle(cornerRadius: DSRadius.sm))
+                .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.s))
             }
         }
     }
@@ -371,9 +371,9 @@ public struct NativeToolsConnectionsReviewView: View {
     private func fact(_ title: String, _ value: TConnReviewFact, _ leaf: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             text("\(title)：\(value.text)", leaf)
-                .foregroundStyle(value.state == .blocked ? Color.dsWarning : Color.dsText)
+                .foregroundStyle(value.state == .blocked ? AeroricColor.warning : AeroricColor.text)
             text("依据：\(value.source)", leaf + ".source")
-                .font(.caption).foregroundStyle(Color.dsTextSecondary)
+                .font(.caption).foregroundStyle(AeroricColor.textSecondary)
         }
     }
 

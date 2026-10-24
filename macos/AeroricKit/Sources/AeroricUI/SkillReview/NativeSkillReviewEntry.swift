@@ -197,7 +197,7 @@ public struct NativeSkillReviewRefusalView: View {
                 VStack(alignment: .leading, spacing: NativePanelGeometry.panelGap) {
                     Text("技能审阅未启动")
                         .font(.title2.bold())
-                        .foregroundStyle(Color.dsWarning)
+                        .foregroundStyle(AeroricColor.warning)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("skillReview.refusal.title")
                     Text("只读拒绝页 · 未进入技能样例或产品工作区，未启动宿主。")
@@ -209,13 +209,13 @@ public struct NativeSkillReviewRefusalView: View {
                             .accessibilityIdentifier("skillReview.refusal.reason.\(reason.rawValue)")
                     }
                     Text("请在获准测试环境中重新提供单一、有效的审阅请求。本页不修改偏好或业务资料，也不会创建数据目录。")
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("skillReview.refusal.isolation")
                     Text("审阅进程：\(String(ProcessInfo.processInfo.processIdentifier))")
                         .font(.caption)
                         .monospacedDigit()
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .accessibilityLabel("审阅进程")
                         .accessibilityValue(Text(String(ProcessInfo.processInfo.processIdentifier)))
                         .accessibilityIdentifier("skillReview.process.pid")
@@ -230,14 +230,14 @@ public struct NativeSkillReviewRefusalView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(
-                Color.dsTextBackground,
+                AeroricColor.layer1,
                 in: RoundedRectangle(cornerRadius: NativePanelGeometry.panelRadius, style: .continuous)
             )
             .padding(NativePanelGeometry.panelInset)
         }
         .padding(NativePanelGeometry.panelInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .foregroundStyle(Color.dsText)
+        .foregroundStyle(AeroricColor.text)
         .background(NativePanelFoundation(preference: .classic))
     }
 }

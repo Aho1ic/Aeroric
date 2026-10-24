@@ -185,7 +185,7 @@ public struct NativeUsageStatisticsReviewRefusalView: View {
                 VStack(alignment: .leading, spacing: NativePanelGeometry.panelGap) {
                     Text("使用统计审阅未启动")
                         .font(.title2.bold())
-                        .foregroundStyle(Color.dsWarning)
+                        .foregroundStyle(AeroricColor.warning)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("usReview.refusal.title")
                     Text("独立只读拒绝内容 · 未创建统计样例 owner，未回落旧样例或产品。")
@@ -199,7 +199,7 @@ public struct NativeUsageStatisticsReviewRefusalView: View {
                             )
                     }
                     Text("不回显任意环境值，不读取 home、数据目录或业务偏好，不连接真实服务。本页不授予 App、窗口或 UI 运行许可。")
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("usReview.refusal.isolation")
                 }
@@ -211,7 +211,7 @@ public struct NativeUsageStatisticsReviewRefusalView: View {
         }
         .padding(NativePanelGeometry.panelInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .foregroundStyle(Color.dsText)
+        .foregroundStyle(AeroricColor.text)
         .background(NativePanelFoundation(preference: .classic))
     }
 }

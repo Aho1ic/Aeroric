@@ -204,29 +204,29 @@ public struct NativeEvolutionReviewRefusalView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: DSSpacing.v(3)) {
+        VStack(alignment: .leading, spacing: AeroricSpace.l) {
             Text("审阅未启动")
-                .font(.system(size: DSTypography.title, weight: .semibold))
+                .font(.system(size: AeroricType.title, weight: .semibold))
                 .accessibilityLabel("审阅未启动")
                 .accessibilityValue(Text("审阅未启动"))
                 .accessibilityIdentifier("evolutionReview.refusal.title")
             Text("本次请求未满足离线审阅的启动条件。未显示样例，未回落到产品工作区，未启动宿主。")
-                .font(.system(size: DSTypography.body))
-                .foregroundStyle(Color.dsTextSecondary)
+                .font(.system(size: AeroricType.body))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel("拒绝说明")
                 .accessibilityValue(Text("未显示样例，未回落到产品工作区，未启动宿主"))
                 .accessibilityIdentifier("evolutionReview.refusal.explanation")
-            VStack(alignment: .leading, spacing: DSSpacing.v(2)) {
+            VStack(alignment: .leading, spacing: AeroricSpace.m) {
                 Text("原因")
-                    .font(.system(size: DSTypography.label, weight: .semibold))
-                    .foregroundStyle(Color.dsTextMuted)
+                    .font(.system(size: AeroricType.caption, weight: .semibold))
+                    .foregroundStyle(AeroricColor.textTertiary)
                 ForEach(reasons) { reason in
-                    HStack(alignment: .firstTextBaseline, spacing: DSSpacing.v(2)) {
+                    HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.m) {
                         Image(systemName: "xmark.circle")
-                            .foregroundStyle(Color.dsDanger)
+                            .foregroundStyle(AeroricColor.danger)
                         Text(reason.title)
-                            .font(.system(size: DSTypography.meta))
+                            .font(.system(size: AeroricType.secondary))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .accessibilityElement(children: .combine)
@@ -234,25 +234,25 @@ public struct NativeEvolutionReviewRefusalView: View {
                     .accessibilityIdentifier("evolutionReview.refusal.reason.\(reason.rawValue)")
                 }
             }
-            .padding(DSSpacing.v(2))
+            .padding(AeroricSpace.m)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.dsTextBackground,
-                        in: RoundedRectangle(cornerRadius: DSRadius.sm, style: .continuous))
+            .background(AeroricColor.layer1,
+                        in: RoundedRectangle(cornerRadius: AeroricRadius.s, style: .continuous))
             Text("DEBUG 限定 · 只读页面 · 不启动宿主、不写真实配置")
-                .font(.system(size: DSTypography.label))
-                .foregroundStyle(Color.dsTextMuted)
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
                 .accessibilityLabel("隔离说明")
                 .accessibilityValue(Text("只读 · 不启动宿主、不写真实配置"))
                 .accessibilityIdentifier("evolutionReview.refusal.isolation")
             Text("审阅进程：\(String(ProcessInfo.processInfo.processIdentifier))")
-                .font(.system(size: DSTypography.label))
+                .font(.system(size: AeroricType.caption))
                 .monospacedDigit()
-                .foregroundStyle(Color.dsTextMuted)
+                .foregroundStyle(AeroricColor.textTertiary)
                 .accessibilityLabel("审阅进程")
                 .accessibilityValue(Text(String(ProcessInfo.processInfo.processIdentifier)))
                 .accessibilityIdentifier("evolutionReview.process.pid")
         }
-        .padding(DSSpacing.v(4))
+        .padding(AeroricSpace.xl)
         .frame(minWidth: 420, minHeight: 300, alignment: .topLeading)
         .background(NativePanelFoundation(preference: .classic).ignoresSafeArea())
     }

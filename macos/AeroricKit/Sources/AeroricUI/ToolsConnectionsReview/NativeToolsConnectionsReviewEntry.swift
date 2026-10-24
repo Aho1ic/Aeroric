@@ -205,7 +205,7 @@ public struct NativeToolsConnectionsReviewRefusalView: View {
                 VStack(alignment: .leading, spacing: NativePanelGeometry.panelGap) {
                     Text("工具库与连接审阅未启动")
                         .font(.title2.bold())
-                        .foregroundStyle(Color.dsWarning)
+                        .foregroundStyle(AeroricColor.warning)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("toolsConnectionsReview.refusal.title")
                     Text("只读拒绝页 · 未进入工具库与连接样例或产品工作区，未启动宿主。")
@@ -219,7 +219,7 @@ public struct NativeToolsConnectionsReviewRefusalView: View {
                             )
                     }
                     Text("本页不修改偏好或业务资料，不创建数据目录。目录元数据校验不证明系统沙箱、秘密保护或偏好完全隔离；测试标签不授予 App 或窗口运行许可。")
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("toolsConnectionsReview.refusal.isolation")
                 }
@@ -230,7 +230,7 @@ public struct NativeToolsConnectionsReviewRefusalView: View {
         }
         .padding(NativePanelGeometry.panelInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .foregroundStyle(Color.dsText)
+        .foregroundStyle(AeroricColor.text)
         .background(NativePanelFoundation(preference: .classic))
     }
 }

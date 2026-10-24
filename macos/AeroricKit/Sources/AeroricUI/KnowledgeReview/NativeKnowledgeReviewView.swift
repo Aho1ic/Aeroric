@@ -80,8 +80,8 @@ public struct NativeKnowledgeReviewView: View {
                         referenceDisclosure
                         impactDisclosure
                         Text("所有操作仅改变本窗口内存；重置或重开恢复虚构样例。用户 Stop 与宿主硬限制始终优先。")
-                            .font(.system(size: DSTypography.meta))
-                            .foregroundStyle(Color.dsTextSecondary)
+                            .font(.system(size: AeroricType.secondary))
+                            .foregroundStyle(AeroricColor.textSecondary)
                         knowledgeReadout("process.pid", "本样例进程", String(ProcessInfo.processInfo.processIdentifier))
                         knowledgeReadout("memory.instance", "窗口内存实例", store.instanceID.uuidString)
                         KnowledgeReviewNativeInputReadout(evidence: nativeInputEvidence)
@@ -93,8 +93,8 @@ public struct NativeKnowledgeReviewView: View {
             .coordinateSpace(name: "knowledgeReview.panels")
             .onPreferenceChange(KnowledgeReviewPanelFrameKey.self) { panelFrames = $0 }
         }
-        .font(.system(size: DSTypography.body))
-        .foregroundStyle(Color.dsText)
+        .font(.system(size: AeroricType.body))
+        .foregroundStyle(AeroricColor.text)
         .frame(minWidth: 380, minHeight: 360)
         .background {
             NativePanelFoundation(preference: surface, reduceTransparency: reduceTransparency)
@@ -136,11 +136,11 @@ public struct NativeKnowledgeReviewView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(KnowledgeReviewFixtures.project.title)
-                .font(.system(size: DSTypography.title, weight: .semibold))
+                .font(.system(size: AeroricType.title, weight: .semibold))
                 .accessibilityIdentifier("knowledgeReview.project")
             Text(KnowledgeReviewFixtures.sampleNotice)
-                .font(.system(size: DSTypography.meta, weight: .semibold))
-                .foregroundStyle(Color.dsWarning)
+                .font(.system(size: AeroricType.secondary, weight: .semibold))
+                .foregroundStyle(AeroricColor.warning)
                 .accessibilityIdentifier("knowledgeReview.notice")
             HStack(spacing: NativePanelGeometry.panelGap) {
                 Menu {
@@ -184,11 +184,11 @@ public struct NativeKnowledgeReviewView: View {
                 .modifier(KnowledgeReviewActionStyle(surface: effectiveSurface))
                 .accessibilityIdentifier("knowledgeReview.newCandidates.process")
             Text(KnowledgeReviewFixtures.processNewNote)
-                .font(.system(size: DSTypography.meta))
-                .foregroundStyle(Color.dsTextSecondary)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
             Text(store.notice)
-                .font(.system(size: DSTypography.meta, weight: .medium))
-                .foregroundStyle(Color.dsAccent)
+                .font(.system(size: AeroricType.secondary, weight: .medium))
+                .foregroundStyle(AeroricColor.accent)
                 .accessibilityIdentifier("knowledgeReview.feedback")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -244,7 +244,7 @@ public struct NativeKnowledgeReviewView: View {
             }
             if store.visibleItems.isEmpty {
                 Text("此栏目暂无样例内容；可切换栏目或重置。")
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .accessibilityIdentifier("knowledgeReview.items.empty")
             } else if compact {
                 Menu {
@@ -268,13 +268,13 @@ public struct NativeKnowledgeReviewView: View {
                     ForEach(store.visibleItems) { item in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.title)
-                                .font(.system(size: DSTypography.body, weight: .medium))
+                                .font(.system(size: AeroricType.body, weight: .medium))
                                 .accessibilityIdentifier("knowledgeReview.item.\(item.id.rawValue)")
                             if store.section == .candidates {
                                 candidateCheckbox(item)
                             } else {
                                 Text(item.state.title)
-                                    .font(.system(size: DSTypography.meta))
+                                    .font(.system(size: AeroricType.secondary))
                                     .foregroundStyle(stateColor(item))
                             }
                         }
@@ -301,12 +301,12 @@ public struct NativeKnowledgeReviewView: View {
                     VStack(alignment: .leading) { batchButtons }
                 }
                 Text("批量勾选不改变详情焦点；有待处理原因的候选不能被强行确认。")
-                    .font(.system(size: DSTypography.meta))
-                    .foregroundStyle(Color.dsTextSecondary)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textSecondary)
                 if !store.selectedCandidateIDs.isEmpty, let reason = store.batchConfirmationBlockedReason {
                     Text(reason)
-                        .font(.system(size: DSTypography.meta))
-                        .foregroundStyle(Color.dsWarning)
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.warning)
                         .accessibilityIdentifier("knowledgeReview.batch.blocked")
                 }
             }
@@ -335,8 +335,8 @@ public struct NativeKnowledgeReviewView: View {
             .accessibilityIdentifier("knowledgeReview.batch.\(item.id.rawValue)")
             if let reason = item.confirmationBlockedReason {
                 Text(reason)
-                    .font(.system(size: DSTypography.meta))
-                    .foregroundStyle(item.issue == .sensitivePlaceholder ? Color.dsDanger : Color.dsWarning)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(item.issue == .sensitivePlaceholder ? AeroricColor.danger : AeroricColor.warning)
                     .accessibilityIdentifier("knowledgeReview.blocked.\(item.id.rawValue)")
             }
         }
@@ -384,7 +384,7 @@ public struct NativeKnowledgeReviewView: View {
                     .textSelection(.enabled)
                     .padding(NativePanelGeometry.panelInset)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.dsTextBackground)
+                    .background(AeroricColor.layer1)
                     .accessibilityLabel("知识正文")
                     .accessibilityValue(Text(version.content))
                     .accessibilityIdentifier("knowledgeReview.detail.content")
@@ -395,8 +395,8 @@ public struct NativeKnowledgeReviewView: View {
                 knowledgeReadout("detail.source", "来源", version.source.title)
                 if let origin = item.admissionOrigin {
                     Text(origin.title)
-                        .font(.system(size: DSTypography.meta))
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.textSecondary)
                 }
                 if let replaced = version.replaces {
                     Text("替代关联：\(replaced.title) → \(version.title)；\(version.correctionBasis ?? "")")
@@ -404,7 +404,7 @@ public struct NativeKnowledgeReviewView: View {
                 }
                 if item.state == .candidate, let reason = item.confirmationBlockedReason {
                     Text("待处理：\(reason)")
-                        .foregroundStyle(Color.dsWarning)
+                        .foregroundStyle(AeroricColor.warning)
                         .accessibilityIdentifier("knowledgeReview.detail.blocked")
                 }
                 if item.state == .candidate, store.hasProcessedNewCandidates,
@@ -428,13 +428,13 @@ public struct NativeKnowledgeReviewView: View {
                 }
                 if item.state == .retired {
                     Text(KnowledgeReviewFixtures.retirementNote)
-                        .font(.system(size: DSTypography.meta))
-                        .foregroundStyle(Color.dsWarning)
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.warning)
                 }
             }
         } else {
             Text("选择一条有内容的样例以查看详情。")
-                .foregroundStyle(Color.dsTextSecondary)
+                .foregroundStyle(AeroricColor.textSecondary)
                 .accessibilityIdentifier("knowledgeReview.detail.empty")
         }
     }
@@ -516,17 +516,17 @@ public struct NativeKnowledgeReviewView: View {
             .accessibilityValue(Text(store.referenceScenario.title))
             .accessibilityIdentifier("knowledgeReview.references.context")
             Text(store.currentRequirement)
-                .font(.system(size: DSTypography.meta))
+                .font(.system(size: AeroricType.secondary))
                 .accessibilityIdentifier("knowledgeReview.references.requirement")
             knowledgeReadout("references.count", "后续新上下文推荐", "\(store.recommendedReferences.count) 条")
             Text(store.referenceRows.isEmpty
                  ? "当前工作没有获准可参考项；不会复制整库或编造缺失内容。"
                  : store.referenceRows.map { "\($0.itemTitle)：\($0.condition.title)。\($0.note)" }.joined(separator: "\n"))
-                .font(.system(size: DSTypography.meta))
+                .font(.system(size: AeroricType.secondary))
                 .accessibilityIdentifier("knowledgeReview.references.summary")
             if store.recommendedReferences.isEmpty {
                 Text("当前条件下没有可推荐项；已停用内容只在历史和旧引用中回看。")
-                    .foregroundStyle(Color.dsWarning)
+                    .foregroundStyle(AeroricColor.warning)
             }
             ForEach(store.referenceRows) { reference in
                 VStack(alignment: .leading, spacing: 4) {
@@ -538,10 +538,10 @@ public struct NativeKnowledgeReviewView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("knowledgeReview.reference.\(reference.itemID.rawValue).summary")
                     Text(reference.condition.title)
-                        .foregroundStyle(reference.isRecommended ? Color.dsAccent : Color.dsWarning)
+                        .foregroundStyle(reference.isRecommended ? AeroricColor.accent : AeroricColor.warning)
                         .accessibilityIdentifier("knowledgeReview.reference.\(reference.itemID.rawValue).status")
                     Text("\(reference.note)\n适用：\(reference.applicability.summary)\n限制：\(reference.applicability.limits)")
-                        .font(.system(size: DSTypography.meta))
+                        .font(.system(size: AeroricType.secondary))
                         .accessibilityIdentifier("knowledgeReview.reference.\(reference.itemID.rawValue).explanation")
                     if reference.condition == .retired {
                         Button("在历史中回看停用项") {
@@ -559,11 +559,11 @@ public struct NativeKnowledgeReviewView: View {
                 }
                 .padding(NativePanelGeometry.panelInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.dsTextBackground)
+                .background(AeroricColor.layer1)
             }
             Text(KnowledgeReviewFixtures.referenceBoundaryNote)
-                .font(.system(size: DSTypography.meta))
-                .foregroundStyle(Color.dsWarning)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.warning)
         }
     }
 
@@ -577,9 +577,9 @@ public struct NativeKnowledgeReviewView: View {
             .accessibilityIdentifier("knowledgeReview.impacts.toggle")
             if impactsExpanded {
                 panel("impacts") {
-                    VStack(alignment: .leading, spacing: DSSpacing.v(3)) {
+                    VStack(alignment: .leading, spacing: AeroricSpace.l) {
                         Text("通知和 ACK 仅表示演示送达；不等于纠正、撤销副作用或本次核验。")
-                            .foregroundStyle(Color.dsWarning)
+                            .foregroundStyle(AeroricColor.warning)
                         ForEach(store.impactRows) { impact in impactRow(impact) }
                     }
                 }
@@ -594,9 +594,9 @@ public struct NativeKnowledgeReviewView: View {
             Text(impact.state == .pending
                  ? "\(impact.state.title) · \(impact.delivery.title)"
                  : impact.state.title)
-                .foregroundStyle(impact.state == .pending ? Color.dsWarning : Color.dsAccent)
+                .foregroundStyle(impact.state == .pending ? AeroricColor.warning : AeroricColor.accent)
                 .accessibilityIdentifier("knowledgeReview.impact.\(impact.id.rawValue).status")
-            Text(impact.note).font(.system(size: DSTypography.meta))
+            Text(impact.note).font(.system(size: AeroricType.secondary))
             if let captured = impact.capturedReference {
                 Text("\(store.capturedReferenceNote(captured))\n局部核对关联版本：\(impact.requiredVersion?.title ?? "待复核")。")
                     .accessibilityIdentifier("knowledgeReview.impact.\(impact.id.rawValue).citation")
@@ -610,12 +610,12 @@ public struct NativeKnowledgeReviewView: View {
                 }
                 if let record = impact.loadedRecord {
                     Text("\(record.title)：\(record.summary)")
-                        .foregroundStyle(Color.dsAccent)
+                        .foregroundStyle(AeroricColor.accent)
                         .accessibilityIdentifier("knowledgeReview.impact.\(impact.id.rawValue).record")
                 } else if let reason = store.preloadedCheckBlockedReason(for: impact.id) {
                     Text(reason)
-                        .font(.system(size: DSTypography.meta))
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .accessibilityIdentifier("knowledgeReview.impact.\(impact.id.rawValue).blocked")
                 }
             } else {
@@ -655,11 +655,11 @@ public struct NativeKnowledgeReviewView: View {
     }
 
     private func stateColor(_ item: KnowledgeReviewItem) -> Color {
-        if item.issue == .sensitivePlaceholder { return .dsDanger }
+        if item.issue == .sensitivePlaceholder { return AeroricColor.danger }
         switch item.state {
-        case .candidate: return item.confirmationBlockedReason == nil ? .dsAccent : .dsWarning
-        case .reusable: return .dsSuccess
-        case .discarded, .retired: return .dsWarning
+        case .candidate: return item.confirmationBlockedReason == nil ? AeroricColor.accent : AeroricColor.warning
+        case .reusable: return AeroricColor.success
+        case .discarded, .retired: return AeroricColor.warning
         }
     }
 
@@ -807,7 +807,7 @@ public struct NativeKnowledgeReviewView: View {
 enum KnowledgeReviewMotionPolicy {
     static func transaction(reduceMotion: Bool) -> Transaction {
         var value = Transaction(animation: reduceMotion ? nil : .easeInOut(
-            duration: DSMotion.duration(DSMotion.normal, reduceMotion: false)
+            duration: AeroricMotion.duration(AeroricMotion.standard, reduceMotion: false)
         ))
         value.disablesAnimations = reduceMotion
         return value
@@ -1067,8 +1067,8 @@ private struct KnowledgeReviewNativeInputReadout: View {
 
     var body: some View {
         Text("原生输入诊断：\(evidence.snapshots.count) 个只读快照")
-            .font(.system(size: DSTypography.meta))
-            .foregroundStyle(Color.dsTextSecondary)
+            .font(.system(size: AeroricType.secondary))
+            .foregroundStyle(AeroricColor.textSecondary)
             .accessibilityLabel("本窗口原生输入诊断")
             .accessibilityValue(Text(evidence.value))
             .accessibilityIdentifier("knowledgeReview.input.diagnostics")
@@ -1109,7 +1109,7 @@ private enum KnowledgeReviewSheet: Identifiable, Equatable {
 @MainActor
 private func knowledgeReadout(_ id: String, _ title: String, _ value: String) -> some View {
     Text("\(title)：\(value)")
-        .font(.system(size: DSTypography.meta))
+        .font(.system(size: AeroricType.secondary))
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityLabel(Text(title))
         .accessibilityValue(Text(value))
@@ -1164,9 +1164,9 @@ private struct KnowledgeReviewAppearancePanel: View {
                 .font(.headline)
                 .accessibilityIdentifier("knowledgeReview.appearance.sheet")
             ScrollView {
-                VStack(alignment: .leading, spacing: DSSpacing.v(3)) {
+                VStack(alignment: .leading, spacing: AeroricSpace.l) {
                     Text("只影响本窗口；不会改变系统设置、interactionMode 或任务授权。")
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                     Text("配色预览").font(.subheadline.bold())
                     NativeSegmentedPicker(
                         selection: $appearance, groupTitle: "配色预览",
@@ -1199,7 +1199,7 @@ private struct KnowledgeReviewAppearancePanel: View {
                                                            reduceTransparency: effectiveTransparency).rawValue)
                     knowledgeReadout("effective.appearance", "配色预览值", appearance.rawValue)
                     knowledgeReadout("effective.motion", "实际转换时长",
-                                     String(format: "%.3f", DSMotion.duration(DSMotion.normal, reduceMotion: effectiveMotion)))
+                                     String(format: "%.3f", AeroricMotion.duration(AeroricMotion.standard, reduceMotion: effectiveMotion)))
                     knowledgeReadout("effective.outline", "实际面板边界宽度",
                                      String(format: "%.1f", NativePanelGeometry.outline(increasedContrast: effectiveContrast).width))
                     Divider()
@@ -1222,7 +1222,7 @@ private struct KnowledgeReviewAppearancePanel: View {
                     knowledgeReadout("geometry.fits", "当前显示器可容纳请求", measurement.requestedFitsDisplay ? "yes" : "no")
                     if !measurement.requestedFitsDisplay {
                         Text("当前显示器不足以容纳请求，保留实际窗口尺寸；不能用缩放截图代替目标尺寸证据。")
-                            .foregroundStyle(Color.dsWarning)
+                            .foregroundStyle(AeroricColor.warning)
                     }
                     ForEach(["list", "detail", "references", "impacts"], id: \.self) { key in
                         knowledgeReadout("geometry.panel.\(key)", "实测面板 \(key)", knowledgeRect(panelFrames[key]))
@@ -1239,7 +1239,7 @@ private struct KnowledgeReviewAppearancePanel: View {
             }
         }
         .padding(NativePanelGeometry.panelInset * 2)
-        .foregroundStyle(Color.dsText)
+        .foregroundStyle(AeroricColor.text)
         .background(NativePanelFoundation(preference: surface, reduceTransparency: effectiveTransparency))
         .preferredColorScheme(appearance.colorScheme)
     }
@@ -1261,14 +1261,14 @@ private struct KnowledgeReviewSourcePanel: View {
                 .font(.headline)
                 .accessibilityIdentifier("knowledgeReview.source.title")
             Text(context)
-                .foregroundStyle(Color.dsTextSecondary)
+                .foregroundStyle(AeroricColor.textSecondary)
                 .accessibilityIdentifier("knowledgeReview.source.context")
             Text("仅展开内嵌虚构摘录；不打开文件、URL 或真实历史。")
-                .font(.system(size: DSTypography.meta))
-                .foregroundStyle(Color.dsWarning)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.warning)
                 .accessibilityIdentifier("knowledgeReview.source.warning")
             ScrollView {
-                VStack(alignment: .leading, spacing: DSSpacing.v(3)) {
+                VStack(alignment: .leading, spacing: AeroricSpace.l) {
                     if paragraphs.isEmpty {
                         Text("来源缺失；不编造回源，不作为当前已核验事实。")
                             .accessibilityIdentifier("knowledgeReview.source.missing")
@@ -1289,7 +1289,7 @@ private struct KnowledgeReviewSourcePanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(NativePanelGeometry.panelInset)
             }
-            .background(Color.dsTextBackground)
+            .background(AeroricColor.layer1)
             HStack {
                 Spacer()
                 Button("关闭来源", action: close)
@@ -1298,7 +1298,7 @@ private struct KnowledgeReviewSourcePanel: View {
             }
         }
         .padding(NativePanelGeometry.panelInset * 2)
-        .foregroundStyle(Color.dsText)
+        .foregroundStyle(AeroricColor.text)
     }
 }
 
@@ -1319,14 +1319,14 @@ private struct KnowledgeReviewEditorPanel: View {
                 .font(.headline)
                 .accessibilityIdentifier("knowledgeReview.sheet.title")
             ScrollView {
-                VStack(alignment: .leading, spacing: DSSpacing.v(3)) {
+                VStack(alignment: .leading, spacing: AeroricSpace.l) {
                     Text("取消不应用；应用只改变本窗口的虚构内容，保留来源和限制。")
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                     Text("示例内容")
                     TextEditor(text: $content)
                         .font(.body)
                         .scrollContentBackground(.hidden)
-                        .background(Color.dsTextBackground)
+                        .background(AeroricColor.layer1)
                         .frame(minHeight: 120, idealHeight: 150, maxHeight: 180)
                         .focused($contentFocused)
                         .accessibilityLabel("示例内容")
@@ -1341,11 +1341,11 @@ private struct KnowledgeReviewEditorPanel: View {
                             .lineLimit(2...4)
                             .accessibilityIdentifier("knowledgeReview.draft.basis")
                         Text("应用会保留旧版本和替代关联；Agent 猜测不自动改写用户确认。")
-                            .foregroundStyle(Color.dsWarning)
+                            .foregroundStyle(AeroricColor.warning)
                     }
                     if !error.isEmpty {
                         Text(error)
-                            .foregroundStyle(Color.dsDanger)
+                            .foregroundStyle(AeroricColor.danger)
                             .accessibilityIdentifier("knowledgeReview.draft.error")
                     }
                 }
@@ -1363,7 +1363,7 @@ private struct KnowledgeReviewEditorPanel: View {
             }
         }
         .padding(NativePanelGeometry.panelInset * 2)
-        .foregroundStyle(Color.dsText)
+        .foregroundStyle(AeroricColor.text)
         .onAppear { contentFocused = true }
     }
 }
@@ -1380,9 +1380,9 @@ private struct KnowledgeReviewConfigurationPanel: View {
                 .font(.headline)
                 .accessibilityIdentifier("knowledgeReview.sheet.title")
             ScrollView {
-                VStack(alignment: .leading, spacing: DSSpacing.v(3)) {
+                VStack(alignment: .leading, spacing: AeroricSpace.l) {
                     Text("取消不应用，应用只改本窗口内存；不会启用真实自动化。")
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                     Toggle("演示自动入库", isOn: $enabled)
                         .accessibilityIdentifier("knowledgeReview.configuration.enabled")
                     Menu {
@@ -1402,9 +1402,9 @@ private struct KnowledgeReviewConfigurationPanel: View {
                         .accessibilityIdentifier("knowledgeReview.configuration.scope")
                     Text("任务授权另以“默认／Full Access”示例切换；本配置不扩大权限、项目或资料范围。")
                     Text("冲突、敏感占位、依据不足和范围外内容仍留候选，不强行入库。")
-                        .foregroundStyle(Color.dsWarning)
+                        .foregroundStyle(AeroricColor.warning)
                     Text(KnowledgeReviewFixtures.closingAutomaticAdmissionNote)
-                        .font(.system(size: DSTypography.meta))
+                        .font(.system(size: AeroricType.secondary))
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("knowledgeReview.configuration.propagation")
                 }
@@ -1422,7 +1422,7 @@ private struct KnowledgeReviewConfigurationPanel: View {
             }
         }
         .padding(NativePanelGeometry.panelInset * 2)
-        .foregroundStyle(Color.dsText)
+        .foregroundStyle(AeroricColor.text)
     }
 }
 #endif

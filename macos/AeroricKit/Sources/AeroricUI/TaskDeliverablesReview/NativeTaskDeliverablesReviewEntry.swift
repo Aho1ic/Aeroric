@@ -204,7 +204,7 @@ public struct NativeTaskDeliverablesReviewRefusalView: View {
                 VStack(alignment: .leading, spacing: NativePanelGeometry.panelGap) {
                     Text("任务成果审阅未启动")
                         .font(.title2.bold())
-                        .foregroundStyle(Color.dsWarning)
+                        .foregroundStyle(AeroricColor.warning)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("taskDeliverablesReview.refusal.title")
                     Text("只读拒绝页 · 未进入成果样例或产品工作区，未启动宿主。")
@@ -218,7 +218,7 @@ public struct NativeTaskDeliverablesReviewRefusalView: View {
                             )
                     }
                     Text("本页不修改偏好、业务资料或真实成果，也不会创建数据目录。")
-                        .foregroundStyle(Color.dsTextSecondary)
+                        .foregroundStyle(AeroricColor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("taskDeliverablesReview.refusal.isolation")
                 }

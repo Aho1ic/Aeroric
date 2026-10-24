@@ -50,7 +50,7 @@ public struct ProxySettingsView: View {
             if let saveError {
                 Text(saveError)
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
                     .accessibilityIdentifier("proxy.error")
             }
         }
@@ -87,7 +87,7 @@ public struct ProviderSettingsView: View {
                         if provider.isOAuth {
                             Text("OAuth")
                                 .font(.caption)
-                                .foregroundStyle(Color.dsTextMuted)
+                                .foregroundStyle(AeroricColor.textTertiary)
                         }
                     }
                     TextField(
@@ -117,7 +117,7 @@ public struct ProviderSettingsView: View {
             if let saveError {
                 Text(saveError)
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
                     .accessibilityIdentifier("provider.error")
             }
         }
@@ -202,7 +202,7 @@ public struct LocalRouterSettingsView: View {
             if let saveError {
                 Text(saveError)
                     .font(.caption)
-                    .foregroundStyle(Color.dsDanger)
+                    .foregroundStyle(AeroricColor.danger)
                     .accessibilityIdentifier("local-router.error")
             }
         }
@@ -228,7 +228,7 @@ public struct AgentOperationPanel: View {
         List {
             if operations.isEmpty {
                 Text("没有进行中或最近的操作")
-                    .foregroundStyle(Color.dsTextMuted)
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityIdentifier("agent-operations.empty")
             }
             ForEach(operations) { operation in
@@ -243,7 +243,7 @@ public struct AgentOperationPanel: View {
                     }
                     Text(operation.message)
                         .font(.caption)
-                        .foregroundStyle(Color.dsTextMuted)
+                        .foregroundStyle(AeroricColor.textTertiary)
                     if operation.isRunning {
                         ProgressView(value: Double(operation.progress), total: 100)
                             .accessibilityIdentifier("agent-operation.progress.\(operation.agent)")
@@ -285,10 +285,10 @@ public struct AgentOperationSnapshotRow: Identifiable, Equatable, Sendable {
 
     public var stateColor: Color {
         switch stateLabel {
-        case "running": .dsAccent
-        case "succeeded": .dsSuccess
-        case "cancelled": .dsWarning
-        default: .dsDanger
+        case "running": AeroricColor.accent
+        case "succeeded": AeroricColor.success
+        case "cancelled": AeroricColor.warning
+        default: AeroricColor.danger
         }
     }
 }
@@ -322,7 +322,7 @@ public struct ConfigImportExportSheet: View {
                     .accessibilityIdentifier("config-export.confirm")
                 Text("导出文件含明文凭据，必须放入 0600 私有目录。")
                     .font(.caption)
-                    .foregroundStyle(Color.dsWarning)
+                    .foregroundStyle(AeroricColor.warning)
             }
             Button("导出") {
                 onExport?(includeSecrets && confirmedSecrets, outputPath)
