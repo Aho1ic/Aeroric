@@ -1,10 +1,14 @@
 mod cache_injector;
 mod chat_bridge;
 mod circuit_breaker;
+pub mod config_routes;
 mod inline_tool_calls;
+mod messages_bridge;
 mod moonshot_schema;
+mod pivot_bridge;
 mod server;
 mod session;
+pub mod task_tokens;
 mod thinking_optimizer;
 mod transforms;
 mod usage;
@@ -66,6 +70,9 @@ pub struct UpstreamTarget {
     models: Vec<String>,
     enable_1m_context: bool,
     enable_chat_completions_proxy: bool,
+    /// The protocol this upstream speaks when it differs from the harness (4d).
+    /// `None` keeps the legacy behaviour: `enable_chat_completions_proxy` decides.
+    upstream_protocol: Option<crate::agent_connections::model::WireProtocol>,
 }
 
 impl UpstreamTarget {
@@ -128,6 +135,7 @@ impl UpstreamTarget {
             models,
             enable_1m_context,
             enable_chat_completions_proxy,
+            upstream_protocol: None,
         })
     }
 
@@ -164,6 +172,19 @@ impl UpstreamTarget {
 
     pub fn enable_chat_completions_proxy(&self) -> bool {
         self.enable_chat_completions_proxy
+    }
+
+    /// Declare the protocol the upstream speaks (set by config routing).
+    pub fn with_upstream_protocol(
+        mut self,
+        protocol: crate::agent_connections::model::WireProtocol,
+    ) -> Self {
+        self.upstream_protocol = Some(protocol);
+        self
+    }
+
+    pub fn upstream_protocol(&self) -> Option<crate::agent_connections::model::WireProtocol> {
+        self.upstream_protocol
     }
 }
 

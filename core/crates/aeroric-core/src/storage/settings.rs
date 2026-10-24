@@ -26,7 +26,15 @@ pub fn load_settings(
     let path = context.paths.settings_file();
     Ok(match atomic::read_json(&path)? {
         ReadOutcome::Absent => ReadOutcome::Absent,
-        ReadOutcome::Found(Value::Object(fields)) => ReadOutcome::Found(fields),
+        ReadOutcome::Found(Value::Object(mut fields)) => {
+            // Same disk boundary as `settings::load_save`: credentials come back
+            // from the keychain; an unreadable entry keeps its marker.
+            if let Some(store) = crate::settings::secret_fields::secret_store() {
+                let _unresolved =
+                    crate::settings::secret_fields::hydrate_from_store(&mut fields, store.as_ref());
+            }
+            ReadOutcome::Found(fields)
+        }
         ReadOutcome::Found(other) => return Err(compat::shape_error(&path, &other, "an object")),
     })
 }
@@ -59,16 +67,26 @@ fn save_settings_unlocked(
     settings: &Map<String, Value>,
 ) -> Result<(), StorageError> {
     compat::require_writer(context)?;
+    let path = context.paths.settings_file();
     context
         .paths
         .ensure_private()
         .map_err(|e| StorageError::WriteFailed {
-            path: context.paths.settings_file(),
+            path: path.clone(),
             reason: e.to_string(),
         })?;
+    let mut on_disk = settings.clone();
+    if let Some(store) = crate::settings::secret_fields::secret_store() {
+        let previous = crate::settings::secret_fields::marked_accounts_on_disk(&path);
+        crate::settings::secret_fields::split_for_disk(&mut on_disk, &previous, store.as_ref())
+            .map_err(|reason| StorageError::WriteFailed {
+                path: path.clone(),
+                reason,
+            })?;
+    }
     atomic::replace_with_backup(
-        &context.paths.settings_file(),
-        &compat::pretty(&Value::Object(settings.clone())),
+        &path,
+        &compat::pretty(&Value::Object(on_disk)),
         FileMode::Private,
     )?;
     Ok(())

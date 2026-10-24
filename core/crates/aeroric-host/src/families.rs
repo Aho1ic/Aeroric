@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+use aeroric_core::agent_connections::launch::legacy_mapping;
+use aeroric_core::agent_connections::model::Harness;
 use aeroric_core::agents::families::{
     built_in_native_resume_family, built_in_session_family, custom_session_family, is_builtin,
     launch_family, unknown_session_family, FamilyProfile,
@@ -39,6 +41,15 @@ impl SettingsFamiliesCli {
             profile["codex_like"].as_bool().unwrap_or(false),
         ))
     }
+
+    /// A migrated legacy id whose profile may already be gone (Q5): the family of
+    /// the configuration it now launches under.
+    fn migrated(&self, agent: &str) -> Option<ProtocolFamily> {
+        legacy_mapping(self.context.paths.data_dir(), agent).map(|config| match config.harness {
+            Harness::Codex => ProtocolFamily::Codex,
+            _ => ProtocolFamily::Claude,
+        })
+    }
 }
 
 impl AgentFamilies for SettingsFamiliesCli {
@@ -49,6 +60,10 @@ impl AgentFamilies for SettingsFamiliesCli {
                 codex_like,
             }),
             None => {
+                // `legacy_mapping` 不认内建名，所以这里不会改变内建判定。
+                if let Some(family) = self.migrated(agent) {
+                    return family;
+                }
                 // 内建与未知都走名字：内建表给准确答案，unknown 落
                 // claude/codex 的镜像回退（与宿主同一条链，b1.0）。
                 match built_in_session_family(agent) {
@@ -73,7 +88,9 @@ impl AgentFamilies for SettingsFamiliesCli {
                 family: &family,
                 codex_like,
             }),
-            None => unknown_session_family(agent),
+            None => self
+                .migrated(agent)
+                .unwrap_or_else(|| unknown_session_family(agent)),
         }
     }
 

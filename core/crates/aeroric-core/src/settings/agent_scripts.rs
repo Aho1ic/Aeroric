@@ -1383,7 +1383,7 @@ pub(super) fn generated_agent_script_target_path(
     Ok(current.with_extension(native_agent_script_extension()))
 }
 
-pub(super) fn is_aeroric_generated_agent_wrapper(content: &str) -> bool {
+pub(crate) fn is_aeroric_generated_agent_wrapper(content: &str) -> bool {
     is_aeroric_codex_wrapper(content)
         || has_aeroric_marker_line(content, CLAUDE_AGENT_SCRIPT_MARKER_PREFIX)
         || (content.contains("export CLAUDE_CONFIG_DIR=")

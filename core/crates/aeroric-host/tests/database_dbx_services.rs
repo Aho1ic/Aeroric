@@ -860,6 +860,6 @@ fn database_dbx_default_library_startup_never_selects_os_keyring() {
     assert!(wrapper.contains("MemorySecrets::default()"));
     assert!(!wrapper.contains("KeyringSecrets"));
     let composition = include_str!("../../aeroric-cli/src/main.rs");
-    assert!(composition.contains("run_startup_with_secrets("));
+    assert!(composition.contains("run_startup_with_secrets_and_legacy_agent_migration("));
     assert!(composition.contains("Arc::new(aeroric_host::platform_adapter::KeyringSecrets)"));
 }

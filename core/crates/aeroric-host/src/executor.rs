@@ -22,6 +22,8 @@
 use std::io::Read as _;
 use std::sync::{Arc, Mutex, Weak};
 
+use aeroric_core::agent_connections::launch::{legacy_mapping, resolve_config, ConfigLaunch};
+use aeroric_core::agent_connections::model::Harness;
 use aeroric_core::agents::environment::{aeroric_guard_ops, terminal_env_ops, EnvOp};
 use aeroric_core::agents::launch::{claude_plan, codex_plan, dsh_plan, omp_plan, LaunchInput};
 use aeroric_core::context::CoreContext;
@@ -206,6 +208,144 @@ impl CliPtyExecutor {
         }
         LaunchInput::new(agent)
     }
+
+    /// The agent configuration a launch runs under (Q5). A pinned configuration that
+    /// is gone is an error, never a fallback to a legacy wrapper. Without a pin, a
+    /// migrated legacy custom id maps to its configuration (D3/D6); anything else
+    /// keeps the legacy path.
+    fn launch_config(
+        &self,
+        pinned: Option<&str>,
+        agent: &str,
+    ) -> Result<Option<ConfigLaunch>, ExecutorFailure> {
+        let data_dir = self.context.paths.data_dir();
+        match pinned.filter(|id| !id.trim().is_empty()) {
+            Some(id) => resolve_config(data_dir, id)
+                .map(Some)
+                .map_err(|reason| ExecutorFailure::Spawn { reason }),
+            None => Ok(legacy_mapping(data_dir, agent)),
+        }
+    }
+
+    /// The harness's own CLI: the configured `claude_path`/`codex_path`, else the
+    /// name on PATH. Never a custom profile's wrapper or fixed args.
+    fn harness_input(&self, agent: &str) -> LaunchInput {
+        aeroric_core::storage::load_settings(&self.context)
+            .ok()
+            .and_then(|outcome| outcome.found())
+            .and_then(|fields| {
+                fields
+                    .get(&format!("{agent}_path"))
+                    .and_then(Value::as_str)
+                    .filter(|path| !path.trim().is_empty())
+                    .map(str::to_string)
+            })
+            .map(LaunchInput::new)
+            .unwrap_or_else(|| LaunchInput::new(agent))
+    }
+
+    /// Managed home for a configuration launch, isolated like the legacy wrappers
+    /// did, so the user's own CLI config cannot redirect the request elsewhere.
+    fn config_home_ops(&self, config: &ConfigLaunch) -> Result<Vec<EnvOp>, String> {
+        let home = self
+            .context
+            .paths
+            .data_dir()
+            .join("agent-homes")
+            .join(&config.home_dir_name);
+        let session_env = home.join("session-env");
+        let tmp = home.join("tmp");
+        for dir in [&home, &session_env, &tmp] {
+            aeroric_core::settings::ensure_private_dir(dir)
+                .map_err(|e| format!("cannot prepare managed agent home {}: {e}", dir.display()))?;
+        }
+        let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        Ok(match config.harness {
+            Harness::Codex => vec![
+                EnvOp::Set("CODEX_HOME".into(), path(&home)),
+                EnvOp::Unset("OPENAI_ORG_ID".into()),
+                EnvOp::Unset("OPENAI_PROJECT".into()),
+            ],
+            _ => vec![
+                EnvOp::Set("CLAUDE_CONFIG_DIR".into(), path(&home)),
+                EnvOp::Set("CLAUDE_CODE_SESSION_ENV_DIR".into(), path(&session_env)),
+                EnvOp::Set("TMPDIR".into(), path(&tmp)),
+                EnvOp::Set(
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(),
+                    "1".into(),
+                ),
+                EnvOp::Set("CLAUDE_CODE_ATTRIBUTION_HEADER".into(), "0".into()),
+                EnvOp::Unset("ANTHROPIC_MODEL".into()),
+                EnvOp::Unset("ANTHROPIC_DEFAULT_OPUS_MODEL".into()),
+                EnvOp::Unset("ANTHROPIC_DEFAULT_SONNET_MODEL".into()),
+                EnvOp::Unset("ANTHROPIC_DEFAULT_HAIKU_MODEL".into()),
+                EnvOp::Unset("AGENT_ROUTER_TOKEN".into()),
+            ],
+        })
+    }
+}
+
+fn config_family(config: &ConfigLaunch) -> ProtocolFamily {
+    match config.harness {
+        Harness::Codex => ProtocolFamily::Codex,
+        _ => ProtocolFamily::Claude,
+    }
+}
+
+/// The gateway listens on this host's loopback; a remote shell cannot reach it.
+fn refuse_remote_config(
+    config: Option<&ConfigLaunch>,
+    working_directory: &WorkingDirectory,
+) -> Execution<()> {
+    if config.is_some() && matches!(working_directory, WorkingDirectory::Ssh { .. }) {
+        return Err(ExecutorFailure::Unsupported {
+            reason: "an agent configuration routes through this Mac's local gateway; \
+                     remote SSH workspaces cannot use it yet"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Environment that points a Claude/Codex CLI at the gateway with its task token.
+/// Any upstream key the CLI would otherwise pick up is unset, so a misconfigured
+/// task fails at the gateway instead of silently spending a different account.
+fn gateway_env_ops(
+    data_dir: &std::path::Path,
+    family: ProtocolFamily,
+    token: &str,
+) -> Result<Vec<EnvOp>, String> {
+    let base = crate::gateway::ensure_running(data_dir)?;
+    let mut ops = match family {
+        ProtocolFamily::Claude => vec![
+            EnvOp::Set("ANTHROPIC_BASE_URL".into(), format!("{base}/claude")),
+            EnvOp::Set("ANTHROPIC_AUTH_TOKEN".into(), token.to_string()),
+            EnvOp::Unset("ANTHROPIC_API_KEY".into()),
+        ],
+        ProtocolFamily::Codex => vec![
+            EnvOp::Set("OPENAI_BASE_URL".into(), format!("{base}/codex/v1")),
+            EnvOp::Set("OPENAI_API_KEY".into(), token.to_string()),
+            EnvOp::Unset("CODEX_API_KEY".into()),
+        ],
+        _ => return Err("this agent family does not use the gateway yet".into()),
+    };
+    // A system proxy must never carry loopback gateway traffic.
+    for key in ["NO_PROXY", "no_proxy"] {
+        let mut list: Vec<String> = std::env::var(key)
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        for bypass in ["127.0.0.1", "localhost", "::1"] {
+            if !list.iter().any(|item| item == bypass) {
+                list.push(bypass.to_string());
+            }
+        }
+        ops.push(EnvOp::Set(key.into(), list.join(",")));
+    }
+    Ok(ops)
 }
 
 fn apply_env_ops(c: &mut CommandBuilder, ops: &[EnvOp]) {
@@ -296,9 +436,37 @@ impl CliPtyExecutor {
         family: ProtocolFamily,
         agent: &str,
         selected_model: Option<&str>,
+        config: Option<&ConfigLaunch>,
     ) -> Execution<()> {
-        let (pre_env_ops, post_env_ops) =
+        // Q23: a task launched under an agent configuration gets its own router token.
+        // It is revoked on exit and on every spawn failure below, so a token never
+        // outlives the process it was issued for. `ConfigLaunch` is Claude/Codex
+        // only (Q32-a).
+        let router_token = config.map(|config| {
+            aeroric_core::local_router::task_tokens::issue(task_id, Some(config.config_id.clone()))
+        });
+        let revoke_on_failure = |failure: ExecutorFailure| {
+            if router_token.is_some() {
+                aeroric_core::local_router::task_tokens::revoke(task_id);
+            }
+            failure
+        };
+        let (pre_env_ops, mut post_env_ops) =
             self.run_flow_env_ops(task_id, agent, family, selected_model);
+        if let Some(token) = router_token.as_deref() {
+            // Post ops win over the plan's env: the CLI must talk to the gateway,
+            // never to an upstream from its own config with a key of its own.
+            match gateway_env_ops(self.context.paths.data_dir(), family, token) {
+                Ok(ops) => post_env_ops.extend(ops),
+                Err(reason) => return Err(revoke_on_failure(ExecutorFailure::Spawn { reason })),
+            }
+        }
+        if let Some(config) = config {
+            match self.config_home_ops(config) {
+                Ok(ops) => post_env_ops.extend(ops),
+                Err(reason) => return Err(revoke_on_failure(ExecutorFailure::Spawn { reason })),
+            }
+        }
         let command = to_command_builder(plan, &pre_env_ops, &post_env_ops);
         let pty_system = native_pty_system();
         let (cols, rows) = terminal_size.unwrap_or((120, 30));
@@ -309,14 +477,16 @@ impl CliPtyExecutor {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| ExecutorFailure::Spawn {
-                reason: format!("cannot open a pty: {e}"),
+            .map_err(|e| {
+                revoke_on_failure(ExecutorFailure::Spawn {
+                    reason: format!("cannot open a pty: {e}"),
+                })
             })?;
         let run = RunKey::minted(task_id, generation);
         let handles = activate_pty_session(pair, command, &self.registry, &run).map_err(|e| {
-            ExecutorFailure::Spawn {
+            revoke_on_failure(ExecutorFailure::Spawn {
                 reason: e.to_string(),
-            }
+            })
         })?;
 
         // reader：阻塞读进字节环。线程随进程退出消亡；supervisor 托管的
@@ -384,6 +554,9 @@ impl CliPtyExecutor {
             let run = RunKey::minted(&task_id, generation);
             ctx.registry.remove_pty_handles(&run);
             ctx.registry.runs.retire(&task_id, generation);
+            // The process is gone; its router token must not outlive it (Q23).
+            aeroric_core::local_router::task_tokens::revoke(&task_id);
+            aeroric_core::local_router::config_routes::forget_task(&task_id);
             // 结算走宿主同一条判据链（settle_exit），标记在此消费：
             // - cancel 意图：宿主侧状态由前端先写（G05 的 React 权威面），CLI host
             //   没有前端——**executor 是写 Cancelled 的人**（origin=Runtime，
@@ -580,6 +753,12 @@ impl TaskExecutor for CliPtyExecutor {
             }
             WorkingDirectory::Local { path } => path.clone(),
         };
+        let config = self.launch_config(request.agent_config_id.as_deref(), &request.agent)?;
+        refuse_remote_config(config.as_ref(), &request.working_directory)?;
+        let family = config.as_ref().map_or(request.family, config_family);
+        let agent = config
+            .as_ref()
+            .map_or(request.agent.as_str(), |config| config.agent());
         let prompt = request
             .prompt_override
             .clone()
@@ -589,13 +768,16 @@ impl TaskExecutor for CliPtyExecutor {
         } else {
             vec!["--".to_string(), prompt.clone()]
         };
-        let input = self.resolve_launch(&request.agent);
-        let mut plan = match request.family {
+        let input = match &config {
+            Some(config) => self.harness_input(config.agent()),
+            None => self.resolve_launch(&request.agent),
+        };
+        let mut plan = match family {
             ProtocolFamily::Claude => {
                 let mut p = claude_plan(
                     &input,
                     &request.permission_mode_wire,
-                    &request.agent,
+                    agent,
                     request.selected_model.as_deref(),
                     request.reasoning_effort.as_deref(),
                 );
@@ -672,9 +854,10 @@ impl TaskExecutor for CliPtyExecutor {
             &request.project_id,
             request.generation,
             request.terminal_size,
-            request.family,
-            &request.agent,
+            family,
+            agent,
             request.selected_model.as_deref(),
+            config.as_ref(),
         )
     }
 
@@ -700,13 +883,22 @@ impl TaskExecutor for CliPtyExecutor {
             WorkingDirectory::Ssh { remote_path, .. } => remote_path.clone(),
             WorkingDirectory::Local { path } => path.clone(),
         };
-        let input = self.resolve_launch(&request.agent);
-        let mut plan = match request.family {
+        let config = self.launch_config(request.agent_config_id.as_deref(), &request.agent)?;
+        refuse_remote_config(config.as_ref(), &request.working_directory)?;
+        let family = config.as_ref().map_or(request.family, config_family);
+        let agent = config
+            .as_ref()
+            .map_or(request.agent.as_str(), |config| config.agent());
+        let input = match &config {
+            Some(config) => self.harness_input(config.agent()),
+            None => self.resolve_launch(&request.agent),
+        };
+        let mut plan = match family {
             ProtocolFamily::Claude => {
                 let mut p = claude_plan(
                     &input,
                     &request.permission_mode_wire,
-                    &request.agent,
+                    agent,
                     request.selected_model.as_deref(),
                     request.reasoning_effort.as_deref(),
                 );
@@ -762,9 +954,10 @@ impl TaskExecutor for CliPtyExecutor {
             &request.project_id,
             request.generation,
             request.terminal_size,
-            request.family,
-            &request.agent,
+            family,
+            agent,
             request.selected_model.as_deref(),
+            config.as_ref(),
         )
     }
 

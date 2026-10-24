@@ -1093,6 +1093,7 @@ fn the_new_task_record_matches_the_shape_the_client_writes() {
                 reasoning_effort: None,
                 speed: None,
                 dsh_agent_preset: None,
+                agent_config_id: None,
                 images: vec![],
                 texts: vec![],
             },
@@ -1135,6 +1136,7 @@ fn the_new_task_record_matches_the_shape_the_client_writes() {
                     reasoning_effort: None,
                     speed: None,
                     dsh_agent_preset: None,
+                    agent_config_id: None,
                     images: vec![],
                     texts: vec![],
                 }
@@ -1167,6 +1169,7 @@ fn an_immediate_task_is_created_and_spawned_with_the_same_commit_as_its_record()
                 reasoning_effort: None,
                 speed: None,
                 dsh_agent_preset: None,
+                agent_config_id: None,
                 images: vec![],
                 texts: vec![],
             },

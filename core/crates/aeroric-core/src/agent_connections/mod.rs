@@ -5,6 +5,7 @@
 //! are in the keychain, never in the file.
 
 pub mod fetch;
+pub mod launch;
 pub mod legacy_cleanup;
 pub mod migration;
 pub mod model;

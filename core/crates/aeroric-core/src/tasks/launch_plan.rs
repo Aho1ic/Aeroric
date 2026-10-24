@@ -170,6 +170,7 @@ pub fn launch_request(
         reasoning_effort: string(record, "reasoningEffort"),
         speed: string(record, "speed"),
         dsh_agent_preset: string(record, "dshAgentPreset"),
+        agent_config_id: string(record, "agentConfigId"),
         created_at_ms: number(record, "createdAt").unwrap_or_default(),
         dsh_window,
         working_directory,
@@ -209,6 +210,8 @@ pub fn resume_request(
         reasoning_effort: string(record, "reasoningEffort"),
         speed: string(record, "speed"),
         dsh_agent_preset: string(record, "dshAgentPreset"),
+        // A resumed task routes through the configuration it was created with (Q27).
+        agent_config_id: string(record, "agentConfigId"),
         prompt: takes_prompt.then(|| string(record, "prompt").unwrap_or_default()),
         working_directory,
         terminal_size: None,

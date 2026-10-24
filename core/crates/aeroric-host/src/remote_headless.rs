@@ -388,6 +388,8 @@ impl RemoteHostHandle for CliRemoteHandle {
                 .get("dshAgentPreset")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            // Remote RPC predates agent configurations; it never selects one.
+            agent_config_id: None,
             images: Vec::new(),
             texts: Vec::new(),
         };

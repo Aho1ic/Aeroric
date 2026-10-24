@@ -98,8 +98,8 @@ pub async fn run_startup(
 }
 
 /// Explicit secret-store composition. The library startup above is safe for
-/// embedding/tests; only the production binary selects the OS credential store.
-/// Changing HOME cannot isolate that OS service.
+/// embedding/tests and deliberately does not migrate legacy Agent settings.
+/// Changing HOME cannot isolate an OS credential service.
 pub async fn run_startup_with_secrets(
     options: &HostOptions,
     clock: Arc<dyn Clock>,
@@ -108,6 +108,54 @@ pub async fn run_startup_with_secrets(
     build_hash: &str,
     protocol_hash: &str,
     secrets: Arc<dyn SecretStore>,
+) -> Result<StartedHost, StartupError> {
+    run_startup_with_secrets_inner(
+        options,
+        clock,
+        owner,
+        probe,
+        build_hash,
+        protocol_hash,
+        secrets,
+        false,
+    )
+    .await
+}
+
+/// Production composition: run the non-destructive legacy Agent migration
+/// after data compatibility succeeds and before the listener can become ready.
+pub async fn run_startup_with_secrets_and_legacy_agent_migration(
+    options: &HostOptions,
+    clock: Arc<dyn Clock>,
+    owner: &LeaseOwner,
+    probe: &dyn StorageLocationProbe,
+    build_hash: &str,
+    protocol_hash: &str,
+    secrets: Arc<dyn SecretStore>,
+) -> Result<StartedHost, StartupError> {
+    run_startup_with_secrets_inner(
+        options,
+        clock,
+        owner,
+        probe,
+        build_hash,
+        protocol_hash,
+        secrets,
+        true,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_startup_with_secrets_inner(
+    options: &HostOptions,
+    clock: Arc<dyn Clock>,
+    owner: &LeaseOwner,
+    probe: &dyn StorageLocationProbe,
+    build_hash: &str,
+    protocol_hash: &str,
+    secrets: Arc<dyn SecretStore>,
+    migrate_legacy_agent_settings: bool,
 ) -> Result<StartedHost, StartupError> {
     // 1. lock —— 写租约（连卷探测），失败即「另一个写者持有着」，绝不排队等。
     let context = Arc::new(
@@ -129,6 +177,14 @@ pub async fn run_startup_with_secrets(
             bumped.metadata
         }
     };
+
+    // Only the production composition opts into this one-way copy. Keep it
+    // before token/listener/ready so a failed migration cannot expose a host
+    // that has announced readiness with incomplete connection data.
+    if migrate_legacy_agent_settings {
+        aeroric_core::agent_connections::migration::migrate_legacy_agent_settings(&context)
+            .map_err(StartupError::DataCompat)?;
+    }
 
     // 3.5 token —— 握手判据的载体在 listener 之前落位：绑上端口却没有 token，
     //      第一个连接的 handshake 只会得到「文件不存在」，那是自造拒绝面。

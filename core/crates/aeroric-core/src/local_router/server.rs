@@ -2,7 +2,14 @@ use super::cache_injector;
 use super::chat_bridge::{chat_response_to_responses, responses_to_chat, ChatSseTransformer};
 use super::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerRegistry, CircuitPermit};
 use super::inline_tool_calls;
+use super::messages_bridge::{
+    chat_error_to_messages, chat_response_to_messages, messages_to_chat, ChatToMessagesSse,
+};
 use super::moonshot_schema;
+use super::pivot_bridge::{
+    chat_to_messages_request, chat_to_responses_request, messages_to_chat_response,
+    responses_to_chat_response, MessagesSseToChat, ResponsesSseToChat,
+};
 use super::session;
 use super::thinking_optimizer;
 use super::transforms::{self, PreparedRequest};
@@ -34,9 +41,9 @@ use futures_util::stream::{self, BoxStream};
 use futures_util::StreamExt;
 use guard::{
     filter_request_headers, filter_response_headers, request_is_authorized, request_is_cross_site,
-    strip_router_credentials,
+    request_task_grant, strip_router_credentials,
 };
-use routing::{build_upstream_url, select_route, SelectedRoute};
+use routing::{build_upstream_url, select_route, Pivot, SelectedRoute};
 use semantic::{inspect_stream_start, semantic_error_from_bytes, SemanticStreamObserver};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -109,6 +116,9 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
     if !request_is_authorized(&runtime_config, &parts.headers) {
         return unauthorized_response();
     }
+    // Read before the credentials are stripped: a task token pinned to an agent
+    // configuration routes through `agent-connections.json` (4b), not the legacy list.
+    let config_grant = request_task_grant(&parts.headers).filter(|g| g.agent_config_id.is_some());
     strip_router_credentials(&mut parts.headers, &runtime_config.access_token);
     let mut completion = RequestCompletion::new(
         route.agent,
@@ -150,7 +160,37 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
         session_body.as_ref(),
     )));
 
-    let candidates = agent_runtime.candidates_for(route.target_id.as_deref());
+    let (candidates, policy) = match &config_grant {
+        Some(grant) => match resolve_config_targets(grant, &request_metadata.model).await {
+            Ok(targets) => {
+                // Every resolved channel is a failover candidate (Q25); the order
+                // already reflects the pool strategy, stickiness and cooldowns.
+                let policy = RouterAgentPolicy {
+                    auto_failover_enabled: true,
+                    max_retries: targets.len().saturating_sub(1).min(u8::MAX as usize) as u8,
+                    model_mapping_enabled: true,
+                    ..agent_runtime.policy.clone()
+                };
+                (targets, policy)
+            }
+            Err(message) => {
+                completion
+                    .complete(
+                        TokenUsage::default(),
+                        StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                        request_metadata.streaming,
+                        Some(message.clone()),
+                    )
+                    .await;
+                return json_error(StatusCode::SERVICE_UNAVAILABLE, &message);
+            }
+        },
+        None => (
+            agent_runtime.candidates_for(route.target_id.as_deref()),
+            agent_runtime.policy.clone(),
+        ),
+    };
+    let config_task = config_grant.as_ref().map(|g| g.task_id.clone());
     if candidates.is_empty() {
         let message = if agent_runtime.policy.auto_failover_enabled {
             "automatic failover is enabled, but its queue has no valid targets"
@@ -171,7 +211,6 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
     let method = parts.method;
     let query = parts.uri.query().map(str::to_string);
     let outbound_headers = filter_request_headers(parts.headers);
-    let policy = agent_runtime.policy;
     let circuit_config = policy.circuit_breaker_config();
     let max_attempts = policy.max_attempts();
     // 熔断器只在"还有别的目标可以接住流量"时才有意义。以下两种情况必须直通：
@@ -237,6 +276,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                         &failure.summary,
                     )
                     .await;
+                note_failure(config_task.as_deref(), &failure);
                 last_failure = Some(failure);
             }
             AttemptResult::Return(mut upstream) => {
@@ -268,7 +308,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                         target_id: target.id().to_string(),
                         used_half_open_permit: permit.used_half_open_permit,
                     });
-                    if route.target_id.is_none() {
+                    if note_success(&route, config_task.as_deref(), target.id()) {
                         mark_active_target(&context, route.agent, target.id()).await;
                     }
                     return upstream.into_response(route.agent);
@@ -282,7 +322,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                             permit.used_half_open_permit,
                         )
                         .await;
-                    if route.target_id.is_none() {
+                    if note_success(&route, config_task.as_deref(), target.id()) {
                         mark_active_target(&context, route.agent, target.id()).await;
                     }
                 }
@@ -330,6 +370,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                             &failure.summary,
                         )
                         .await;
+                    note_failure(config_task.as_deref(), &failure);
                     last_failure = Some(failure);
                 }
                 AttemptResult::Return(mut upstream) => {
@@ -351,7 +392,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                                 target_id: target.id().to_string(),
                                 used_half_open_permit: false,
                             });
-                            if route.target_id.is_none() {
+                            if note_success(&route, config_task.as_deref(), target.id()) {
                                 mark_active_target(&context, route.agent, target.id()).await;
                             }
                             return upstream.into_response(route.agent);
@@ -360,7 +401,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                             .circuit_breakers
                             .record_success(route.agent, target.id(), circuit_config.clone(), false)
                             .await;
-                        if route.target_id.is_none() {
+                        if note_success(&route, config_task.as_deref(), target.id()) {
                             mark_active_target(&context, route.agent, target.id()).await;
                         }
                     }
@@ -418,6 +459,64 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
     }
 }
 
+/// Targets for a task pinned to an agent configuration (4b). Disk and keychain
+/// reads run on a blocking thread. No keychain installed means no credentials can
+/// be read, so this fails closed instead of sending requests without a key.
+async fn resolve_config_targets(
+    grant: &super::task_tokens::TaskGrant,
+    model: &str,
+) -> Result<Vec<UpstreamTarget>, String> {
+    let grant = grant.clone();
+    let model = model.to_string();
+    let resolved = tokio::task::spawn_blocking(move || {
+        let data_dir = crate::settings::aeroric_dir()?;
+        let secrets = crate::settings::secret_fields::secret_store()
+            .ok_or_else(|| "no credential store is configured for the router".to_string())?;
+        Ok::<_, String>(super::config_routes::resolve_from_disk(
+            &data_dir, &grant, &model, &secrets,
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    match resolved {
+        super::config_routes::Resolution::Targets(targets) => Ok(targets),
+        super::config_routes::Resolution::Unavailable(reason) => Err(reason),
+    }
+}
+
+/// After a successful attempt. Config-pinned tasks record into the shared
+/// cooldown/sticky table (4b) and never touch the legacy active target, which
+/// would otherwise be overwritten with a `conn:` id. Returns whether the caller
+/// should still mark the legacy active target.
+fn note_success(route: &SelectedRoute, config_task: Option<&str>, target_id: &str) -> bool {
+    match config_task {
+        Some(task_id) => {
+            super::config_routes::record_success(task_id, target_id, CONFIG_STICKY_TTL_S);
+            false
+        }
+        None => route.target_id.is_none(),
+    }
+}
+
+/// After a failed attempt on a config-pinned task: cool the channel down (Q31,
+/// shared across pools and configs). Legacy targets keep only the circuit breaker.
+fn note_failure(config_task: Option<&str>, failure: &AttemptFailure) {
+    if config_task.is_some() {
+        let retry_after = failure
+            .headers
+            .get(axum::http::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok());
+        super::config_routes::record_failure(
+            &failure.target_id,
+            failure.upstream_status.map(|s| s.as_u16()),
+            retry_after,
+        );
+    }
+}
+
+const CONFIG_STICKY_TTL_S: u64 = 3600;
+
 async fn mark_active_target(context: &ServerContext, agent: RouterAgent, target_id: &str) {
     let mut config = context.config.write().await;
     config.upstreams.agent_mut(agent).policy.active_target = target_id.to_string();
@@ -464,11 +563,22 @@ async fn attempt_target(
     let request_model = prepared.request_model.clone();
     let outbound_model = prepared.outbound_model.clone();
     let mut one_m_context = prepared.one_m_context;
+    // Two bridges share the Chat Completions upstream: Codex Responses (existing)
+    // and Claude Messages (4c). `chat_bridge` is "the upstream speaks Chat".
     let bridge = route.bridges_responses_to_chat(target);
-    let endpoint = if bridge {
-        "/v1/chat/completions".to_string()
-    } else {
-        route.forward_path.clone()
+    let messages_bridge = route.bridges_messages_to_chat(target);
+    let chat_bridge = bridge || messages_bridge;
+    // 4d: Messages ↔ Responses, pivoting through Chat inside the router.
+    let pivot = route.pivot(target);
+    // Any translation: the upstream body is not what the client sent.
+    let translated = chat_bridge || pivot.is_some();
+    // The client reads Anthropic shapes (Claude Code), whatever the upstream speaks.
+    let reply_as_messages = messages_bridge || pivot == Some(Pivot::ClaudeToResponses);
+    let endpoint = match pivot {
+        Some(Pivot::ClaudeToResponses) => "/v1/responses".to_string(),
+        Some(Pivot::CodexToMessages) => "/v1/messages".to_string(),
+        None if chat_bridge => "/v1/chat/completions".to_string(),
+        None => route.forward_path.clone(),
     };
     let upstream_url = match build_upstream_url(target, &endpoint, query) {
         Ok(url) => url,
@@ -484,23 +594,26 @@ async fn attempt_target(
     };
 
     let mut current_json = prepared.json.clone();
-    let mut current_body = match request_body_for_target(&prepared, bridge, target) {
-        Ok(body) => body,
-        Err(message) => {
-            return AttemptResult::Return(AttemptResponse::local_error(
-                StatusCode::BAD_REQUEST,
-                message,
-                endpoint,
-                outbound_model,
-            ));
-        }
-    };
+    let mut current_body =
+        match request_body_for_target(&prepared, bridge, messages_bridge, pivot, target) {
+            Ok(body) => body,
+            Err(message) => {
+                return AttemptResult::Return(AttemptResponse::local_error(
+                    StatusCode::BAD_REQUEST,
+                    message,
+                    endpoint,
+                    outbound_model,
+                ));
+            }
+        };
     // Preflight optimization for Claude: inject thinking configuration and
     // prompt-cache breakpoints before the first upstream send. Both run only
     // when enabled by policy; the rectifier retry path below re-serializes the
     // body independently and does not re-run these passes.
     let mut interleaved_thinking = false;
-    if route.agent == RouterAgent::Claude {
+    // Both passes rewrite the Messages JSON into `current_body`; on a bridged
+    // request that would overwrite the converted Chat body, so they are skipped.
+    if route.agent == RouterAgent::Claude && !translated {
         if let Some(json) = current_json.as_mut() {
             if policy.thinking_optimizer_enabled {
                 if let Some(outcome) = thinking_optimizer::optimize(json) {
@@ -523,10 +636,23 @@ async fn attempt_target(
             original_headers,
             route.agent,
             target,
-            bridge,
+            translated,
             one_m_context,
             interleaved_thinking,
         ) {
+            // A Messages upstream authenticates with `x-api-key` and needs a version
+            // header; Codex sends neither (it only knows Bearer).
+            Ok(mut headers) if pivot == Some(Pivot::CodexToMessages) => {
+                if let Ok(key) = HeaderValue::from_str(target.api_key()) {
+                    if !target.api_key().is_empty() {
+                        headers.insert("x-api-key", key);
+                    }
+                }
+                headers
+                    .entry("anthropic-version")
+                    .or_insert(HeaderValue::from_static("2023-06-01"));
+                headers
+            }
             Ok(headers) => headers,
             Err(message) => {
                 return AttemptResult::Retry(AttemptFailure::transport(
@@ -569,9 +695,13 @@ async fn attempt_target(
 
         if raw.status.as_u16() >= 400 {
             let status = raw.status;
-            let (headers, body) = raw.into_buffered();
+            let (mut headers, body) = raw.into_buffered();
             let summary = upstream_error_summary(status, &headers, &body);
-            if !rectifier_retried && policy.rectifier_enabled && route.agent == RouterAgent::Claude
+            // Rectifiers edit Anthropic request fields; a bridged body is Chat.
+            if !rectifier_retried
+                && policy.rectifier_enabled
+                && route.agent == RouterAgent::Claude
+                && !translated
             {
                 if let Some(json) = current_json.as_ref() {
                     if let Some((rectified, _kind)) =
@@ -585,6 +715,17 @@ async fn attempt_target(
                 }
             }
 
+            // Claude Code parses errors as Anthropic `{type:"error",error:{…}}`.
+            let body = if reply_as_messages {
+                headers.remove(CONTENT_ENCODING);
+                headers.remove(CONTENT_LENGTH);
+                headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                serde_json::to_vec(&chat_error_to_messages(status.as_u16(), &body))
+                    .map(Bytes::from)
+                    .unwrap_or(body)
+            } else {
+                body
+            };
             let response = AttemptResponse {
                 status,
                 headers,
@@ -644,23 +785,34 @@ async fn attempt_target(
         return match raw.body {
             RawAttemptBody::Buffered(body) => {
                 let mut headers = raw.headers;
-                let body = if bridge {
+                let reply_model = if outbound_model.is_empty() {
+                    request_model.as_str()
+                } else {
+                    outbound_model.as_str()
+                };
+                let body = if translated {
                     match serde_json::from_slice::<Value>(&body) {
                         Ok(payload) => {
                             headers.remove(CONTENT_ENCODING);
                             headers.remove(CONTENT_LENGTH);
                             headers
                                 .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-                            serde_json::to_vec(&chat_response_to_responses(
-                                &payload,
-                                if outbound_model.is_empty() {
-                                    &request_model
-                                } else {
-                                    &outbound_model
-                                },
-                            ))
-                            .map(Bytes::from)
-                            .unwrap_or(body)
+                            // 4d: the pivot first normalizes the upstream reply to Chat.
+                            let payload = match pivot {
+                                Some(Pivot::ClaudeToResponses) => {
+                                    responses_to_chat_response(&payload)
+                                }
+                                Some(Pivot::CodexToMessages) => messages_to_chat_response(&payload),
+                                None => payload,
+                            };
+                            let converted = if reply_as_messages {
+                                chat_response_to_messages(&payload, reply_model)
+                            } else {
+                                chat_response_to_responses(&payload, reply_model)
+                            };
+                            serde_json::to_vec(&converted)
+                                .map(Bytes::from)
+                                .unwrap_or(body)
                         }
                         Err(_) => body,
                     }
@@ -691,7 +843,7 @@ async fn attempt_target(
             RawAttemptBody::Streaming { first, rest } => {
                 let mut headers = raw.headers;
                 headers.remove(CONTENT_LENGTH);
-                if bridge {
+                if translated {
                     headers.remove(CONTENT_ENCODING);
                     headers.insert(
                         CONTENT_TYPE,
@@ -711,17 +863,34 @@ async fn attempt_target(
                     body: AttemptBody::Streaming(StreamingAttemptBody {
                         first,
                         rest,
-                        bridge_model: bridge.then(|| {
-                            if outbound_model.is_empty() {
+                        bridge: translated.then(|| {
+                            let model = if outbound_model.is_empty() {
                                 request_model.clone()
                             } else {
                                 outbound_model.clone()
+                            };
+                            let client = if reply_as_messages {
+                                StreamBridge::Messages(ChatToMessagesSse::new(model.clone()))
+                            } else {
+                                StreamBridge::Responses(ChatSseTransformer::new(model.clone()))
+                            };
+                            // 4d: the upstream stream is first normalized to Chat SSE.
+                            match pivot {
+                                Some(Pivot::ClaudeToResponses) => StreamBridge::Pivot(
+                                    PivotSse::Responses(ResponsesSseToChat::new(model)),
+                                    Box::new(client),
+                                ),
+                                Some(Pivot::CodexToMessages) => StreamBridge::Pivot(
+                                    PivotSse::Messages(MessagesSseToChat::new(model)),
+                                    Box::new(client),
+                                ),
+                                None => client,
                             }
                         }),
                         semantic_protocol,
                         // 桥接过的流由 ChatSseTransformer 直接产出原生工具调用；
                         // 只有直连 Responses 的上游会把工具调用写进文本里。
-                        repair_inline_tool_calls: !bridge
+                        repair_inline_tool_calls: !translated
                             && route.agent == RouterAgent::Codex
                             && route.forward_path.contains("/responses")
                             && !body_is_encoded,
@@ -742,16 +911,32 @@ async fn attempt_target(
 fn request_body_for_target(
     prepared: &PreparedRequest,
     bridge: bool,
+    messages_bridge: bool,
+    pivot: Option<Pivot>,
     target: &UpstreamTarget,
 ) -> Result<Vec<u8>, String> {
-    if !bridge {
+    if !bridge && !messages_bridge && pivot.is_none() {
         return Ok(prepared.bytes.clone());
     }
     let json = prepared
         .json
         .as_ref()
-        .ok_or_else(|| "Codex Responses-to-Chat bridge requires a JSON request body".to_string())?;
-    let mut chat = responses_to_chat(json);
+        .ok_or_else(|| "the protocol bridge requires a JSON request body".to_string())?;
+    // 4d: the pivot goes through Chat and on to the upstream's own protocol. The
+    // Moonshot schema rewrite below is a Chat-upstream quirk and does not apply.
+    if let Some(pivot) = pivot {
+        let upstream = match pivot {
+            Pivot::ClaudeToResponses => chat_to_responses_request(&messages_to_chat(json)),
+            Pivot::CodexToMessages => chat_to_messages_request(&responses_to_chat(json)),
+        };
+        return serde_json::to_vec(&upstream)
+            .map_err(|error| format!("failed to convert the request: {error}"));
+    }
+    let mut chat = if messages_bridge {
+        messages_to_chat(json)
+    } else {
+        responses_to_chat(json)
+    };
     // Moonshot / Kimi 的 Chat Completions 拒收带兄弟键的 `$ref`,而 Codex 内置工具
     // schema 正是这个形状。只对这个上游改写;其它供应商的工具 schema 字节不变,
     // prompt 缓存前缀不受扰动。
@@ -1314,7 +1499,7 @@ enum AttemptBody {
 struct StreamingAttemptBody {
     first: Option<Bytes>,
     rest: BoxStream<'static, Result<Bytes, reqwest::Error>>,
-    bridge_model: Option<String>,
+    bridge: Option<StreamBridge>,
     semantic_protocol: Option<SemanticProtocol>,
     /// 是否需要把文本形态的工具调用还原成原生 `function_call`(仅 Codex Responses 流)。
     repair_inline_tool_calls: bool,
@@ -1353,7 +1538,7 @@ fn streaming_response(
     let mut state = ProxyBodyState {
         upstream: streaming.rest,
         pending: VecDeque::new(),
-        transformer: streaming.bridge_model.map(ChatSseTransformer::new),
+        transformer: streaming.bridge,
         inline_tool_calls: streaming
             .repair_inline_tool_calls
             .then(inline_tool_calls::InlineToolCallSseFilter::new),
@@ -1423,10 +1608,70 @@ fn streaming_response(
     response
 }
 
+/// A Chat Completions upstream stream re-shaped for the client's protocol.
+enum StreamBridge {
+    Responses(ChatSseTransformer),
+    Messages(ChatToMessagesSse),
+    /// 4d: upstream SSE → Chat SSE, then the inner bridge to the client's protocol.
+    Pivot(PivotSse, Box<StreamBridge>),
+}
+
+/// The upstream half of a pivot: its own protocol's SSE → Chat SSE chunks.
+enum PivotSse {
+    Responses(ResponsesSseToChat),
+    Messages(MessagesSseToChat),
+}
+
+impl PivotSse {
+    fn push(&mut self, chunk: &[u8]) -> Vec<Bytes> {
+        match self {
+            Self::Responses(t) => t.push(chunk),
+            Self::Messages(t) => t.push(chunk),
+        }
+    }
+
+    fn finish(&mut self) -> Vec<Bytes> {
+        match self {
+            Self::Responses(t) => t.finish(),
+            Self::Messages(t) => t.finish(),
+        }
+    }
+}
+
+impl StreamBridge {
+    fn push(&mut self, chunk: &[u8]) -> Vec<Bytes> {
+        match self {
+            Self::Responses(t) => t.push(chunk),
+            Self::Messages(t) => t.push(chunk),
+            Self::Pivot(upstream, client) => upstream
+                .push(chunk)
+                .iter()
+                .flat_map(|chat| client.push(chat))
+                .collect(),
+        }
+    }
+
+    fn finish(&mut self) -> Vec<Bytes> {
+        match self {
+            Self::Responses(t) => t.finish(),
+            Self::Messages(t) => t.finish(),
+            Self::Pivot(upstream, client) => {
+                let mut out: Vec<Bytes> = upstream
+                    .finish()
+                    .iter()
+                    .flat_map(|chat| client.push(chat))
+                    .collect();
+                out.extend(client.finish());
+                out
+            }
+        }
+    }
+}
+
 struct ProxyBodyState {
     upstream: BoxStream<'static, Result<Bytes, reqwest::Error>>,
     pending: VecDeque<Bytes>,
-    transformer: Option<ChatSseTransformer>,
+    transformer: Option<StreamBridge>,
     inline_tool_calls: Option<inline_tool_calls::InlineToolCallSseFilter>,
     semantic_observer: Option<SemanticStreamObserver>,
     semantic_failure: Option<String>,
@@ -1877,6 +2122,24 @@ mod tests {
     use std::fs;
     use std::net::{Ipv4Addr, SocketAddr};
     use std::path::{Path, PathBuf};
+
+    /// Loopback requests now need a live task token (Q23), so every test client
+    /// carries a freshly issued one, the same way a launched CLI does.
+    fn test_client() -> reqwest::Client {
+        let token = crate::local_router::task_tokens::issue(
+            &format!("router-test-{}", uuid::Uuid::new_v4().simple()),
+            None,
+        );
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            ROUTER_TOKEN_HEADER,
+            reqwest::header::HeaderValue::from_str(&token).expect("token is ascii"),
+        );
+        reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .expect("test client")
+    }
     use tokio::sync::Mutex;
     use uuid::Uuid;
 
@@ -2125,7 +2388,7 @@ mod tests {
             .await
             .unwrap();
 
-        let response = reqwest::Client::new()
+        let response = test_client()
             .post(format!("{}/codex/v1/responses?trace=1", info.base_url))
             .header("authorization", "Bearer test-secret")
             .header(ROUTE_AGENT_HEADER, "codex")
@@ -2225,7 +2488,7 @@ mod tests {
             ))
             .await
             .unwrap();
-        let response = reqwest::Client::new()
+        let response = test_client()
             .post(format!("{}/codex/v1/responses", info.base_url))
             .json(&json!({"model":"gpt-test","input":"hello"}))
             .send()
@@ -2292,7 +2555,7 @@ mod tests {
             .await
             .unwrap();
 
-        let response = reqwest::Client::new()
+        let response = test_client()
             .post(format!("{}/codex/v1/responses", info.base_url))
             .json(&json!({"model":"gpt-test","input":"hello"}))
             .send()
@@ -2373,7 +2636,7 @@ mod tests {
             .await
             .unwrap();
 
-        let response = reqwest::Client::new()
+        let response = test_client()
             .post(format!("{}/codex/v1/responses", info.base_url))
             .json(&json!({"model":"gpt-test","input":"hello","stream":true}))
             .send()
@@ -2433,7 +2696,7 @@ mod tests {
         );
         let info = router.start(config.clone()).await.unwrap();
 
-        let response = reqwest::Client::new()
+        let response = test_client()
             .post(format!("{}/codex/v1/responses", info.base_url))
             .json(&json!({"model":"gpt-test","input":"hello","stream":true}))
             .send()
@@ -2521,7 +2784,7 @@ mod tests {
             ))
             .await
             .unwrap();
-        let response = reqwest::Client::new()
+        let response = test_client()
             .post(format!("{}/codex/v1/responses", info.base_url))
             .json(&json!({"model":"gpt-test","input":"bad"}))
             .send()
@@ -2583,7 +2846,7 @@ mod tests {
             .await
             .unwrap();
 
-        let client = reqwest::Client::new();
+        let client = test_client();
         let url = format!("{}/codex/v1/responses", info.base_url);
         for _ in 0..4 {
             let response = client
@@ -2667,7 +2930,7 @@ mod tests {
             .await
             .unwrap();
 
-        let client = reqwest::Client::new();
+        let client = test_client();
         let url = format!("{}/codex/targets/primary/v1/responses", info.base_url);
         for _ in 0..4 {
             let response = client
@@ -2742,7 +3005,7 @@ mod tests {
             ))
             .await
             .unwrap();
-        let response = reqwest::Client::new()
+        let response = test_client()
             .post(format!("{}/claude/v1/messages", info.base_url))
             .json(&json!({"model": "claude-sonnet-4-5", "stream": true}))
             .send()
@@ -2817,7 +3080,7 @@ mod tests {
             ))
             .await
             .unwrap();
-        let response = reqwest::Client::new()
+        let response = test_client()
             .post(format!("{}/codex/v1/responses", info.base_url))
             .json(&json!({
                 "model":"gpt-test",
@@ -2831,6 +3094,174 @@ mod tests {
         let payload: Value = response.json().await.unwrap();
         assert_eq!(payload["object"], "response");
         assert_eq!(payload["output"][0]["content"][0]["text"], "Hello");
+
+        router.stop().await.unwrap();
+        upstream_task.abort();
+        let _ = upstream_task.await;
+        remove_database(&database_path);
+    }
+
+    /// 4d:Claude Code(Messages)→ 只会 Responses 的上游,经 Chat 中转,回给客户端的是 Messages。
+    #[tokio::test]
+    async fn pivots_claude_messages_to_a_responses_upstream() {
+        let upstream = Router::new().fallback(any(|request: Request| async move {
+            assert_eq!(request.uri().path(), "/v1/responses");
+            let body = to_bytes(request.into_body(), MAX_REQUEST_BODY_BYTES)
+                .await
+                .unwrap();
+            let json: Value = serde_json::from_slice(&body).unwrap();
+            assert!(json.get("input").is_some(), "upstream must receive a Responses body");
+            assert!(json.get("messages").is_none());
+            Json(json!({
+                "id":"resp_1",
+                "object":"response",
+                "model":"gpt-test",
+                "status":"completed",
+                "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi there"}]}],
+                "usage":{"input_tokens":5,"output_tokens":3}
+            }))
+        }));
+        let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
+        let target = UpstreamTarget::with_details(
+            "resp",
+            "Responses",
+            format!("http://{upstream_address}/v1"),
+            "",
+            vec!["gpt-test".to_string()],
+            false,
+            true,
+        )
+        .unwrap()
+        .with_upstream_protocol(crate::agent_connections::model::WireProtocol::Responses);
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone());
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                runtime_with_target(
+                    RouterAgent::Claude,
+                    target,
+                    RouterAgentPolicy {
+                        active_target: "resp".to_string(),
+                        ..RouterAgentPolicy::default()
+                    },
+                ),
+            ))
+            .await
+            .unwrap();
+        let response = test_client()
+            .post(format!("{}/claude/v1/messages", info.base_url))
+            .json(&json!({
+                "model":"gpt-test",
+                "max_tokens":64,
+                "messages":[{"role":"user","content":"Hello"}],
+                "stream":false
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = response.json().await.unwrap();
+        assert_eq!(payload["type"], "message");
+        assert_eq!(payload["content"][0]["type"], "text");
+        assert_eq!(payload["content"][0]["text"], "Hi there");
+
+        router.stop().await.unwrap();
+        upstream_task.abort();
+        let _ = upstream_task.await;
+        remove_database(&database_path);
+    }
+
+    /// 4d:Codex(Responses)→ 只会 Messages 的上游,流式经 Chat 中转回成 Responses SSE。
+    #[tokio::test]
+    async fn pivots_codex_responses_stream_to_a_messages_upstream() {
+        let events = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-test\",\"usage\":{\"input_tokens\":9,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Pong\"}}\n\n",
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        let upstream = Router::new().fallback(any(move |request: Request| async move {
+            assert_eq!(request.uri().path(), "/v1/messages");
+            assert_eq!(
+                request
+                    .headers()
+                    .get("x-api-key")
+                    .and_then(|v| v.to_str().ok()),
+                Some("msg-secret")
+            );
+            assert!(request.headers().contains_key("anthropic-version"));
+            let body = to_bytes(request.into_body(), MAX_REQUEST_BODY_BYTES)
+                .await
+                .unwrap();
+            let json: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["messages"][0]["role"], "user");
+            assert!(
+                json.get("input").is_none(),
+                "upstream must receive a Messages body"
+            );
+            let chunks = vec![
+                Ok::<Bytes, Infallible>(Bytes::copy_from_slice(&events.as_bytes()[..57])),
+                Ok::<Bytes, Infallible>(Bytes::copy_from_slice(&events.as_bytes()[57..])),
+            ];
+            let mut response = Response::new(Body::from_stream(stream::iter(chunks)));
+            response
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+            response
+        }));
+        let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
+        let target = UpstreamTarget::with_details(
+            "msg",
+            "Messages",
+            format!("http://{upstream_address}/v1"),
+            "msg-secret",
+            vec!["claude-test".to_string()],
+            false,
+            true,
+        )
+        .unwrap()
+        .with_upstream_protocol(crate::agent_connections::model::WireProtocol::Messages);
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone());
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                runtime_with_target(
+                    RouterAgent::Codex,
+                    target,
+                    RouterAgentPolicy {
+                        active_target: "msg".to_string(),
+                        ..RouterAgentPolicy::default()
+                    },
+                ),
+            ))
+            .await
+            .unwrap();
+        let response = test_client()
+            .post(format!("{}/codex/v1/responses", info.base_url))
+            .json(&json!({
+                "model":"claude-test",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Ping"}]}],
+                "stream":true
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response.text().await.unwrap();
+        assert!(
+            text.contains("response.output_text.delta"),
+            "stream: {text}"
+        );
+        assert!(text.contains("Pong"), "stream: {text}");
+        assert!(text.contains("response.completed"), "stream: {text}");
 
         router.stop().await.unwrap();
         upstream_task.abort();
@@ -2898,7 +3329,7 @@ mod tests {
             .unwrap();
 
         let image_data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
-        let response = reqwest::Client::new()
+        let response = test_client()
             .post(format!("{}/v1/images/edits", info.base_url))
             .json(&json!({
                 "model": "gpt-image-test",
@@ -2973,9 +3404,10 @@ mod tests {
 
         let kimi = target_for("https://api.kimi.com/coding/v1");
         let prepared = transforms::prepare_request(&body, &kimi, &policy);
-        let converted: Value =
-            serde_json::from_slice(&request_body_for_target(&prepared, true, &kimi).unwrap())
-                .unwrap();
+        let converted: Value = serde_json::from_slice(
+            &request_body_for_target(&prepared, true, false, None, &kimi).unwrap(),
+        )
+        .unwrap();
         let parameters = &converted["tools"][0]["function"]["parameters"];
         assert_eq!(
             parameters["properties"]["prompt"],
@@ -2984,9 +3416,10 @@ mod tests {
 
         let openai = target_for("https://api.openai.com/v1");
         let prepared = transforms::prepare_request(&body, &openai, &policy);
-        let converted: Value =
-            serde_json::from_slice(&request_body_for_target(&prepared, true, &openai).unwrap())
-                .unwrap();
+        let converted: Value = serde_json::from_slice(
+            &request_body_for_target(&prepared, true, false, None, &openai).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             converted["tools"][0]["function"]["parameters"]["properties"]["prompt"],
             json!({"$ref":"#/$defs/__schema20","description":"Prompt to run"})
@@ -2995,7 +3428,7 @@ mod tests {
         // 不桥接时请求体原样透传,不做任何 schema 改写。
         let prepared = transforms::prepare_request(&body, &kimi, &policy);
         assert_eq!(
-            request_body_for_target(&prepared, false, &kimi).unwrap(),
+            request_body_for_target(&prepared, false, false, None, &kimi).unwrap(),
             body
         );
     }
@@ -3158,7 +3591,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let client = reqwest::Client::new();
+            let client = test_client();
             let url = format!("{}/codex/v1/responses", info.base_url);
             let mut handles = Vec::with_capacity(REQUESTS);
             for _ in 0..REQUESTS {
@@ -3259,7 +3692,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let client = reqwest::Client::new();
+            let client = test_client();
             let url = format!("{}/codex/v1/responses", info.base_url);
             let mut handles = Vec::with_capacity(REQUESTS);
             for _ in 0..REQUESTS {
@@ -3384,7 +3817,7 @@ mod tests {
                 .unwrap();
 
             const REQUESTS: usize = 32;
-            let client = reqwest::Client::new();
+            let client = test_client();
             let url = format!("{}/codex/v1/responses", info.base_url);
             let mut handles = Vec::with_capacity(REQUESTS);
             for _ in 0..REQUESTS {
@@ -3489,7 +3922,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let client = reqwest::Client::new();
+            let client = test_client();
             let url = format!("{}/codex/v1/responses", info.base_url);
             let mut handles = Vec::with_capacity(REQUESTS);
             for _ in 0..REQUESTS {
@@ -3602,7 +4035,7 @@ mod tests {
             for _ in 0..REQUESTS {
                 // 每次用独立 client:连接池复用会让"丢掉 Response"变成把连接还池,
                 // 对端未必立刻感知关闭。独立 client 出作用域即关连接。
-                let client = reqwest::Client::new();
+                let client = test_client();
                 let response = client
                     .post(&url)
                     .json(&json!({"model": "claude-sonnet-4-5", "stream": true}))
@@ -3699,7 +4132,7 @@ mod tests {
 
             let url = format!("{}/codex/v1/responses", info.base_url);
             for _ in 0..REQUESTS {
-                let client = reqwest::Client::new();
+                let client = test_client();
                 // 给一个够短的超时,让 reqwest 自己放弃并关连接。
                 let outcome = client
                     .post(&url)

@@ -59,6 +59,8 @@ pub mod omp_home;
 pub mod preferences;
 pub mod project_config;
 pub mod schema;
+pub mod secret_fields;
+pub mod session_catalog;
 pub mod versions;
 
 use std::collections::{HashMap, HashSet};

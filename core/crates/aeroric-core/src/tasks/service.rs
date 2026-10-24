@@ -65,6 +65,9 @@ pub struct NewTask {
     pub reasoning_effort: Option<String>,
     pub speed: Option<String>,
     pub dsh_agent_preset: Option<String>,
+    /// `agent-connections.json` config the task was created with (Q27: pinned at
+    /// creation). `None` for tasks that use the legacy agent settings.
+    pub agent_config_id: Option<String>,
     pub images: Vec<String>,
     pub texts: Vec<String>,
 }
@@ -505,6 +508,9 @@ pub struct TaskService {
     /// 时，轻则误拒（smoke-headless 首跑绿二跑红的长任务创建），重则陈旧快照
     /// 盖回 settle 的状态更新。core 侧自己串行化，守卫继续专防外来写者。
     mutations: Mutex<()>,
+    /// Serializes durable submission receipt → create/start, separately from
+    /// task mutations so the existing mutation/ledger lock order stays intact.
+    submissions: Mutex<()>,
 }
 
 impl TaskService {
@@ -529,6 +535,7 @@ impl TaskService {
             task_projects: Mutex::new(HashMap::new()),
             ledger: Mutex::new(ledger),
             mutations: Mutex::new(()),
+            submissions: Mutex::new(()),
         })
     }
 
@@ -545,6 +552,76 @@ impl TaskService {
 
     pub fn context(&self) -> &CoreContext {
         &self.context
+    }
+
+    /// Native composer opt-in. Validation failures are immutable receipts;
+    /// indeterminate execution failures never become a second launch.
+    pub fn submit(
+        &self,
+        request: &aeroric_protocol::submission::SubmissionRequest,
+    ) -> Result<aeroric_protocol::submission::SubmissionReceipt, super::submissions::SubmissionError> {
+        // Lock order: settings → submissions → task mutations → operation ledger.
+        // The execution resolver reads the same settings snapshot without a write.
+        let _settings = crate::storage::settings::settings_lock().lock();
+        crate::storage::compat::require_writer(&self.context)?;
+        let (project, reasons) = match crate::settings::session_catalog::for_project(
+            &self.context,
+            &request.project_id,
+        ) {
+            Ok((project, catalog)) => (
+                Some(project),
+                crate::settings::session_catalog::validate(&catalog, request),
+            ),
+            Err(reason) => (None, vec![reason]),
+        };
+        super::submissions::submit(&self.context, &self.submissions, request, reasons, || {
+            let project = project
+                .as_ref()
+                .ok_or_else(|| TaskError::Unaddressable(request.project_id.clone()))?;
+            self.create(
+                project,
+                NewTask {
+                    id: request.submission_id.clone(),
+                    project_id: request.project_id.clone(),
+                    prompt: request.prompt.clone(),
+                    agent: request.agent.clone(),
+                    permission_mode: request.permission_mode.clone(),
+                    immediate: true,
+                    selected_model: request.selected_model.clone(),
+                    reasoning_effort: request.reasoning_effort.clone(),
+                    speed: None,
+                    dsh_agent_preset: None,
+                    // Q27: the task pins the configuration it was submitted with.
+                    // Only an `agent-config:` catalog entry names one; legacy and
+                    // built-in entries keep their own launch path.
+                    agent_config_id: crate::agent_connections::launch::config_id_from_catalog(
+                        &request.configuration_id,
+                    )
+                    .map(str::to_string),
+                    images: vec![],
+                    texts: vec![],
+                },
+            )?;
+            self.start(
+                project,
+                &request.submission_id,
+                &format!("submission-{}", request.submission_id),
+                true,
+                None,
+                false,
+                Attachments::default(),
+                HostWindowFacts::default(),
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn submission(
+        &self,
+        id: &str,
+        fingerprint: &str,
+    ) -> Result<aeroric_protocol::submission::SubmissionLookup, super::submissions::SubmissionError> {
+        super::submissions::lookup(&self.context, &self.submissions, id, fingerprint)
     }
 
     pub fn clock(&self) -> &dyn Clock {
@@ -794,6 +871,11 @@ impl TaskService {
             record
                 .0
                 .insert("speed".into(), Value::String(speed.clone()));
+        }
+        if let Some(config_id) = &spec.agent_config_id {
+            record
+                .0
+                .insert("agentConfigId".into(), Value::String(config_id.clone()));
         }
         if launch_family == ProtocolFamily::Dsh {
             record.0.insert(
@@ -2369,6 +2451,7 @@ impl TaskService {
                     reasoning_effort: reasoning_effort.clone(),
                     speed: speed.clone(),
                     dsh_agent_preset: dsh_agent_preset.clone(),
+                    agent_config_id: None,
                     images: Vec::new(),
                     texts: Vec::new(),
                 };

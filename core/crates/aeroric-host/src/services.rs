@@ -3011,7 +3011,19 @@ pub fn register_task_services(
             std::sync::Arc::new(move |request, _call| {
                 let service = std::sync::Arc::clone(&service);
                 let context = std::sync::Arc::clone(&context);
-                Box::pin(async move { task_run(request, service, context) })
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    match tokio::task::spawn_blocking(move || task_run(request, service, context))
+                        .await
+                    {
+                        Ok(frame) => frame,
+                        Err(_) => failure(
+                            id,
+                            ErrorCode::IoError,
+                            "task.run worker failed; acceptance unknown",
+                        ),
+                    }
+                })
             }),
         );
     }
@@ -3186,6 +3198,9 @@ fn task_run(
     service: std::sync::Arc<TaskService>,
     context: std::sync::Arc<aeroric_core::context::CoreContext>,
 ) -> Frame {
+    if crate::submission_services::is_versioned(&request.params) {
+        return crate::submission_services::run(request, service);
+    }
     let id = request.id.clone();
     let Some(path) = request
         .params
@@ -3274,6 +3289,7 @@ fn task_run(
             .map(str::to_string),
         speed: None,
         dsh_agent_preset: None,
+        agent_config_id: None,
         images: Vec::new(),
         texts: Vec::new(),
     };

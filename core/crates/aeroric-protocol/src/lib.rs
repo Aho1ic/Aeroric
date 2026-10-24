@@ -13,6 +13,7 @@ pub mod error;
 pub mod event;
 pub mod project;
 pub mod session;
+pub mod submission;
 pub mod task;
 pub mod terminal;
 

@@ -295,6 +295,15 @@ impl HostServices {
         // AP7 适配器探测面。必须在 handshake 闭包捕获 `capabilities` **之前**读懂,
         // 否则广告会落在快照之后(实测:握手应答里根本没有 session-controls)。
         let adapters = wiring.adapters.take();
+        crate::submission_services::register(&mut set, Arc::clone(&context), service.clone());
+        if service.is_some() {
+            capabilities.push(aeroric_protocol::capability::Capability {
+                name: aeroric_protocol::submission::CAPABILITY.into(),
+                enabled: true,
+                since: Some(1),
+                note: Some("Versioned native configurations and durable submission receipts".into()),
+            });
+        }
         crate::services::register_read_services(&mut set, Arc::clone(&context));
         crate::connection_services::register_connection_services(&mut set, Arc::clone(&context));
         crate::infrastructure_services::register_infrastructure_services(
@@ -331,6 +340,11 @@ impl HostServices {
             &mut set,
             Arc::clone(&context),
             wiring.agent_config_external_home.take(),
+        );
+        // B1 第 3 步：连接 / 模型目录 / 号池 / Agent 配置（Q23–Q34）。
+        crate::agent_connections_services::register_agent_connection_services(
+            &mut set,
+            Arc::clone(&context),
         );
         crate::ide_services::register_ide_services(&mut set, Arc::clone(&context));
         crate::lsp_services::register_lsp_services(

@@ -25,6 +25,7 @@ pub mod operations;
 pub mod reducer;
 pub mod service;
 pub mod session_owner;
+pub mod submissions;
 
 /// The vocabulary the ports speak. A host implementing [`AgentFamilies`] cannot name a
 /// protocol family without it, and src-tauri deliberately depends on `aeroric-core` only.

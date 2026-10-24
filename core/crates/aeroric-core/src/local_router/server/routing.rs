@@ -68,18 +68,63 @@ const IMAGES_SIBLING_SUFFIXES: &[&str] = &[
     "/responses",
 ];
 
+/// Messages ↔ Responses through a Chat Completions pivot (4d).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Pivot {
+    /// Claude Code (Messages) → an upstream that only speaks Responses.
+    ClaudeToResponses,
+    /// Codex (Responses) → an upstream that only speaks Messages.
+    CodexToMessages,
+}
+
 impl SelectedRoute {
-    pub(super) fn bridges_responses_to_chat(&self, target: &UpstreamTarget) -> bool {
-        if self.agent != RouterAgent::Codex || !target.enable_chat_completions_proxy() {
-            return false;
+    fn is_codex_responses(&self) -> bool {
+        self.agent == RouterAgent::Codex
+            && matches!(
+                self.forward_path.trim_end_matches('/'),
+                "/responses" | "/v1/responses"
+            )
+    }
+
+    fn is_claude_messages(&self) -> bool {
+        self.agent == RouterAgent::Claude
+            && self.forward_path.trim_end_matches('/') == "/v1/messages"
+    }
+
+    /// Set only by config routing, from the channel's declared protocol.
+    pub(super) fn pivot(&self, target: &UpstreamTarget) -> Option<Pivot> {
+        use crate::agent_connections::model::WireProtocol;
+        match target.upstream_protocol()? {
+            WireProtocol::Responses if self.is_claude_messages() => Some(Pivot::ClaudeToResponses),
+            WireProtocol::Messages if self.is_codex_responses() => Some(Pivot::CodexToMessages),
+            _ => None,
         }
-        matches!(
-            self.forward_path.trim_end_matches('/'),
-            "/responses" | "/v1/responses"
-        )
+    }
+
+    pub(super) fn bridges_responses_to_chat(&self, target: &UpstreamTarget) -> bool {
+        self.is_codex_responses()
+            && target.enable_chat_completions_proxy()
+            && self.pivot(target).is_none()
+    }
+
+    /// Claude Code talking Messages to a Chat Completions-only upstream (4c).
+    /// `count_tokens` has no Chat equivalent and is never bridged.
+    pub(super) fn bridges_messages_to_chat(&self, target: &UpstreamTarget) -> bool {
+        self.is_claude_messages()
+            && target.enable_chat_completions_proxy()
+            && self.pivot(target).is_none()
     }
 
     pub(super) fn semantic_protocol(&self, target: &UpstreamTarget) -> Option<SemanticProtocol> {
+        // The observer reads the upstream bytes, in whatever protocol the channel speaks.
+        match self.pivot(target) {
+            Some(Pivot::ClaudeToResponses) => return Some(SemanticProtocol::Responses),
+            Some(Pivot::CodexToMessages) => return Some(SemanticProtocol::Anthropic),
+            None => {}
+        }
+        if self.bridges_messages_to_chat(target) {
+            return Some(SemanticProtocol::ChatCompletions);
+        }
         if self.agent == RouterAgent::Claude && self.forward_path.starts_with("/v1/messages") {
             return Some(SemanticProtocol::Anthropic);
         }

@@ -133,6 +133,7 @@ async fn a_settled_task_announces_task_status_to_the_event_log() {
                 reasoning_effort: None,
                 speed: None,
                 dsh_agent_preset: None,
+                agent_config_id: None,
                 images: Vec::new(),
                 texts: Vec::new(),
             },

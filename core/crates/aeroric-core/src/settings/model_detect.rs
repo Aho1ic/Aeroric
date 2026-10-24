@@ -166,6 +166,37 @@ pub(super) async fn detect_models_over_http(
     pinned: &[SocketAddr],
     failover_addresses: &[SocketAddr],
 ) -> Result<AgentModels, String> {
+    let (models, detect) = fetch_model_catalog_over_http(
+        kind,
+        base_url,
+        api_key,
+        policy,
+        proxy_settings,
+        pinned,
+        failover_addresses,
+    )
+    .await?;
+    // 复用最终成功的那个客户端:否则余额查询会重新解析域名,可能又踩到黑洞地址。
+    let balance = fetch_agent_balance(&detect, base_url.as_str(), api_key).await;
+    Ok(AgentModels {
+        models,
+        balance,
+        reasoning_effort: None,
+        reasoning_speed: None,
+    })
+}
+
+/// 只读模型目录（Q134：获取模型不顺带推理或查余额）。返回模型 id 与最终成功的客户端，
+/// 供需要余额的旧调用方复用。
+pub(super) async fn fetch_model_catalog_over_http(
+    kind: &AgentSetupKind,
+    base_url: &url::Url,
+    api_key: &str,
+    policy: ModelDetectionPolicy,
+    proxy_settings: &ProxySettings,
+    pinned: &[SocketAddr],
+    failover_addresses: &[SocketAddr],
+) -> Result<(Vec<String>, reqwest::Client), String> {
     let candidates = model_endpoint_candidates(base_url);
 
     // 每次尝试钉住的地址。
@@ -236,13 +267,48 @@ pub(super) async fn detect_models_over_http(
             }
         }
     };
+    Ok((models, detect))
+}
 
-    // 复用最终成功的那个客户端:否则余额查询会重新解析域名,可能又踩到黑洞地址。
-    let balance = fetch_agent_balance(&detect, base_url.as_str(), api_key).await;
-    Ok(AgentModels {
-        models,
-        balance,
-        reasoning_effort: None,
-        reasoning_speed: None,
-    })
+/// `agent_connections` 的目录获取入口：本机用户策略（SSRF 闸门、地址故障转移照旧），
+/// 代理仅在连接勾选时套用（Q139：默认直连，代理失败不暗中改走直连）。
+pub async fn fetch_connection_catalog(
+    kind: AgentSetupKind,
+    base_url: &str,
+    api_key: &str,
+    use_global_proxy: bool,
+) -> Result<Vec<String>, String> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Err("API key is required".to_string());
+    }
+    let policy = ModelDetectionPolicy::LocalUser;
+    let base_url = validate_model_base_url(base_url, policy)?;
+    let proxy_settings = if use_global_proxy {
+        let proxy = tokio::task::spawn_blocking(|| load_settings_internal().proxy_settings)
+            .await
+            .map_err(|error| error.to_string())?;
+        if normalize_proxy_url(&proxy.url).is_empty() {
+            return Err("Global proxy is not configured; no request was sent".to_string());
+        }
+        proxy
+    } else {
+        ProxySettings::default()
+    };
+    let failover_addresses = if detect_proxy_applies(&proxy_settings, policy) {
+        Vec::new()
+    } else {
+        resolve_local_model_addresses(&base_url).await
+    };
+    let (models, _client) = fetch_model_catalog_over_http(
+        &kind,
+        &base_url,
+        api_key,
+        policy,
+        &proxy_settings,
+        &[],
+        &failover_addresses,
+    )
+    .await?;
+    Ok(models)
 }

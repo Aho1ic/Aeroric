@@ -148,7 +148,9 @@ fn agent_config_external_home() -> Result<std::path::PathBuf, String> {
 async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
     use aeroric_core::storage_lock::LeaseOwner;
     use aeroric_host::dispatcher::HostServices;
-    use aeroric_host::startup::{run_startup_with_secrets, serve as serve_loop, HostOptions};
+    use aeroric_host::startup::{
+        run_startup_with_secrets_and_legacy_agent_migration, serve as serve_loop, HostOptions,
+    };
 
     let agent_config_external_home = match agent_config_external_home() {
         Ok(home) => home,
@@ -165,9 +167,14 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
         application: "aeroric-cli".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
+    // settings.json 的凭据字段落 OS 钥匙串（`settings::secret_fields`）。必须在
+    // 第一次读 settings 之前装上：之后读到的明文会在下一次写盘时迁走。
+    let secrets: Arc<dyn aeroric_core::context::SecretStore> =
+        Arc::new(aeroric_host::platform_adapter::KeyringSecrets);
+    aeroric_core::settings::secret_fields::configure_secret_store(secrets.clone());
     // build/protocol 两个 hash：CLI 构建没有 git 元数据注入，如实给版本串
     // （supervisor 区分「不同 build」够用，不假装有 commit hash）。
-    match run_startup_with_secrets(
+    match run_startup_with_secrets_and_legacy_agent_migration(
         &HostOptions {
             paths,
             socket_path,
@@ -178,7 +185,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
         &aeroric_core::location_probe::RawPlatformProbe,
         &format!("aeroric-cli-{}", env!("CARGO_PKG_VERSION")),
         &format!("protocol-v{}", aeroric_protocol::PROTOCOL_VERSION),
-        Arc::new(aeroric_host::platform_adapter::KeyringSecrets),
+        secrets,
     )
     .await
     {

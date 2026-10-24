@@ -15,19 +15,26 @@ pub(super) fn filter_request_headers(headers: HeaderMap) -> HeaderMap {
     filtered
 }
 
+/// Q23: every request needs a credential, loopback included — a live per-task
+/// token (`task_tokens`) or the configured access token. Loopback used to pass
+/// without one, which let any local process spend the user's upstream keys.
 pub(super) fn request_is_authorized(config: &RouterRuntimeConfig, headers: &HeaderMap) -> bool {
-    let Ok(listen_addr) =
-        crate::local_router::validate_listen_address(&config.listen_address, config.port)
-    else {
+    if crate::local_router::validate_listen_address(&config.listen_address, config.port).is_err() {
         return false;
-    };
-    if listen_addr.ip().is_loopback() {
-        return true;
     }
+    router_credentials(headers).iter().any(|credential| {
+        crate::local_router::task_tokens::lookup(credential).is_some()
+            || constant_time_secret_eq(credential, &config.access_token)
+    })
+}
 
+/// The task grant behind the request's credential, if it carries a task token.
+pub(super) fn request_task_grant(
+    headers: &HeaderMap,
+) -> Option<crate::local_router::task_tokens::TaskGrant> {
     router_credentials(headers)
         .iter()
-        .any(|credential| constant_time_secret_eq(credential, &config.access_token))
+        .find_map(|credential| crate::local_router::task_tokens::lookup(credential))
 }
 
 /// 判断请求是否来自浏览器的跨站上下文。
@@ -112,7 +119,10 @@ pub(super) fn strip_router_credentials(headers: &mut HeaderMap, access_token: &s
             .and_then(|value| value.to_str().ok())
             .map(str::trim)
             .map(|value| value.strip_prefix("Bearer ").unwrap_or(value).trim())
-            .is_some_and(|value| constant_time_secret_eq(value, access_token));
+            .is_some_and(|value| {
+                constant_time_secret_eq(value, access_token)
+                    || crate::local_router::task_tokens::lookup(value).is_some()
+            });
         if is_router_token {
             headers.remove(header);
         }
@@ -172,10 +182,34 @@ mod tests {
     }
 
     #[test]
-    fn loopback_requests_remain_compatible_without_credentials() {
+    fn loopback_requests_need_a_live_task_token() {
         let config =
             RouterRuntimeConfig::new("127.0.0.1", 43123, false, RouterUpstreams::default());
-        assert!(request_is_authorized(&config, &HeaderMap::new()));
+        assert!(!request_is_authorized(&config, &HeaderMap::new()));
+
+        let token = crate::local_router::task_tokens::issue("t-guard-loopback", None);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        );
+        assert!(request_is_authorized(&config, &headers));
+        assert_eq!(
+            request_task_grant(&headers).map(|g| g.task_id),
+            Some("t-guard-loopback".to_string())
+        );
+
+        // The token is stripped before forwarding, so it never reaches an upstream.
+        strip_router_credentials(&mut headers, "");
+        assert!(!headers.contains_key(AUTHORIZATION));
+
+        crate::local_router::task_tokens::revoke("t-guard-loopback");
+        let mut revoked = HeaderMap::new();
+        revoked.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        );
+        assert!(!request_is_authorized(&config, &revoked));
     }
 
     #[test]

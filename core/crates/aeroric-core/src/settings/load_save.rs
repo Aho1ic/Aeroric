@@ -293,6 +293,19 @@ pub(super) fn settings_path() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("settings.json"))
 }
 
+/// Serialize settings for `path`, moving credentials into the keychain when one is
+/// configured (see `secret_fields`). Every write of settings.json goes through here.
+fn settings_disk_raw(path: &Path, settings: &AppSettings) -> Result<String, String> {
+    let mut value = serde_json::to_value(settings).map_err(|error| error.to_string())?;
+    if let (Some(store), serde_json::Value::Object(fields)) =
+        (secret_fields::secret_store(), &mut value)
+    {
+        let previous = secret_fields::marked_accounts_on_disk(path);
+        secret_fields::split_for_disk(fields, &previous, store.as_ref())?;
+    }
+    serde_json::to_string_pretty(&value).map_err(|error| error.to_string())
+}
+
 pub(super) fn normalize_settings(settings: AppSettings) -> AppSettings {
     let proxy_settings = migrate_legacy_proxy_settings(&settings);
     let agent_proxy_enabled = migrate_agent_proxy_enabled(&settings);
@@ -424,7 +437,7 @@ pub(super) fn load_settings_unlocked() -> AppSettings {
         if let Ok(dir) = aeroric_dir() {
             let _ = fs::create_dir_all(&dir);
         }
-        if let Ok(raw) = serde_json::to_string_pretty(&settings) {
+        if let Ok(raw) = settings_disk_raw(&path, &settings) {
             if atomic_write_private(&path, &raw).is_ok() {
                 cache_settings(&path, &settings);
             }
@@ -441,13 +454,24 @@ pub(super) fn load_settings_unlocked() -> AppSettings {
         Ok(r) => r,
         Err(_) => return AppSettings::default(),
     };
-    let settings: AppSettings = serde_json::from_str(&raw).unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    // A pre-keychain file still holds plaintext: rewrite it once so the split runs.
+    let mut migrate_secrets = false;
+    if let (Some(store), serde_json::Value::Object(fields)) =
+        (secret_fields::secret_store(), &mut value)
+    {
+        migrate_secrets = secret_fields::has_plaintext_secrets(fields);
+        // Failures keep the marker in memory; the next save leaves the entry alone.
+        let _unresolved = secret_fields::hydrate_from_store(fields, store.as_ref());
+    }
+    let settings: AppSettings = serde_json::from_value(value).unwrap_or_default();
     let mut normalized = normalize_settings(settings.clone());
     recover_custom_agent_settings(&mut normalized);
     refresh_stale_codex_agent_scripts(&mut normalized);
     refresh_stale_claude_agent_scripts(&mut normalized);
-    if normalized != settings {
-        if let Ok(raw) = serde_json::to_string_pretty(&normalized) {
+    if normalized != settings || migrate_secrets {
+        if let Ok(raw) = settings_disk_raw(&path, &normalized) {
             let _ = atomic_write_private(&path, &raw);
         }
     }
@@ -465,7 +489,7 @@ pub(super) fn persist_settings_unlocked(settings: AppSettings) -> Result<AppSett
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     let path = settings_path()?;
     let normalized = normalize_settings(settings);
-    let raw = serde_json::to_string_pretty(&normalized).map_err(|error| error.to_string())?;
+    let raw = settings_disk_raw(&path, &normalized)?;
     atomic_write_private(&path, &raw)?;
     cache_settings(&path, &normalized);
     Ok(normalized)
@@ -526,8 +550,9 @@ pub(crate) fn save_managed_agent_path(agent: &str, path: &Path) -> Result<(), St
         let dir = aeroric_dir()?;
         fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
         let normalized = normalize_settings(settings);
-        let raw = serde_json::to_string_pretty(&normalized).map_err(|error| error.to_string())?;
-        atomic_write_private(&settings_path()?, &raw)?;
+        let path = settings_path()?;
+        let raw = settings_disk_raw(&path, &normalized)?;
+        atomic_write_private(&path, &raw)?;
     }
     clear_cached_versions();
     Ok(())

@@ -1,0 +1,23 @@
+{
+  "contract": "session-submission.schema.json",
+  "request": {
+    "agent": "custom-fixture",
+    "attachments": [],
+    "configurationId": "custom-fixture",
+    "configurationVersion": "fixture-v1",
+    "evolution": false,
+    "fingerprint": "sha256:cb156eef8bed21a31bc0ad0a020b528c229423b5cd6f6eea12bcfa5efd256e26",
+    "permissionAgent": "custom-fixture",
+    "permissionMode": "ask",
+    "projectId": "fixture-project",
+    "prompt": "目标：保留\n原文 / \\\"",
+    "reasoningEffort": null,
+    "recipeId": null,
+    "review": false,
+    "schemaVersion": 1,
+    "selectedModel": "fixture/model",
+    "submissionId": "fixture-submission",
+    "team": false,
+    "worktree": null
+  }
+}

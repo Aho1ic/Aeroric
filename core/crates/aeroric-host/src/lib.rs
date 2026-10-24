@@ -11,6 +11,7 @@ pub mod diagnostics;
 pub mod dispatcher;
 pub mod executor;
 pub mod families;
+pub mod gateway;
 pub mod file_access;
 pub mod file_services2;
 pub mod ide_services;
@@ -25,7 +26,9 @@ pub mod remote_headless;
 pub mod search_services;
 pub mod services;
 pub mod settings_services;
+pub mod agent_connections_services;
 pub mod startup;
+pub mod submission_services;
 pub mod subscriptions;
 pub mod uds;
 

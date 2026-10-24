@@ -6,6 +6,7 @@
 //! the shipping client already uses — including the fields this crate does not model.
 
 pub mod adapters;
+pub mod agent_connections;
 pub mod agents;
 pub mod clock;
 pub mod connections;

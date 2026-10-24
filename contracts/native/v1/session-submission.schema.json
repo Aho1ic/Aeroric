@@ -1,0 +1,398 @@
+{
+  "$defs": {
+    "catalog": {
+      "additionalProperties": false,
+      "properties": {
+        "asOf": {
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "configurations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "agent": {
+                "type": "string"
+              },
+              "blockedReasons": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "efforts": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "harness": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "models": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "permissionModes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "version",
+              "displayName",
+              "agent",
+              "harness",
+              "models",
+              "efforts",
+              "permissionModes",
+              "blockedReasons"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "revision",
+        "asOf",
+        "configurations"
+      ],
+      "type": "object"
+    },
+    "lookup": {
+      "additionalProperties": false,
+      "properties": {
+        "fingerprint": {
+          "type": "string"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/receipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "submissionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "submissionId",
+        "fingerprint",
+        "receipt"
+      ],
+      "type": "object"
+    },
+    "receipt": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "configurationId": {
+          "type": "string"
+        },
+        "configurationVersion": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "applied": {
+                "type": "boolean"
+              },
+              "option": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "option",
+              "applied"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "permissionAgent": {
+          "type": "string"
+        },
+        "permissionMode": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "reasoningEffort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "selectedModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "accepted",
+            "rejected_before_side_effect",
+            "unknown"
+          ]
+        },
+        "submissionId": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "agent",
+        "configurationId",
+        "configurationVersion",
+        "fingerprint",
+        "options",
+        "permissionAgent",
+        "permissionMode",
+        "projectId",
+        "reasoningEffort",
+        "reasons",
+        "schemaVersion",
+        "selectedModel",
+        "state",
+        "submissionId",
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "request": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "attachments": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "configurationId": {
+          "type": "string"
+        },
+        "configurationVersion": {
+          "type": "string"
+        },
+        "evolution": {
+          "type": "boolean"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "permissionAgent": {
+          "type": "string"
+        },
+        "permissionMode": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "reasoningEffort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipeId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review": {
+          "type": "boolean"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "selectedModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "submissionId": {
+          "type": "string"
+        },
+        "team": {
+          "type": "boolean"
+        },
+        "worktree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "agent",
+        "attachments",
+        "configurationId",
+        "configurationVersion",
+        "evolution",
+        "fingerprint",
+        "permissionAgent",
+        "permissionMode",
+        "projectId",
+        "prompt",
+        "reasoningEffort",
+        "recipeId",
+        "review",
+        "schemaVersion",
+        "selectedModel",
+        "submissionId",
+        "team",
+        "worktree"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "capability": "task.submissions",
+  "fingerprint": {
+    "algorithm": "SHA-256",
+    "header": "aeroric.task-submission.v1\\0",
+    "optional": "0 if null, otherwise 1 followed by the string",
+    "order": [
+      "projectId",
+      "configurationId",
+      "configurationVersion",
+      "agent",
+      "prompt",
+      "permissionMode",
+      "permissionAgent",
+      "selectedModel?",
+      "reasoningEffort?",
+      "attachments.length:u64",
+      "attachments[]",
+      "worktree?",
+      "recipeId?",
+      "team:u8",
+      "review:u8",
+      "evolution:u8"
+    ],
+    "prefix": "sha256:",
+    "strings": "u64 big-endian UTF-8 byte length followed by bytes"
+  },
+  "methods": {
+    "agent.configurations": {
+      "mutating": false,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/catalog"
+      }
+    },
+    "task.run": {
+      "mutating": true,
+      "optIn": "schemaVersion/submissionId",
+      "params": {
+        "$ref": "#/$defs/request"
+      },
+      "result": {
+        "$ref": "#/$defs/receipt"
+      }
+    },
+    "task.submission.get": {
+      "mutating": false,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "fingerprint": {
+            "type": "string"
+          },
+          "submissionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "fingerprint"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/lookup"
+      }
+    }
+  },
+  "retryRule": "Never replay unknown/pending. Same identity plus same fingerprint returns the original receipt; a changed payload requires a new identity after explicit rejection.",
+  "source": "aeroric-protocol/src/submission.rs + docs/native/command-map.json nativeServices",
+  "title": "aeroric-native-session-submission-v1"
+}

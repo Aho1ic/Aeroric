@@ -89,6 +89,9 @@ pub struct LaunchRequest {
     pub reasoning_effort: Option<String>,
     pub speed: Option<String>,
     pub dsh_agent_preset: Option<String>,
+    /// Read back from the task record's `agentConfigId`; the host resolves it to a
+    /// gateway route and a per-task token at spawn time.
+    pub agent_config_id: Option<String>,
     pub created_at_ms: u64,
     /// DSH-only window facts; `None` for every other family.
     pub dsh_window: Option<DshWindowFacts>,
@@ -138,6 +141,9 @@ pub struct ResumeRequest {
     pub reasoning_effort: Option<String>,
     pub speed: Option<String>,
     pub dsh_agent_preset: Option<String>,
+    /// See [`LaunchRequest::agent_config_id`]: a resumed task keeps routing through the
+    /// configuration it was started with (Q27).
+    pub agent_config_id: Option<String>,
     /// Always false by construction for dsh; carried for the other three families, whose
     /// CLI resumes with the original prompt available.
     pub prompt: Option<String>,

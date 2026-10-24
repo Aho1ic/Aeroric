@@ -168,3 +168,107 @@ async fn graceful_shutdown_unlinks_the_socket_and_frees_the_lease() {
     drop(restarted);
     std::fs::remove_dir_all(&root).ok();
 }
+
+#[tokio::test]
+async fn library_startup_does_not_migrate_legacy_agent_settings() {
+    let root = fresh_root("agent-migration-off");
+    let paths = AppPaths::from_user_home(root.join("home"));
+    std::fs::create_dir_all(paths.data_dir()).expect("data dir");
+    let settings = serde_json::to_vec_pretty(&serde_json::json!({
+        "builtin_agent_credentials": {
+            "claude": {
+                "base_url": "https://anthropic.example",
+                "api_key": "sk-library-must-not-copy",
+                "models": ["claude-test"]
+            }
+        }
+    }))
+    .expect("settings");
+    std::fs::write(paths.settings_file(), &settings).expect("legacy settings");
+    let secrets = Arc::new(aeroric_core::context::MemorySecrets::default());
+
+    let started = aeroric_host::startup::run_startup_with_secrets(
+        &HostOptions {
+            socket_path: paths.data_dir().join("host.sock"),
+            paths: paths.clone(),
+            ready_fd: None,
+        },
+        Arc::new(SystemClock),
+        &owner(),
+        &LocalProbe,
+        "bh",
+        "ph",
+        secrets.clone(),
+    )
+    .await
+    .expect("library startup");
+
+    assert!(!paths.data_dir().join("agent-connections.json").exists());
+    assert!(!aeroric_core::agent_connections::migration::report_path(paths.data_dir()).exists());
+    assert!(secrets.keys().is_empty());
+    assert_eq!(std::fs::read(paths.settings_file()).unwrap(), settings);
+    drop(started);
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
+async fn production_startup_migrates_legacy_agent_settings_before_ready() {
+    let root = fresh_root("agent-migration-on");
+    let paths = AppPaths::from_user_home(root.join("home"));
+    std::fs::create_dir_all(paths.data_dir()).expect("data dir");
+    let settings = serde_json::to_vec_pretty(&serde_json::json!({
+        "builtin_agent_credentials": {
+            "claude": {
+                "base_url": "https://anthropic.example",
+                "api_key": "sk-production-copy",
+                "models": ["claude-test"]
+            }
+        }
+    }))
+    .expect("settings");
+    std::fs::write(paths.settings_file(), &settings).expect("legacy settings");
+    let secrets = Arc::new(aeroric_core::context::MemorySecrets::default());
+
+    let started =
+        aeroric_host::startup::run_startup_with_secrets_and_legacy_agent_migration(
+            &HostOptions {
+                socket_path: paths.data_dir().join("host.sock"),
+                paths: paths.clone(),
+                ready_fd: None,
+            },
+            Arc::new(SystemClock),
+            &owner(),
+            &LocalProbe,
+            "bh",
+            "ph",
+            secrets.clone(),
+        )
+        .await
+        .expect("production startup");
+
+    let document = aeroric_core::agent_connections::store::load(
+        &paths.data_dir().join("agent-connections.json"),
+    )
+    .expect("migrated document");
+    assert_eq!(document.connections.len(), 1);
+    assert_eq!(document.configs.len(), 1);
+    assert_eq!(
+        secrets
+            .peek(&document.connections[0].secret_account())
+            .as_deref(),
+        Some("sk-production-copy")
+    );
+    let report: aeroric_core::agent_connections::migration::MigrationReport =
+        serde_json::from_slice(
+            &std::fs::read(aeroric_core::agent_connections::migration::report_path(
+                paths.data_dir(),
+            ))
+            .expect("migration report"),
+        )
+        .expect("valid migration report");
+    assert_eq!(report.migrated.len(), 1);
+    assert!(report.skipped.is_empty());
+    assert_eq!(std::fs::read(paths.settings_file()).unwrap(), settings);
+    drop(started);
+    std::fs::remove_dir_all(root).ok();
+}

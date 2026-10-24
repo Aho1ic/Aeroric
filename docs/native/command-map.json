@@ -1,4 +1,36 @@
 {
+  "nativeServices": {
+    "source": "approved-ui-native-integration-stage-01 continuation; additive to the frozen legacy inventory",
+    "contract": "contracts/native/v1/session-submission.schema.json",
+    "capability": "task.submissions",
+    "methods": [
+      {
+        "name": "agent.configurations",
+        "mutating": false,
+        "coreService": "settings::session_catalog",
+        "host": "submission_services::register",
+        "cli": "rpc agent.configurations --params-file <explicit-project-fixture.json>",
+        "consumer": "WorkspaceClient.configurations(projectID:)"
+      },
+      {
+        "name": "task.run",
+        "mutating": true,
+        "optIn": "schemaVersion/submissionId; existing CLI branch preserved",
+        "coreService": "TaskService::submit",
+        "host": "services::task_run -> submission_services::run",
+        "cli": "rpc task.run --params-file <versioned-submission.json>",
+        "consumer": "WorkspaceClient.submitTask(_:)"
+      },
+      {
+        "name": "task.submission.get",
+        "mutating": false,
+        "coreService": "TaskService::submission",
+        "host": "submission_services::register",
+        "cli": "rpc task.submission.get --params-file <original-identity-and-fingerprint.json>",
+        "consumer": "WorkspaceClient.submission(_:)"
+      }
+    ]
+  },
   "meta": {
     "generated": "2026-09-21",
     "task": "P1-02",
