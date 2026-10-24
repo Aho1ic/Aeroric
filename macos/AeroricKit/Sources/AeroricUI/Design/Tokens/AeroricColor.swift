@@ -6,8 +6,8 @@ import SwiftUI
 /// Roles, not hues: each one is a dynamic `NSColor` resolved per appearance
 /// (light, dark, and both increased-contrast variants), so a view never
 /// branches on the colour scheme. Values start from the cool neutral scale the
-/// user picked (DeepSeek Harness light/dark relation); `SessionPalette` and
-/// `Color.ds*` forward here so older views stop disagreeing with new ones.
+/// user picked (DeepSeek Harness light/dark relation). This is the only colour
+/// vocabulary; the old `SessionPalette` / `Color.ds*` forwarders were removed.
 public enum AeroricColor {
     // MARK: Surfaces
 
@@ -61,6 +61,10 @@ public enum AeroricColor {
     /// Primary button fill: near-black in light, near-white in dark.
     public static let primary = dynamic(light: .rgb(0x17181B), dark: .rgb(0xE9EBEE))
     public static let onPrimary = dynamic(light: .rgb(0xFFFFFF), dark: .rgb(0x151517))
+    /// Decorative hues for capability / category marks (never status). Tints
+    /// are `.opacity(0.12)` of these.
+    public static let teal = dynamic(light: .rgb(0x16856F), dark: .rgb(0x5CC9A7))
+    public static let violet = dynamic(light: .rgb(0x7A5AD6), dark: .rgb(0xA992F2))
 
     // MARK: Status (fixed meaning across the app)
 

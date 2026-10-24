@@ -87,6 +87,25 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     /// surface is for*, which is the hierarchy the flat strip could not
     /// express: the work, the project-scoped tools, and the machine-level
     /// configuration.
+    /// Host wiring per section (M4b audit, research/sections-audit.md): only
+    /// Agent tools gets real data today; the rest explain what they will do.
+    var status: ToolSectionStatus {
+        switch self {
+        case .tasks: .wired
+        case .files: .comingSoon("浏览、搜索与编辑项目文件。当前请用右侧面板的“文件”只读浏览。")
+        case .git: .comingSoon("暂存、提交、分支、worktree 与历史。当前请用右侧面板的“改动”查看 diff。")
+        case .ide: .comingSoon("问题列表、符号大纲与调试会话。")
+        case .connections: .comingSoon("SSH 主机、主机密钥确认与 SFTP 文件传输。")
+        case .infrastructure: .comingSoon("Docker 容器与镜像、端口占用、Conda 环境。")
+        case .database: .comingSoon("SQLite、Redis、MongoDB 的浏览与查询。")
+        case .notebook: .comingSoon("项目笔记、同步与知识检索。")
+        case .extensions: .comingSoon("技能、MCP 服务器与 Hook 的管理。")
+        case .remote: .comingSoon("与手机配对、设备管理与远程访问审计。")
+        case .operations: .comingSoon("用量统计、诊断与通知中心。")
+        case .agentTools: .partial("能力来自宿主对外部 Agent 的探测；具体操作由外部 Agent 自己执行。")
+        }
+    }
+
     var group: SidebarGroup {
         switch self {
         case .tasks: .work
@@ -381,8 +400,8 @@ struct TaskWorkspaceView: View {
                     }
                 } else {
                     Text("选择一个会话或新建会话后，这里显示它的详情。")
-                        .font(AeroricFont.ui(AeroricFont.meta))
-                        .foregroundStyle(SessionPalette.muted)
+                        .font(Font.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textTertiary)
                 }
             }
             .padding(14)
@@ -394,11 +413,11 @@ struct TaskWorkspaceView: View {
     private func detailRow(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
-                .font(AeroricFont.ui(AeroricFont.meta))
-                .foregroundStyle(SessionPalette.muted)
+                .font(Font.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
             Text(value)
-                .font(AeroricFont.ui(AeroricFont.body))
-                .foregroundStyle(SessionPalette.text)
+                .font(Font.system(size: AeroricType.body))
+                .foregroundStyle(AeroricColor.text)
                 .textSelection(.enabled)
                 .lineLimit(3)
         }
@@ -477,11 +496,17 @@ struct TaskWorkspaceView: View {
                     .disabled(previewActive)
                     .accessibilityHidden(previewActive)
             } else if activeSection != .tasks {
-                VStack(spacing: 0) {
-                    toolContext
+                ToolSectionScaffold(
+                    title: activeSection.title, systemImage: activeSection.systemImage,
+                    projectName: services.taskStore.projects.first(where: { $0.id == projectContextID })?.name,
+                    status: activeSection.status,
+                    returnTitle: selectedTask.map { task in
+                        "返回：\(services.taskStore.projects.first { $0.id == task.projectID }?.name ?? "原项目") · \(task.title)"
+                    },
+                    onReturn: { if let task = selectedTask { selection = SessionNavigation.task(task.id) } }
+                ) {
                     sectionContent
                 }
-                .background(Color.dsSurface)
                 .opacity(previewActive ? 0 : 1)
                 .allowsHitTesting(!previewActive)
                 .accessibilityHidden(previewActive)
@@ -738,27 +763,6 @@ struct TaskWorkspaceView: View {
         }
     }
 
-    private var toolContext: some View {
-        HStack {
-            if let project = services.taskStore.projects.first(where: { $0.id == projectContextID }) {
-                Text("\(project.name) › \(activeSection.title)")
-                    .font(.system(size: 12))
-            }
-            Spacer()
-            if let task = selectedTask {
-                let project = services.taskStore.projects.first { $0.id == task.projectID }
-                Button("返回：\(project?.name ?? "原项目") · \(task.title)") {
-                    selection = SessionNavigation.task(task.id)
-                }
-                .buttonStyle(.borderless)
-                .accessibilityIdentifier("workspace.return-to-task")
-            } else if selectedTaskID != nil {
-                Text("原任务当前不可用，请核对目标。").font(.caption)
-            }
-        }
-        .padding(12)
-    }
-
     private var taskContent: some View {
         ZStack {
             VStack(spacing: 0) {
@@ -977,13 +981,13 @@ struct TaskWorkspaceView: View {
             // Q26-a: no structured history → terminal full height, labelled.
             VStack(spacing: 0) {
                 Label("此会话仅终端可读：宿主未提供结构化历史", systemImage: "terminal")
-                    .font(AeroricFont.ui(AeroricFont.meta))
-                    .foregroundStyle(SessionPalette.secondary)
+                    .font(Font.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
-                    .background(SessionPalette.card)
-                    .overlay(alignment: .bottom) { Rectangle().fill(SessionPalette.edge).frame(height: 1) }
+                    .background(AeroricColor.layer1)
+                    .overlay(alignment: .bottom) { Rectangle().fill(AeroricColor.separator2).frame(height: 1) }
                     .accessibilityIdentifier("tasks.requires-advanced")
                 terminalSurface(task)
             }
@@ -999,8 +1003,8 @@ struct TaskWorkspaceView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if !coordinator.holdsLease {
                     Text("只读返回：本地输入已释放；不会自动接管。宿主权威输入票据仍待接入。")
-                        .font(AeroricFont.ui(AeroricFont.meta))
-                        .foregroundStyle(SessionPalette.secondary).padding(8)
+                        .font(Font.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textSecondary).padding(8)
                 }
                 NativeTerminalView(coordinator: coordinator)
             }
@@ -1008,8 +1012,8 @@ struct TaskWorkspaceView: View {
             .accessibilityIdentifier("tasks.terminal")
         } else {
             Text("终端未挂载（等待会话句柄）")
-                .font(AeroricFont.ui(AeroricFont.meta))
-                .foregroundStyle(SessionPalette.muted)
+                .font(Font.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("tasks.terminal-pending")
         }

@@ -29,7 +29,7 @@ public enum AeroricRadius {
 }
 
 /// Type scale. Interface text is the system face (SF + PingFang); code and the
-/// terminal use JetBrains Mono through `AeroricFont.mono`.
+/// terminal use JetBrains Mono through `AeroricType.mono`.
 public enum AeroricType {
     /// Body-level sizes follow the text-size setting (`AeroricTypeScale`):
     /// secondary = body − 1, caption = body − 2. Headings below are fixed.
@@ -43,6 +43,12 @@ public enum AeroricType {
     public static let largeTitle: CGFloat = 22
     public static let hero: CGFloat = 26
 
+    /// Monospaced face for code, diffs and the terminal: bundled JetBrains Mono
+    /// (registered by the app target), falling back to the system mono.
+    public static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        Font.custom("JetBrainsMono-Regular", size: size, relativeTo: .body).weight(weight)
+    }
+
     /// 11pt uppercase-style section labels (orca/codeg sidebar groups).
     public static func sectionLabel() -> Font { .system(size: caption, weight: .semibold) }
 }
@@ -53,6 +59,11 @@ public enum AeroricMotion {
     public static let quick: TimeInterval = 0.10
     public static let standard: TimeInterval = 0.20
     public static let slow: TimeInterval = 0.30
+
+    /// Zero when Reduce Motion is on, so transactions built from it are instant.
+    public static func duration(_ base: TimeInterval, reduceMotion: Bool) -> TimeInterval {
+        reduceMotion ? 0 : base
+    }
 
     public static func animation(_ duration: TimeInterval, reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .easeInOut(duration: duration)
