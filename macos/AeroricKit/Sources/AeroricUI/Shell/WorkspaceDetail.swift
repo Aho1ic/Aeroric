@@ -28,6 +28,8 @@ public enum SidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable
     case work
     /// Projects, each scoping the task list.
     case projects
+    /// Imported sessions whose cwd matches no open project (M4).
+    case imports
     /// Tools scoped to the open project.
     case tools
     /// Machine- and agent-level configuration surfaces.
@@ -39,6 +41,7 @@ public enum SidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable
         switch self {
         case .work: "工作"
         case .projects: "项目"
+        case .imports: "未归类导入"
         case .tools: "工具"
         case .system: "系统"
         }
@@ -46,7 +49,7 @@ public enum SidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable
 
     /// Render order of the groups. Fixed, so a row can never float to a
     /// surprising place by arriving in a different order.
-    static let renderOrder: [SidebarGroup] = [.work, .projects, .tools, .system]
+    static let renderOrder: [SidebarGroup] = [.work, .projects, .imports, .tools, .system]
 }
 
 /// The one place that decides the order rows appear in.
@@ -123,6 +126,10 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
     public var agent: String?
     /// Last activity, for the row's relative time.
     public var updatedAt: Date?
+    /// Read-only imported session row (M4); shows "已导入".
+    public var imported: Bool
+    /// Working directory of an imported session, for "添加为项目…".
+    public var path: String?
 
     public init(
         id: String,
@@ -134,8 +141,12 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
         status: String? = nil,
         pinned: Bool = false,
         agent: String? = nil,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        imported: Bool = false,
+        path: String? = nil
     ) {
+        self.imported = imported
+        self.path = path
         self.id = id
         self.title = title
         self.systemImage = systemImage
@@ -183,10 +194,13 @@ public protocol WorkspaceStateProviding: AnyObject {
     var paletteCommands: [PaletteCommand] { get }
     /// Live counts for the status bar; nil until the task mirror is loaded.
     var activityCounts: ActivityCounts? { get }
+    /// Open `path` as a project (from "添加为项目…" on an unassigned import).
+    func addProject(path: String)
 }
 
 public extension WorkspaceStateProviding {
     var activityCounts: ActivityCounts? { nil }
+    func addProject(path: String) {}
 }
 
 /// Running / waiting-for-you counts shown in the status bar.

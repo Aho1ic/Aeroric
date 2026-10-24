@@ -42,10 +42,13 @@ public protocol SettingsStateProviding: AnyObject {
     var settingsInteractionMode: InteractionModeController? { get }
     /// Host connection phase for the 连接 pane; nil shows "未知".
     var connectionPhaseText: String? { get }
+    /// Imported sessions (M4); nil or unavailable hides the 导入 pane.
+    var settingsImportBook: ImportBook? { get }
 }
 
 public extension SettingsStateProviding {
     var legacyCleanup: LegacyCleanupStore? { nil }
     var settingsInteractionMode: InteractionModeController? { nil }
     var connectionPhaseText: String? { nil }
+    var settingsImportBook: ImportBook? { nil }
 }

@@ -295,6 +295,12 @@ public enum SessionNavigation {
     public static let allTasks = "section.tasks"
     public static func draft(projectID: String) -> String { "draft.project.\(projectID)" }
     public static func task(_ id: String) -> String { "task.\(id)" }
+    /// Imported (read-only) session row (M4).
+    public static func imported(_ id: String) -> String { "imported.\(id)" }
+    public static func importedID(_ selection: String?) -> String? {
+        guard let selection, selection.hasPrefix("imported.") else { return nil }
+        return String(selection.dropFirst("imported.".count))
+    }
     public static func draftScope(_ selection: String?) -> SessionDraftScope? {
         guard let selection else { return nil }
         if selection == globalDraft { return .global }

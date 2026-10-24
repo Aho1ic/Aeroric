@@ -84,7 +84,8 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                     onNewProjectTask: { navigationSelection.wrappedValue = SessionNavigation.draft(projectID: $0) },
                     onMoveSelection: moveSidebarSelection,
                     onSearch: { palettePresented = true },
-                    onOpenSettings: { onCommand(PaletteCommand(id: "settings.show", title: "设置…")) }
+                    onOpenSettings: { onCommand(PaletteCommand(id: "settings.show", title: "设置…")) },
+                    onAddProject: { state.addProject(path: $0) }
                 )
                 Group {
                     if railShown {

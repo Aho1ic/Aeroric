@@ -486,6 +486,9 @@ struct TaskWorkspaceView: View {
                 .allowsHitTesting(!previewActive)
                 .accessibilityHidden(previewActive)
             }
+            if let importedID = SessionNavigation.importedID(selection), !previewActive {
+                ImportedSessionPane(book: services.importBook, id: importedID)
+            }
             if previewActive, let id = resourceProjectID, let target = resourceBook.scene(id).target {
                 CentralResourcePreview(
                     book: resourceBook, target: target,

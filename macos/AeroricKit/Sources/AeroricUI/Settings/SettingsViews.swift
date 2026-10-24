@@ -6,7 +6,7 @@ import SwiftUI
 
 /// Settings window navigation.
 public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
-    case general, appearance, agents, connection, legacyCleanup, about
+    case general, appearance, agents, imports, connection, legacyCleanup, about
 
     public var id: String { rawValue }
 
@@ -15,6 +15,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .general: "通用"
         case .appearance: "外观"
         case .agents: "Agents"
+        case .imports: "导入"
         case .connection: "连接"
         case .legacyCleanup: "旧版 Agent 清理"
         case .about: "关于"
@@ -26,6 +27,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .general: "gearshape"
         case .appearance: "paintpalette"
         case .agents: "cpu"
+        case .imports: "tray.and.arrow.down"
         case .connection: "bolt.horizontal"
         case .legacyCleanup: "trash"
         case .about: "info.circle"
@@ -139,7 +141,22 @@ struct GeneralSettingsPane: View {
     private var mode: InteractionMode { controller?.mode ?? fallbackMode?.wrappedValue ?? .native }
     private var saveError: String? { controller?.lastSaveError ?? fallbackError }
 
+    @AppStorage(OnboardingFlow.completedKey) private var onboardingCompleted = false
+
     var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.xl) {
+            interaction
+            SettingsCard("引导") {
+                SettingsRow("重新打开引导", detail: "回到首次启动的引导页：检测 Agent、打开项目、导入已有会话。") {
+                    Button("打开") { onboardingCompleted = false }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                        .accessibilityIdentifier("settings.general.reopen-onboarding")
+                }
+            }
+        }
+    }
+
+    private var interaction: some View {
         SettingsCard("交互") {
             SettingsRow("高级终端模式",
                         detail: "开启后终端与原生面板并存。只改变呈现，不改变底层 Agent，也不会重启或取消运行中的任务。") {
@@ -306,5 +323,77 @@ struct AboutSettingsPane<State: SettingsStateProviding>: View {
             }
         }
         .accessibilityIdentifier("settings.about")
+    }
+}
+
+struct ImportsSettingsPane: View {
+    let book: ImportBook
+    @State private var revoking: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.xl) {
+            SettingsCard("已有会话") {
+                ForEach(ImportBook.importableAgents, id: \.self) { agent in
+                    row(agent)
+                }
+            }
+            SettingsCard {
+                SettingsRow("立即重新扫描", detail: scanDetail) {
+                    Button("扫描") { Task { await book.rescan() } }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                        .disabled(book.busyAgents.contains("rescan"))
+                        .accessibilityIdentifier("settings.imports.rescan")
+                }
+                SettingsRow("DSH / oh-my-pi", detail: "这两种 Agent 的会话导入将在后续版本支持。") { ComingSoonBadge() }
+            }
+            if let error = book.lastError ?? book.status?.lastError {
+                Text(error)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.danger)
+            }
+            Text("导入只读取会话文件，不复制、不修改；撤销会删除 Aeroric 里的索引，原文件不受影响。")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+        }
+        .task {
+            await book.refresh()
+            for agent in ImportBook.importableAgents { await book.estimate(agent) }
+        }
+        .confirmationDialog("撤销导入授权？", isPresented: Binding(
+            get: { revoking != nil }, set: { if !$0 { revoking = nil } }
+        ), presenting: revoking) { agent in
+            Button("撤销", role: .destructive) { Task { await book.revoke(agent) } }
+            Button("取消", role: .cancel) {}
+        } message: { agent in
+            Text("\(ImportPresentation.agentTitle(agent)) 的已导入会话会从 Aeroric 中移除，原文件不受影响。")
+        }
+        .accessibilityIdentifier("settings.imports")
+    }
+
+    private var scanDetail: String {
+        guard let ms = book.status?.lastScanAtMs else { return "尚未扫描" }
+        let ago = RelativeTime.short(Date(timeIntervalSince1970: Double(ms) / 1000))
+        return "上次扫描：" + (ago == "刚刚" ? ago : ago + "前")
+    }
+
+    private func row(_ agent: String) -> some View {
+        let status = book.agentStatus(agent)
+        let granted = status?.granted == true
+        let detail = granted
+            ? "\(ImportPresentation.abbreviated(status?.root ?? "")) · 已导入 \(status?.sessions ?? 0) 个会话"
+            : "\(ImportPresentation.abbreviated(book.estimates[agent]?.root ?? status?.root ?? "")) · "
+                + ImportPresentation.estimateText(book.estimates[agent])
+        return SettingsRow(ImportPresentation.agentTitle(agent), detail: detail) {
+            if granted {
+                Button("撤销…") { revoking = agent }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.destructive, compact: true))
+                    .accessibilityIdentifier("settings.imports.revoke.\(agent)")
+            } else {
+                Button("导入") { Task { await book.grant(agent) } }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
+                    .disabled(book.busyAgents.contains(agent) || book.estimates[agent]?.rootExists == false)
+                    .accessibilityIdentifier("settings.imports.grant.\(agent)")
+            }
+        }
     }
 }

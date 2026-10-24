@@ -24,7 +24,13 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
     }
 
     private var panes: [SettingsPane] {
-        SettingsPane.allCases.filter { $0 != .legacyCleanup || state.legacyCleanup != nil }
+        SettingsPane.allCases.filter {
+            switch $0 {
+            case .legacyCleanup: state.legacyCleanup != nil
+            case .imports: state.settingsImportBook?.isAvailable == true
+            default: true
+            }
+        }
     }
 
     public var body: some View {
@@ -62,6 +68,8 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
             AppearanceSettingsPane()
         case .agents:
             AgentsSettingsPane()
+        case .imports:
+            if let book = state.settingsImportBook { ImportsSettingsPane(book: book) }
         case .connection:
             ConnectionSettingsPane(state: state)
         case .legacyCleanup:

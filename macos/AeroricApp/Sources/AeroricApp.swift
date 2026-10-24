@@ -296,6 +296,7 @@ struct AeroricNativeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
     @State private var services: AppServices
+    @AppStorage(OnboardingFlow.completedKey) private var onboardingCompleted = false
 
     init() {
         AppFontRegistration.registerBundledFonts()
@@ -333,6 +334,19 @@ struct AeroricNativeApp: App {
                 AnyView(TaskWorkspaceView(services: services, selection: selection))
             }
         )
+            // M4: first-launch onboarding once the host is ready.
+            .sheet(isPresented: Binding(
+                get: { OnboardingFlow.shouldPresent(completed: onboardingCompleted, phase: services.phaseSnapshot) },
+                set: { if !$0 { onboardingCompleted = true } }
+            )) {
+                OnboardingView(
+                    book: services.importBook,
+                    projects: services.taskStore.projects,
+                    dataDirectory: services.dataDirectory.path,
+                    onOpenProject: { WorkspaceActions.openProjectPanel(services: services) },
+                    onFinish: { onboardingCompleted = true }
+                )
+            }
             // The supervisor owns its own run loop; startSupervisor is
             // idempotent, so re-activation after sleep/logout is a no-op
             // while it is already up.

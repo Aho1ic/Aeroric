@@ -9,7 +9,7 @@ struct TranscriptView<Footer: View>: View {
     let pending: [PendingRequestStore.PendingRequest]
     let store: PendingRequestStore
     let onRespond: (String, PendingRequestStore.Outcome) -> Void
-    let footer: () -> Footer
+    @ViewBuilder let footer: () -> Footer
     @State private var atBottom = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 

@@ -53,6 +53,8 @@ final class AppServices {
     let agentToolsStore = AgentToolsStore()
     /// B1:旧版自定义 Agent 清理(设置 → Agents)。按握手广告的能力决定可用性。
     let legacyCleanupStore = LegacyCleanupStore()
+    /// Imported Claude/Codex sessions (M4); gated on the host's `imports` capability.
+    let importBook = ImportBook()
     /// AP7:外部协议只读状态(OAuth/沙箱/工具/媒体/语音)。
     let externalProtocolStore = ExternalProtocolStore()
     /// P5-01/P5-02：模式控制器（迁移默认按旧客户端存在性）。
@@ -180,6 +182,10 @@ final class AppServices {
                         client: LegacyCleanupClient(connection: connection),
                         capabilityEnabled: advertised[LegacyCleanupContract.capability] == true
                     )
+                    self.importBook.attach(
+                        client: ImportsClient(connection: connection),
+                        capabilityEnabled: advertised[ImportsClient.capability] == true
+                    )
                 }
                 // AP7:能力探测走宿主真值。没有适配器面时 `capabilities()` 抛错,
                 // store 保持「未探测」——UI 因此什么都不显示,而不是显示一堆注定
@@ -285,6 +291,8 @@ final class AppServices {
     /// 连接就绪后读取项目/任务镜像；不把初次快照冒充实时事件覆盖。
     func refreshWorkspace() async {
         guard let client = workspaceClient else { return }
+        // Imports re-scan incrementally on the host when stale; cheap to ask.
+        Task { await importBook.refresh() }
         taskSnapshotReadState = .loading
         if let projects = try? await client.listProjects() {
             for project in projects {
@@ -712,10 +720,32 @@ extension AppServices: WorkspaceStateProviding {
                                     status: task.status, pinned: task.starred, agent: task.agent,
                                     updatedAt: task.updatedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) })
                     }
+                    + importBook.sessions(inProject: project.id).map(Self.importedItem)
             )
         }
+        let unassigned = importBook.unassigned.map(Self.importedItem).map { item -> SidebarItem in
+            var item = item
+            item.group = .imports
+            return item
+        }
         return [SidebarItem(id: SessionNavigation.globalDraft, title: "新建会话",
-                            systemImage: "plus", group: .work)] + sections + projects
+                            systemImage: "plus", group: .work)] + sections + projects + unassigned
+    }
+
+    static func importedItem(_ session: ImportsClient.ImportedSession) -> SidebarItem {
+        SidebarItem(id: SessionNavigation.imported(session.id), title: session.title,
+                    systemImage: "tray.and.arrow.down", group: .projects, agent: session.agent,
+                    updatedAt: Date(timeIntervalSince1970: Double(session.lastAtMs) / 1000),
+                    imported: true, path: session.cwd)
+    }
+
+    /// "添加为项目…" on an unassigned import: open its cwd as a project, then
+    /// re-list so the host re-assigns those sessions to it.
+    func addProject(path: String) {
+        Task { @MainActor in
+            _ = try? await openProject(at: path)
+            await importBook.rescan()
+        }
     }
 
     /// Trailing badge for the task row: how many tasks are live right now.
@@ -765,4 +795,5 @@ extension AppServices: SettingsStateProviding {
     var legacyCleanup: LegacyCleanupStore? { legacyCleanupStore }
     var settingsInteractionMode: InteractionModeController? { interactionModeController }
     var connectionPhaseText: String? { phaseText }
+    var settingsImportBook: ImportBook? { importBook }
 }

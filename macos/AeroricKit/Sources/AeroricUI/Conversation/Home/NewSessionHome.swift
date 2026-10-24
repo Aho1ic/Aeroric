@@ -46,7 +46,8 @@ public struct NewSessionHome: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: AeroricSpace.s) {
-                    TypewriterTitle(text: Self.heading)
+                    TypewriterText(Self.heading, size: AeroricType.hero)
+                        .accessibilityIdentifier("new-session.title")
                     Text(project.map { "在 \($0.name) 中开始新会话" } ?? "先在下方选择一个项目")
                         .font(.system(size: AeroricType.body))
                         .foregroundStyle(AeroricColor.textSecondary)
@@ -276,33 +277,5 @@ private struct RecipeCard: View {
         .onHover { hovered = $0 }
         .help("填入模板，不会自动发送")
         .accessibilityIdentifier("new-session.recipe.\(recipe.id)")
-    }
-}
-
-/// "你想做什么？" appearing character by character; static under Reduce Motion.
-private struct TypewriterTitle: View {
-    let text: String
-    @State private var shown = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        Text(text)
-            .font(.system(size: AeroricType.hero, weight: .semibold))
-            .opacity(0)
-            .overlay(alignment: .leading) {
-                Text(String(text.prefix(reduceMotion ? text.count : shown)))
-                    .font(.system(size: AeroricType.hero, weight: .semibold))
-            }
-            .accessibilityLabel(text)
-            .accessibilityIdentifier("new-session.title")
-            .task(id: text) {
-                guard !reduceMotion else { return }
-                shown = 0
-                let step = min(0.06, 0.6 / Double(max(1, text.count)))
-                for index in 1...max(1, text.count) {
-                    try? await Task.sleep(for: .seconds(step))
-                    shown = index
-                }
-            }
     }
 }

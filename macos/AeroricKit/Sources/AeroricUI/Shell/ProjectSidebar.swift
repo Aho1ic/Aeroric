@@ -20,6 +20,7 @@ public struct ProjectSidebar: View {
     private let onMoveSelection: (MoveCommandDirection) -> Void
     private let onSearch: () -> Void
     private let onOpenSettings: () -> Void
+    private let onAddProject: (String) -> Void
     /// Window-local status filter. Presentation only; never a host query.
     @State private var filter: SidebarStatusFilter = .all
 
@@ -36,7 +37,8 @@ public struct ProjectSidebar: View {
         onNewProjectTask: @escaping (String) -> Void = { _ in },
         onMoveSelection: @escaping (MoveCommandDirection) -> Void = { _ in },
         onSearch: @escaping () -> Void = {},
-        onOpenSettings: @escaping () -> Void = {}
+        onOpenSettings: @escaping () -> Void = {},
+        onAddProject: @escaping (String) -> Void = { _ in }
     ) {
         self._selection = selection
         self.items = items
@@ -49,12 +51,15 @@ public struct ProjectSidebar: View {
         self.onMoveSelection = onMoveSelection
         self.onSearch = onSearch
         self.onOpenSettings = onOpenSettings
+        self.onAddProject = onAddProject
     }
 
     private var workItems: [SidebarItem] {
         items.filter { $0.group == .work && $0.id != SessionNavigation.globalDraft }
     }
     private var projectItems: [SidebarItem] { items.filter { $0.group == .projects } }
+    private var importItems: [SidebarItem] { items.filter { $0.group == .imports } }
+    @State private var importsExpanded = true
     private var shell: NativePanelGeometry.MainShell { NativePanelGeometry.mainShell }
 
     public var body: some View {
@@ -96,6 +101,7 @@ public struct ProjectSidebar: View {
                         ForEach(projectItems) { project in
                             projectGroup(project)
                         }
+                        if !importItems.isEmpty { importsGroup }
                     }
                     .padding(.horizontal, AeroricSpace.m)
                     .padding(.bottom, AeroricSpace.m)
@@ -143,7 +149,8 @@ public struct ProjectSidebar: View {
 
     private func sessions(of project: SidebarItem) -> [SidebarItem] {
         (project.children ?? []).filter {
-            SessionNavigation.taskID($0.id) != nil && filter.matches($0.status)
+            (SessionNavigation.taskID($0.id) != nil && filter.matches($0.status))
+                || (SessionNavigation.importedID($0.id) != nil && filter == .all)
         }
     }
 
@@ -182,6 +189,41 @@ public struct ProjectSidebar: View {
                     .foregroundStyle(AeroricColor.textTertiary)
                     .padding(.leading, 36)
                     .frame(height: 24)
+            }
+        }
+    }
+
+    /// Imported sessions whose cwd matches no open project. Each row can turn
+    /// its directory into a project, which moves the sessions under it.
+    @ViewBuilder private var importsGroup: some View {
+        Button { importsExpanded.toggle() } label: {
+            HStack(spacing: AeroricSpace.xs) {
+                SectionHeader("未归类导入 · \(importItems.count)")
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .rotationEffect(.degrees(importsExpanded ? 90 : 0))
+                    .padding(.trailing, AeroricSpace.m)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, AeroricSpace.l)
+        .accessibilityIdentifier("sidebar.group.imports")
+        if importsExpanded {
+            ForEach(importItems) { item in
+                HoverCapsuleRow(selected: selection == item.id, height: shell.sessionRowHeight,
+                                action: { selection = item.id }) {
+                    SessionRow(item: item)
+                }
+                .contextMenu {
+                    if let path = item.path {
+                        Button("将 \(URL(fileURLWithPath: path).lastPathComponent) 添加为项目") { onAddProject(path) }
+                    }
+                }
+                .help(item.path.map { "\(item.title)\n\($0)" } ?? item.title)
+                .accessibilityIdentifier("sidebar.item.\(item.id)")
             }
         }
     }
@@ -418,6 +460,14 @@ private struct SessionRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 2)
+            if item.imported {
+                Text("已导入")
+                    .font(.system(size: AeroricType.caption - 1, weight: .medium))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .padding(.horizontal, AeroricSpace.xs)
+                    .background(AeroricColor.layer2, in: Capsule(style: .continuous))
+                    .accessibilityLabel("已导入，只读")
+            }
             if item.pinned {
                 Image(systemName: "pin.fill")
                     .font(.system(size: 9))

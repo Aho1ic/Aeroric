@@ -18,6 +18,8 @@ public struct SessionRouteView: View {
     let task: TaskStore.TaskEntry
     let actions: any SessionRouteActions
     let canSend: Bool
+    /// When set, the composer is replaced by this notice (imported sessions).
+    let readOnlyNotice: String?
     @State private var messages: [SessionMessage] = []
     @State private var loading = false
     @State private var draft = ""
@@ -25,10 +27,11 @@ public struct SessionRouteView: View {
     @State private var errorText: String?
 
     public init(task: TaskStore.TaskEntry, actions: any SessionRouteActions, canSend: Bool,
-                pendingStore: PendingRequestStore = PendingRequestStore()) {
+                pendingStore: PendingRequestStore = PendingRequestStore(), readOnlyNotice: String? = nil) {
         self.task = task
         self.actions = actions
         self.canSend = canSend
+        self.readOnlyNotice = readOnlyNotice
         _store = State(initialValue: pendingStore)
     }
 
@@ -39,6 +42,15 @@ public struct SessionRouteView: View {
     public var body: some View {
         TranscriptView(items: items, isLoading: loading, pending: store.pending, store: store,
                        onRespond: respond) {
+            if let readOnlyNotice {
+                Label(readOnlyNotice, systemImage: "lock")
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .padding(.horizontal, AeroricSpace.l)
+                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                    .glassSurface(.floatingCard, in: AeroricRadius.shape(AeroricRadius.l))
+                    .accessibilityIdentifier("session.read-only")
+            } else {
             VStack(alignment: .leading, spacing: AeroricSpace.s) {
                 if task.status == "input_required" && canSend {
                     Label("Agent 正在等待输入：发送的文字将原样输入到终端", systemImage: "exclamationmark.circle")
@@ -61,6 +73,7 @@ public struct SessionRouteView: View {
                     .padding(.horizontal, AeroricSpace.s)
                     .help("会话中不可更改 Agent、模型或权限")
                 }
+            }
             }
         }
         .overlay(alignment: .topTrailing) {
