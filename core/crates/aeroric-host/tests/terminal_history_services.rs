@@ -166,3 +166,91 @@ async fn read_task_terminal_history_rejects_invalid_task_id() {
         assert_eq!(failure.error.code, ErrorCode::InvalidArgument, "{case}");
     }
 }
+
+/// **答复必须装得进一帧。** 2026-10-13 AP8 实测的真缺陷:把整个 8 MiB 尾部塞进
+/// `result` 会让 `write_frame` 超限失败、宿主直接断连,客户端只看到
+/// "host closed the connection" —— 于是"小历史读得到、大历史读不到",而大历史
+/// 正是最需要它的时候。判据不是"大文件也能读",而是**大文件读出来的字节数受限且
+/// 是一次成功的答复**。
+#[tokio::test]
+async fn a_history_larger_than_one_frame_is_read_back_bounded_not_by_dropping_the_connection() {
+    use aeroric_protocol::MAX_FRAME_BYTES;
+
+    let harness = Harness::start("hist-frame-budget").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let hist_dir = harness.data_dir.join("terminal-history");
+    fixture_dir(&hist_dir);
+    let task_id = "task-big_history";
+    // 4 MiB:超过 1 MiB 帧上限,也在 8 MiB 的保留上限之内(即"合法大小"的历史)。
+    let huge = "x".repeat(4 * 1024 * 1024);
+    write_fixture(&hist_dir.join(format!("{task_id}.log")), huge.as_bytes());
+
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "read-huge",
+        "project.read_task_terminal_history",
+        json!({"taskId": task_id}),
+    )
+    .await;
+    let text = success_result(reply);
+    let returned = text.as_str().expect("history is a string").len();
+    assert!(returned > 0, "a 4 MiB history must not come back empty");
+    assert!(
+        returned <= MAX_FRAME_BYTES,
+        "the reply must fit one frame: got {returned} bytes against a {MAX_FRAME_BYTES} limit"
+    );
+
+    // 连接仍然可用 —— 这才是原缺陷真正丢掉的东西(宿主在超限时断连)。
+    let follow_up = query(
+        &mut reader,
+        &mut writer,
+        "after-huge",
+        "project.read_task_terminal_history",
+        json!({"taskId": "nonexistent_task"}),
+    )
+    .await;
+    assert_eq!(success_result(follow_up), json!(""));
+}
+
+/// 尾部是**最新的**那一端:窗口钳过之后,丢的必须是开头而不是结尾。
+/// 读历史的人要的是"刚才发生了什么",把结尾截掉等于把它变成最没用的那份。
+#[tokio::test]
+async fn a_bounded_history_read_keeps_the_tail_not_the_head() {
+    let harness = Harness::start("hist-tail-window").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let hist_dir = harness.data_dir.join("terminal-history");
+    fixture_dir(&hist_dir);
+    let task_id = "task-tail_window";
+    // 开头与结尾用**可区分**的标记:两份都是 `H` 的话,"保留尾部"与"保留头部"
+    // 在断言上无法分辨,那条用例就测不到它声称的东西。
+    let mut content = String::from("THE-VERY-START");
+    content.push_str(&"H".repeat(2 * 1024 * 1024));
+    content.push_str("THE-VERY-END");
+    write_fixture(&hist_dir.join(format!("{task_id}.log")), content.as_bytes());
+
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "read-tail",
+        "project.read_task_terminal_history",
+        json!({"taskId": task_id}),
+    )
+    .await;
+    let text = success_result(reply);
+    let returned = text.as_str().expect("history is a string");
+    assert!(
+        returned.ends_with("THE-VERY-END"),
+        "a bounded read must keep the newest bytes, not the oldest"
+    );
+    assert!(
+        !returned.starts_with("THE-VERY-START"),
+        "the oldest bytes are what gets dropped"
+    );
+}

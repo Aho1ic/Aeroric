@@ -321,8 +321,16 @@ impl CliPtyExecutor {
 
         // reader：阻塞读进字节环。线程随进程退出消亡；supervisor 托管的
         // 取消面在 b1.2（run 等待 settled 时随 shutdown 一起收）。
+        //
+        // **同时落一份磁盘历史**（`GAP-AP8-HISTORY-WRITER`，2026-10-13 AP8 修）。
+        // 这条以前只在待退休的 Tauri 桥里（`src-tauri/src/pty.rs` → `storage::append_task_terminal_history`），
+        // 所以无头宿主与原生端跑完的任务在 `terminal-history/` 下没有日志 ——
+        // 读侧的 `project.read_task_terminal_history` 对刚跑完的任务返回空。
+        // 追加走 core 的 `append_terminal_history`（未超高水位是纯 append，
+        // 超过才原子重写），策略与读侧共用 `HistoryRetention`，不是第二份参数。
         let terminal = Arc::clone(&self.terminal);
         let identity = TerminalIdentity::new(task_id.to_string(), generation);
+        let history_path = self.context.paths.terminal_history_file(task_id).ok();
         let mut reader = handles.reader;
         std::thread::spawn(move || {
             let mut buf = [0u8; 8 * 1024];
@@ -331,6 +339,17 @@ impl CliPtyExecutor {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         terminal.publish(&identity, &buf[..n]);
+                        if let Some(path) = history_path.as_ref() {
+                            // 失败不改读循环的行为：历史是旁路，丢日志不能让任务停。
+                            // 但绝不静默——`publish` 的字节环与事件是真相源。
+                            if let Ok(text) = std::str::from_utf8(&buf[..n]) {
+                                let _ = aeroric_core::terminal::history::append_terminal_history(
+                                    path,
+                                    text,
+                                    aeroric_core::terminal::HistoryRetention::LEGACY,
+                                );
+                            }
+                        }
                     }
                 }
             }

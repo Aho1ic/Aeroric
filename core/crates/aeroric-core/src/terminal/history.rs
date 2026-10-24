@@ -122,6 +122,116 @@ pub fn read_terminal_history_tail_from_path(
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// 把一段 PTY 输出追加到某任务的历史文件,按 [`HistoryRetention`] 压实。
+///
+/// ## 为什么写侧也必须住在 core
+///
+/// P3-03 只上收了**读**与**策略**,追加落盘留在宿主 `storage.rs`(模块头当时如实记着
+/// 这一点)。迁移到 Apple-only 之后这条切分露出了真实后果:唯一的写者
+/// (`src-tauri/src/pty.rs`)是**待退休**的桥,而新的无头宿主(`aeroric-cli serve`)与
+/// 原生 Mac 端都**没有**写侧实现,于是它们跑完的任务在 `terminal-history/` 下没有日志,
+/// `project.read_task_terminal_history` 对刚跑完的任务返回空。
+///
+/// 2026-10-13 AP8 压测把这条当成机器证据(门禁 `stress-headless` 的
+/// "5 MiB 输出的任务在磁盘上留下了终端历史")钉住,而不是靠人记得。
+/// 缺口编号 `GAP-AP8-HISTORY-WRITER`。
+///
+/// ## 语义与旧实现逐条对齐
+///
+/// - **未超高水位**:`append` 打开(新建时 0600),只追加,不读全文件——活跃 TUI 每秒
+///   几十个片段,压实摊薄的意义就在这里。
+/// - **超过高水位**:读末尾 [`HistoryRetention::disk_tail_bytes`] 字节 + 本片段,
+///   按字符边界裁剪后**原子重写**;压缩回上限而不是高水位,留出整个 slack 窗口。
+///
+/// 写入走 [`crate::storage::atomic::write_atomic`](FileMode::Private):它自带
+/// temp→flush→rename 与 0600,所以"读者永远看不到半个文件"与"权限不会先松后紧"两条
+/// 都由机制保证,不再依赖调用方记得。
+pub fn append_terminal_history(
+    path: &std::path::Path,
+    data: &str,
+    retention: HistoryRetention,
+) -> Result<(), String> {
+    use std::io::Write as _;
+
+    if data.is_empty() {
+        return Ok(());
+    }
+    let existing_len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+    if !retention.needs_compaction(existing_len, data.len()) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path).map_err(|e| e.to_string())?;
+        // 新建的文件由 open 的 mode 就位;只有"已存在且权限不对"才需要那次 syscall。
+        // 老版本留下的 0644 历史文件因此仍会被收紧一次,而稳态下的每片段追加不再付这个钱。
+        if permissions_need_tightening(path) {
+            tighten_history_permissions(path)?;
+        }
+        return file.write_all(data.as_bytes()).map_err(|e| e.to_string());
+    }
+
+    let incoming = utf8_tail_str(data, retention.max_bytes);
+    let tail_len = retention.disk_tail_bytes(incoming.len());
+    let tail = read_terminal_history_tail_from_path(path, tail_len).map_err(|e| e.to_string())?;
+    let mut compacted = tail.into_bytes();
+    compacted.extend_from_slice(incoming.as_bytes());
+    let clipped = utf8_tail_bytes(&compacted, retention.max_bytes).to_vec();
+    crate::storage::atomic::write_atomic(
+        path,
+        &clipped,
+        crate::storage::atomic::FileMode::Private,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// `&str` 版的取尾:`utf8_tail_bytes` 的字符边界语义,但输入已是字符串。
+fn utf8_tail_str(data: &str, max_bytes: usize) -> &str {
+    if data.len() <= max_bytes {
+        return data;
+    }
+    let mut start = data.len() - max_bytes;
+    while start < data.len() && !data.is_char_boundary(start) {
+        start += 1;
+    }
+    &data[start..]
+}
+
+#[cfg(unix)]
+fn permissions_need_tightening(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o777 != 0o600)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn permissions_need_tightening(_path: &std::path::Path) -> bool {
+    // Windows 没有 mode 位,ACL 状态读不出来,保持旧行为每次收紧。
+    true
+}
+
+fn tighten_history_permissions(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryDeleteError {
     #[error(transparent)]

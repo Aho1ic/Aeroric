@@ -9,6 +9,7 @@
 //! Task P2-03 and P2-04.
 
 pub mod atomic;
+pub mod backup;
 pub mod compat;
 pub mod fingerprint;
 pub mod projects;
@@ -17,6 +18,7 @@ pub mod settings;
 pub mod tasks;
 
 pub use atomic::{FileMode, ReadOutcome, StorageError};
+pub use backup::{BackupManifest, RestoreOutcome};
 pub use compat::{update_record, Record};
 pub use fingerprint::{Cover, Fingerprint};
 pub use projects::{load_projects, save_projects};

@@ -849,9 +849,26 @@ fn project_read_task_terminal_history(request: Request, context: Arc<CoreContext
         }
     };
 
+    // **答复必须装得进一帧。** `read_terminal_history_tail_from_path` 的上限是 8 MiB
+    // （`HISTORY_MAX_BYTES`），而 `MAX_FRAME_BYTES` 是 1 MiB —— 直接把整个尾部塞进
+    // `result` 会让宿主在编码时超限，`write_frame` 失败即断连，客户端只看到
+    // "host closed the connection"。那正是"读得到小历史、读不到大历史"的形状，
+    // 而大历史恰恰是最需要它的时候（长任务）。
+    //
+    // 所以窗口钳到帧预算之内：JSON 字符串还要转义（最坏 6×，控制字符）加上信封与 id，
+    // 留出量级上的余量。要一次拿更多，走 `maxBytes` 分页读（与 `terminal.plan_replay`
+    // 的 `maxBytes` 是同一路数），不是把单帧撑大。
+    const HISTORY_REPLY_MAX_BYTES: u64 = 256 * 1024;
+    let requested = request
+        .params
+        .get("maxBytes")
+        .and_then(Value::as_u64)
+        .filter(|bytes| *bytes > 0)
+        .unwrap_or(HISTORY_REPLY_MAX_BYTES)
+        .min(HISTORY_REPLY_MAX_BYTES);
     match aeroric_core::terminal::history::read_terminal_history_tail_from_path(
         &path,
-        aeroric_core::terminal::history::HISTORY_MAX_BYTES as u64,
+        requested,
     ) {
         Ok(history) => ok(&request, json!(history)),
         Err(e) => failure(
@@ -4811,6 +4828,73 @@ mod terminal_replay_tests {
         );
         let result = result_of(frame);
         assert_eq!(result["reason"]["kind"], "unknownStream");
+    }
+
+    /// `evicted` 是三个理由里**唯一有实现却没有任何测试**的那个(AP8 勘察点名)。
+    ///
+    /// 它要回答的问题与 `notStarted` 恰好相反,而客户端的动作也不同:`notStarted`
+    /// ⇒"挂起等活流",`evicted` ⇒"这一代没有任何历史可重放,历史走
+    /// `session.history`"。两者混同的后果是重连后一片空白却不知道该等还是该死心
+    /// ——ADR-038 决策 2 拆这两个理由的全部意义就在这里。
+    ///
+    /// 区分依据:任务**记录还在**(`find_project_of_task` 命中)但该代**不在册**
+    /// (`resource_run` 不命中)。因此这里必须真的建出一个项目+任务记录,否则
+    /// 落到的还是 `unknownStream`,用例就测不到它声称的东西。
+    #[test]
+    fn plan_replay_classifies_a_retired_run_of_a_known_task_as_evicted() {
+        use aeroric_core::storage::Record;
+        use serde_json::json;
+
+        let terminal = TerminalService::new();
+        let registry = TaskRegistry::default();
+        let context = temp_context("evicted");
+
+        // 真实落盘一个项目与一条任务记录:这是 `evicted` 与 `unknownStream` 的
+        // 唯一分界(记录在 vs 两处都查无)。
+        let project_dir = context.paths.project_dir("proj-evicted").expect("project dir");
+        std::fs::create_dir_all(&project_dir).expect("create project dir");
+        std::fs::write(
+            context.paths.projects_file(),
+            serde_json::to_vec(&json!([{
+                "id": "proj-evicted",
+                "name": "evicted",
+                "path": project_dir.to_string_lossy(),
+                "orderIndex": 0,
+            }]))
+            .expect("projects json"),
+        )
+        .expect("write projects");
+        std::fs::write(
+            context.paths.tasks_file("proj-evicted").expect("tasks file"),
+            serde_json::to_vec(&json!([{
+                "id": "task-retired",
+                "projectId": "proj-evicted",
+                "agent": "claude",
+                "status": "done",
+                "permissionMode": "ask",
+                "createdAt": 1_700_000_000_000i64,
+            }]))
+            .expect("tasks json"),
+        )
+        .expect("write tasks");
+
+        // 该代**不在册**:没有 register,流也从未产出。这正是"已收尾并被 FIFO 退场"。
+        let frame = terminal_plan_replay(
+            request(json!({
+                "taskId": "task-retired", "generation": 2,
+                "cursor": {"kind": "bytes", "value": 0},
+            })),
+            &terminal,
+            &registry,
+            &context,
+        );
+        let result = result_of(frame);
+        assert_eq!(result["kind"], "reset");
+        assert_eq!(
+            result["reason"]["kind"], "evicted",
+            "a known task with an unregistered generation is 已退场, not 未知流: {result}"
+        );
+        let _ = Record::default();
     }
 
     #[test]

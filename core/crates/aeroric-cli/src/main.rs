@@ -5,7 +5,7 @@ mod args;
 mod attach;
 mod client;
 
-use args::{exit, ApprovalCmd, Cli, Command, ProjectCmd, TaskCmd};
+use args::{exit, ApprovalCmd, BackupCmd, Cli, Command, ProjectCmd, TaskCmd};
 use clap::Parser;
 use std::path::Path;
 use std::sync::Arc;
@@ -25,6 +25,7 @@ async fn dispatch(cli: Cli) -> i32 {
         // ③/④/⑤ 片的落地面。未接线前每命令显式失败，数字用 CONNECT：
         // 能力在计划里，不在树里。
         Command::Events { after } => events(&cli.data_dir, &after).await,
+        Command::Backup(cmd) => backup(&cli.data_dir, cmd).await,
         Command::Project(cmd) => project(&cli.data_dir, cmd).await,
         Command::Task(cmd) => task(&cli.data_dir, cmd).await,
         Command::Run {
@@ -467,6 +468,74 @@ async fn events(data_dir: &Path, after: &str) -> i32 {
             eprintln!("aeroric-cli events: {e}");
             e.exit_code()
         }
+    }
+}
+
+// ── backup：数据目录的一致性备份 / 校验 / 恢复（AP8 Action 1） ──────────
+
+/// 备份是**离线**动作,不连 host:连上 host 意味着那个 host 持有写租约、正在写这个
+/// 目录,而"停写后再备份"的纪律(`docs/native/rollback.md` 规则 2)要求备份前先确认
+/// 没有写者。这里不替调用方做那个判断,只是不去制造相反的事实。
+async fn backup(data_dir: &Path, command: BackupCmd) -> i32 {
+    match command {
+        BackupCmd::Create { out, live } => {
+            let now = aeroric_core::clock::Clock::now_ms(&aeroric_core::clock::SystemClock);
+            match aeroric_core::storage::backup::create(data_dir, &out, now, live) {
+                Ok(manifest) => {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "backupDir": out.to_string_lossy(),
+                            "files": manifest.entries.len(),
+                            "databases": manifest.databases.len(),
+                            "live": manifest.live,
+                        })
+                    );
+                    exit::OK
+                }
+                Err(e) => {
+                    eprintln!("aeroric-cli backup create: {e}");
+                    exit::CONNECT
+                }
+            }
+        }
+        BackupCmd::Verify { backup } => match aeroric_core::storage::backup::verify(&backup) {
+            Ok(problems) if problems.is_empty() => {
+                println!("{}", serde_json::json!({"verified": true, "problems": []}));
+                exit::OK
+            }
+            Ok(problems) => {
+                println!(
+                    "{}",
+                    serde_json::json!({"verified": false, "problems": problems})
+                );
+                // 非零退出:脚本与门禁要能用退出码判断,而不是去解析 JSON。
+                exit::TASK_FAILED
+            }
+            Err(e) => {
+                eprintln!("aeroric-cli backup verify: {e}");
+                exit::CONNECT
+            }
+        },
+        BackupCmd::Restore {
+            backup,
+            discard_newer,
+        } => match aeroric_core::storage::backup::restore(&backup, data_dir, discard_newer) {
+            Ok(outcome) => {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "restored": outcome.written,
+                        "diverged": outcome.diverged,
+                    })
+                );
+                exit::OK
+            }
+            Err(e) => {
+                eprintln!("aeroric-cli backup restore: {e}");
+                exit::TASK_FAILED
+            }
+        },
     }
 }
 

@@ -75,6 +75,8 @@ pub enum Command {
         #[arg(long, value_name = "CURSOR")]
         after: String,
     },
+    #[command(subcommand)]
+    Backup(BackupCmd),
     /// 转发真实 PTY 字节（termios raw RAII；SIGWINCH→resize；退出 detach 不 cancel）。
     Attach { task_id: String },
 }
@@ -85,6 +87,36 @@ pub enum ProjectCmd {
     /// 把一个目录登记为项目（`run --project` 的既有值不登记）。
     Open {
         path: std::path::PathBuf,
+    },
+}
+
+/// 数据目录的一致性备份 / 校验 / 恢复（AP8 Action 1）。
+///
+/// **默认只接受 `--data-dir` 指到哪就备到哪**:所有命令都读顶层 `--data-dir`,
+/// 没有第二个"真实目录"的缺省。真实 `~/.aeroric` 的停写与备份是一次不可自动回退的
+/// 操作(`docs/native/rollback.md`),所以本命令族不提供任何"自动找家目录"的捷径。
+#[derive(Subcommand, Debug)]
+pub enum BackupCmd {
+    /// 建一份备份（含清单）。目标目录必须不存在或为空。
+    Create {
+        #[arg(long, value_name = "DIR")]
+        out: std::path::PathBuf,
+        /// 记账用：备份时确实有活写者。库走 backup API、文件走原子写，所以快照自洽。
+        #[arg(long)]
+        live: bool,
+    },
+    /// 重算摘要 + `integrity_check` + 行数对账。有任何问题即非零退出。
+    Verify {
+        #[arg(long, value_name = "DIR")]
+        backup: std::path::PathBuf,
+    },
+    /// 把备份恢复到 `--data-dir`。默认拒绝覆盖备份之后的写入。
+    Restore {
+        #[arg(long, value_name = "DIR")]
+        backup: std::path::PathBuf,
+        /// 显式丢弃备份之后的新写入（"回滚"而不是"恢复"，需自己说出口）。
+        #[arg(long)]
+        discard_newer: bool,
     },
 }
 
