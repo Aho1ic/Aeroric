@@ -3770,34 +3770,102 @@ use aeroric_core::sessions::{
     export::{export_session_markdown, ExportSource, ExportTaskMeta},
     omp::parse_omp_session_lines,
     parser::parse_session_lines,
+    SessionContent, SessionMessage,
 };
 
 /// 会话消息的家族分派——与宿主 `session.rs` 同一条四族链（P3-04 的 core 读侧）。
-fn parse_messages(lines: &[String], family: ProtocolFamily) -> Vec<Value> {
+fn parse_messages(lines: &[String], family: ProtocolFamily) -> Vec<SessionMessage> {
     match family {
-        ProtocolFamily::Dsh => parse_dsh_session_lines(lines)
-            .into_iter()
-            .map(serde_json::to_value)
-            .map(Result::unwrap_or_default)
-            .collect(),
-        ProtocolFamily::Omp => parse_omp_session_lines(lines)
-            .into_iter()
-            .map(serde_json::to_value)
-            .map(Result::unwrap_or_default)
-            .collect(),
+        ProtocolFamily::Dsh => parse_dsh_session_lines(lines).unwrap_or_default(),
+        ProtocolFamily::Omp => parse_omp_session_lines(lines).unwrap_or_default(),
         other => {
             let mut messages = Vec::new();
             parse_session_lines(lines, other == ProtocolFamily::Codex, &mut messages);
             messages
-                .into_iter()
-                .map(serde_json::to_value)
-                .map(Result::unwrap_or_default)
-                .collect()
         }
     }
 }
 
+/// 解析结果 → v1 `SessionPage`（客户端按 v1 契约解码）。文本与思考是
+/// `Text` 块；工具调用、结果与附件保持不透明（kind + 原样 payload），客户端
+/// 按 kind 认领，宿主不推断结构。
+fn session_page(
+    session_id: String,
+    family: ProtocolFamily,
+    messages: Vec<SessionMessage>,
+) -> SessionPage {
+    let messages = messages
+        .into_iter()
+        .enumerate()
+        .map(|(index, message)| v1_message(index, message, family))
+        .collect();
+    SessionPage {
+        session_id,
+        family,
+        messages,
+        next_cursor: None,
+        has_more: false,
+    }
+}
+
+fn v1_message(index: usize, message: SessionMessage, family: ProtocolFamily) -> V1Message {
+    let role = match message.role.as_str() {
+        "user" => MessageRole::User,
+        "tool" => MessageRole::Tool,
+        "system" => MessageRole::System,
+        _ => MessageRole::Assistant,
+    };
+    let opaque = |kind: &str, source_id: Option<String>, payload: Value| {
+        ContentBlock::Unknown(OpaqueContent {
+            kind: kind.to_string(),
+            source_id,
+            payload,
+            origin_family: Some(family),
+        })
+    };
+    let blocks = message
+        .content
+        .into_iter()
+        .map(|content| match content {
+            SessionContent::Text { text } => ContentBlock::Text {
+                kind: "text".into(),
+                text,
+            },
+            SessionContent::Thinking { thinking } => ContentBlock::Text {
+                kind: "thinking".into(),
+                text: thinking,
+            },
+            SessionContent::ToolUse { id, name, input } => {
+                // input 是序列化后的 JSON 字符串；能解析就给结构，否则原样。
+                let input = serde_json::from_str::<Value>(&input).unwrap_or(Value::String(input));
+                opaque(
+                    "tool_use",
+                    Some(id),
+                    json!({ "name": name, "input": input }),
+                )
+            }
+            SessionContent::ToolResult { id, output } => {
+                opaque("tool_result", Some(id), json!({ "output": output }))
+            }
+            other => opaque(
+                "attachment",
+                None,
+                serde_json::to_value(other).unwrap_or_default(),
+            ),
+        })
+        .collect();
+    V1Message {
+        id: message.message_id.unwrap_or_else(|| format!("m{index}")),
+        role,
+        blocks,
+        created_at: None,
+    }
+}
+
 use aeroric_core::tasks::ProtocolFamily;
+use aeroric_protocol::session::{
+    ContentBlock, MessageRole, OpaqueContent, SessionMessage as V1Message, SessionPage,
+};
 
 #[allow(clippy::type_complexity)]
 /// 终端重放面与租约面（P5-01，ADR-038）：`terminal.plan_replay` 承接回放与
@@ -4169,8 +4237,16 @@ fn session_history(
     };
     let lines: Vec<String> = raw.lines().map(str::to_string).collect();
     let agent = mutations::text(&record, "agent").unwrap_or_default();
-    let messages = parse_messages(&lines, families.session_family(agent));
-    ok(&request, json!({ "messages": messages, "path": path }))
+    let family = families.session_family(agent);
+    let session_id = mutations::text(&record, "sessionId").unwrap_or(task_id);
+    let page = session_page(
+        session_id.to_string(),
+        family,
+        parse_messages(&lines, family),
+    );
+    let mut reply = serde_json::to_value(page).unwrap_or_default();
+    reply["path"] = json!(path);
+    ok(&request, reply)
 }
 
 fn session_export(

@@ -458,7 +458,7 @@ async fn session_history_reads_the_record_transcript_via_the_family_parser() {
     let transcript = root.join("session.jsonl");
     std::fs::write(
         &transcript,
-        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"问\"}]}}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"答\"}]}}\n",
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"问\"}]}}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"答\"},{\"type\":\"tool_use\",\"id\":\"tu1\",\"name\":\"Read\",\"input\":{\"file_path\":\"a.rs\"}}]}}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"tu1\",\"content\":\"ok\"}]}}\n",
     )
     .expect("transcript");
     let context = Arc::new(
@@ -568,10 +568,28 @@ async fn session_history_reads_the_record_transcript_via_the_family_parser() {
     .await;
     match frame {
         aeroric_protocol::envelope::Frame::Success(success) => {
-            let messages = success.result["messages"].as_array().expect("messages");
-            assert_eq!(messages.len(), 2, "claude 两行必须解析为两条消息");
+            // v1 SessionPage：客户端 SessionPage.decode 依赖 sessionId/family/blocks。
+            let result = &success.result;
+            assert_eq!(result["family"], "claude");
+            assert!(result["sessionId"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty()));
+            let messages = result["messages"].as_array().expect("messages");
+            assert_eq!(messages.len(), 3, "claude 三行必须解析为三条消息");
             assert_eq!(messages[0]["role"], "user");
+            assert_eq!(messages[0]["blocks"][0]["kind"], "text");
+            assert_eq!(messages[0]["blocks"][0]["text"], "问");
             assert_eq!(messages[1]["role"], "assistant");
+            let tool = &messages[1]["blocks"][1];
+            assert_eq!(tool["kind"], "tool_use");
+            assert_eq!(tool["sourceId"], "tu1");
+            assert_eq!(tool["payload"]["name"], "Read");
+            assert_eq!(tool["payload"]["input"]["file_path"], "a.rs");
+            let result_block = &messages[2]["blocks"][0];
+            assert_eq!(result_block["kind"], "tool_result");
+            assert_eq!(result_block["sourceId"], "tu1");
+            assert_eq!(result_block["payload"]["output"], "ok");
+            assert!(messages.iter().all(|m| m["id"].as_str().is_some()));
         }
         other => panic!("expected success, got {other:?}"),
     }
