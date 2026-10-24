@@ -208,7 +208,11 @@ final class SandboxLifecycleTests: XCTestCase {
                  "buildHash": "b1", "protocolHash": "protocol-v1",
                  "dataDirHash": "d1", "socketPath": sock_path}
         os.write(3, json.dumps(ready).encode() + b"\\n")
-        signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
+        # Keep SIGTERM at its default disposition so the kernel ends the process
+        # even while it is blocked in accept(). A Python-level handler only sets
+        # a flag; a SIGTERM landing just before accept() re-blocks is never acted
+        # on and the host lives on (the flaky explicit-stop failure, 2026-10-25).
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
         while True:
             conn, _ = srv.accept()
             buf = b""
