@@ -1,8 +1,9 @@
 import AeroricClient
 import SwiftUI
 
-/// Narrow locator only. No editor, diff, mutation toolbar or history lives
-/// here; file/change selection forwards one typed target to the centre.
+/// Repository panel lists (M3): a file tree and the change list with inline
+/// diffs. Read-only; selecting a file or "在中栏打开" forwards one typed
+/// target to the centre preview. Files vs changes is chosen by the panel tabs.
 public struct ProjectResourceInspector: View {
     let book: ProjectResourceBook
     let projectID: String
@@ -10,33 +11,24 @@ public struct ProjectResourceInspector: View {
     let onOpen: (ResourcePreviewTarget) -> Void
     let onLoadDirectory: (String) -> Void
     let onRefresh: () -> Void
+    let onToggleChange: (ResourceGitChange) -> Void
 
     public init(book: ProjectResourceBook, projectID: String, projectName: String,
                 onOpen: @escaping (ResourcePreviewTarget) -> Void,
-                onLoadDirectory: @escaping (String) -> Void, onRefresh: @escaping () -> Void) {
+                onLoadDirectory: @escaping (String) -> Void, onRefresh: @escaping () -> Void,
+                onToggleChange: @escaping (ResourceGitChange) -> Void = { _ in }) {
         self.book = book; self.projectID = projectID; self.projectName = projectName
         self.onOpen = onOpen; self.onLoadDirectory = onLoadDirectory; self.onRefresh = onRefresh
+        self.onToggleChange = onToggleChange
     }
     private var scene: ProjectResourceScene { book.scene(projectID) }
+    static var rowHeight: CGFloat { 26 }
+    static var indent: CGFloat { 14 }
+
     public var body: some View {
-        VStack(spacing: 6) {
-            NativeSegmentedPicker(
-                selection: Binding(get: { scene.section }, set: { section in
-                    book.edit(projectID) { $0.section = section }
-                }),
-                groupTitle: "项目资源", segments: [
-                    .init(value: .files, title: "文件"), .init(value: .git, title: "Git"),
-                ]
-            )
-            .controlSize(.small)
-            .accessibilityIdentifier("resources.section")
-            HStack(spacing: 4) {
-                Text(projectName).lineLimit(1).truncationMode(.middle).help(projectName)
-                Spacer(minLength: 2)
-                NativeIconButton(systemImage: "arrow.clockwise", label: "刷新\(projectName)资源",
-                                 identifier: "resources.refresh", action: onRefresh)
-            }
-            .font(AeroricFont.mono(AeroricFont.meta))
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            HairlineDivider()
             ZStack {
                 fileList
                     .opacity(scene.section == .files ? 1 : 0)
@@ -48,9 +40,26 @@ public struct ProjectResourceInspector: View {
                     .accessibilityHidden(scene.section != .git)
             }
         }
-        .padding(8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+
+    private var header: some View {
+        HStack(spacing: AeroricSpace.s) {
+            Image(systemName: scene.section == .files ? "folder" : "arrow.triangle.branch")
+                .foregroundStyle(AeroricColor.textTertiary)
+            Text(scene.section == .files ? projectName : (scene.branches.first(where: \.current)?.name ?? "分支未知"))
+                .font(.system(size: AeroricType.secondary, weight: .medium))
+                .lineLimit(1).truncationMode(.middle)
+                .help(projectName)
+            Spacer(minLength: AeroricSpace.xs)
+            NativeIconButton(systemImage: "arrow.clockwise", label: "刷新\(projectName)资源",
+                             identifier: "resources.refresh", action: onRefresh)
+        }
+        .padding(.horizontal, AeroricSpace.l)
+        .frame(height: 36)
+    }
+
+    // MARK: - Files
 
     private struct TreeRow: Identifiable {
         var id: String { node.path }
@@ -73,10 +82,10 @@ public struct ProjectResourceInspector: View {
         })
     }
     private var fileList: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 0) {
             readNotice(scene.directoryStates[""] ?? .notLoaded, hasCache: scene.directories[""] != nil)
             if scene.directoryStates[""] == .loaded, scene.directories[""]?.isEmpty == true {
-                Text("目录为空").font(AeroricFont.mono(AeroricFont.meta))
+                AeroricEmptyState(systemImage: "folder", title: "目录为空")
             }
             NativeSelectionList(selection: fileSelection) {
                 ForEach(rows) { row in
@@ -90,10 +99,14 @@ public struct ProjectResourceInspector: View {
                                 }
                                 if !expanded, scene.directories[row.id] == nil { onLoadDirectory(row.id) }
                             } label: {
-                                HStack(spacing: 5) {
-                                    Image(systemName: scene.expandedPaths.contains(row.id) ? "chevron.down" : "chevron.right")
+                                HStack(spacing: AeroricSpace.xs) {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundStyle(AeroricColor.textTertiary)
+                                        .rotationEffect(.degrees(scene.expandedPaths.contains(row.id) ? 90 : 0))
                                         .frame(width: 10)
-                                    resourceName(row.node.name, symbol: row.node.isSymlink ? "link" : "folder")
+                                    resourceName(row.node.name, symbol: row.node.isSymlink ? "link" : "folder.fill",
+                                                 tint: AeroricColor.accent.opacity(0.75))
                                 }
                                 .contentShape(Rectangle())
                             }
@@ -103,16 +116,22 @@ public struct ProjectResourceInspector: View {
                             if scene.expandedPaths.contains(row.id) {
                                 if let status = scene.directoryStates[row.id], status != .loaded {
                                     readNotice(status, hasCache: scene.directories[row.id] != nil)
-                                    Button("重试此目录") { onLoadDirectory(row.id) }.buttonStyle(.borderless)
+                                    Button("重试此目录") { onLoadDirectory(row.id) }.buttonStyle(.link)
                                 } else if scene.directories[row.id]?.isEmpty == true {
-                                    Text("空目录").font(AeroricFont.mono(AeroricFont.meta))
+                                    Text("空目录")
+                                        .font(.system(size: AeroricType.caption))
+                                        .foregroundStyle(AeroricColor.textTertiary)
+                                        .padding(.leading, Self.indent + 10)
                                 }
                             }
                         }
                         .tag(Optional<String>.none)
                         .listRowInsets(insets(row.depth))
                     } else {
-                        resourceName(row.node.name, symbol: row.node.isSymlink ? "link" : "doc")
+                        resourceName(row.node.name,
+                                     symbol: row.node.isSymlink ? "link" : FileSymbol.symbol(forFile: row.node.name),
+                                     tint: AeroricColor.textSecondary)
+                            .padding(.leading, 14)
                             .tag(Optional(row.id))
                             .help(row.node.path)
                             .accessibilityLabel("\(row.node.name)，只读预览，\(row.node.path)")
@@ -123,83 +142,168 @@ public struct ProjectResourceInspector: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, NativePanelGeometry.mainShell.resourceRowHeight)
+            .environment(\.defaultMinListRowHeight, Self.rowHeight)
             .accessibilityIdentifier("resources.files")
         }
     }
-    private var gitSelection: Binding<String?> {
-        Binding(get: {
-            guard let target = scene.target, target.kind != .file else { return nil }
-            return "\(target.kind == .stagedDiff):\(target.path)"
-        }, set: { id in
-            guard let change = scene.changes.first(where: { $0.id == id }) else { return }
-            onOpen(.init(projectID: projectID, path: change.path,
-                         kind: change.status == "?" ? .untracked : change.staged ? .stagedDiff : .unstagedDiff))
-        })
-    }
+
+    // MARK: - Changes
+
     private var gitList: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch")
-                Text(scene.branches.first(where: \.current)?.name ?? "分支未知").lineLimit(1)
-            }
-            .font(AeroricFont.mono(AeroricFont.meta))
-            readNotice(scene.branchState, hasCache: !scene.branches.isEmpty)
-            readNotice(scene.gitState, hasCache: !scene.changes.isEmpty)
-            if scene.gitState == .loaded, scene.changes.isEmpty {
-                Text("此快照没有变更").font(AeroricFont.mono(AeroricFont.meta))
-            }
-            NativeSelectionList(selection: gitSelection) {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: AeroricSpace.xxs) {
+                readNotice(scene.branchState, hasCache: !scene.branches.isEmpty)
+                readNotice(scene.gitState, hasCache: !scene.changes.isEmpty)
+                if scene.gitState == .loaded, scene.changes.isEmpty {
+                    AeroricEmptyState(systemImage: "checkmark.circle", title: "没有改动", message: "工作区与最近一次提交一致。")
+                }
                 changeGroup("已暂存", changes: scene.changes.filter(\.staged))
                 changeGroup("未暂存", changes: scene.changes.filter { !$0.staged && $0.status != "?" })
                 changeGroup("未跟踪", changes: scene.changes.filter { !$0.staged && $0.status == "?" })
             }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, NativePanelGeometry.mainShell.resourceRowHeight)
-            .accessibilityIdentifier("resources.git")
+            .padding(.horizontal, AeroricSpace.s)
+            .padding(.vertical, AeroricSpace.s)
         }
+        .accessibilityIdentifier("resources.git")
     }
-    private func changeGroup(_ title: String, changes: [ResourceGitChange]) -> some View {
-        Section {
+
+    @ViewBuilder private func changeGroup(_ title: String, changes: [ResourceGitChange]) -> some View {
+        if !changes.isEmpty {
+            SectionHeader("\(title) · \(changes.count)")
+                .padding(.horizontal, AeroricSpace.s)
+                .padding(.top, AeroricSpace.m)
             ForEach(changes) { change in
-                HStack(spacing: 5) {
-                    Text(change.status).foregroundStyle(Color.dsTextSecondary).frame(width: 15)
-                    Text((change.path as NSString).lastPathComponent).lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 0)
-                }
-                .font(AeroricFont.mono(AeroricFont.file))
-                .frame(minHeight: NativePanelGeometry.mainShell.resourceRowHeight)
-                .help(change.path)
-                .accessibilityLabel("\(title)，\(change.status)，\(change.path)")
-                .tag(Optional(change.id))
-                .listRowInsets(insets(0))
-                .listRowSeparator(.hidden)
+                changeRow(change)
+                if scene.expandedChange == change.id { inlineDiff(change) }
             }
-        } header: {
-            Text("\(title) · \(changes.count)").font(AeroricFont.mono(AeroricFont.meta))
         }
     }
-    private func resourceName(_ name: String, symbol: String) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: symbol).frame(width: 14).foregroundStyle(Color.dsTextSecondary)
-            Text(name).lineLimit(1).truncationMode(.middle)
+
+    private func changeRow(_ change: ResourceGitChange) -> some View {
+        let badge = ChangeBadge(status: change.status)
+        let name = (change.path as NSString).lastPathComponent
+        let directory = (change.path as NSString).deletingLastPathComponent
+        return HoverCapsuleRow(selected: scene.expandedChange == change.id, height: Self.rowHeight) {
+            onToggleChange(change)
+        } label: {
+            HStack(spacing: AeroricSpace.s) {
+                Text(badge.letter)
+                    .font(.system(size: AeroricType.caption, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Self.badgeColor(badge))
+                    .frame(width: 16, height: 16)
+                    .background(Self.badgeColor(badge).opacity(0.14), in: AeroricRadius.shape(AeroricRadius.xs))
+                Text(name)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.text)
+                    .lineLimit(1)
+                if !directory.isEmpty {
+                    Text(directory)
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .lineLimit(1).truncationMode(.head)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .help(change.path)
+        .accessibilityLabel("\(badge.label)，\(change.path)")
+        .accessibilityIdentifier("resources.change.\(change.id)")
+    }
+
+    @ViewBuilder private func inlineDiff(_ change: ResourceGitChange) -> some View {
+        let diff = scene.inlineDiffs[change.id] ?? InlineDiff()
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            if let notice = diff.state.notice {
+                Text(notice)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(diff.lines) { line in
+                            Text(line.text.isEmpty ? " " : line.text)
+                                .font(.system(size: AeroricType.code - 1, design: .monospaced))
+                                .foregroundStyle(Self.lineColor(line.kind))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Self.lineBackground(line.kind))
+                        }
+                    }
+                    .textSelection(.enabled)
+                }
+                if diff.totalLines > diff.lines.count {
+                    Text("仅显示前 \(diff.lines.count) 行，共 \(diff.totalLines) 行")
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                }
+            }
+            Button("在中栏打开") {
+                onOpen(.init(projectID: projectID, path: change.path,
+                             kind: change.status == "?" ? .untracked : change.staged ? .stagedDiff : .unstagedDiff))
+            }
+            .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+            .accessibilityIdentifier("resources.change.open-centre")
+        }
+        .padding(AeroricSpace.m)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AeroricColor.layer1, in: AeroricRadius.shape(AeroricRadius.s))
+        .overlay { AeroricRadius.shape(AeroricRadius.s).strokeBorder(AeroricColor.separator1, lineWidth: 1) }
+        .padding(.leading, AeroricSpace.xxxl)
+        .padding(.vertical, AeroricSpace.xxs)
+        .accessibilityIdentifier("resources.change.diff")
+    }
+
+    static func badgeColor(_ badge: ChangeBadge) -> Color {
+        switch badge {
+        case .modified: AeroricColor.warning
+        case .added, .untracked: AeroricColor.success
+        case .deleted: AeroricColor.danger
+        case .renamed: AeroricColor.accent
+        case .other: AeroricColor.textSecondary
+        }
+    }
+
+    static func lineColor(_ kind: ResourcePreviewLine.Kind) -> Color {
+        switch kind {
+        case .metadata: AeroricColor.textTertiary
+        default: AeroricColor.text
+        }
+    }
+
+    static func lineBackground(_ kind: ResourcePreviewLine.Kind) -> Color {
+        switch kind {
+        case .added: AeroricColor.success.opacity(0.14)
+        case .removed: AeroricColor.danger.opacity(0.14)
+        default: .clear
+        }
+    }
+
+    // MARK: - Shared
+
+    private func resourceName(_ name: String, symbol: String, tint: Color) -> some View {
+        HStack(spacing: AeroricSpace.s) {
+            Image(systemName: symbol)
+                .font(.system(size: 12))
+                .frame(width: 16)
+                .foregroundStyle(tint)
+            Text(name)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.text)
+                .lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 0)
         }
-        .font(AeroricFont.mono(AeroricFont.file))
-        .frame(minHeight: NativePanelGeometry.mainShell.resourceRowHeight)
+        .frame(minHeight: Self.rowHeight)
     }
     private func insets(_ depth: Int) -> EdgeInsets {
-        EdgeInsets(top: 0, leading: CGFloat(depth) * 12 + 2, bottom: 0, trailing: 2)
+        EdgeInsets(top: 0, leading: CGFloat(depth) * Self.indent + AeroricSpace.s, bottom: 0, trailing: AeroricSpace.s)
     }
     @ViewBuilder private func readNotice(_ status: ResourceReadStatus, hasCache: Bool) -> some View {
         if let notice = status.notice {
             Text(notice + (hasCache ? "（保留缓存，版本未知）" : ""))
-                .font(AeroricFont.mono(AeroricFont.meta)).foregroundStyle(Color.dsTextSecondary)
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary)
                 .textSelection(.enabled)
-        } else {
-            Text("宿主快照 · 版本未知")
-                .font(AeroricFont.mono(AeroricFont.meta)).foregroundStyle(Color.dsTextMuted)
+                .padding(.horizontal, AeroricSpace.l)
+                .padding(.vertical, AeroricSpace.s)
         }
     }
 }

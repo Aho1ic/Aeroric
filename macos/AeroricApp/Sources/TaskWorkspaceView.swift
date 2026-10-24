@@ -328,13 +328,20 @@ struct TaskWorkspaceView: View {
     /// tooltip and accessibility label.
     private func auxiliaryTabButton(_ tab: AuxiliaryTab, title: String, systemImage: String) -> some View {
         let selected = auxiliaryTab == tab
-        return Button { auxiliaryTab = tab } label: {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                .foregroundStyle(selected ? SessionPalette.accent : SessionPalette.secondary)
-                .frame(width: 18)
+        return HoverCapsuleRow(selected: selected, height: 28, horizontalPadding: AeroricSpace.m) {
+            auxiliaryTab = tab
+        } label: {
+            HStack(spacing: AeroricSpace.xs) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                if selected {
+                    Text(title).font(.system(size: AeroricType.secondary, weight: .medium)).lineLimit(1)
+                }
+            }
+            .foregroundStyle(selected ? AeroricColor.text : AeroricColor.textSecondary)
+            .fixedSize()
         }
-        .buttonStyle(GhostCapsuleButtonStyle(isActive: selected, height: 28))
+        .fixedSize()
         .help(title)
         .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -408,22 +415,45 @@ struct TaskWorkspaceView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let notice = services.gitStore.historyReadState.notice {
                 Text(notice)
-                    .font(AeroricFont.ui(AeroricFont.meta))
-                    .foregroundStyle(SessionPalette.muted)
-                    .padding(14)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .padding(AeroricSpace.l)
+            }
+            if let branches = resourceProjectID.map({ resourceBook.scene($0).branches }), !branches.isEmpty {
+                DisclosureGroup {
+                    ForEach(branches, id: \.name) { branch in
+                        Label(branch.name, systemImage: branch.current ? "checkmark" : "arrow.triangle.branch")
+                            .font(.system(size: AeroricType.secondary, weight: branch.current ? .semibold : .regular))
+                            .foregroundStyle(branch.current ? AeroricColor.text : AeroricColor.textSecondary)
+                            .lineLimit(1)
+                    }
+                } label: {
+                    Text("分支 · \(branches.count)").font(AeroricType.sectionLabel()).foregroundStyle(AeroricColor.textTertiary)
+                }
+                .padding(.horizontal, AeroricSpace.l)
+                .padding(.vertical, AeroricSpace.s)
+                .accessibilityIdentifier("auxiliary.history.branches")
+                HairlineDivider()
             }
             List(services.gitStore.commits) { commit in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(commit.message)
-                        .font(AeroricFont.ui(AeroricFont.project))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(commit.message.split(separator: "\n").first.map(String.init) ?? commit.message)
+                        .font(.system(size: AeroricType.secondary, weight: .medium))
+                        .foregroundStyle(AeroricColor.text)
                         .lineLimit(2)
-                    Text("\(commit.shortHash) · \(commit.author) · \(commit.date)")
-                        .font(AeroricFont.mono(AeroricFont.meta))
-                        .foregroundStyle(SessionPalette.muted)
-                        .lineLimit(1)
+                    HStack(spacing: AeroricSpace.s) {
+                        Text(commit.shortHash)
+                            .font(.system(size: AeroricType.caption, design: .monospaced))
+                            .foregroundStyle(AeroricColor.accent)
+                        Text("\(commit.author) · \(commit.date)")
+                            .font(.system(size: AeroricType.caption))
+                            .foregroundStyle(AeroricColor.textTertiary)
+                            .lineLimit(1)
+                    }
                 }
-                .padding(.vertical, 3)
+                .padding(.vertical, AeroricSpace.xs)
                 .help(commit.hash)
+                .listRowSeparator(.hidden)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -536,7 +566,13 @@ struct TaskWorkspaceView: View {
                                 projectID: id, path: path, reader: services.projectResourceReader
                             ) }
                         },
-                        onRefresh: { Task { await refreshResources(project) } }
+                        onRefresh: { Task { await refreshResources(project) } },
+                        onToggleChange: { change in
+                            Task { await resourceBook.toggleInlineDiff(
+                                change, projectID: id, projectPath: project.path,
+                                reader: services.projectResourceReader
+                            ) }
+                        }
                     )
                     .opacity(resourceProjectID == id ? 1 : 0)
                     .allowsHitTesting(resourceProjectID == id)

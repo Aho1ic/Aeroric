@@ -86,6 +86,14 @@ public struct ResourcePreviewLine: Identifiable, Equatable, Sendable {
     }
 }
 
+public struct InlineDiff: Equatable, Sendable {
+    public var state: ResourceReadStatus = .notLoaded
+    public var lines: [ResourcePreviewLine] = []
+    /// Lines beyond `limit` are not rendered inline; the centre preview has all.
+    public var totalLines = 0
+    public static let limit = 300
+}
+
 public struct ProjectResourceScene: Sendable {
     public var section: ResourceListSection = .files
     public var expandedPaths: Set<String> = [""]
@@ -101,6 +109,10 @@ public struct ProjectResourceScene: Sendable {
     public var previewText: String?
     public var previewLines: [ResourcePreviewLine] = []
     public var positions: [ResourcePreviewTarget: Int] = [:]
+    /// Inline diff under a change row (M3), keyed by `ResourceGitChange.id`.
+    /// Separate from the centre preview so expanding a row never replaces it.
+    public var expandedChange: String?
+    public var inlineDiffs: [String: InlineDiff] = [:]
     fileprivate var directoryRequests: [String: UUID] = [:]
     fileprivate var gitRequest: UUID?
     fileprivate var previewRequest: UUID?
@@ -153,6 +165,7 @@ public final class ProjectResourceBook {
                 value.gitState = .cached("宿主连接已变化，需显式刷新")
                 value.branchState = .cached("宿主连接已变化，需显式刷新")
                 value.previewState = .cached("宿主连接已变化，需显式刷新")
+                value.inlineDiffs = [:]
             }
         }
     }
@@ -192,7 +205,7 @@ public final class ProjectResourceBook {
             let changes = try await reader.changes(projectPath: projectPath)
             try Task.checkCancellation()
             guard scene(projectID).gitRequest == request else { return }
-            edit(projectID) { $0.changes = changes; $0.gitState = .loaded }
+            edit(projectID) { $0.changes = changes; $0.gitState = .loaded; $0.inlineDiffs = [:]; $0.expandedChange = nil }
         } catch {
             guard scene(projectID).gitRequest == request else { return }
             if Self.isCancellation(error) {
@@ -269,6 +282,44 @@ public final class ProjectResourceBook {
             }
         }
     }
+    /// Toggle a change row's inline diff; loads it on first expand.
+    public func toggleInlineDiff(_ change: ResourceGitChange, projectID: String, projectPath: String,
+                                 reader: (any ProjectResourceReading)?) async {
+        if scene(projectID).expandedChange == change.id {
+            edit(projectID) { $0.expandedChange = nil }
+            return
+        }
+        edit(projectID) { $0.expandedChange = change.id }
+        if let cached = scene(projectID).inlineDiffs[change.id], cached.state == .loaded { return }
+        edit(projectID) { $0.inlineDiffs[change.id] = InlineDiff(state: .loading) }
+        guard let reader else {
+            edit(projectID) { $0.inlineDiffs[change.id] = InlineDiff(state: .unavailable("宿主不可用，不能读取此目标")) }
+            return
+        }
+        do {
+            let untracked = change.status == "?"
+            let text = untracked
+                ? try await reader.text(projectID: projectID, path: change.path)
+                : try await reader.diff(projectPath: projectPath, path: change.path, staged: change.staged)
+            guard text.utf8.count <= 1_048_576, !text.contains("\0") else {
+                edit(projectID) {
+                    $0.inlineDiffs[change.id] = InlineDiff(state: .unsupported("内容过大或含二进制数据，请在中栏查看。"))
+                }
+                return
+            }
+            let lines = await Task.detached { ResourcePreviewLine.lines(text, diff: !untracked) }.value
+            edit(projectID) {
+                $0.inlineDiffs[change.id] = InlineDiff(state: .loaded, lines: Array(lines.prefix(InlineDiff.limit)),
+                                                       totalLines: lines.count)
+            }
+        } catch {
+            edit(projectID) {
+                $0.inlineDiffs[change.id] = InlineDiff(
+                    state: Self.isCancellation(error) ? .cancelled : .failed(error.localizedDescription))
+            }
+        }
+    }
+
     private static func isCancellation(_ error: Error) -> Bool {
         Task.isCancelled || error is CancellationError || (error as? ConnectionError) == .cancelled
     }
