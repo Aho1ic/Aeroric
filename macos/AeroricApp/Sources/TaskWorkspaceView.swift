@@ -922,7 +922,8 @@ struct TaskWorkspaceView: View {
                 terminalFraction: $terminalFraction,
                 terminalTitle: "终端 · \(task.agent ?? "Agent")"
             ) {
-                DshSessionPanel(services: services, task: task, canSend: { taskInputGate.permits(task.id) })
+                SessionRouteView(task: task, actions: HostSessionRouteActions(services: services),
+                                 canSend: taskInputGate.permits(task.id))
             } terminal: {
                 terminalSurface(task)
             }
@@ -972,166 +973,51 @@ struct TaskWorkspaceView: View {
     }
 }
 
-/// P5-04 Action 6：DSH 会话 native 面板（消息＋composer＋审批/问题）。
-/// 会话读取走 SessionsClient（task.history taskId 寻址，G13 不全量放行）；
-/// 发送走 composer（斜杠命令早跳）；审批/问题走 PendingRequestStore＋
-/// respond_dsh_remote_event。非 DSH 会话保持 unsupported 状态（Action 6：
-/// 移除对应未接通状态但保留其他 Agent 的 unsupported 状态——这里只由
-/// SessionPresentation.native 分支到达，非 DSH 不会走到这里）。
-struct DshSessionPanel: View {
+/// P5-04 会话面的宿主接线（M2）：历史走 session.history（v1 SessionPage，
+/// taskId 寻址），发送走 task.input，审批走 approval.respond，停止走
+/// task.cancel（D3）。视图只拿这个协议，不持有连接（INV-02）。
+@MainActor
+struct HostSessionRouteActions: SessionRouteActions {
     let services: AppServices
-    let task: TaskStore.TaskEntry
-    let canSend: () -> Bool
 
-    @State private var paginator = SessionPaginator()
-    @State private var pendingStore = PendingRequestStore()
-    @State private var composerDraft = ""
-    @State private var composerAttachments: [String] = []
-    @State private var usage = SessionUsage()
-    @State private var approvalPresented = false
-    @State private var questionPresented = false
-    @State private var sendError: String?
-    @State private var pageLoadTask: Task<Void, Never>?
-
-    var body: some View {
-        VStack(spacing: 0) {
-            SessionView(
-                paginator: paginator,
-                onLoadMore: { loadEarlierPage() },
-                onExport: { exportSession() },
-                usage: usage
-            )
-            // Q24-a: explicit send only; the text goes to the session input.
-            SessionContinuationComposer(
-                draft: $composerDraft,
-                canSend: canSend(),
-                writesToTerminal: task.status == "input_required",
-                readOnlyReason: "当前只读；离开任务面后不会自动恢复输入或审批。",
-                onSend: { text in sendMessage(text: text, attachments: []) }
-            )
-        }
-        .onAppear {
-            paginator.reset(sessionKey: task.id, isCodex: false)
-            loadEarlierPage()
-        }
-        .onChange(of: task.id) { oldID, newID in
-            guard oldID != newID else { return }
-            pageLoadTask?.cancel()
-            paginator.reset(sessionKey: newID, isCodex: false)
-            loadEarlierPage()
-        }
-        .sheet(isPresented: $approvalPresented) {
-            if let request = pendingStore.pending.first(where: { $0.kind == .approval }) {
-                ApprovalSheet(
-                    request: request,
-                    store: pendingStore,
-                    onSubmit: { eventId, outcome in submitOutcome(eventId: eventId, outcome: outcome) },
-                    onDismiss: { approvalPresented = false }
-                )
-            }
-        }
-        .sheet(isPresented: $questionPresented) {
-            if let request = pendingStore.pending.first(where: { $0.kind == .question }) {
-                QuestionSheet(
-                    request: request,
-                    store: pendingStore,
-                    onSubmit: { eventId, outcome in submitOutcome(eventId: eventId, outcome: outcome) },
-                    onDismiss: { questionPresented = false }
-                )
-            }
-        }
-        .alert("发送失败", isPresented: Binding(
-            get: { sendError != nil },
-            set: { if !$0 { sendError = nil } }
-        )) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text(sendError ?? "")
-        }
+    func loadHistory(taskID: String) async throws -> [AeroricUI.SessionMessage] {
+        guard let sessions = services.sessionsClient else { throw AppServices.ProjectError.notConnected }
+        let page = try await sessions.historyPage(taskId: taskID, cursor: nil)
+        return page.messages.map(SessionBlockMapping.message)
     }
 
-    /// 加载更早页（分页循环：cursor=null 起步 → session.history → 合并；
-    /// !hasMore 或坏游标停止）。
-    private func loadEarlierPage() {
-        guard paginator.canLoadMore || paginator.messages.isEmpty else { return }
-        paginator.setLoadingPage(true)
-        pageLoadTask?.cancel()
-        pageLoadTask = Task { @MainActor in
-            guard let sessions = services.sessionsClient else {
-                paginator.setLoadingPage(false)
-                return
-            }
-            if let page = try? await sessions.historyPage(
-                taskId: task.id,
-                cursor: paginator.cursor.map { String($0) }
-            ) {
-                paginator.ingest(page: SessionMessagePage(
-                    messages: page.messages.map(Self.toStoreMessage),
-                    nextCursor: nil,
-                    hasMore: false
-                ))
-            }
-            paginator.setLoadingPage(false)
-        }
+    func send(taskID: String, text: String) async throws {
+        try await services.sendDshPrompt(sessionTaskId: taskID, text: text)
     }
 
-    /// 发送（composer → DSH prompt；斜杠命令已在 ComposerView 早跳）。
-    private func sendMessage(text: String, attachments: [String]) {
-        guard canSend() else { return }
-        Task { @MainActor in
-            guard canSend() else { return }
-            do {
-                try await services.sendDshPrompt(sessionTaskId: task.id, text: text)
-            } catch {
-                sendError = String(describing: error)
-            }
-        }
+    func stop(taskID: String) async {
+        await services.cancelTask(taskId: taskID)
     }
 
-    /// 提交审批/问题回执（approval.respond；值即结果本身，无信封）。
-    private func submitOutcome(eventId: String, outcome: PendingRequestStore.Outcome) {
-        guard canSend() else { return }
-        pendingStore.markSubmitted(eventId: eventId)
-        let payload = Self.toJSONValue(PendingRequestStore.outcomePayload(outcome))
-        Task { @MainActor in
-            guard canSend() else { return }
-            try? await services.respondDshOutcome(eventId: eventId, outcome: payload)
-            pendingStore.resolve(eventId: eventId)
-        }
+    func respond(eventID: String, outcome: PendingRequestStore.Outcome) async throws {
+        let payload = Self.jsonObject(PendingRequestStore.outcomePayload(outcome))
+        try await services.respondDshOutcome(eventId: eventID, outcome: payload)
     }
 
-    /// [String: Any]（JSONSerialization 产物）→ JSONValue。
-    static func toJSONValue(_ any: [String: Any]) -> [String: JSONValue] {
-        any.mapValues { value in
-            switch value {
-            case let text as String: .string(text)
-            case let number as NSNumber: .number(number.stringValue)
-            case let flag as Bool: .bool(flag)
-            case let dict as [String: Any]: .object(toJSONValue(dict))
-            default: .null
-            }
-        }
+    /// session.export；输出路径由宿主校验。
+    func export(taskID: String) async throws {
+        try await services.exportDshSession(taskId: taskID, out: NSTemporaryDirectory() + "session-\(taskID).md")
     }
 
-    /// 导出 Markdown（session.export；out 路径由宿主校验）。
-    private func exportSession() {
-        Task { @MainActor in
-            let out = NSTemporaryDirectory() + "session-\(task.id).md"
-            try? await services.exportDshSession(taskId: task.id, out: out)
-        }
+    /// JSONSerialization 形状 → JSONValue。Bool 先于 NSNumber 判断（Bool 桥接成
+    /// NSNumber），数组逐项转换（问题回答是数组）。
+    static func jsonObject(_ object: [String: Any]) -> [String: JSONValue] {
+        object.mapValues(jsonValue)
     }
 
-    /// 协议层消息 → store 镜像（v1 ContentBlock → UI SessionContent）。
-    static func toStoreMessage(_ message: AeroricProtocol.SessionMessage) -> AeroricUI.SessionMessage {
-        var content: [SessionContent] = []
-        for block in message.blocks {
-            switch block {
-            case let .text(_, text):
-                content.append(.text(text: text))
-            case let .unknown(opaque):
-                content.append(.text(text: opaque.kind))
-            }
+    static func jsonValue(_ value: Any) -> JSONValue {
+        switch value {
+        case let text as String: .string(text)
+        case let number as NSNumber where CFGetTypeID(number) == CFBooleanGetTypeID(): .bool(number.boolValue)
+        case let number as NSNumber: .number(number.stringValue)
+        case let dict as [String: Any]: .object(jsonObject(dict))
+        case let array as [Any]: .array(array.map(jsonValue))
+        default: .null
         }
-        return SessionMessage(role: message.role.rawValue, content: content, messageId: message.id)
     }
 }

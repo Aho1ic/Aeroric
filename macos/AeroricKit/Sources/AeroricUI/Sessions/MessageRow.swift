@@ -1,43 +1,6 @@
 import SwiftUI
 import MarkdownUI
 
-/// Redesign 01 message row. User turns sit in a right-aligned bubble (Orca
-/// `NativeChatMessageList`); assistant turns are unboxed. Tool calls are flat
-/// `▸ 工具名 · 摘要` rows that expand in place (Q16-a), never cards.
-public struct MessageRow: View {
-    let message: SessionMessage
-
-    public init(message: SessionMessage) {
-        self.message = message
-    }
-
-    private var isUser: Bool { message.role == "user" }
-
-    public var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            if isUser { Spacer(minLength: 80) }
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(message.content.enumerated()), id: \.offset) { _, block in
-                    ContentBlock(block: block)
-                }
-            }
-            .padding(.horizontal, isUser ? 14 : 0)
-            .padding(.vertical, isUser ? 10 : 2)
-            .background {
-                if isUser {
-                    RoundedRectangle(cornerRadius: ShellRadius.composer, style: .continuous)
-                        .fill(SessionPalette.bubble)
-                }
-            }
-            if !isUser { Spacer(minLength: 0) }
-        }
-        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(isUser ? "用户" : "Assistant")
-        .accessibilityIdentifier("session.message.\(message.messageId ?? message.role)")
-    }
-}
-
 /// One content block. Markdown is rendered by MarkdownUI with images and
 /// raw HTML disabled: no remote fetches, no script execution. Link taps go
 /// through the scheme allow-list below.
@@ -75,7 +38,11 @@ public struct ContentBlock: View {
                 CodeText(input)
             }
         case let .toolResult(id, output):
-            ToolCallRow(id: id, output: output)
+            // The transcript pairs results with their calls; this is the fallback.
+            FlatDisclosureRow(symbol: "arrow.turn.down.right", title: "结果", summary: Self.summary(output),
+                              expanded: $expanded, identifier: "session.tool-result.\(id)") {
+                if DiffText.looksLikeDiff(output) { DiffText(output) } else { CodeText(output) }
+            }
         case let .attachment(name, mediaType, _):
             Label("\(name)（\(mediaType)）", systemImage: "paperclip")
                 .font(AeroricFont.ui(AeroricFont.meta))
@@ -97,27 +64,6 @@ public struct ContentBlock: View {
             return true
         default:
             return false
-        }
-    }
-}
-
-/// Tool result row. Diff-shaped output is coloured by line; everything is
-/// shown in full when expanded (the host already deduplicates tool blocks).
-public struct ToolCallRow: View {
-    let id: String
-    let output: String
-    @State private var expanded = false
-
-    public init(id: String, output: String) {
-        self.id = id
-        self.output = output
-    }
-
-    public var body: some View {
-        FlatDisclosureRow(symbol: "arrow.turn.down.right", title: "结果",
-                          summary: ContentBlock.summary(output), expanded: $expanded,
-                          identifier: "session.tool-result.\(id)") {
-            if DiffText.looksLikeDiff(output) { DiffText(output) } else { CodeText(output) }
         }
     }
 }
