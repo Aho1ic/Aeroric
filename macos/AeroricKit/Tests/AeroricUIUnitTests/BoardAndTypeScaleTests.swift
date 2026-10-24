@@ -98,8 +98,7 @@ final class BoardAndTypeScaleTests: XCTestCase {
         XCTAssertEqual(AeroricType.body, 13)
         XCTAssertEqual(AeroricType.secondary, 12)
         XCTAssertEqual(AeroricType.caption, 11)
-        XCTAssertEqual(AeroricFont.code, 12)
-        XCTAssertEqual(AeroricFont.meta, 11)
+        XCTAssertEqual(AeroricType.code, 12)
         XCTAssertEqual(AeroricType.headline, 15, "headings do not scale")
     }
 }

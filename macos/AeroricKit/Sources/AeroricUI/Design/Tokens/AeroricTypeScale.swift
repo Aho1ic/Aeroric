@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// Three-step text sizes for body text, code and the terminal (Q21, D5).
-/// Views read the sizes through `AeroricType` / `AeroricFont`; because this
+/// Views read the sizes through `AeroricType`; because this
 /// is `@Observable`, a view that read a size re-renders when it changes.
 /// Only body-level sizes scale; headings stay fixed.
 @Observable

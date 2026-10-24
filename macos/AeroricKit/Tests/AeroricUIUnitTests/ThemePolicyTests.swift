@@ -2,46 +2,29 @@ import XCTest
 import SwiftUI
 @testable import AeroricUI
 
-// Token policy tests (Task P4-03 Acceptance). The number layers are
-// pinned to `packages/design-system/src/tokens.ts` — that file is the
-// authoring source, so any change here without a matching React-side
-// change breaks these tests. Colour policy is proven dynamic: every role
-// must resolve to a different value under light vs dark appearance.
+// Token policy tests. The number scales are the M1 design system
+// (`AeroricSpace` / `AeroricRadius` / `AeroricMotion`); the React token
+// mirror (`DSSpacing`, `DSRadius`, …) was removed in M4b. Colour policy is
+// proven dynamic: every role must resolve differently under light vs dark.
 
 final class ThemePolicyTests: XCTestCase {
-    // MARK: Number tokens mirror tokens.ts
+    // MARK: Number scales
 
-    func testSpacingMatchesReactTokens() {
-        XCTAssertEqual(DSSpacing.values, [0, 4, 8, 12, 16, 20, 24])
+    func testSpacingScale() {
+        XCTAssertEqual([AeroricSpace.xxs, AeroricSpace.xs, AeroricSpace.s, AeroricSpace.m, AeroricSpace.l,
+                        AeroricSpace.xl, AeroricSpace.xxl, AeroricSpace.xxxl, AeroricSpace.huge],
+                       [2, 4, 6, 8, 12, 16, 20, 24, 32])
     }
 
-    func testRadiiMatchReactTokens() {
-        XCTAssertEqual(DSRadius.sm, 8)
-        XCTAssertEqual(DSRadius.md, 10)
-        XCTAssertEqual(DSRadius.lg, 14)
-        XCTAssertEqual(DSRadius.xl, 18)
-        XCTAssertEqual(DSRadius.pill, 999)
+    func testRadiusScale() {
+        XCTAssertEqual([AeroricRadius.xs, AeroricRadius.s, AeroricRadius.m, AeroricRadius.l, AeroricRadius.xl,
+                        AeroricRadius.panel], [4, 8, 12, 16, 20, 28])
     }
 
-    func testTypographyMatchesReactTokens() {
-        XCTAssertEqual(DSTypography.label, 11)
-        XCTAssertEqual(DSTypography.meta, 12)
-        XCTAssertEqual(DSTypography.body, 14)
-        XCTAssertEqual(DSTypography.title, 18)
-    }
-
-    func testMotionMatchesReactTokens() {
-        XCTAssertEqual(DSMotion.fast, 0.120, accuracy: 1e-9)
-        XCTAssertEqual(DSMotion.normal, 0.180, accuracy: 1e-9)
-        XCTAssertEqual(DSMotion.slow, 0.260, accuracy: 1e-9)
-    }
-
-    func testSpacingAccessorCoversExactlySevenSteps() {
-        // Bounds contract: valid steps are exactly 0..<7 (values.count);
-        // precondition guards out-of-range steps.
-        XCTAssertEqual(DSSpacing.values.count, 7)
-        XCTAssertEqual(DSSpacing.v(0), 0)
-        XCTAssertEqual(DSSpacing.v(6), 24)
+    func testMotionScale() {
+        XCTAssertEqual(AeroricMotion.quick, 0.10, accuracy: 1e-9)
+        XCTAssertEqual(AeroricMotion.standard, 0.20, accuracy: 1e-9)
+        XCTAssertEqual(AeroricMotion.slow, 0.30, accuracy: 1e-9)
     }
 
     // MARK: Colour roles are dynamic, not literal RGB
@@ -182,8 +165,8 @@ final class ThemePolicyTests: XCTestCase {
     // MARK: Motion policy
 
     func testReduceMotionCollapsesDurations() {
-        XCTAssertEqual(DSMotion.duration(DSMotion.slow, reduceMotion: true), 0)
-        XCTAssertEqual(DSMotion.duration(DSMotion.fast, reduceMotion: false),
-                       DSMotion.fast)
+        XCTAssertEqual(AeroricMotion.duration(AeroricMotion.slow, reduceMotion: true), 0)
+        XCTAssertEqual(AeroricMotion.duration(AeroricMotion.quick, reduceMotion: false), AeroricMotion.quick)
+        XCTAssertNil(AeroricMotion.animation(AeroricMotion.slow, reduceMotion: true))
     }
 }
