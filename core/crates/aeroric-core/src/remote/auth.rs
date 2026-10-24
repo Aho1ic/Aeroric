@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -78,14 +79,27 @@ pub struct DeviceEntry {
     pub last_seen_at: i64,
 }
 
-fn devices_path() -> Result<std::path::PathBuf, String> {
+fn devices_path() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("remote-devices.json"))
+}
+
+fn devices_path_in(data_dir: &Path) -> PathBuf {
+    data_dir.join("remote-devices.json")
 }
 
 pub fn load_devices() -> Vec<DeviceEntry> {
     let Ok(path) = devices_path() else {
         return Vec::new();
     };
+    load_devices_from_path(&path)
+}
+
+/// 读取指定 data root 下的设备注册表；CLI 显式 root 与全局 home 分离。
+pub fn load_devices_from(data_dir: &Path) -> Vec<DeviceEntry> {
+    load_devices_from_path(&devices_path_in(data_dir))
+}
+
+fn load_devices_from_path(path: &Path) -> Vec<DeviceEntry> {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
@@ -93,12 +107,20 @@ pub fn load_devices() -> Vec<DeviceEntry> {
 }
 
 pub fn save_devices(devices: &[DeviceEntry]) -> Result<(), String> {
-    let path = devices_path()?;
+    save_devices_to_path(&devices_path()?, devices)
+}
+
+/// 将设备注册表写入指定 data root。
+pub fn save_devices_to(data_dir: &Path, devices: &[DeviceEntry]) -> Result<(), String> {
+    save_devices_to_path(&devices_path_in(data_dir), devices)
+}
+
+fn save_devices_to_path(path: &Path, devices: &[DeviceEntry]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         ensure_private_dir(parent)?;
     }
     let raw = serde_json::to_string_pretty(devices).map_err(|e| e.to_string())?;
-    atomic_write_private(&path, &raw)
+    atomic_write_private(path, &raw)
 }
 
 // ── 认证状态机 ───────────────────────────────────────────────────────────────
@@ -123,6 +145,9 @@ struct ThrottleEntry {
 /// 由 RemoteState 持有(parking_lot Mutex 包裹),所有方法都要求短临界区。
 pub struct AuthStore {
     devices: Vec<DeviceEntry>,
+    /// `None` keeps the historical global-home path for desktop callers;
+    /// `Some` is an explicit CLI/test data root.
+    data_dir: Option<PathBuf>,
     /// key = invite token 的 SHA-256 hex。
     invites: HashMap<String, PendingInvite>,
     /// key = opaque pairing id. Entries remain memory-only until confirmation.
@@ -162,6 +187,21 @@ impl AuthStore {
     pub fn load() -> Self {
         Self {
             devices: load_devices(),
+            data_dir: None,
+            invites: HashMap::new(),
+            pending_pairings: HashMap::new(),
+            throttle: HashMap::new(),
+            persist: true,
+            persist_failure: None,
+            invite_failure: None,
+        }
+    }
+
+    /// 读取显式 data root 下的注册表；CLI `--data-dir` 不能绕过它。
+    pub fn load_from(data_dir: &Path) -> Self {
+        Self {
+            devices: load_devices_from(data_dir),
+            data_dir: Some(data_dir.to_path_buf()),
             invites: HashMap::new(),
             pending_pairings: HashMap::new(),
             throttle: HashMap::new(),
@@ -176,6 +216,7 @@ impl AuthStore {
     pub fn in_memory() -> Self {
         Self {
             devices: Vec::new(),
+            data_dir: None,
             invites: HashMap::new(),
             pending_pairings: HashMap::new(),
             throttle: HashMap::new(),
@@ -192,7 +233,10 @@ impl AuthStore {
         if !self.persist {
             return Ok(());
         }
-        save_devices(devices)
+        match self.data_dir.as_deref() {
+            Some(data_dir) => save_devices_to(data_dir, devices),
+            None => save_devices(devices),
+        }
     }
 
     fn persist_devices(&self) -> Result<(), String> {
@@ -520,6 +564,7 @@ mod tests {
     fn empty_store() -> AuthStore {
         AuthStore {
             devices: Vec::new(),
+            data_dir: None,
             invites: HashMap::new(),
             pending_pairings: HashMap::new(),
             throttle: HashMap::new(),

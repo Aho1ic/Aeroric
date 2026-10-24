@@ -6,7 +6,7 @@
 
 use serde_json::{json, Value};
 
-use crate::remote::config::{normalize_public_endpoint, normalize_relay_url, save_config};
+use crate::remote::config::{normalize_public_endpoint, normalize_relay_url};
 use crate::remote::identity::{host_name, pairing_endpoints, selected_lan_ip};
 use crate::remote::protocol;
 use crate::remote::services::RemoteHostHandle;
@@ -101,7 +101,7 @@ pub async fn update_config(
         if next.relay_url.is_some() && next.relay_token.is_none() {
             return Err("Relay token is required when a relay URL is configured".to_string());
         }
-        save_config(&next)?;
+        state.persist_config(&next)?;
         was_running = next.enabled;
         *cfg = next;
     }
@@ -123,7 +123,7 @@ pub async fn select_lan_ip(state: &RemoteState, lan_ip: String) -> Result<Value,
     {
         let mut cfg = state.config.lock();
         cfg.preferred_lan_ip = Some(lan_ip.clone());
-        save_config(&cfg)?;
+        state.persist_config(&cfg)?;
     }
     Ok(current_status(state).await)
 }
@@ -145,7 +145,7 @@ pub async fn server_start(
             cfg.port = p;
         }
         cfg.enabled = true;
-        save_config(&cfg)?;
+        state.persist_config(&cfg)?;
     }
     start().await?;
     Ok(current_status(state).await)
@@ -160,7 +160,7 @@ pub async fn server_stop(
     {
         let mut cfg = state.config.lock();
         cfg.enabled = false;
-        save_config(&cfg)?;
+        state.persist_config(&cfg)?;
     }
     stop().await?;
     Ok(current_status(state).await)

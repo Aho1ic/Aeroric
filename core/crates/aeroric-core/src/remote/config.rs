@@ -6,6 +6,8 @@
 //! 地址走 wss；用户手填的直连端点允许 ws:// 内网地址（E2EE 载荷不依赖
 //! 传输层加密）。
 
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 
 use crate::settings::{
@@ -46,8 +48,13 @@ impl Default for RemoteConfig {
     }
 }
 
-pub fn config_path() -> Result<std::path::PathBuf, String> {
+pub fn config_path() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("remote-config.json"))
+}
+
+/// 显式 data root 下的远程配置文件路径。
+pub fn config_path_in(data_dir: &Path) -> PathBuf {
+    data_dir.join("remote-config.json")
 }
 
 pub fn normalize_ws_endpoint(
@@ -99,10 +106,20 @@ pub fn load_config() -> RemoteConfig {
     let Ok(path) = config_path() else {
         return RemoteConfig::default();
     };
-    let Ok(raw) = std::fs::read_to_string(&path) else {
+    load_config_from_path(&path)
+}
+
+/// 从显式 data root 读取配置；CLI 必须使用这个入口，避免用全局 home
+/// 的 relay/端口配置去启动一个属于另一个 root 的 host。
+pub fn load_config_in(data_dir: &Path) -> RemoteConfig {
+    load_config_from_path(&config_path_in(data_dir))
+}
+
+fn load_config_from_path(path: &Path) -> RemoteConfig {
+    let Ok(raw) = std::fs::read_to_string(path) else {
         return RemoteConfig::default();
     };
-    let _ = ensure_private_file_permissions(&path);
+    let _ = ensure_private_file_permissions(path);
     let mut config = serde_json::from_str::<RemoteConfig>(&raw).unwrap_or_default();
     let relay_valid = config
         .relay_url
@@ -134,12 +151,20 @@ pub fn load_config() -> RemoteConfig {
 }
 
 pub fn save_config(config: &RemoteConfig) -> Result<(), String> {
-    let path = config_path()?;
+    save_config_to_path(&config_path()?, config)
+}
+
+/// 将配置写入显式 data root。
+pub fn save_config_in(data_dir: &Path, config: &RemoteConfig) -> Result<(), String> {
+    save_config_to_path(&config_path_in(data_dir), config)
+}
+
+fn save_config_to_path(path: &Path, config: &RemoteConfig) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         ensure_private_dir(parent)?;
     }
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    atomic_write_private(&path, &raw)
+    atomic_write_private(path, &raw)
 }
 
 #[cfg(test)]

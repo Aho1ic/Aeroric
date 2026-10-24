@@ -307,14 +307,14 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             // P8-03 刀四：remote-config.json enabled 时拉起无头远程 WS 服务
             // （core `remote::server` + CliRemoteHandle 真实任务面）。默认关闭，
             // 与桌面端同一份配置文件语义。
-            let remote_cfg_path = data_dir.join("remote-config.json");
-            let remote_enabled = std::fs::read_to_string(&remote_cfg_path)
-                .ok()
-                .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-                .and_then(|cfg| cfg.get("enabled").and_then(serde_json::Value::as_bool))
-                .unwrap_or(false);
-            if remote_enabled {
-                let remote_state = Arc::new(aeroric_core::remote::state::RemoteState::new());
+            // Read through the same typed, path-aware loader as the remote
+            // state itself. Raw JSON here could disagree with defaults and
+            // security normalization applied by `load_config_in`.
+            let remote_config = aeroric_core::remote::config::load_config_in(data_dir);
+            if remote_config.enabled {
+                let remote_state = Arc::new(
+                    aeroric_core::remote::state::RemoteState::new_at(data_dir),
+                );
                 // 诊断用的 relay 配置取自 state(即服务真正会用的那份),而不是再读一遍文件。
                 let relay_for_diagnostics = {
                     let cfg = remote_state.config.lock();
@@ -336,15 +336,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                         push_transport: push.as_ref().map(|(_, transport)| Arc::clone(transport)),
                         relay: Some(relay_for_diagnostics),
                     });
-                let cfg_port = std::fs::read_to_string(&remote_cfg_path)
-                    .ok()
-                    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-                    .and_then(|cfg| {
-                        cfg.get("port")
-                            .and_then(serde_json::Value::as_u64)
-                            .map(|p| p as u16)
-                    })
-                    .unwrap_or(aeroric_core::remote::config::DEFAULT_PORT);
+                let cfg_port = remote_config.port;
                 let scope = aeroric_core::remote::state::required_listener_scope(&remote_state);
                 match aeroric_core::remote::server::start_with_scope(
                     Arc::clone(&remote_state),

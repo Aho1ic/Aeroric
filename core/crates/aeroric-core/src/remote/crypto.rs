@@ -74,6 +74,12 @@ impl StaticKeys {
         Self::load_or_create_at(&aeroric_dir()?.join("remote-keypair.json"))
     }
 
+    /// 读取/生成指定 data root 下的密钥对。CLI 的显式 `--data-dir`
+    /// 必须贯穿 remote 服务，不能悄悄落回全局 home。
+    pub fn load_or_create_in(data_dir: &Path) -> Result<Self, String> {
+        Self::load_or_create_at(&data_dir.join("remote-keypair.json"))
+    }
+
     /// `load_or_create` 的可注入路径版本(单元测试用临时目录)。
     fn load_or_create_at(path: &Path) -> Result<Self, String> {
         match std::fs::read_to_string(path) {

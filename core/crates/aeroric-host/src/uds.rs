@@ -113,8 +113,23 @@ fn set_owner_only(path: &Path) -> Result<(), UdsError> {
 }
 
 /// 本 host 的默认 socket 路径（data dir 下，随 `AppPaths` 注入，不读环境变量）。
+///
+/// Sandbox 容器里的 `Application Support` 根可以越过 `sun_path` 的 104 B
+/// 上限。Swift 客户端与 CLI/host 必须对同一个 data dir 算出同一条路径，
+/// 否则客户端会把 host 的 ready 帧判成 `socketMismatch`，或附着到错误的
+/// socket。因此超限时两端使用同一个确定性 FNV-1a 64 位短路径；普通短根
+/// 保持 `<dataDir>/host.sock` 不变。
 pub fn default_socket_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("host.sock")
+    let direct = data_dir.join("host.sock");
+    if direct.as_os_str().as_encoded_bytes().len() < SUN_PATH_LIMIT {
+        return direct;
+    }
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in data_dir.as_os_str().as_encoded_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    PathBuf::from(format!("/tmp/aeroric-{hash:016x}.sock"))
 }
 
 #[cfg(test)]
@@ -166,6 +181,29 @@ mod tests {
         }
         drop(listener);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn default_socket_path_matches_the_swift_short_path_contract() {
+        assert_eq!(
+            default_socket_path(Path::new("/tmp/aeroric-short")),
+            PathBuf::from("/tmp/aeroric-short/host.sock")
+        );
+
+        // The same fixture and expected value are pinned in Swift's
+        // SandboxLifecycleTests; the two implementations must stay aligned.
+        let deep = Path::new(
+            "/Users/fixture/Library/Containers/com.aeroric.native.dev/Data/Library/Application Support/com.aeroric.native.dev",
+        );
+        assert_eq!(
+            default_socket_path(deep),
+            PathBuf::from("/tmp/aeroric-98e1d459c998c1aa.sock")
+        );
+        assert!(default_socket_path(deep)
+            .as_os_str()
+            .as_encoded_bytes()
+            .len()
+            < SUN_PATH_LIMIT);
     }
 
     #[tokio::test]

@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn v3_wire_shape_matches_shared_golden_fixture() {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../../packages/remote-contracts/fixtures/rpc-golden.json"
+            "../../../../../contracts/remote/rpc-golden.json"
         ))
         .expect("shared golden fixture");
         let request = parse_request(&fixture["request"].to_string(), RpcVersion::V3)

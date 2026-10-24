@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::remote::auth::AuthStore;
-use crate::remote::config::{load_config, RemoteConfig};
+use crate::remote::config::{load_config, load_config_in, save_config, save_config_in, RemoteConfig};
 use crate::remote::crypto;
 use crate::remote::event_log::EventLog;
 use crate::remote::protocol::{push_json, RpcVersion};
@@ -492,6 +493,9 @@ impl TerminalLeaseRegistry {
 // ── RemoteState（自宿主 mod.rs） ─────────────────────────────────────────────
 
 pub struct RemoteState {
+    /// Explicit CLI/test data root. `None` preserves the historical
+    /// global-home behavior used by desktop callers.
+    pub data_dir: Option<PathBuf>,
     pub auth: Mutex<AuthStore>,
     /// 桌面初始化完成闸（刀二：替代 React 的 startupReadyRef）。
     /// 宿主 setup 尾置位；置位前的 task.create/resume 请求等待而非失败。
@@ -531,28 +535,62 @@ impl RemoteState {
     // Default 语义不成立：new() 会读盘载入密钥对与配置，空壳默认值会掩盖载入失败。
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
+        Self::new_with_data_dir(crate::settings::aeroric_dir().ok())
+    }
+
+    /// Load remote keys, device registry and relay config from an explicit
+    /// data root. The CLI uses this so `--data-dir` is a real isolation
+    /// boundary instead of silently reading/writing the global home.
+    pub fn new_at(data_dir: impl Into<PathBuf>) -> Self {
+        Self::new_with_data_dir(Some(data_dir.into()))
+    }
+
+    fn new_with_data_dir(data_dir: Option<PathBuf>) -> Self {
+        let loaded_keys = match data_dir.as_deref() {
+            Some(dir) => crypto::StaticKeys::load_or_create_in(dir),
+            None => crypto::StaticKeys::load_or_create(),
+        };
         // 挂在整条 `let` 上：`expect` 是下面闭包的尾表达式，属性只能上提到这里。
         #[allow(clippy::expect_used, reason = "CSPRNG 不可用属不可恢复")]
-        let keys = crypto::StaticKeys::load_or_create().unwrap_or_else(|err| {
+        let keys = loaded_keys.unwrap_or_else(|err| {
             eprintln!("[remote] keypair load failed, using in-memory keys: {err}");
             crypto::StaticKeys::ephemeral().expect("CSPRNG unavailable")
         });
+        let auth = match data_dir.as_deref() {
+            Some(dir) => AuthStore::load_from(dir),
+            None => AuthStore::load(),
+        };
+        let config = match data_dir.as_deref() {
+            Some(dir) => load_config_in(dir),
+            None => load_config(),
+        };
         Self {
+            data_dir,
             ready: Arc::new(std::sync::OnceLock::new()),
             task_queues: Mutex::new(HashMap::new()),
-            auth: Mutex::new(AuthStore::load()),
+            auth: Mutex::new(auth),
             clients: Arc::new(ClientRegistry::default()),
             terminal_leases: Arc::new(TerminalLeaseRegistry::default()),
             approvals: Arc::new(ApprovalRegistry::default()),
             task_requests: Arc::new(TaskRequestBroker::default()),
             push_bindings: Arc::new(PushBindings::new()),
             event_log: Arc::new(EventLog::default()),
-            config: Mutex::new(load_config()),
+            config: Mutex::new(config),
             keys,
             audit_enabled: true,
             relay_state: Arc::new(Mutex::new("off".to_string())),
             running: tokio::sync::Mutex::new(None),
             lifecycle: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    /// Persist the in-memory config to this state's data root. Keeping the
+    /// choice in one place prevents control-plane writes from falling back to
+    /// the global home after a CLI/test injected a different root.
+    pub fn persist_config(&self, config: &RemoteConfig) -> Result<(), String> {
+        match self.data_dir.as_deref() {
+            Some(data_dir) => save_config_in(data_dir, config),
+            None => save_config(config),
         }
     }
 
@@ -563,6 +601,7 @@ impl RemoteState {
         let ready = Arc::new(std::sync::OnceLock::new());
         let _ = ready.set(());
         Self {
+            data_dir: None,
             ready,
             task_queues: Mutex::new(HashMap::new()),
             auth: Mutex::new(AuthStore::in_memory()),
@@ -717,5 +756,60 @@ pub async fn abort_unconfirmed_pairing(
     }
     if let Err(error) = reconcile_listener_scope_locked(state, handle).await {
         eprintln!("[remote] server closed after rolling back unconfirmed pairing: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_root(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        PathBuf::from("/tmp").join(format!(
+            "aeroric-remote-state-{tag}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn new_at_reads_config_devices_and_keys_from_only_the_injected_root() {
+        let root = scratch_root("injected");
+        std::fs::create_dir_all(&root).expect("scratch root");
+        let config = serde_json::json!({
+            "enabled": true,
+            "port": 6789,
+            "publicEndpoints": ["ws://127.0.0.1:6789"]
+        });
+        std::fs::write(
+            crate::remote::config::config_path_in(&root),
+            serde_json::to_vec(&config).expect("config json"),
+        )
+        .expect("write config");
+        let devices = serde_json::json!([{
+            "id": "device-injected",
+            "name": "iPhone",
+            "tokenHash": "00",
+            "createdAt": 1,
+            "lastSeenAt": 1
+        }]);
+        std::fs::write(
+            root.join("remote-devices.json"),
+            serde_json::to_vec(&devices).expect("devices json"),
+        )
+        .expect("write devices");
+
+        let state = RemoteState::new_at(&root);
+
+        assert_eq!(state.data_dir.as_deref(), Some(root.as_path()));
+        assert!(state.config.lock().enabled);
+        assert_eq!(state.config.lock().port, 6789);
+        assert_eq!(state.auth.lock().devices().len(), 1);
+        assert_eq!(state.auth.lock().devices()[0].id, "device-injected");
+        assert!(root.join("remote-keypair.json").is_file());
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

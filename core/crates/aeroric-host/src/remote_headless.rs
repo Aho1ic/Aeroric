@@ -1348,7 +1348,7 @@ pub fn register_remote_services(
                     if let Some(p) = port {
                         cfg.port = p;
                     }
-                    if let Err(e) = aeroric_core::remote::config::save_config(&cfg) {
+                    if let Err(e) = s.persist_config(&cfg) {
                         return failure(id, ErrorCode::IoError, &e);
                     }
                 }
@@ -1369,7 +1369,7 @@ pub fn register_remote_services(
                 {
                     let mut cfg = s.config.lock();
                     cfg.enabled = false;
-                    if let Err(e) = aeroric_core::remote::config::save_config(&cfg) {
+                    if let Err(e) = s.persist_config(&cfg) {
                         return failure(id, ErrorCode::IoError, &e);
                     }
                 }
