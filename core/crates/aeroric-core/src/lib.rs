@@ -8,6 +8,7 @@
 pub mod adapters;
 pub mod agent_connections;
 pub mod agents;
+pub mod canvas;
 pub mod clock;
 pub mod connections;
 pub mod context;
