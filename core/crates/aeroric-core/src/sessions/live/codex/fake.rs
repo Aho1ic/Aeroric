@@ -1,13 +1,18 @@
-//! Test support: a scripted in-process `codex app-server` peer.
+//! Test support: a scripted in-process `codex app-server` peer and a sink that
+//! records what a driver reported.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use super::rpc::Transport;
 use super::server::Launcher;
+use crate::sessions::live::update::SessionUpdate;
+use crate::sessions::live::LiveStatusSink;
+use crate::tasks::{ProtocolFamily, TaskStatus};
 
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -30,6 +35,12 @@ impl Peer {
         let message = self.next().await;
         assert_eq!(message["method"], method, "unexpected message {message}");
         message
+    }
+
+    /// Nothing more arrives within a short wait.
+    pub async fn silent(&mut self) {
+        let next = tokio::time::timeout(Duration::from_millis(100), self.from_client.recv()).await;
+        assert!(next.is_err(), "unexpected message {next:?}");
     }
 
     fn send(&self, message: Value) {
@@ -84,6 +95,72 @@ pub async fn launched(peers: &mut mpsc::UnboundedReceiver<Peer>) -> Peer {
         .await
         .expect("nothing was launched")
         .expect("launcher gone")
+}
+
+#[derive(Default)]
+pub struct Sink {
+    pub statuses: Mutex<Vec<(TaskStatus, Option<String>, u64)>>,
+    pub sessions: Mutex<Vec<(String, Option<String>)>>,
+    pub updates: Mutex<Vec<SessionUpdate>>,
+}
+
+impl Sink {
+    pub fn last_status(&self) -> Option<TaskStatus> {
+        self.statuses.lock().last().map(|(status, _, _)| *status)
+    }
+
+    pub fn statuses(&self) -> Vec<TaskStatus> {
+        self.statuses
+            .lock()
+            .iter()
+            .map(|(status, _, _)| *status)
+            .collect()
+    }
+
+    pub fn update_types(&self) -> Vec<String> {
+        self.updates
+            .lock()
+            .iter()
+            .map(|u| {
+                serde_json::to_value(u).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect()
+    }
+}
+
+impl LiveStatusSink for Sink {
+    fn status(
+        &self,
+        _project: &str,
+        _task: &str,
+        generation: u64,
+        status: TaskStatus,
+        reason: Option<String>,
+    ) {
+        self.statuses.lock().push((status, reason, generation));
+    }
+
+    fn session(
+        &self,
+        _project: &str,
+        _task: &str,
+        family: ProtocolFamily,
+        _agent: &str,
+        id: &str,
+        path: Option<&str>,
+    ) {
+        assert_eq!(family, ProtocolFamily::Codex);
+        self.sessions
+            .lock()
+            .push((id.to_string(), path.map(str::to_string)));
+    }
+
+    fn update(&self, update: &SessionUpdate) {
+        self.updates.lock().push(update.clone());
+    }
 }
 
 /// Wait (bounded) until `condition` holds.

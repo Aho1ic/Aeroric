@@ -4,6 +4,7 @@
 //! `TaskExecutor` port so the task service and its reducer stay unchanged.
 
 pub mod codex;
+pub mod executor;
 pub mod update;
 
 use std::collections::HashMap;
