@@ -517,6 +517,59 @@ pub fn record_diff_stats(
     (if changed { next } else { records.to_vec() }, changed)
 }
 
+/// ADR-043：原生结构化会话的驱动只活在宿主进程里，宿主一退出，停在
+/// `pending`/`running`/`input_required` 的原生任务就再没有人会结算它。`is_orphan` 由宿主
+/// 回答（这一行走结构化驱动、且本进程没有它的驱动）。规则：已写下 `failureReason` 的
+/// ⇒ `failed`（`completedAt` 按 [`apply_status_transition`] 的先到者为准）；否则沿用
+/// [`normalize_after_boot`] 对"孩子没了"的约定 ⇒ `interrupted` 并补
+/// `attentionRequestedAt = 已有值 ?? now`。返回结算过的任务 id。
+pub fn settle_orphaned_sessions(
+    records: &[Record],
+    is_orphan: &dyn Fn(&Record) -> bool,
+    now_ms: u64,
+) -> (Vec<Record>, Vec<String>) {
+    let mut next = records.to_vec();
+    let mut settled = Vec::new();
+    for record in records {
+        let active = status_of(record).is_some_and(|value| {
+            matches!(
+                value,
+                TaskStatus::Pending | TaskStatus::Running | TaskStatus::InputRequired
+            )
+        });
+        let Some(task_id) = record.id() else {
+            continue;
+        };
+        if !active || !is_orphan(record) {
+            continue;
+        }
+        let failed = record
+            .get("failureReason")
+            .and_then(Value::as_str)
+            .is_some_and(|reason| !reason.trim().is_empty());
+        if failed {
+            next = apply_status_transition(&next, task_id, TaskStatus::Failed, None, None, now_ms)
+                .records;
+        } else if let Some(updated) = next.iter_mut().find(|r| r.id() == Some(task_id)) {
+            updated.0.insert(
+                "status".to_string(),
+                Value::String(
+                    serde_json::to_value(TaskStatus::Interrupted)
+                        .expect("a status is a string")
+                        .as_str()
+                        .expect("a status is a string")
+                        .to_string(),
+                ),
+            );
+            if !updated.contains("attentionRequestedAt") {
+                write_field(updated, "attentionRequestedAt", Field::Set(now_ms));
+            }
+        }
+        settled.push(task_id.to_string());
+    }
+    (next, settled)
+}
+
 /// #11（`useAppStartup.ts:67` + `appProjectState.ts:171-210`）：启动修复，规则全部在这里，
 /// 宿主交出来的只有事实（`live_task_ids`＝还挂着活子进程的 id、`is_dsh`＝宿主家族表对
 /// `agent` 的回答）。四条判据与旧客户端一字不差：活孩子还在 ⇒ 非 `detached` 的行改

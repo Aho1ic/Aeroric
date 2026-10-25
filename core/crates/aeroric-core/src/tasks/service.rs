@@ -2176,6 +2176,38 @@ impl TaskService {
         self.finish_intent(project_id, records, persist)
     }
 
+    /// ADR-043：宿主启动时结算上一个宿主进程留下的原生会话任务（规则在
+    /// `reducer::settle_orphaned_sessions`）。驱动随旧进程一起没了，它们在账本里留下的
+    /// 未结 claim 也一并结掉，否则 `is_task_live` 会把这些行当成仍在跑。
+    pub fn settle_orphaned_sessions(
+        &self,
+        project_id: &str,
+        is_orphan: &dyn Fn(&Record) -> bool,
+    ) -> Result<(Vec<String>, Applied), TaskError> {
+        self.serial(|| {
+            let snapshot = self.load(project_id)?;
+            let (records, settled) = reducer::settle_orphaned_sessions(
+                &snapshot.records,
+                is_orphan,
+                self.clock().now_ms(),
+            );
+            if settled.is_empty() {
+                return Ok((
+                    settled,
+                    self.unchanged(snapshot.records, snapshot.fingerprint),
+                ));
+            }
+            let applied = self.commit(project_id, &records)?;
+            self.ledger(|ledger| {
+                for task_id in &settled {
+                    ledger.settle_task(task_id);
+                }
+                let _ = ledger.persist(&self.context);
+            });
+            Ok((settled, applied))
+        })
+    }
+
     /// #9：续跑前的那**一次**写。会话字段与 #21 走同一条 `apply_resolved_session`（清三设一），
     /// 外加 `agent`、`status: pending` 与两个清空——都落在 core 刚读出的权威行上，而不是宿主
     /// 内存里那份可能已过期的整行（ADR-037 决策 3：载荷与今天那一次写等价）。

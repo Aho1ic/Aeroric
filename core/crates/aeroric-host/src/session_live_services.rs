@@ -39,6 +39,24 @@ struct Live {
 
 type Run = fn(&Live, &Request) -> Frame;
 
+/// ADR-043: settle the native tasks a previous host process left active. Their
+/// drivers died with it, so nothing would ever move them off `running`; a task
+/// with a driver in `executor` is left alone. Returns the settled task ids.
+pub fn settle_orphaned_sessions(
+    executor: Arc<StructuredExecutor>,
+    families: Arc<dyn AgentFamilies>,
+    service: Arc<TaskService>,
+    context: Arc<CoreContext>,
+) -> Vec<String> {
+    Live {
+        executor,
+        families,
+        service,
+        context,
+    }
+    .settle_orphaned()
+}
+
 pub fn register_session_live_services(
     set: &mut ServiceSet,
     executor: Arc<StructuredExecutor>,
@@ -52,6 +70,8 @@ pub fn register_session_live_services(
         service,
         context,
     });
+    // Before any session method can answer: the previous host's drivers are gone.
+    live.settle_orphaned();
     let methods: [(&str, Run); 8] = [
         (wire::PROMPT_METHOD, prompt),
         (wire::INTERRUPT_METHOD, interrupt),
@@ -111,6 +131,52 @@ fn no_session(request: &Request) -> Frame {
 impl Live {
     fn driver(&self, task_id: &str) -> Option<Arc<dyn SessionDriver>> {
         self.executor.registry().get(task_id)
+    }
+
+    /// Whether this task's runs go to a structured driver.
+    fn structured(&self, record: &Record, project: &Record) -> bool {
+        working_directory(record, project).is_some_and(|cwd| {
+            self.executor.takes_task(
+                launch_family_of(record, self.families.as_ref()),
+                record
+                    .get("agent")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                record
+                    .get("agentConfigId")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty()),
+                &cwd,
+            )
+        })
+    }
+
+    fn settle_orphaned(&self) -> Vec<String> {
+        let Ok(projects) =
+            aeroric_core::projects::ProjectService::new(Arc::clone(&self.context)).list()
+        else {
+            return Vec::new();
+        };
+        let mut settled = Vec::new();
+        for project in projects {
+            let Some(project_id) = project.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let orphan = |record: &Record| {
+                record
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| self.driver(id).is_none())
+                    && self.structured(record, &project)
+            };
+            match self.service.settle_orphaned_sessions(project_id, &orphan) {
+                Ok((ids, _)) => settled.extend(ids),
+                Err(error) => eprintln!(
+                    "[aeroric-host] cannot settle native sessions left by the previous host in {project_id}: {error}"
+                ),
+            }
+        }
+        settled
     }
 
     /// The task's record and its project.
@@ -343,20 +409,7 @@ fn state(live: &Live, request: &Request) -> Frame {
             let session_id = aeroric_core::tasks::session_owner::current_session(&record).0;
             let text = |key: &str| record.get(key).and_then(Value::as_str).map(str::to_string);
             let family = launch_family_of(&record, live.families.as_ref());
-            let structured = working_directory(&record, &project).is_some_and(|cwd| {
-                live.executor.takes_task(
-                    family,
-                    record
-                        .get("agent")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                    record
-                        .get("agentConfigId")
-                        .and_then(Value::as_str)
-                        .filter(|id| !id.is_empty()),
-                    &cwd,
-                )
-            });
+            let structured = live.structured(&record, &project);
             SessionState {
                 task_id: p.task_id.clone(),
                 live: false,

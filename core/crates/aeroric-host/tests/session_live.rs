@@ -140,11 +140,22 @@ struct Host {
     /// Each Claude process start, with the peer for its stdio.
     claude_peers: mpsc::UnboundedReceiver<(ClaudeStart, Peer)>,
     project: aeroric_core::storage::Record,
+    structured: Arc<StructuredExecutor>,
+    families: Arc<dyn AgentFamilies>,
+    context: Arc<CoreContext>,
     _root: PathBuf,
 }
 
+/// Writes task records into the data root before the host is assembled, as a
+/// previous host process would have left them.
+type Seed = Box<dyn FnOnce(&Arc<CoreContext>)>;
+
 impl Host {
     async fn start(with_live: bool) -> Host {
+        Self::start_seeded(with_live, Box::new(|_| {})).await
+    }
+
+    async fn start_seeded(with_live: bool, seed: Seed) -> Host {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
         let root = PathBuf::from("/tmp").join(format!("ah-slive-{}-{n}", std::process::id()));
         std::fs::create_dir_all(root.join("home/.aeroric")).expect("home");
@@ -161,6 +172,16 @@ impl Host {
             )
             .expect("writer context"),
         );
+        let project_dir = root.join("workspace");
+        std::fs::create_dir_all(&project_dir).expect("workspace");
+        let (upserted, _) = ProjectService::new(Arc::clone(&context))
+            .open_local(
+                &project_dir.to_string_lossy(),
+                "project-1",
+                context.clock.now_ms() as i64,
+            )
+            .expect("open project");
+        seed(&context);
         let (peers_tx, peers) = mpsc::unbounded_channel();
         let launcher: Launcher = Arc::new(move || {
             let (transport, from_client, to_client) = Transport::pair();
@@ -216,7 +237,7 @@ impl Host {
             log,
             Arc::clone(&context),
             Arc::clone(&service),
-            families,
+            Arc::clone(&families),
             pty,
             terminal,
             registry,
@@ -247,15 +268,6 @@ impl Host {
         .await;
         assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
 
-        let project_dir = root.join("workspace");
-        std::fs::create_dir_all(&project_dir).expect("workspace");
-        let (upserted, _) = ProjectService::new(Arc::clone(&context))
-            .open_local(
-                &project_dir.to_string_lossy(),
-                "project-1",
-                context.clock.now_ms() as i64,
-            )
-            .expect("open project");
         Host {
             call,
             service,
@@ -263,6 +275,9 @@ impl Host {
             peers,
             claude_peers,
             project: upserted.project,
+            structured,
+            families,
+            context,
             _root: root,
         }
     }
@@ -320,6 +335,16 @@ impl Host {
     fn record(&self) -> Value {
         let stamped = self.service.load("project-1").expect("load");
         serde_json::to_value(&stamped.records.first().expect("task").0).unwrap()
+    }
+
+    fn record_of(&self, task_id: &str) -> Value {
+        let stamped = self.service.load("project-1").expect("load");
+        let record = stamped
+            .records
+            .into_iter()
+            .find(|r| r.get("id").and_then(Value::as_str) == Some(task_id))
+            .expect("task");
+        serde_json::to_value(&record.0).unwrap()
     }
 
     async fn until(&self, what: &str, check: impl Fn(&Host) -> bool) {
@@ -753,4 +778,109 @@ async fn a_closed_claude_session_reopens_with_its_recorded_session() {
         .expect("launcher");
     assert_eq!(start.resume.as_deref(), Some("cs-1"));
     peer.claude_turn("cs-1", "again").await;
+}
+
+/// A previous host process died with native sessions open: their rows still
+/// say `running` / `input_required`, and no driver in this process will ever
+/// settle them. The new host settles them when it assembles the session
+/// services — a recorded failure becomes `failed`, anything else
+/// `interrupted` (the PTY boot rule) — and leaves PTY and finished tasks alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restarted_host_settles_native_tasks_left_running() {
+    let seed: Seed = Box::new(|context| {
+        let task = |id: &str, agent: &str, status: &str, extra: Value| {
+            let mut record = json!({
+                "id": id, "projectId": "project-1", "prompt": "x", "agent": agent,
+                "permissionMode": "ask", "status": status, "createdAt": 1, "generation": "2",
+            });
+            record
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value::<aeroric_core::storage::Record>(record).unwrap()
+        };
+        aeroric_core::storage::save_tasks(
+            context,
+            "project-1",
+            &[
+                task(
+                    "failed-run",
+                    "claude",
+                    "running",
+                    json!({"failureReason": "API Error: 401"}),
+                ),
+                task("quiet-run", "codex", "running", json!({})),
+                task(
+                    "waiting-run",
+                    "codex",
+                    "input_required",
+                    json!({"attentionRequestedAt": 7}),
+                ),
+                // TestRouting keeps a pinned configuration on the PTY executor.
+                task(
+                    "pty-run",
+                    "codex",
+                    "running",
+                    json!({"agentConfigId": "cfg"}),
+                ),
+                task("finished", "claude", "done", json!({"completedAt": 9})),
+            ],
+        )
+        .expect("seed tasks");
+    });
+    let host = Host::start_seeded(true, seed).await;
+
+    let failed = host.record_of("failed-run");
+    assert_eq!(failed["status"], "failed", "{failed}");
+    assert_eq!(failed["failureReason"], "API Error: 401");
+    assert!(failed["completedAt"].is_u64(), "{failed}");
+
+    let quiet = host.record_of("quiet-run");
+    assert_eq!(quiet["status"], "interrupted", "{quiet}");
+    assert!(quiet["attentionRequestedAt"].is_u64(), "{quiet}");
+    assert!(quiet.get("completedAt").is_none(), "{quiet}");
+
+    let waiting = host.record_of("waiting-run");
+    assert_eq!(waiting["status"], "interrupted", "{waiting}");
+    assert_eq!(
+        waiting["attentionRequestedAt"], 7,
+        "the first request stands"
+    );
+
+    assert_eq!(host.record_of("pty-run")["status"], "running");
+    assert_eq!(host.record_of("finished")["status"], "done");
+    assert_eq!(host.record_of("finished")["completedAt"], 9);
+
+    // Settled is settled: a second pass changes nothing.
+    let again = aeroric_host::session_live_services::settle_orphaned_sessions(
+        Arc::clone(&host.structured),
+        Arc::clone(&host.families),
+        Arc::clone(&host.service),
+        Arc::clone(&host.context),
+    );
+    assert!(again.is_empty(), "{again:?}");
+}
+
+/// A task whose driver is alive in this process is not an orphan.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn settling_leaves_a_task_with_a_live_driver_alone() {
+    let mut host = Host::start(true).await;
+    host.start_task("hello");
+    let _peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .expect("no app-server launched")
+        .expect("launcher gone");
+    let before = host.record()["status"].clone();
+    assert!(
+        matches!(before.as_str(), Some("pending" | "running")),
+        "{before}"
+    );
+    let settled = aeroric_host::session_live_services::settle_orphaned_sessions(
+        Arc::clone(&host.structured),
+        Arc::clone(&host.families),
+        Arc::clone(&host.service),
+        Arc::clone(&host.context),
+    );
+    assert!(settled.is_empty(), "{settled:?}");
+    assert_eq!(host.record()["status"], before);
 }
