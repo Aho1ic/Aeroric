@@ -168,3 +168,28 @@ final class LiveSessionModelTests: XCTestCase {
     }
 }
 
+@MainActor
+final class LivePickerOptionsTests: XCTestCase {
+    func testModelsKeepTheCurrentOneAndPermissionsAreTheThreeTiers() {
+        let models = LivePickerOptions.models(["a", "b"], current: "custom")
+        XCTAssertEqual(models.sections[0].options.map(\.id), ["custom", "a", "b"])
+        XCTAssertEqual(models.sections[0].options.first(where: \.selected)?.id, "custom")
+        XCTAssertNotNil(LivePickerOptions.models([], current: nil).note)
+        let permissions = LivePickerOptions.permissions(current: "auto_edit")
+        XCTAssertEqual(permissions.sections[0].options.map(\.id), ["ask", "auto_edit", "full_access"])
+        XCTAssertEqual(permissions.sections[0].options.first(where: \.selected)?.id, "auto_edit")
+    }
+
+    func testClaudeEffortIsReadOnlyAndAnEmptyCatalogHidesTheCapsule() {
+        XCTAssertNil(LivePickerOptions.efforts([], current: nil, editable: true))
+        let codex = LivePickerOptions.efforts(["low", "high"], current: "low", editable: true)
+        XCTAssertTrue(codex?.sections[0].options.allSatisfy(\.isEnabled) == true)
+        let claude = LivePickerOptions.efforts(["low", "high"], current: "low", editable: false)
+        XCTAssertEqual(claude?.sections[0].options.map(\.isEnabled), [true, false])
+    }
+
+    func testChangesAreLinesNotFiles() {
+        XCTAssertEqual(LiveSessionFacts(agent: "codex").changesText, "—")
+        XCTAssertEqual(LiveSessionFacts(agent: "codex", additions: 12, deletions: 3).changesText, "+12 −3")
+    }
+}
