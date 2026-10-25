@@ -293,7 +293,9 @@ struct TaskWorkspaceView: View {
             }
             visitedTaskIDs.insert(task.id)
             taskInputGate.update(taskID: task.id, visible: taskSurfaceVisible)
-            if let generation = services.generation(for: task) {
+            if services.liveStructured[task.id] == true {
+                services.detachTerminal(presentationOwner: terminalPresentationOwner)
+            } else if let generation = services.generation(for: task) {
                 services.attachTerminal(taskId: task.id, generation: generation,
                                         presentationOwner: terminalPresentationOwner)
                 if !taskInputGate.permits(task.id) {
@@ -307,6 +309,40 @@ struct TaskWorkspaceView: View {
             taskInputGate.leave()
             services.suspendTerminalInput(presentationOwner: terminalPresentationOwner)
         }
+        .onChange(of: selectedTaskID.flatMap { services.liveStructured[$0] }) { _, structured in
+            // A native session has no PTY: never keep a terminal poll for it.
+            if structured == true { services.detachTerminal(presentationOwner: terminalPresentationOwner) }
+        }
+        .onChange(of: services.requestedSelection) { _, requested in
+            guard let requested else { return }
+            selection = requested
+            services.requestedSelection = nil
+        }
+        .onChange(of: services.requestedNewSessionLike) { _, taskID in
+            guard let taskID else { return }
+            services.requestedNewSessionLike = nil
+            openNewSession(like: taskID)
+        }
+    }
+
+    /// `/clear` (N4 D6): the new-session page prefilled like this task; the
+    /// current session stays as it is.
+    private func openNewSession(like taskID: String) {
+        guard let task = services.taskStore.tasks.first(where: { $0.id == taskID }) else { return }
+        let target = SessionNavigation.draft(projectID: task.projectID)
+        guard let scope = SessionNavigation.draftScope(target) else { return }
+        let configuration = services.sessionConfigurations(projectID: task.projectID).first { $0.agent == task.agent }
+        let config = services.liveStores[taskID]?.model?.config
+        draftBook.open(scope)
+        draftBook.edit(scope) { draft in
+            if let configuration {
+                draft.selectHarness(configuration.harness)
+                draft.apply(configuration)
+            }
+            if let model = config?.model { draft.task.model = model }
+            if let permission = config?.permission { draft.selectPermission(permission) }
+        }
+        selection = target
     }
 
     // MARK: - Auxiliary panel (Q17: 详情 / 文件 / 改动 / Git 日志)
@@ -984,8 +1020,31 @@ struct TaskWorkspaceView: View {
     /// P5-02 SessionPresentation 接线落点：由模式＋能力验证状态决定
     /// 呈现；`forcedTerminal` 只影响本窗口本次选择（用户触发，不自动改
     /// 全局偏好）。
+    /// N4: a task the host runs as a structured session gets the live page —
+    /// the whole column is the conversation, no terminal (Q25). Anything else
+    /// keeps the presentation below.
     @ViewBuilder
     private func taskBody(_ task: TaskStore.TaskEntry) -> some View {
+        if services.liveCapability {
+            switch services.liveStructured[task.id] {
+            case true?:
+                LiveSessionView(store: services.liveStore(for: task.id), facts: services.liveFacts(for: task),
+                                focusApproval: services.approvalFocus[task.id])
+                    .id("live.\(task.id)")
+            case false?:
+                legacyTaskBody(task)
+            case nil:
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .task(id: task.id) { await services.resolveLive(taskID: task.id) }
+            }
+        } else {
+            legacyTaskBody(task)
+        }
+    }
+
+    @ViewBuilder
+    private func legacyTaskBody(_ task: TaskStore.TaskEntry) -> some View {
         let presentation = SessionPresentation.resolve(
             mode: forcedTerminalTaskIDs.contains(task.id) ? .advanced : services.interactionModeController.mode,
             structuredCapabilitiesVerified: services.structuredCapabilitiesVerified(task)

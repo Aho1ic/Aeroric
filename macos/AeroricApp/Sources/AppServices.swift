@@ -70,6 +70,24 @@ final class AppServices {
     private var projectConfigurations: [String: [SessionConfiguration]] = [:]
     private var configurationReads: [String: UUID] = [:]
     private(set) var configurationEpoch = UUID()
+    // MARK: N4 native sessions (state; behaviour in LiveSessions.swift)
+
+    /// The host advertised `session.live`.
+    var liveCapability = false
+    /// Per task: does it run as a structured session (host's `session.state.structured`).
+    var liveStructured: [String: Bool] = [:]
+    @ObservationIgnored var liveStores: [String: LiveSessionStore] = [:]
+    /// A window should select this (a clicked notification, `/clear`).
+    var requestedSelection: String?
+    /// Task whose new-session draft `/clear` asked for (prefilled like it).
+    var requestedNewSessionLike: String?
+    /// Approval card to scroll to, per task (a clicked notification).
+    var approvalFocus: [String: String] = [:]
+    @ObservationIgnored var statusPumpTask: Task<Void, Never>?
+    @ObservationIgnored var statusCursor: UInt64?
+    @ObservationIgnored var notificationGate = ApprovalNotificationGate()
+    @ObservationIgnored let notifier = SessionNotifier()
+
     /// P5-01：选中任务的终端轮询任务（attach/detach 管理）。
     private var terminalPollTask: Task<Void, Never>?
     private(set) var terminalCoordinator: TerminalCoordinator?
@@ -78,7 +96,7 @@ final class AppServices {
     let terminalStore = TerminalStore()
     private(set) var supervisor: HostSupervisor?
     /// The live channel; retained so the sink stays wired between attempts.
-    private var attachedConnection: HostConnection?
+    private(set) var attachedConnection: HostConnection?
     /// A read-only boundary, not a global resource/selection store.
     var projectResourceReader: ProjectResourcesClient? {
         guard phaseSnapshot == .ready, let attachedConnection else { return nil }
@@ -192,6 +210,12 @@ final class AppServices {
                         client: CanvasClient(connection: connection),
                         capabilityEnabled: advertised[CanvasClient.capability] == true
                     )
+                    self.liveCapability = advertised[SessionsClient.liveCapability] == true
+                    self.liveStructured.removeAll()
+                    self.liveStores.removeAll()
+                    self.notifier.install()
+                    self.notifier.onOpen = { [weak self] taskID in self?.openFromNotification(taskID: taskID) }
+                    self.startStatusPump()
                 }
                 // AP7:能力探测走宿主真值。没有适配器面时 `capabilities()` 抛错,
                 // store 保持「未探测」——UI 因此什么都不显示,而不是显示一堆注定
@@ -318,7 +342,11 @@ final class AppServices {
                     createdAtMs: task.createdAtMs,
                     updatedAtMs: task.updatedAtMs,
                     archived: task.archived,
-                    starred: task.starred
+                    starred: task.starred,
+                    worktreePath: task.worktreePath,
+                    worktreeBranch: task.worktreeBranch,
+                    additions: task.additions,
+                    deletions: task.deletions
                 ))
                 if let generation = task.generation {
                     pendingGenerations[task.id] = generation

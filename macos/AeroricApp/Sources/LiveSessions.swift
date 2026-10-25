@@ -1,0 +1,203 @@
+import AeroricClient
+import AeroricProtocol
+import AeroricUI
+import AppKit
+import Foundation
+import UserNotifications
+
+/// N4 宿主接线：原生结构化会话页走 `session.*`（SessionsClient），视图只拿
+/// `LiveSessionActions`，不持有连接（INV-02）。
+@MainActor
+struct HostLiveSessionActions: LiveSessionActions {
+    let services: AppServices
+
+    private func client() throws -> SessionsClient {
+        guard let client = services.sessionsClient else { throw AppServices.ProjectError.notConnected }
+        return client
+    }
+
+    func state(taskID: String) async throws -> LiveSessionState {
+        let state = try await client().state(taskId: taskID)
+        services.liveStructured[taskID] = state.structured
+        return state
+    }
+
+    func updates(taskID: String, after: UInt64) async throws -> LiveUpdatesBatch {
+        try await client().updates(taskId: taskID, after: after)
+    }
+
+    func history(taskID: String) async throws -> [AeroricUI.SessionMessage] {
+        let page = try await client().historyPage(taskId: taskID, cursor: nil)
+        return page.messages.map(SessionBlockMapping.message)
+    }
+
+    func prompt(taskID: String, text: String) async throws { try await client().prompt(taskId: taskID, text: text) }
+    func interrupt(taskID: String) async throws { try await client().interrupt(taskId: taskID) }
+
+    func respond(taskID: String, requestID: String, decision: LiveDecision, reason: String?) async throws {
+        try await client().respond(taskId: taskID, requestId: requestID, decision: decision, reason: reason)
+    }
+
+    func configure(taskID: String, model: String?, permission: LivePermission?, effort: String?) async throws {
+        try await client().configure(taskId: taskID, model: model, permission: permission, effort: effort)
+    }
+
+    func command(taskID: String, command: LiveCommand) async throws {
+        try await client().command(taskId: taskID, command: command)
+    }
+
+    func close(taskID: String) async throws { try await client().close(taskId: taskID) }
+
+    func export(taskID: String) async throws {
+        try await client().exportSession(taskId: taskID, out: NSTemporaryDirectory() + "session-\(taskID).md")
+    }
+
+    func startNewSession(like taskID: String) { services.requestedNewSessionLike = taskID }
+}
+
+extension AppServices {
+    /// Asks the host whether this task runs as a structured session.
+    func resolveLive(taskID: String) async {
+        guard liveCapability, liveStructured[taskID] == nil, let client = sessionsClient else { return }
+        if let state = try? await client.state(taskId: taskID) {
+            liveStructured[taskID] = state.structured
+        } else {
+            liveStructured[taskID] = false
+        }
+    }
+
+    func liveStore(for taskID: String) -> LiveSessionStore {
+        if let store = liveStores[taskID] { return store }
+        let store = LiveSessionStore(taskID: taskID, actions: HostLiveSessionActions(services: self))
+        liveStores[taskID] = store
+        return store
+    }
+
+    func liveFacts(for task: TaskStore.TaskEntry) -> LiveSessionFacts {
+        let configurations = sessionConfigurations(projectID: task.projectID).filter { $0.agent == task.agent }
+        var models: [String] = []
+        var efforts: [String] = []
+        for configuration in configurations {
+            for model in configuration.options.models where !models.contains(model) { models.append(model) }
+            for effort in configuration.options.efforts where !efforts.contains(effort) { efforts.append(effort) }
+        }
+        let projectPath = taskStore.projects.first { $0.id == task.projectID }?.path
+        return LiveSessionFacts(
+            agent: task.agent, configurationTitle: configurations.first?.title,
+            workingDirectory: task.worktreePath ?? projectPath, branch: task.worktreeBranch,
+            startedAt: task.createdAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) },
+            additions: task.additions, deletions: task.deletions, models: models, efforts: efforts
+        )
+    }
+
+    // MARK: - D4 task status pump
+
+    /// Polls `events.since` once a second so background tasks' status reaches the
+    /// sidebar and the board, and approvals can notify (N4 D4/D5).
+    func startStatusPump() {
+        statusPumpTask?.cancel()
+        statusCursor = nil
+        statusPumpTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                await self?.pumpStatusOnce()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    func pumpStatusOnce() async {
+        guard let connection = attachedConnection else { return }
+        let after = statusCursor ?? 0
+        guard let reply = try? await connection.request("events.since", params: .object(["after": .number(String(after))])),
+              let batch = ReplayBatch.decode(reply.result) else { return }
+        let latest = UInt64(batch.latestSeq.text) ?? after
+        // First read only sets the cursor: the snapshot already came from task.list.
+        guard statusCursor != nil, !batch.reset else {
+            statusCursor = latest
+            if batch.reset { await refreshWorkspace() }
+            return
+        }
+        statusCursor = latest
+        for event in batch.events where event.event == "task-status" {
+            applyStatus(event.data)
+        }
+    }
+
+    private func applyStatus(_ data: JSONValue) {
+        guard let taskID = data["task_id"]?.stringValue, let status = data["status"]?.stringValue else { return }
+        guard var task = taskStore.tasks.first(where: { $0.id == taskID }) else {
+            Task { await refreshWorkspace() }
+            return
+        }
+        let previous = task.status
+        guard previous != status else { return }
+        task.status = status
+        taskStore.upsertTask(task)
+        if notificationGate.shouldNotify(taskID: taskID, previous: previous, current: status,
+                                         appActive: NSApp.isActive) {
+            notifyApproval(task)
+        }
+    }
+
+    // MARK: - D5 notifications
+
+    private func notifyApproval(_ task: TaskStore.TaskEntry) {
+        Task { @MainActor in
+            let summary = try? await sessionsClient?.state(taskId: task.id).pending.first?.summary
+            notifier.post(taskID: task.id, title: "\(task.title) 需要你批准", body: summary ?? "Agent 在等待你的回应")
+        }
+    }
+
+    /// A clicked notification: bring the window forward on that task's approval card.
+    func openFromNotification(taskID: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        requestedSelection = SessionNavigation.task(taskID)
+        Task { @MainActor in
+            if let id = try? await sessionsClient?.state(taskId: taskID).pending.first?.id {
+                approvalFocus[taskID] = id
+            }
+        }
+    }
+}
+
+/// UNUserNotificationCenter for "needs your approval" (N4 D5). Authorization is
+/// requested the first time one is needed; once declined it never asks again.
+final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
+    static let taskKey = "taskID"
+    @MainActor var onOpen: ((String) -> Void)?
+
+    func install() {
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    @MainActor
+    func post(taskID: String, title: String, body: String) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            let deliver = {
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = .default
+                content.userInfo = [Self.taskKey: taskID]
+                center.add(UNNotificationRequest(identifier: "approval.\(taskID)", content: content, trigger: nil))
+            }
+            switch settings.authorizationStatus {
+            case .authorized, .provisional:
+                deliver()
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in if granted { deliver() } }
+            default:
+                break
+            }
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let taskID = response.notification.request.content.userInfo[Self.taskKey] as? String
+        completionHandler()
+        guard let taskID else { return }
+        Task { @MainActor in self.onOpen?(taskID) }
+    }
+}

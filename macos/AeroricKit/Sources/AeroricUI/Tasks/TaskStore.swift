@@ -31,6 +31,11 @@ public final class TaskStore {
         /// 归档/置星是宿主权威状态（ADR-037 词汇表），这里镜像。
         public var archived: Bool
         public var starred: Bool
+        /// Record facts the native session page shows (N4): worktree and line changes.
+        public var worktreePath: String?
+        public var worktreeBranch: String?
+        public var additions: UInt64?
+        public var deletions: UInt64?
 
         public init(
             id: String,
@@ -41,8 +46,16 @@ public final class TaskStore {
             createdAtMs: UInt64? = nil,
             updatedAtMs: UInt64? = nil,
             archived: Bool = false,
-            starred: Bool = false
+            starred: Bool = false,
+            worktreePath: String? = nil,
+            worktreeBranch: String? = nil,
+            additions: UInt64? = nil,
+            deletions: UInt64? = nil
         ) {
+            self.worktreePath = worktreePath
+            self.worktreeBranch = worktreeBranch
+            self.additions = additions
+            self.deletions = deletions
             self.id = id
             self.projectID = projectID
             self.title = title
