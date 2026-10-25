@@ -60,6 +60,11 @@ pub trait Routing: Send + Sync {
     ) -> Option<Route>;
     fn codex_launcher(&self, key: &ServerKey) -> Launcher;
     fn claude_launcher(&self, key: &ClaudeKey) -> ClaudeLauncher;
+    /// The `CLAUDE_CONFIG_DIR` this key's process writes transcripts under
+    /// (`<dir>/projects/<encoded cwd>/<session id>.jsonl`); `None` records no path.
+    fn claude_config_dir(&self, _key: &ClaudeKey) -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 pub struct StructuredExecutor {
@@ -197,6 +202,7 @@ impl StructuredExecutor {
                     model: spec.model.clone(),
                     effort: spec.effort.clone(),
                     session_id: spec.thread_id.clone(),
+                    config_dir: self.routing.claude_config_dir(key),
                 },
                 self.claude_launcher(key),
                 Arc::clone(&self.sink),

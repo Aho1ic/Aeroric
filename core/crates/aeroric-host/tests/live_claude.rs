@@ -69,6 +69,7 @@ impl TaskExecutor for Pty {
 struct Sink {
     statuses: parking_lot::Mutex<Vec<(TaskStatus, Option<String>)>>,
     sessions: parking_lot::Mutex<Vec<String>>,
+    paths: parking_lot::Mutex<Vec<Option<String>>>,
 }
 
 impl LiveStatusSink for Sink {
@@ -82,10 +83,11 @@ impl LiveStatusSink for Sink {
         family: ProtocolFamily,
         _: &str,
         session_id: &str,
-        _: Option<&str>,
+        path: Option<&str>,
     ) {
         assert_eq!(family, ProtocolFamily::Claude);
         self.sessions.lock().push(session_id.to_string());
+        self.paths.lock().push(path.map(str::to_string));
     }
 }
 
@@ -285,6 +287,16 @@ async fn the_built_in_claude_starts_in_control_mode_and_runs_a_turn() {
     );
     assert!(env.file("cwd.txt").trim().ends_with("workspace"));
     assert_eq!(*env.sink.sessions.lock(), ["cs-host"]);
+    let encoded = aeroric_core::sessions::discovery::encode_claude_project_path(
+        &std::fs::canonicalize(env.root.join("workspace"))
+            .unwrap()
+            .to_string_lossy(),
+    );
+    let path = env.sink.paths.lock()[0].clone().expect("a transcript path");
+    assert!(
+        path.ends_with(&format!("/projects/{encoded}/cs-host.jsonl")),
+        "{path}"
+    );
     assert!(
         env.recorded("ANTHROPIC_BASE_URL").is_none(),
         "the built-in Claude uses the user's own login"
@@ -361,10 +373,18 @@ async fn a_configuration_gets_its_home_and_gateway_and_the_task_token_dies_with_
         .launch(&launch(&env, "t3", Some(&config)))
         .unwrap();
     env.until_status(TaskStatus::Done).await;
-    assert!(env
-        .recorded("CLAUDE_CONFIG_DIR")
-        .unwrap()
-        .contains("agent-homes"));
+    let config_dir = env.recorded("CLAUDE_CONFIG_DIR").unwrap();
+    assert!(config_dir.contains("agent-homes"));
+    // N6a B2: the transcript is recorded under the process's own config dir.
+    let encoded = aeroric_core::sessions::discovery::encode_claude_project_path(
+        &std::fs::canonicalize(env.root.join("workspace"))
+            .unwrap()
+            .to_string_lossy(),
+    );
+    assert_eq!(
+        env.sink.paths.lock()[0].as_deref(),
+        Some(format!("{config_dir}/projects/{encoded}/cs-host.jsonl").as_str())
+    );
     let base = env.recorded("ANTHROPIC_BASE_URL").unwrap();
     assert!(
         base.starts_with("http://127.0.0.1") && base.ends_with("/claude"),

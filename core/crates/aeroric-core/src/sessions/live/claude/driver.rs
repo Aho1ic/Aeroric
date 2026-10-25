@@ -42,6 +42,21 @@ pub type ClaudeLauncher =
     Arc<dyn Fn(&ClaudeStart) -> Result<(Transport, Option<ChildGuard>), String> + Send + Sync>;
 
 const CRASH_WINDOW_MS: u64 = 60_000;
+
+/// Where Claude writes a session's transcript. The file appears with the
+/// first message, so the path may not exist yet when it is recorded. Claude
+/// keys the folder by its physical cwd (`/tmp` is `/private/tmp` on macOS).
+fn transcript_path(config_dir: &std::path::Path, cwd: &str, session_id: &str) -> String {
+    let cwd = std::fs::canonicalize(cwd)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| cwd.to_string());
+    config_dir
+        .join("projects")
+        .join(crate::sessions::discovery::encode_claude_project_path(&cwd))
+        .join(format!("{session_id}.jsonl"))
+        .to_string_lossy()
+        .into_owned()
+}
 const CRASH_LIMIT: usize = 3;
 
 #[derive(Clone, Debug, Default)]
@@ -55,6 +70,8 @@ pub struct ClaudeSessionSpec {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub session_id: Option<String>,
+    /// Where this process's `CLAUDE_CONFIG_DIR` is (N6a B2).
+    pub config_dir: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug)]
@@ -78,6 +95,7 @@ struct State {
     generation: u64,
     agent: String,
     cwd: String,
+    config_dir: Option<std::path::PathBuf>,
     session_id: Option<String>,
     alive: bool,
     active_turn: Option<String>,
@@ -114,6 +132,7 @@ impl ClaudeSession {
             generation: spec.generation,
             agent: spec.agent,
             cwd: spec.cwd,
+            config_dir: spec.config_dir,
             session_id: spec.session_id,
             alive: false,
             active_turn: None,
@@ -581,13 +600,17 @@ impl Actor {
                 }
                 match signal {
                     Some(ClaudeSignal::SessionStarted { session_id, model }) => {
-                        let (project_id, agent) = {
+                        let (project_id, agent, path) = {
                             let mut state = self.state.lock();
                             state.session_id = Some(session_id.clone());
                             if state.model.is_none() {
                                 state.model = model;
                             }
-                            (state.project_id.clone(), state.agent.clone())
+                            let path = state
+                                .config_dir
+                                .as_ref()
+                                .map(|dir| transcript_path(dir, &state.cwd, &session_id));
+                            (state.project_id.clone(), state.agent.clone(), path)
                         };
                         self.sink.session(
                             &project_id,
@@ -595,7 +618,7 @@ impl Actor {
                             ProtocolFamily::Claude,
                             &agent,
                             &session_id,
-                            None,
+                            path.as_deref(),
                         );
                     }
                     Some(ClaudeSignal::TurnResult { failed, error }) => {

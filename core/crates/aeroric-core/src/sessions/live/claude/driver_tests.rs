@@ -79,6 +79,7 @@ fn spec() -> ClaudeSessionSpec {
         model: Some("sonnet".into()),
         effort: None,
         session_id: None,
+        config_dir: None,
     }
 }
 
@@ -362,6 +363,25 @@ async fn a_launcher_refusal_fails_the_task() {
         .as_deref()
         .unwrap()
         .contains("请升级"));
+}
+
+#[tokio::test]
+async fn the_session_records_its_transcript_under_the_config_dir() {
+    let mut h = start(ClaudeSessionSpec {
+        cwd: "/w/my.app".into(),
+        config_dir: Some("/homes/cfg".into()),
+        ..spec()
+    });
+    let _peer = running(&mut h).await;
+    let sink = Arc::clone(&h.sink);
+    until("session", move || !sink.sessions.lock().is_empty()).await;
+    assert_eq!(
+        *h.sink.sessions.lock(),
+        [(
+            "cs1".to_string(),
+            Some("/homes/cfg/projects/-w-my-app/cs1.jsonl".to_string())
+        )]
+    );
 }
 
 #[tokio::test]

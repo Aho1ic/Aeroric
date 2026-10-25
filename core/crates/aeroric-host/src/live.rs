@@ -183,6 +183,39 @@ impl Routing for HostRouting {
     fn claude_launcher(&self, key: &ClaudeKey) -> ClaudeLauncher {
         claude_launcher(Arc::clone(&self.context), key.clone())
     }
+
+    fn claude_config_dir(&self, key: &ClaudeKey) -> Option<std::path::PathBuf> {
+        claude_config_dir(&self.context, key, get_login_shell_env())
+    }
+}
+
+/// Mirrors the launcher's environment: a configuration gets its managed home;
+/// the built-in CLI keeps the login shell's `CLAUDE_CONFIG_DIR`, else
+/// `~/.claude`. Custom wrappers own theirs and stay on the PTY.
+pub fn claude_config_dir(
+    context: &CoreContext,
+    key: &ClaudeKey,
+    login_env: &[(String, String)],
+) -> Option<std::path::PathBuf> {
+    let env = |name: &str| {
+        login_env
+            .iter()
+            .find(|(k, v)| k == name && !v.trim().is_empty())
+            .map(|(_, v)| std::path::PathBuf::from(v))
+    };
+    match &key.config {
+        Some(config_id) => {
+            let data_dir = context.paths.data_dir();
+            let config = resolve_config(data_dir, config_id).ok()?;
+            Some(data_dir.join("agent-homes").join(config.home_dir_name))
+        }
+        None if key.agent == "claude" => env("CLAUDE_CONFIG_DIR").or_else(|| {
+            env("HOME")
+                .or_else(aeroric_core::settings::home_dir)
+                .map(|home| home.join(".claude"))
+        }),
+        None => None,
+    }
 }
 
 /// Claude Code in stream-json control mode (N5). One process per session:
