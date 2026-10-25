@@ -3,6 +3,7 @@
 //! status; [`executor::StructuredExecutor`] puts drivers behind the existing
 //! `TaskExecutor` port so the task service and its reducer stay unchanged.
 
+pub mod codex;
 pub mod update;
 
 use std::collections::HashMap;
