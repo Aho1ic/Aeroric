@@ -120,3 +120,64 @@ public struct SessionsClient: Sendable {
         _ = try await connection.request("approval.respond", params: .object(params))
     }
 }
+
+// MARK: - Live structured sessions（ADR-043 N3，能力 `session.live`）
+
+extension SessionsClient {
+    public static let liveCapability = LiveSessionContract.capability
+
+    public func prompt(taskId: String, text: String) async throws {
+        _ = try await connection.request(LiveSessionContract.promptMethod,
+                                         params: LiveSessionRequest.prompt(taskId: taskId, text: text))
+    }
+
+    public func interrupt(taskId: String) async throws {
+        _ = try await connection.request(LiveSessionContract.interruptMethod,
+                                         params: LiveSessionRequest.interrupt(taskId: taskId))
+    }
+
+    public func respond(taskId: String, requestId: String, decision: LiveDecision, reason: String? = nil) async throws {
+        _ = try await connection.request(
+            LiveSessionContract.respondMethod,
+            params: LiveSessionRequest.respond(taskId: taskId, requestId: requestId, decision: decision, reason: reason)
+        )
+    }
+
+    public func configure(taskId: String, model: String? = nil, permission: LivePermission? = nil,
+                          effort: String? = nil) async throws {
+        _ = try await connection.request(
+            LiveSessionContract.configureMethod,
+            params: LiveSessionRequest.configure(taskId: taskId, model: model, permission: permission, effort: effort)
+        )
+    }
+
+    public func command(taskId: String, command: LiveCommand) async throws {
+        _ = try await connection.request(LiveSessionContract.commandMethod,
+                                         params: LiveSessionRequest.command(taskId: taskId, command: command))
+    }
+
+    public func close(taskId: String) async throws {
+        _ = try await connection.request(LiveSessionContract.closeMethod,
+                                         params: LiveSessionRequest.close(taskId: taskId))
+    }
+
+    public func state(taskId: String) async throws -> LiveSessionState {
+        let frame = try await connection.request(LiveSessionContract.stateMethod,
+                                                 params: LiveSessionRequest.state(taskId: taskId))
+        do {
+            return try LiveSessionState.decode(frame.result)
+        } catch let error as LiveSessionDecodeError {
+            throw MalformedReply.malformedReply("session.state: \(error.reason)")
+        }
+    }
+
+    public func updates(taskId: String, after: UInt64, limit: Int? = nil) async throws -> LiveUpdatesBatch {
+        let frame = try await connection.request(LiveSessionContract.updatesMethod,
+                                                 params: LiveSessionRequest.updates(taskId: taskId, after: after, limit: limit))
+        do {
+            return try LiveUpdatesBatch.decode(frame.result)
+        } catch let error as LiveSessionDecodeError {
+            throw MalformedReply.malformedReply("session.updates: \(error.reason)")
+        }
+    }
+}
