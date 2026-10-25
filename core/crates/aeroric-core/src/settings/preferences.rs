@@ -47,6 +47,8 @@ impl DshReasoningEffort {
 pub enum PreferenceUpdate {
     SendShortcut(String),
     ShiftEnterNewline(bool),
+    /// A14: keep the Mac awake while tasks run (absent means on).
+    KeepAwakeWhileRunning(bool),
     AutoCleanup(AutoCleanupSettings),
     WeeklyReport(WeeklyReportSettings),
     NotebookEmbedding(NotebookEmbeddingSettings),
@@ -62,6 +64,7 @@ impl PreferenceUpdate {
                 Value::String(normalize_send_shortcut(value)),
             ),
             Self::ShiftEnterNewline(value) => ("terminal_shift_enter_newline", Value::Bool(value)),
+            Self::KeepAwakeWhileRunning(value) => ("keep_awake_while_running", Value::Bool(value)),
             Self::AutoCleanup(value) => (
                 "auto_cleanup_settings",
                 serde_json::to_value(normalize_auto_cleanup_settings(value))

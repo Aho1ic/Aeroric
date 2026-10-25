@@ -311,6 +311,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             let wiring = aeroric_host::dispatcher::HostWiring {
                 agent_config_external_home: Some(agent_config_external_home),
                 live: Some(Arc::clone(&structured)),
+                keep_awake: Some(Arc::new(aeroric_host::keep_awake::CaffeinateAssertion)),
                 ..Default::default()
             };
             let services = HostServices::with_tasks_and_wiring(

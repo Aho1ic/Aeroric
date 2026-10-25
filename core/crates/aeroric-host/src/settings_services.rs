@@ -71,6 +71,11 @@ const FIELD_UPDATES: &[FieldUpdate] = &[
         param: "enabled",
         key: "terminal_shift_enter_newline",
     },
+    FieldUpdate {
+        method: "settings.save_keep_awake_while_running",
+        param: "enabled",
+        key: "keep_awake_while_running",
+    },
 ];
 
 /// Disk IO and the settings critical section stay off the async executor.
@@ -161,6 +166,12 @@ pub fn register_settings_services(
         "settings.save_shift_enter_newline",
         settings_handler(&context, |request, context| {
             settings_preference_update(request, context, PreferenceKind::ShiftEnterNewline)
+        }),
+    );
+    set.register(
+        "settings.save_keep_awake_while_running",
+        settings_handler(&context, |request, context| {
+            settings_preference_update(request, context, PreferenceKind::KeepAwakeWhileRunning)
         }),
     );
     set.register(
@@ -256,6 +267,7 @@ fn settings_write_project_config(request: Request, context: Arc<CoreContext>) ->
 enum PreferenceKind {
     SendShortcut,
     ShiftEnterNewline,
+    KeepAwakeWhileRunning,
     AutoCleanup,
     WeeklyReport,
     NotebookEmbedding,
@@ -302,6 +314,9 @@ fn decode_preference(
         }
         PreferenceKind::Proxy => {
             PreferenceUpdate::Proxy(preference_param(request, "proxySettings")?)
+        }
+        PreferenceKind::KeepAwakeWhileRunning => {
+            PreferenceUpdate::KeepAwakeWhileRunning(preference_param(request, "enabled")?)
         }
         PreferenceKind::ShiftEnterNewline => {
             // `enabled` is the Tauri/frozen contract. Keep the previous host-only

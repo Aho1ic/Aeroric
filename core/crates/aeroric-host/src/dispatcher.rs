@@ -182,6 +182,10 @@ pub struct HostWiring {
     /// ADR-043：结构化会话执行器。给了（且有任务服务）才注册 `session.prompt` 等
     /// 方法并通告 `session.live`。
     pub live: Option<Arc<aeroric_core::sessions::live::executor::StructuredExecutor>>,
+    /// A14: what keeps the Mac awake while tasks run. Given (with a task service)
+    /// ⇒ the host watches its tasks and advertises `power.keepAwake`; tests pass a
+    /// fake, only `serve` passes the real `caffeinate` holder.
+    pub keep_awake: Option<Arc<dyn crate::keep_awake::PowerAssertion>>,
 }
 
 /// remote plane 的装配参数(持有 core 的 `RemoteState` 与宿主 handle)。
@@ -443,6 +447,21 @@ impl HostServices {
                     enabled: true,
                     since: Some(1),
                     note: Some("Host-local live structured agent sessions (ADR-043)".into()),
+                });
+            }
+            if let Some(assertion) = wiring.keep_awake.take() {
+                let keep = crate::keep_awake::KeepAwake::start(
+                    Arc::clone(&context),
+                    Arc::clone(&service),
+                    Arc::clone(&log),
+                    assertion,
+                );
+                crate::keep_awake::register_keep_awake_services(&mut set, keep);
+                capabilities.push(aeroric_protocol::capability::Capability {
+                    name: crate::keep_awake::CAPABILITY.into(),
+                    enabled: true,
+                    since: Some(1),
+                    note: Some("Keep the Mac awake while tasks run (A14)".into()),
                 });
             }
             crate::services::register_session_services(&mut set, service, replay_context, families);
