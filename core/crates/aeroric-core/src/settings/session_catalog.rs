@@ -24,6 +24,8 @@ pub struct AgentSources {
     /// structured Codex, `Err` when Codex could not answer.
     pub builtin_codex:
         Option<Result<Vec<crate::sessions::live::codex::models::CodexModel>, String>>,
+    /// The built-in Claude runs as a native session here (N5).
+    pub builtin_claude: bool,
 }
 
 impl AgentSources {
@@ -44,6 +46,7 @@ impl AgentSources {
             connections,
             migrated,
             builtin_codex: crate::sessions::live::codex::models::builtin_models("codex"),
+            builtin_claude: crate::sessions::live::codex::models::native_sessions_enabled(),
         })
     }
 }
@@ -109,7 +112,8 @@ pub fn catalog_with(
         "schemaVersion": SCHEMA_VERSION, "settings": fields,
         "projectId": project_id, "projectPath": project_path,
         "connections": sources.connections, "migrated": sources.migrated,
-        "builtinCodex": sources.builtin_codex.as_ref().map(|answer| answer.as_ref().ok())
+        "builtinCodex": sources.builtin_codex.as_ref().map(|answer| answer.as_ref().ok()),
+        "builtinClaude": sources.builtin_claude
     }))
     .map_err(|_| "无法确定配置版本。".to_string())?;
     let revision = format!("v1:{:x}", Sha256::digest(bytes));
@@ -126,6 +130,10 @@ pub fn catalog_with(
                 configurations.push(native);
                 continue;
             }
+        }
+        if agent == "claude" && sources.builtin_claude {
+            configurations.push(builtin_claude(&revision));
+            continue;
         }
         configurations.push(AgentConfiguration {
             id: agent.into(),
@@ -328,6 +336,23 @@ fn builtin_codex(revision: &str, sources: &AgentSources) -> Option<AgentConfigur
         permission_modes: vec!["ask".into(), "auto_edit".into(), "full_access".into()],
         blocked_reasons: blocked,
     })
+}
+
+/// N5 D4: the built-in Claude, native with the user's own login. Claude Code
+/// has no model catalog to ask, so its stable aliases are offered; the
+/// reasoning effort is not offered (it is fixed for a session).
+fn builtin_claude(revision: &str) -> AgentConfiguration {
+    AgentConfiguration {
+        id: "claude".into(),
+        version: revision.to_string(),
+        display_name: "Claude Code".into(),
+        agent: "claude".into(),
+        harness: "claude".into(),
+        models: vec!["opus".into(), "sonnet".into(), "haiku".into()],
+        efforts: vec![],
+        permission_modes: vec!["ask".into(), "auto_edit".into(), "full_access".into()],
+        blocked_reasons: vec![],
+    }
 }
 
 pub fn validate(catalog: &ConfigurationCatalog, request: &SubmissionRequest) -> Vec<String> {
@@ -572,6 +597,7 @@ mod tests {
                 .map(|(legacy, config)| ((*legacy).to_string(), (*config).to_string()))
                 .collect(),
             builtin_codex: None,
+            builtin_claude: false,
         }
     }
 
@@ -779,5 +805,49 @@ mod tests {
             .unwrap()
             .blocked_reasons[0]
             .contains("内建配置"));
+    }
+
+    #[test]
+    fn the_built_in_claude_is_offered_with_its_aliases_only_on_a_native_host() {
+        let native = AgentSources {
+            builtin_claude: true,
+            ..AgentSources::default()
+        };
+        let directory = catalog_with(&Map::new(), &native, "p", "/synthetic/project", 1).unwrap();
+        let claude = directory
+            .configurations
+            .iter()
+            .find(|c| c.id == "claude")
+            .unwrap();
+        assert!(claude.blocked_reasons.is_empty());
+        assert_eq!(claude.models, ["opus", "sonnet", "haiku"]);
+        assert!(claude.efforts.is_empty());
+        let request = SubmissionRequest {
+            project_id: "p".into(),
+            configuration_id: "claude".into(),
+            configuration_version: directory.revision.clone(),
+            agent: "claude".into(),
+            permission_mode: "ask".into(),
+            permission_agent: "claude".into(),
+            selected_model: Some("sonnet".into()),
+            reasoning_effort: None,
+            ..aeroric_protocol::submission::fixture_request()
+        };
+        assert_eq!(validate(&directory, &request), Vec::<String>::new());
+        let pty = catalog_with(
+            &Map::new(),
+            &AgentSources::default(),
+            "p",
+            "/synthetic/project",
+            1,
+        )
+        .unwrap();
+        let blocked = pty
+            .configurations
+            .iter()
+            .find(|c| c.id == "claude")
+            .unwrap();
+        assert!(!blocked.blocked_reasons.is_empty());
+        assert_ne!(pty.revision, directory.revision);
     }
 }

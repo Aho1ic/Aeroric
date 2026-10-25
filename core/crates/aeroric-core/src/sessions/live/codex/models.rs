@@ -41,6 +41,12 @@ fn cache() -> &'static Mutex<Cache> {
     CACHE.get_or_init(Mutex::default)
 }
 
+/// Whether this process runs structured sessions at all (a host installed a
+/// fetcher): the built-in Claude is offered only then (N5).
+pub fn native_sessions_enabled() -> bool {
+    fetcher().lock().is_some()
+}
+
 /// Installed by the host's structured executor; the last one wins.
 pub fn install_fetcher(fetch: Fetcher) {
     *fetcher().lock() = Some(fetch);
