@@ -49,13 +49,29 @@ struct HostLiveSessionActions: LiveSessionActions {
     func close(taskID: String) async throws { try await client().close(taskId: taskID) }
 
     func export(taskID: String) async throws {
-        try await client().exportSession(taskId: taskID, out: NSTemporaryDirectory() + "session-\(taskID).md")
+        guard let out = services.chooseSessionExportPath(taskID: taskID) else { return }
+        try await client().exportSession(taskId: taskID, out: out)
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: out)])
     }
 
     func startNewSession(like taskID: String) { services.requestedNewSessionLike = taskID }
 }
 
 extension AppServices {
+    /// Where to save a session's Markdown export; nil when the user cancels.
+    /// The export used to land in a temporary directory nobody was told about.
+    func chooseSessionExportPath(taskID: String) -> String? {
+        let title = taskStore.tasks.first { $0.id == taskID }?.title ?? "session"
+        let safe = title.components(separatedBy: CharacterSet(charactersIn: "/:\\\n\r\t")).joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = String((safe.isEmpty ? "session" : safe).prefix(60)) + ".md"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.pathExtension.lowercased() == "md" ? url.path : url.path + ".md"
+    }
+
     /// Asks the host whether this task runs as a structured session.
     /// A failed read is retried before the page falls back to the terminal: a
     /// task the App sees right after submitting may not be committed yet, and

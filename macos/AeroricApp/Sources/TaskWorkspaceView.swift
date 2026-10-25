@@ -1138,7 +1138,9 @@ struct HostSessionRouteActions: SessionRouteActions {
 
     /// session.export；输出路径由宿主校验。
     func export(taskID: String) async throws {
-        try await services.exportDshSession(taskId: taskID, out: NSTemporaryDirectory() + "session-\(taskID).md")
+        guard let out = services.chooseSessionExportPath(taskID: taskID) else { return }
+        try await services.exportDshSession(taskId: taskID, out: out)
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: out)])
     }
 
     /// JSONSerialization 形状 → JSONValue。Bool 先于 NSNumber 判断（Bool 桥接成
