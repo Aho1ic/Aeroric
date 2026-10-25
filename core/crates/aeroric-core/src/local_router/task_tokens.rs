@@ -54,6 +54,15 @@ pub fn revoke(task_id: &str) {
     }
 }
 
+/// Revoke one token, leaving any newer token of the same task alone. A process's
+/// cleanup uses this: when a session is reopened, the new process's token is
+/// issued before the old process has finished exiting.
+pub fn revoke_token(token: &str) {
+    if let Some(table) = TOKENS.write().as_mut() {
+        table.remove(token);
+    }
+}
+
 /// The grant behind a presented credential, if it is a live task token.
 pub fn lookup(credential: &str) -> Option<TaskGrant> {
     let credential = credential.trim();
@@ -89,6 +98,19 @@ mod tests {
         assert!(lookup(&first).is_none());
         assert!(lookup(&second).is_some());
         revoke("t-tokens-2");
+    }
+
+    #[test]
+    fn an_old_process_cleanup_spares_the_reopened_sessions_token() {
+        let old = issue("t-tokens-3", Some("cfg".into()));
+        let new = issue("t-tokens-3", Some("cfg".into()));
+        revoke_token(&old);
+        assert!(
+            lookup(&new).is_some(),
+            "the reopened session keeps its token"
+        );
+        revoke_token(&new);
+        assert!(lookup(&new).is_none());
     }
 
     #[test]

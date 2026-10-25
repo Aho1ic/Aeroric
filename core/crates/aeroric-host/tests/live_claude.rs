@@ -395,6 +395,9 @@ async fn a_configuration_gets_its_home_and_gateway_and_the_task_token_dies_with_
     let grant = task_tokens::lookup(&token).expect("a live token while the process runs");
     assert_eq!(grant.task_id, "t3");
     assert_eq!(grant.agent_config_id.as_deref(), Some(config.as_str()));
+    // N6a C1: a reopened session's process gets its token while this one is
+    // still exiting; this process's cleanup must not revoke it.
+    let reopened = task_tokens::issue("t3", Some(config.clone()));
 
     env.executor
         .cancel(
@@ -412,6 +415,13 @@ async fn a_configuration_gets_its_home_and_gateway_and_the_task_token_dies_with_
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    // Let the old process's cleanup run to completion, then check.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        task_tokens::lookup(&reopened).is_some(),
+        "the old process's cleanup revoked the reopened session's token"
+    );
+    task_tokens::revoke_token(&reopened);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

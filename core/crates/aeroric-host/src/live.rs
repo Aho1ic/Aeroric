@@ -247,9 +247,11 @@ fn claude_launcher(context: Arc<CoreContext>, key: ClaudeKey) -> ClaudeLauncher 
                 &start.task_id,
                 Some(config_id.clone()),
             );
-            let task_id = start.task_id.clone();
+            // Only this process's token: a reopened session's process gets a
+            // new one before this one has exited (N6a C1).
+            let own = token.clone();
             revoke = Some(Box::new(move || {
-                aeroric_core::local_router::task_tokens::revoke(&task_id)
+                aeroric_core::local_router::task_tokens::revoke_token(&own)
             }));
             match gateway_env_ops(context.paths.data_dir(), ProtocolFamily::Claude, &token) {
                 Ok(ops) => push_ops(&mut spec, ops),
@@ -374,8 +376,8 @@ fn config_launcher(context: Arc<CoreContext>, config_id: String) -> Launcher {
         let token =
             aeroric_core::local_router::task_tokens::issue(&token_id, Some(config_id.clone()));
         let revoke = {
-            let token_id = token_id.clone();
-            move || aeroric_core::local_router::task_tokens::revoke(&token_id)
+            let own = token.clone();
+            move || aeroric_core::local_router::task_tokens::revoke_token(&own)
         };
         match gateway_env_ops(data_dir, ProtocolFamily::Codex, &token) {
             Ok(ops) => push_ops(&mut spec, ops),

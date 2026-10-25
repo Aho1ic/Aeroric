@@ -528,8 +528,8 @@ impl CliPtyExecutor {
             aeroric_core::local_router::task_tokens::issue(task_id, Some(config.config_id.clone()))
         });
         let revoke_on_failure = |failure: ExecutorFailure| {
-            if router_token.is_some() {
-                aeroric_core::local_router::task_tokens::revoke(task_id);
+            if let Some(token) = router_token.as_deref() {
+                aeroric_core::local_router::task_tokens::revoke_token(token);
             }
             failure
         };
@@ -624,6 +624,7 @@ impl CliPtyExecutor {
         let task_id = task_id.to_string();
         let project_id = project_id.to_string();
         let child = handles.child;
+        let exit_token = router_token.clone();
         std::thread::spawn(move || {
             let code = match child.lock().wait() {
                 Ok(status) => Some(status.exit_code() as i32),
@@ -637,7 +638,10 @@ impl CliPtyExecutor {
             ctx.registry.remove_pty_handles(&run);
             ctx.registry.runs.retire(&task_id, generation);
             // The process is gone; its router token must not outlive it (Q23).
-            aeroric_core::local_router::task_tokens::revoke(&task_id);
+            // Only its own: a resumed run may already hold a newer one (N6a C1).
+            if let Some(token) = exit_token.as_deref() {
+                aeroric_core::local_router::task_tokens::revoke_token(token);
+            }
             aeroric_core::local_router::config_routes::forget_task(&task_id);
             // 结算走宿主同一条判据链（settle_exit），标记在此消费：
             // - cancel 意图：宿主侧状态由前端先写（G05 的 React 权威面），CLI host
