@@ -7,11 +7,13 @@
 use std::sync::Arc;
 
 use aeroric_core::context::CoreContext;
+use aeroric_core::sessions::live::auto_check::{AutoCheckPolicy, AutoCheckSelection};
 use aeroric_core::sessions::live::executor::StructuredExecutor;
 use aeroric_core::sessions::live::update::Replay;
 use aeroric_core::sessions::live::{
     ConfigChange, Decision, DriverError, SessionDriver, SlashCommand,
 };
+use aeroric_core::settings::preferences;
 use aeroric_core::storage::Record;
 use aeroric_core::tasks::launch_plan::working_directory;
 use aeroric_core::tasks::session_owner::launch_family_of;
@@ -70,6 +72,8 @@ pub fn register_session_live_services(
         service,
         context,
     });
+    live.executor
+        .set_auto_check_policy(Arc::new(SettingsAutoChecks(Arc::clone(&live.context))));
     // Before any session method can answer: the previous host's drivers are gone.
     live.settle_orphaned();
     let methods: [(&str, Run); 8] = [
@@ -84,6 +88,93 @@ pub fn register_session_live_services(
     ];
     for (name, run) in methods {
         set.register(name, blocking(&live, run));
+    }
+    set.register(AUTO_CHECK_GET_METHOD, blocking(&live, auto_check_get));
+    set.register(AUTO_CHECK_SET_METHOD, blocking(&live, auto_check_set));
+}
+
+/// A05: which checks the task's project runs after a turn; keyed by task so
+/// the client never needs the project id.
+pub const AUTO_CHECK_GET_METHOD: &str = "session.autoCheck.get";
+pub const AUTO_CHECK_SET_METHOD: &str = "session.autoCheck.set";
+
+/// Read on every turn end, so a toggle applies from the next turn on.
+struct SettingsAutoChecks(Arc<CoreContext>);
+
+impl AutoCheckPolicy for SettingsAutoChecks {
+    fn selection(&self, project_id: &str) -> AutoCheckSelection {
+        let fields = aeroric_core::storage::load_settings(&self.0)
+            .ok()
+            .and_then(|outcome| outcome.found());
+        preferences::auto_check_selection(fields.as_ref(), project_id)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AutoCheckParams {
+    task_id: String,
+    tests: bool,
+    diagnostics: bool,
+}
+
+fn project_of(live: &Live, request: &Request, task_id: &str) -> Result<String, Box<Frame>> {
+    find_project_of_task(&live.context, task_id)
+        .and_then(|project| {
+            project
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .ok_or_else(|| {
+            Box::new(failure(
+                request.id.clone(),
+                ErrorCode::NotFound,
+                "no task with that id in any known project",
+            ))
+        })
+}
+
+fn selection_json(selection: AutoCheckSelection) -> Value {
+    json!({"tests": selection.tests, "diagnostics": selection.diagnostics})
+}
+
+fn auto_check_get(live: &Live, request: &Request) -> Frame {
+    let p: TaskParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    match project_of(live, request, &p.task_id) {
+        Ok(project_id) => ok(
+            request,
+            selection_json(SettingsAutoChecks(Arc::clone(&live.context)).selection(&project_id)),
+        ),
+        Err(frame) => *frame,
+    }
+}
+
+fn auto_check_set(live: &Live, request: &Request) -> Frame {
+    let p: AutoCheckParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let project_id = match project_of(live, request, &p.task_id) {
+        Ok(project_id) => project_id,
+        Err(frame) => return *frame,
+    };
+    let selection = AutoCheckSelection {
+        tests: p.tests,
+        diagnostics: p.diagnostics,
+    };
+    match preferences::update_preference(
+        &live.context,
+        preferences::PreferenceUpdate::AutoCheck {
+            project_id,
+            selection,
+        },
+    ) {
+        Ok(_) => ok(request, selection_json(selection)),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
     }
 }
 

@@ -884,3 +884,38 @@ async fn settling_leaves_a_task_with_a_live_driver_alone() {
     assert!(settled.is_empty(), "{settled:?}");
     assert_eq!(host.record()["status"], before);
 }
+
+/// A05: auto checks are chosen per project through the task; off until set.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_checks_are_toggled_per_project_through_a_task() {
+    let host = Host::start(true).await;
+    host.start_task("hi");
+    let get = || host.call("session.autoCheck.get", json!({"taskId": "task-1"}));
+    assert_eq!(
+        get().await.unwrap(),
+        json!({"tests": false, "diagnostics": false})
+    );
+    let set = host
+        .call(
+            "session.autoCheck.set",
+            json!({"taskId": "task-1", "tests": true, "diagnostics": false}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(set, json!({"tests": true, "diagnostics": false}));
+    assert_eq!(get().await.unwrap(), set);
+    let saved = aeroric_core::storage::load_settings(&host.context)
+        .unwrap()
+        .found()
+        .unwrap();
+    assert_eq!(
+        saved["auto_checks"]["project-1"],
+        json!({"tests": true, "diagnostics": false})
+    );
+    assert_eq!(
+        host.call("session.autoCheck.get", json!({"taskId": "nope"}))
+            .await
+            .unwrap_err()["code"],
+        "NOT_FOUND"
+    );
+}

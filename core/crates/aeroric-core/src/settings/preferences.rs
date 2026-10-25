@@ -49,6 +49,11 @@ pub enum PreferenceUpdate {
     ShiftEnterNewline(bool),
     /// A14: keep the Mac awake while tasks run (absent means on).
     KeepAwakeWhileRunning(bool),
+    /// A05: one project's auto checks after a turn (absent means both off).
+    AutoCheck {
+        project_id: String,
+        selection: crate::sessions::live::auto_check::AutoCheckSelection,
+    },
     AutoCleanup(AutoCleanupSettings),
     WeeklyReport(WeeklyReportSettings),
     NotebookEmbedding(NotebookEmbeddingSettings),
@@ -89,6 +94,22 @@ impl PreferenceUpdate {
                     .as_object_mut()
                     .ok_or("dsh_reasoning_efforts must be an object")?;
                 efforts.insert("dsh".into(), Value::String(value.as_str().into()));
+                return Ok(());
+            }
+            Self::AutoCheck {
+                project_id,
+                selection,
+            } => {
+                // Nested patch: other projects' choices stay as they are.
+                let checks = fields
+                    .entry(AUTO_CHECKS_KEY)
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .ok_or("auto_checks must be an object")?;
+                checks.insert(
+                    project_id,
+                    serde_json::json!({"tests": selection.tests, "diagnostics": selection.diagnostics}),
+                );
                 return Ok(());
             }
             Self::Proxy(value) => return apply_proxy_update(fields, value),
@@ -140,6 +161,28 @@ fn apply_proxy_update(
     Ok(())
 }
 
+pub const AUTO_CHECKS_KEY: &str = "auto_checks";
+
+/// What `project_id` opted into; anything missing or malformed reads as off.
+pub fn auto_check_selection(
+    fields: Option<&Map<String, Value>>,
+    project_id: &str,
+) -> crate::sessions::live::auto_check::AutoCheckSelection {
+    let entry = fields
+        .and_then(|fields| fields.get(AUTO_CHECKS_KEY))
+        .and_then(|checks| checks.get(project_id));
+    let flag = |key: &str| {
+        entry
+            .and_then(|entry| entry.get(key))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    };
+    crate::sessions::live::auto_check::AutoCheckSelection {
+        tests: flag("tests"),
+        diagnostics: flag("diagnostics"),
+    }
+}
+
 pub fn update_preference(
     context: &CoreContext,
     update: PreferenceUpdate,
@@ -189,6 +232,46 @@ mod tests {
         assert_eq!(
             settings::load_settings(&context).unwrap().found().unwrap(),
             after
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn auto_checks_are_per_project_and_default_off() {
+        use crate::sessions::live::auto_check::AutoCheckSelection;
+        let (root, context) = writer("preference-auto-check");
+        assert_eq!(
+            auto_check_selection(None, "p1"),
+            AutoCheckSelection::default()
+        );
+        let on = AutoCheckSelection {
+            tests: true,
+            diagnostics: false,
+        };
+        update_preference(
+            &context,
+            PreferenceUpdate::AutoCheck {
+                project_id: "p1".into(),
+                selection: on,
+            },
+        )
+        .unwrap();
+        let after = update_preference(
+            &context,
+            PreferenceUpdate::AutoCheck {
+                project_id: "p2".into(),
+                selection: AutoCheckSelection {
+                    tests: false,
+                    diagnostics: true,
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(auto_check_selection(Some(&after), "p1"), on);
+        assert!(auto_check_selection(Some(&after), "p2").diagnostics);
+        assert_eq!(
+            auto_check_selection(Some(&after), "p3"),
+            AutoCheckSelection::default()
         );
         std::fs::remove_dir_all(root).ok();
     }
