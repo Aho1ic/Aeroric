@@ -68,10 +68,11 @@ final class LiveSessionModelTests: XCTestCase {
         _ = model.apply(batch([
             .turnStarted(turnId: "u"),
             .permissionRequest(id: "7", toolCallId: "c", kind: "command", summary: "rm", options: []),
-            .permissionRequest(id: "8", toolCallId: nil, kind: "fileChange", summary: "a.swift", options: []),
+            .permissionRequest(id: "8", toolCallId: nil, kind: "Write", summary: "a.swift", options: ["allowOnce", "deny"]),
             .permissionResolved(id: "7", decision: "deny"),
         ]))
         XCTAssertEqual(model.pending.map(\.id), ["8"])
+        XCTAssertEqual(model.pending.first?.options, ["allowOnce", "deny"], "no session-wide allowance offered")
         _ = model.apply(batch([.turnEnded(turnId: "u", reason: .interrupted, error: nil)], from: 5))
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertEqual(model.items.last, .notice(id: "seq5", message: "已中断", recoverable: true))

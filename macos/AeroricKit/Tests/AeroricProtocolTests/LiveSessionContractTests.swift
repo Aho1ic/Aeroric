@@ -51,7 +51,8 @@ final class LiveSessionContractTests: XCTestCase {
         XCTAssertTrue(state.structured)
         XCTAssertEqual(state.family, "codex")
         XCTAssertEqual(state.sessionId, "th-1")
-        XCTAssertEqual(state.pending, [LivePendingPermission(id: "7", kind: "command", summary: "ls -la", toolCallId: "c1")])
+        XCTAssertEqual(state.pending, [LivePendingPermission(id: "7", kind: "command", summary: "ls -la", toolCallId: "c1",
+                                                             options: ["allowOnce", "allowForSession", "deny"])])
         XCTAssertEqual(state.latestSeq, 16)
         XCTAssertEqual(state.contextLimit, 200_000)
     }

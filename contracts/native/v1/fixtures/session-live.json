@@ -57,6 +57,11 @@
       {
         "id": "7",
         "kind": "command",
+        "options": [
+          "allowOnce",
+          "allowForSession",
+          "deny"
+        ],
         "summary": "ls -la",
         "toolCallId": "c1"
       }

@@ -192,6 +192,10 @@ pub struct PendingPermission {
     pub summary: String,
     #[serde(default)]
     pub tool_call_id: Option<String>,
+    /// Decisions this request accepts (`allowForSession` only when the agent
+    /// can scope an allowance to the session).
+    #[serde(default)]
+    pub options: Vec<String>,
 }
 
 /// `session.state`: what a client that just (re)connected needs besides updates.
@@ -437,6 +441,7 @@ pub fn fixture_state() -> SessionState {
             kind: "command".into(),
             summary: "ls -la".into(),
             tool_call_id: Some("c1".into()),
+            options: vec!["allowOnce".into(), "allowForSession".into(), "deny".into()],
         }],
         plan: vec![PlanEntry {
             text: "读代码".into(),
@@ -549,7 +554,8 @@ pub fn schema() -> Value {
                 "taskId": s, "live": {"type": "boolean"}, "structured": {"type": "boolean"}, "family": {"enum": ["claude", "codex", "dsh", "omp", null]},
                 "sessionId": opt_string, "turnActive": {"type": "boolean"},
                 "pending": {"type": "array", "items": {"type": "object", "required": ["id", "kind", "summary"], "properties": {
-                    "id": s, "kind": s, "summary": s, "toolCallId": opt_string}}},
+                    "id": s, "kind": s, "summary": s, "toolCallId": opt_string,
+                    "options": {"type": "array", "items": {"enum": ["allowOnce", "allowForSession", "deny"]}}}}},
                 "plan": {"type": "array", "items": {"$ref": "#/$defs/planEntry"}},
                 "model": opt_string, "permission": opt_string, "effort": opt_string,
                 "contextUsed": opt_u64, "contextLimit": opt_u64, "inputTokens": opt_u64, "outputTokens": opt_u64,

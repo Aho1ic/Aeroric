@@ -79,12 +79,17 @@ public struct LivePendingPermission: Equatable, Sendable {
     public var kind: String
     public var summary: String
     public var toolCallId: String?
+    /// Decisions the agent accepts; "always allow in this session" only when listed.
+    public var options: [String]
 
-    public init(id: String, kind: String, summary: String, toolCallId: String?) {
+    public static let allOptions = ["allowOnce", "allowForSession", "deny"]
+
+    public init(id: String, kind: String, summary: String, toolCallId: String?, options: [String] = allOptions) {
         self.id = id
         self.kind = kind
         self.summary = summary
         self.toolCallId = toolCallId
+        self.options = options
     }
 }
 
@@ -269,7 +274,9 @@ extension LiveSessionState {
             guard let id = string(p, "id"), let kind = string(p, "kind"), let summary = string(p, "summary") else {
                 throw LiveSessionDecodeError("a pending permission needs id, kind and summary")
             }
-            return LivePendingPermission(id: id, kind: kind, summary: summary, toolCallId: string(p, "toolCallId"))
+            let options = p["options"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            return LivePendingPermission(id: id, kind: kind, summary: summary, toolCallId: string(p, "toolCallId"),
+                                         options: options.isEmpty ? LivePendingPermission.allOptions : options)
         }
         let entries = plan.compactMap(LivePlanEntry.decode)
         guard entries.count == plan.count else { throw LiveSessionDecodeError("a plan entry needs text and status") }

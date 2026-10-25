@@ -17,6 +17,8 @@ struct LiveApprovalCard: View {
         case "command": "需要你批准运行命令"
         case "fileChange": "需要你批准修改文件"
         case "permissions": "需要你批准额外权限"
+        case "Bash": "需要你批准运行命令"
+        case "Edit", "MultiEdit", "Write", "NotebookEdit": "需要你批准修改文件"
         default: "需要你批准：\(request.kind)"
         }
     }
@@ -79,9 +81,11 @@ struct LiveApprovalCard: View {
                 Button("拒绝") { onBeginDeny() }
                     .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
                     .accessibilityIdentifier("session.live.approval.deny")
-                Button("本会话总是允许") { onDecide(.allowForSession) }
-                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
-                    .accessibilityIdentifier("session.live.approval.allow-session")
+                if request.options.contains(LiveDecision.allowForSession.rawValue) {
+                    Button("本会话总是允许") { onDecide(.allowForSession) }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
+                        .accessibilityIdentifier("session.live.approval.allow-session")
+                }
                 Button("批准一次") { onDecide(.allowOnce) }
                     .buttonStyle(AeroricCapsuleButtonStyle(.primary))
                     .keyboardShortcut(.defaultAction)

@@ -112,6 +112,16 @@
               "kind": {
                 "type": "string"
               },
+              "options": {
+                "items": {
+                  "enum": [
+                    "allowOnce",
+                    "allowForSession",
+                    "deny"
+                  ]
+                },
+                "type": "array"
+              },
               "summary": {
                 "type": "string"
               },
