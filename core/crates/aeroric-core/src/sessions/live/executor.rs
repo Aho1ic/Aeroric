@@ -153,6 +153,26 @@ impl StructuredExecutor {
     }
 }
 
+/// Let the settings catalog ask the installed Codex for its models (N4)
+/// through this executor's shared app-server. Process-wide, so only the
+/// product wiring calls it. A catalog read happens on host worker threads, so
+/// the request runs on its own thread and is bounded.
+pub fn install_model_fetcher(executor: &Arc<StructuredExecutor>) {
+    const LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+    let weak = Arc::downgrade(executor);
+    super::codex::models::install_fetcher(Arc::new(move |agent: &str| {
+        let executor = weak.upgrade().ok_or("Aeroric 的会话服务已停止")?;
+        let server = executor.server(agent);
+        let runtime = executor.runtime.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(runtime.block_on(super::codex::models::list_models(&server)));
+        });
+        rx.recv_timeout(LIMIT)
+            .unwrap_or_else(|_| Err("读取 Codex 模型目录超时；请确认 Codex 已安装并登录。".into()))
+    }));
+}
+
 fn local_path(cwd: &WorkingDirectory) -> String {
     match cwd {
         WorkingDirectory::Local { path } => path.clone(),

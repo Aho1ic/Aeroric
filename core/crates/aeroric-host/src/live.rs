@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use aeroric_core::agent_connections::launch::legacy_mapping;
 use aeroric_core::agents::environment::{terminal_env_ops, EnvOp};
+use aeroric_core::agents::launch::LaunchInput;
 use aeroric_core::context::CoreContext;
 use aeroric_core::events::EventLog;
 use aeroric_core::sessions::live::codex::server::{process_launcher, Launcher, ProcessSpec};
@@ -132,7 +133,12 @@ impl Routing for HostRouting {
     }
 
     fn codex_launcher(&self, agent: &str) -> Launcher {
-        let input = resolve_launch_input(&self.context, agent);
+        // The harness's own CLI path from settings (`codex_path`) wins, as for
+        // a configuration launch; otherwise the agent's legacy launch input.
+        let input = match harness_path(&self.context, agent) {
+            Some(path) => LaunchInput::new(path),
+            None => resolve_launch_input(&self.context, agent),
+        };
         let mut spec = ProcessSpec {
             program: input.program,
             args: input.args,
@@ -146,6 +152,16 @@ impl Routing for HostRouting {
         }
         process_launcher(spec)
     }
+}
+
+fn harness_path(context: &CoreContext, agent: &str) -> Option<String> {
+    aeroric_core::storage::load_settings(context)
+        .ok()?
+        .found()?
+        .get(&format!("{agent}_path"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| !path.trim().is_empty())
+        .map(str::to_string)
 }
 
 fn now_ms() -> u64 {

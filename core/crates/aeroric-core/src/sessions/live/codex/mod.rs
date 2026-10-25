@@ -2,6 +2,7 @@
 
 pub mod driver;
 pub mod map;
+pub mod models;
 pub mod rpc;
 pub mod server;
 

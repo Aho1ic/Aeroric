@@ -395,6 +395,7 @@ pub const CLIENT_METHODS: &[&str] = &[
     "turn/steer",
     "thread/compact/start",
     "review/start",
+    "model/list",
 ];
 pub const SERVER_REQUESTS: &[&str] = &[
     "item/commandExecution/requestApproval",

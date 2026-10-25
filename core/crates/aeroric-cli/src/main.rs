@@ -283,6 +283,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 Arc::clone(&live_sink) as Arc<_>,
                 tokio::runtime::Handle::current(),
             );
+            aeroric_core::sessions::live::executor::install_model_fetcher(&structured);
             let task_service = match aeroric_core::tasks::TaskService::new(
                 Arc::clone(&started.context),
                 families.clone() as Arc<_>,

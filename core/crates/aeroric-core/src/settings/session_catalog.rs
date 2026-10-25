@@ -1,5 +1,7 @@
 //! Read-only projection of stored settings for the ordinary native composer.
-//! No CLI/config/home probes, credential service, repair, shell or network.
+//! No CLI/config/home probes, credential service, repair, shell or network —
+//! except the built-in Codex model list, which comes from the host's structured
+//! executor (`sessions::live::codex::models`, N4) and only when one is installed.
 use aeroric_protocol::submission::{
     AgentConfiguration, ConfigurationCatalog, SubmissionRequest, SCHEMA_VERSION,
 };
@@ -18,6 +20,10 @@ use crate::settings::schema::AppSettings;
 pub struct AgentSources {
     pub connections: ConnectionsDocument,
     pub migrated: std::collections::BTreeMap<String, String>,
+    /// The built-in Codex's own model list (N4): `None` when this host runs no
+    /// structured Codex, `Err` when Codex could not answer.
+    pub builtin_codex:
+        Option<Result<Vec<crate::sessions::live::codex::models::CodexModel>, String>>,
 }
 
 impl AgentSources {
@@ -37,6 +43,7 @@ impl AgentSources {
         Ok(Self {
             connections,
             migrated,
+            builtin_codex: crate::sessions::live::codex::models::builtin_models("codex"),
         })
     }
 }
@@ -101,7 +108,8 @@ pub fn catalog_with(
     let bytes = serde_json::to_vec(&serde_json::json!({
         "schemaVersion": SCHEMA_VERSION, "settings": fields,
         "projectId": project_id, "projectPath": project_path,
-        "connections": sources.connections, "migrated": sources.migrated
+        "connections": sources.connections, "migrated": sources.migrated,
+        "builtinCodex": sources.builtin_codex.as_ref().map(|answer| answer.as_ref().ok())
     }))
     .map_err(|_| "无法确定配置版本。".to_string())?;
     let revision = format!("v1:{:x}", Sha256::digest(bytes));
@@ -113,6 +121,12 @@ pub fn catalog_with(
         ("dsh", "DeepSeek"),
         ("claude_gpt55", "Claude GPT55"),
     ] {
+        if agent == "codex" {
+            if let Some(native) = builtin_codex(&revision, sources) {
+                configurations.push(native);
+                continue;
+            }
+        }
         configurations.push(AgentConfiguration {
             id: agent.into(),
             version: revision.clone(),
@@ -279,6 +293,43 @@ fn agent_config_entries(
 }
 
 /// Admission is repeated immediately before a receipt and any task execution.
+/// N4: the built-in Codex runs as a native session with its own login, so it
+/// is offered once its model list is known; a failed read keeps it unavailable
+/// with the reason.
+fn builtin_codex(revision: &str, sources: &AgentSources) -> Option<AgentConfiguration> {
+    let answer = sources.builtin_codex.as_ref()?;
+    let (models, efforts, blocked) = match answer {
+        Ok(models) => {
+            let mut efforts: Vec<String> = Vec::new();
+            for effort in models.iter().flat_map(|m| m.efforts.iter()) {
+                if !efforts.contains(effort) {
+                    efforts.push(effort.clone());
+                }
+            }
+            let mut ordered: Vec<&crate::sessions::live::codex::models::CodexModel> =
+                models.iter().collect();
+            ordered.sort_by_key(|m| !m.is_default);
+            (
+                ordered.into_iter().map(|m| m.model.clone()).collect(),
+                efforts,
+                Vec::new(),
+            )
+        }
+        Err(reason) => (Vec::new(), Vec::new(), vec![reason.clone()]),
+    };
+    Some(AgentConfiguration {
+        id: "codex".into(),
+        version: revision.to_string(),
+        display_name: "Codex".into(),
+        agent: "codex".into(),
+        harness: "codex".into(),
+        models,
+        efforts,
+        permission_modes: vec!["ask".into(), "auto_edit".into(), "full_access".into()],
+        blocked_reasons: blocked,
+    })
+}
+
 pub fn validate(catalog: &ConfigurationCatalog, request: &SubmissionRequest) -> Vec<String> {
     let mut reasons = Vec::new();
     if request.project_id != catalog.project_id {
@@ -520,6 +571,7 @@ mod tests {
                 .iter()
                 .map(|(legacy, config)| ((*legacy).to_string(), (*config).to_string()))
                 .collect(),
+            builtin_codex: None,
         }
     }
 
@@ -646,5 +698,86 @@ mod tests {
         let mut fields = fields();
         fields["custom_agents"][0]["id"] = json!("agent-config:cfg-claude");
         assert!(catalog_with(&fields, &sources(&[]), "p", "/synthetic", 0).is_err());
+    }
+
+    #[test]
+    fn the_built_in_codex_is_offered_with_its_own_models_once_known() {
+        use crate::sessions::live::codex::models::CodexModel;
+        let fields = Map::new();
+        let sources = AgentSources {
+            builtin_codex: Some(Ok(vec![
+                CodexModel {
+                    model: "mini".into(),
+                    efforts: vec!["low".into()],
+                    is_default: false,
+                },
+                CodexModel {
+                    model: "main".into(),
+                    efforts: vec!["low".into(), "high".into()],
+                    is_default: true,
+                },
+            ])),
+            ..AgentSources::default()
+        };
+        let directory = catalog_with(&fields, &sources, "p", "/synthetic/project", 1).unwrap();
+        let codex = directory
+            .configurations
+            .iter()
+            .find(|c| c.id == "codex")
+            .unwrap();
+        assert!(codex.blocked_reasons.is_empty());
+        assert_eq!(codex.models, ["main", "mini"], "the default first");
+        assert_eq!(codex.efforts, ["low", "high"]);
+        assert_eq!(codex.permission_modes, ["ask", "auto_edit", "full_access"]);
+        let request = SubmissionRequest {
+            project_id: "p".into(),
+            configuration_id: "codex".into(),
+            configuration_version: directory.revision.clone(),
+            agent: "codex".into(),
+            permission_mode: "auto_edit".into(),
+            selected_model: Some("main".into()),
+            reasoning_effort: Some("high".into()),
+            ..aeroric_protocol::submission::fixture_request()
+        };
+        assert_eq!(validate(&directory, &request), Vec::<String>::new());
+        let claude = directory
+            .configurations
+            .iter()
+            .find(|c| c.id == "claude")
+            .unwrap();
+        assert!(
+            !claude.blocked_reasons.is_empty(),
+            "only Codex is native in N4"
+        );
+    }
+
+    #[test]
+    fn a_codex_that_cannot_answer_stays_unavailable_with_its_reason() {
+        let sources = AgentSources {
+            builtin_codex: Some(Err("请升级 Codex".into())),
+            ..AgentSources::default()
+        };
+        let directory = catalog_with(&Map::new(), &sources, "p", "/synthetic/project", 1).unwrap();
+        let codex = directory
+            .configurations
+            .iter()
+            .find(|c| c.id == "codex")
+            .unwrap();
+        assert_eq!(codex.blocked_reasons, ["请升级 Codex"]);
+        let none = catalog_with(
+            &Map::new(),
+            &AgentSources::default(),
+            "p",
+            "/synthetic/project",
+            1,
+        )
+        .unwrap();
+        assert!(none
+            .configurations
+            .iter()
+            .find(|c| c.id == "codex")
+            .unwrap()
+            .blocked_reasons[0]
+            .contains("内建配置"));
     }
 }
