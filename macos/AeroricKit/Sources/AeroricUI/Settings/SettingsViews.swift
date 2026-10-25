@@ -182,6 +182,23 @@ struct GeneralSettingsPane: View {
     }
 }
 
+/// A16: the menu bar extra (on by default; the App owns the scene, this only
+/// flips the shared preference).
+struct MenuBarSettingsCard: View {
+    @AppStorage("menuBarExtra.shown") private var shown = true
+
+    var body: some View {
+        SettingsCard("菜单栏") {
+            SettingsRow("在菜单栏显示 Aeroric", detail: "显示运行中与待回应的数量；关掉所有窗口后，宿主仍在后台执行任务。") {
+                Toggle("", isOn: $shown)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .accessibilityIdentifier("settings.menu-bar")
+            }
+        }
+    }
+}
+
 /// A14: keep the Mac awake while tasks run (host-held; on by default).
 struct KeepAwakeSettingsCard: View {
     let store: KeepAwakeStore

@@ -297,6 +297,7 @@ struct AeroricNativeApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var services: AppServices
     @AppStorage(OnboardingFlow.completedKey) private var onboardingCompleted = false
+    @AppStorage(MenuBarPreference.shownKey) private var menuBarShown = true
 
     init() {
         AppFontRegistration.registerBundledFonts()
@@ -318,6 +319,11 @@ struct AeroricNativeApp: App {
                      height: NativePanelGeometry.mainShell.defaultWindowHeight)
         .commands {
             AeroricCommands(services: services)
+        }
+        MenuBarExtra(isInserted: $menuBarShown) {
+            MenuBarContent(services: services)
+        } label: {
+            MenuBarLabel(services: services)
         }
     }
 

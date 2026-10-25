@@ -72,6 +72,7 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
             if let keepAwake = state.settingsKeepAwake, keepAwake.isAvailable {
                 KeepAwakeSettingsCard(store: keepAwake)
             }
+            MenuBarSettingsCard()
         case .appearance:
             AppearanceSettingsPane()
         case .agents:
