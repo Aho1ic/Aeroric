@@ -274,10 +274,19 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             let families = Arc::new(aeroric_host::families::SettingsFamiliesCli::new(
                 Arc::clone(&started.context),
             ));
+            // ADR-043: Codex runs go through the structured driver; every other run
+            // is delegated to the PTY executor unchanged.
+            let live_sink = aeroric_host::live::TaskServiceSink::new(Arc::clone(&log));
+            let structured = aeroric_core::sessions::live::executor::StructuredExecutor::new(
+                Arc::clone(&executor) as Arc<_>,
+                aeroric_host::live::HostRouting::new(Arc::clone(&started.context)),
+                Arc::clone(&live_sink) as Arc<_>,
+                tokio::runtime::Handle::current(),
+            );
             let task_service = match aeroric_core::tasks::TaskService::new(
                 Arc::clone(&started.context),
                 families.clone() as Arc<_>,
-                Arc::clone(&executor) as Arc<_>,
+                Arc::clone(&structured) as Arc<_>,
                 Arc::new(aeroric_host::executor::RegistryLiveRuns::new(Arc::clone(
                     &registry,
                 ))),
@@ -289,6 +298,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 }
             };
             executor.attach(&task_service);
+            live_sink.attach(&task_service);
             let task_service_for_remote = Arc::clone(&task_service);
             let terminal_for_remote = Arc::clone(&terminal);
             let registry_for_remote = Arc::clone(&registry);

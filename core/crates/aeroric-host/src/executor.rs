@@ -174,39 +174,8 @@ impl CliPtyExecutor {
         }
     }
 
-    /// agent → 程序与固定参数：settings.yaml 的 custom_agents 优先，内建回退
-    /// 到「程序名＝agent id」（PATH 解析）。与宿主 launch_spec 的差具名在模块头。
     fn resolve_launch(&self, agent: &str) -> LaunchInput {
-        let settings = aeroric_core::storage::load_settings(&self.context)
-            .ok()
-            .and_then(|outcome| outcome.found());
-        if let Some(fields) = settings.as_ref() {
-            if let Some(profile) = fields
-                .get("custom_agents")
-                .and_then(Value::as_array)
-                .and_then(|list| {
-                    list.iter()
-                        .find(|profile| profile["id"].as_str() == Some(agent))
-                })
-            {
-                let program = profile["path"]
-                    .as_str()
-                    .filter(|p| !p.trim().is_empty())
-                    .unwrap_or(agent)
-                    .to_string();
-                let args = profile["args"]
-                    .as_array()
-                    .map(|args| {
-                        args.iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                return LaunchInput { program, args };
-            }
-        }
-        LaunchInput::new(agent)
+        resolve_launch_input(&self.context, agent)
     }
 
     /// The agent configuration a launch runs under (Q5). A pinned configuration that
@@ -283,6 +252,41 @@ impl CliPtyExecutor {
             ],
         })
     }
+}
+
+/// agent → 程序与固定参数：settings.yaml 的 custom_agents 优先，内建回退
+/// 到「程序名＝agent id」（PATH 解析）。与宿主 launch_spec 的差具名在模块头。
+pub(crate) fn resolve_launch_input(context: &CoreContext, agent: &str) -> LaunchInput {
+    let settings = aeroric_core::storage::load_settings(context)
+        .ok()
+        .and_then(|outcome| outcome.found());
+    if let Some(fields) = settings.as_ref() {
+        if let Some(profile) = fields
+            .get("custom_agents")
+            .and_then(Value::as_array)
+            .and_then(|list| {
+                list.iter()
+                    .find(|profile| profile["id"].as_str() == Some(agent))
+            })
+        {
+            let program = profile["path"]
+                .as_str()
+                .filter(|p| !p.trim().is_empty())
+                .unwrap_or(agent)
+                .to_string();
+            let args = profile["args"]
+                .as_array()
+                .map(|args| {
+                    args.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            return LaunchInput { program, args };
+        }
+    }
+    LaunchInput::new(agent)
 }
 
 fn config_family(config: &ConfigLaunch) -> ProtocolFamily {

@@ -19,6 +19,7 @@ pub mod gateway;
 pub mod ide_services;
 pub mod imports_services;
 pub mod infrastructure_services;
+pub mod live;
 pub(crate) mod local_targets;
 pub mod lsp_services;
 pub mod maintenance_services;
