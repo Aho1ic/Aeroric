@@ -9,7 +9,12 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
     let interactionMode: Binding<InteractionMode>?
     let onInteractionModeSave: ((InteractionMode) -> Void)?
     let interactionModeSaveError: String?
-    @SwiftUI.State private var pane: SettingsPane? = .general
+    /// Selected by `id`, like the task list: `List(data, selection:)` tags rows
+    /// with their `id` (a `String`), so a `SettingsPane?` binding never matched
+    /// and no row could be selected.
+    @SwiftUI.State private var paneID: SettingsPane.ID? = SettingsPane.general.id
+
+    private var pane: SettingsPane? { paneID.flatMap(SettingsPane.init(rawValue:)) }
 
     public init(
         state: State,
@@ -35,9 +40,9 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
 
     public var body: some View {
         HStack(spacing: 0) {
-            List(panes, selection: $pane) { item in
+            List(panes, selection: $paneID) { item in
                 Label(item.title, systemImage: item.systemImage)
-                    .tag(Optional(item))
+                    .tag(Optional(item.id))
                     .accessibilityIdentifier("settings.nav.\(item.rawValue)")
             }
             .listStyle(.sidebar)
