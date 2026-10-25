@@ -1945,17 +1945,22 @@ impl TaskService {
         })
     }
 
+    /// Read-modify-write under the same gate as observations: a status landing
+    /// between this load and commit would otherwise be overwritten, or overwrite
+    /// this change (N6a: `session.configure` lost to a concurrent `running`).
     pub fn mutate(
         &self,
         project_id: &str,
         change: impl Fn(&[Record], u64) -> (Vec<Record>, bool),
     ) -> Result<Applied, TaskError> {
-        let snapshot = self.load(project_id)?;
-        let (records, changed) = change(&snapshot.records, self.clock().now_ms());
-        if !changed || records == snapshot.records {
-            return Ok(self.unchanged(snapshot.records, snapshot.fingerprint));
-        }
-        self.commit(project_id, &records)
+        self.serial(|| {
+            let snapshot = self.load(project_id)?;
+            let (records, changed) = change(&snapshot.records, self.clock().now_ms());
+            if !changed || records == snapshot.records {
+                return Ok(self.unchanged(snapshot.records, snapshot.fingerprint));
+            }
+            self.commit(project_id, &records)
+        })
     }
 
     /// ADR-022 决策 2 的元数据入口。这四个操作在 `reducer` 里早就有了，但 ADR-022 第 17 行
