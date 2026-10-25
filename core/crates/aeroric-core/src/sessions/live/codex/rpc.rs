@@ -74,16 +74,37 @@ impl Transport {
                 }
             }
         });
-        Ok((Transport { outgoing, incoming }, ChildGuard(Some(child))))
+        Ok((
+            Transport { outgoing, incoming },
+            ChildGuard {
+                child: Some(child),
+                cleanup: None,
+            },
+        ))
     }
 }
 
-pub struct ChildGuard(Option<tokio::process::Child>);
+pub struct ChildGuard {
+    child: Option<tokio::process::Child>,
+    cleanup: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl ChildGuard {
+    /// Run `cleanup` once the process is gone (killed here, or already exited):
+    /// e.g. revoke the credentials it was started with.
+    pub fn with_cleanup(mut self, cleanup: impl FnOnce() + Send + 'static) -> Self {
+        self.cleanup = Some(Box::new(cleanup));
+        self
+    }
+}
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
+        if let Some(mut child) = self.child.take() {
             let _ = child.start_kill();
+        }
+        if let Some(cleanup) = self.cleanup.take() {
+            cleanup();
         }
     }
 }
@@ -290,5 +311,15 @@ mod tests {
             None,
             "inbound ends when the transport closes"
         );
+    }
+
+    #[tokio::test]
+    async fn the_guard_kills_the_process_then_runs_its_cleanup_once() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (_transport, guard) = Transport::spawn(tokio::process::Command::new("cat")).unwrap();
+        let guard = guard.with_cleanup(move || tx.send("revoked").unwrap());
+        drop(guard);
+        assert_eq!(rx.try_recv(), Ok("revoked"));
+        assert!(rx.try_recv().is_err(), "once");
     }
 }

@@ -22,16 +22,26 @@ use crate::tasks::{ProtocolFamily, WorkingDirectory};
 pub const SESSION_IDLE_MS: u64 = 10 * 60_000;
 const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Which shared app-server a structured Codex run talks to: the built-in
+/// agent's own, or one per agent configuration (N4b: each configuration has
+/// its own managed home and gateway credentials).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ServerKey {
+    Agent(String),
+    Config(String),
+}
+
 /// What the host decides per run: whether `(family, agent, agent configuration)`
-/// goes structured, and how to start that agent's Codex process.
+/// goes structured — and on which server — and how to start that server.
 pub trait Routing: Send + Sync {
-    fn structured(
+    /// `None` keeps the run on the PTY executor.
+    fn route(
         &self,
         family: ProtocolFamily,
         agent: &str,
         agent_config_id: Option<&str>,
-    ) -> bool;
-    fn codex_launcher(&self, agent: &str) -> Launcher;
+    ) -> Option<ServerKey>;
+    fn codex_launcher(&self, key: &ServerKey) -> Launcher;
 }
 
 pub struct StructuredExecutor {
@@ -40,7 +50,7 @@ pub struct StructuredExecutor {
     sink: Arc<dyn LiveStatusSink>,
     runtime: tokio::runtime::Handle,
     registry: Arc<DriverRegistry>,
-    servers: Mutex<HashMap<String, Arc<CodexServer>>>,
+    servers: Mutex<HashMap<ServerKey, Arc<CodexServer>>>,
 }
 
 impl StructuredExecutor {
@@ -95,13 +105,27 @@ impl StructuredExecutor {
         }
     }
 
-    fn server(&self, agent: &str) -> Arc<CodexServer> {
+    fn server(&self, key: &ServerKey) -> Arc<CodexServer> {
         let mut servers = self.servers.lock();
         Arc::clone(
             servers
-                .entry(agent.to_string())
-                .or_insert_with(|| CodexServer::new(self.routing.codex_launcher(agent))),
+                .entry(key.clone())
+                .or_insert_with(|| CodexServer::new(self.routing.codex_launcher(key))),
         )
+    }
+
+    /// The server a run with these facts goes to; `None` = the PTY executor.
+    fn route_task(
+        &self,
+        family: ProtocolFamily,
+        agent: &str,
+        config: Option<&str>,
+        cwd: &WorkingDirectory,
+    ) -> Option<ServerKey> {
+        if family != ProtocolFamily::Codex || !matches!(cwd, WorkingDirectory::Local { .. }) {
+            return None;
+        }
+        self.routing.route(family, agent, config)
     }
 
     /// Whether a run with these facts goes to a structured driver.
@@ -112,12 +136,10 @@ impl StructuredExecutor {
         config: Option<&str>,
         cwd: &WorkingDirectory,
     ) -> bool {
-        family == ProtocolFamily::Codex
-            && matches!(cwd, WorkingDirectory::Local { .. })
-            && self.routing.structured(family, agent, config)
+        self.route_task(family, agent, config, cwd).is_some()
     }
 
-    fn start_session(&self, spec: CodexSessionSpec) -> Arc<CodexSession> {
+    fn start_session(&self, spec: CodexSessionSpec, key: &ServerKey) -> Arc<CodexSession> {
         if let Some(old) = self.registry.remove(&spec.task_id) {
             let _ = old.close();
         }
@@ -125,7 +147,7 @@ impl StructuredExecutor {
             .registry
             .log(&spec.task_id)
             .unwrap_or_else(|| SharedLog::new(&spec.task_id));
-        let server = self.server(&spec.agent);
+        let server = self.server(key);
         let session = CodexSession::start(
             spec.clone(),
             server,
@@ -162,7 +184,7 @@ pub fn install_model_fetcher(executor: &Arc<StructuredExecutor>) {
     let weak = Arc::downgrade(executor);
     super::codex::models::install_fetcher(Arc::new(move |agent: &str| {
         let executor = weak.upgrade().ok_or("Aeroric 的会话服务已停止")?;
-        let server = executor.server(agent);
+        let server = executor.server(&ServerKey::Agent(agent.to_string()));
         let runtime = executor.runtime.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -184,28 +206,31 @@ fn local_path(cwd: &WorkingDirectory) -> String {
 impl TaskExecutor for StructuredExecutor {
     fn launch(&self, request: &LaunchRequest) -> Execution<()> {
         let config = request.agent_config_id.as_deref();
-        if !self.takes_task(
+        let Some(key) = self.route_task(
             request.family,
             &request.agent,
             config,
             &request.working_directory,
-        ) {
+        ) else {
             return self.inner.launch(request);
-        }
-        let session = self.start_session(CodexSessionSpec {
-            task_id: request.task_id.clone(),
-            project_id: request.project_id.clone(),
-            generation: request.generation,
-            agent: request.agent.clone(),
-            cwd: local_path(&request.working_directory),
-            permission: request.permission_mode_wire.clone(),
-            model: request
-                .selected_model
-                .clone()
-                .filter(|m| !m.trim().is_empty()),
-            effort: request.reasoning_effort.clone(),
-            thread_id: request.session_id.clone(),
-        });
+        };
+        let session = self.start_session(
+            CodexSessionSpec {
+                task_id: request.task_id.clone(),
+                project_id: request.project_id.clone(),
+                generation: request.generation,
+                agent: request.agent.clone(),
+                cwd: local_path(&request.working_directory),
+                permission: request.permission_mode_wire.clone(),
+                model: request
+                    .selected_model
+                    .clone()
+                    .filter(|m| !m.trim().is_empty()),
+                effort: request.reasoning_effort.clone(),
+                thread_id: request.session_id.clone(),
+            },
+            &key,
+        );
         let prompt = request
             .prompt_override
             .clone()
@@ -222,14 +247,14 @@ impl TaskExecutor for StructuredExecutor {
 
     fn resume(&self, request: &ResumeRequest) -> Execution<()> {
         let config = request.agent_config_id.as_deref();
-        if !self.takes_task(
+        let Some(key) = self.route_task(
             request.family,
             &request.agent,
             config,
             &request.working_directory,
-        ) {
+        ) else {
             return self.inner.resume(request);
-        }
+        };
         if let Some(driver) = self.registry.get(&request.task_id) {
             // Still open here: the same session continues under the new generation.
             driver.rebind(request.generation);
@@ -237,20 +262,23 @@ impl TaskExecutor for StructuredExecutor {
                 reason: error.to_string(),
             });
         }
-        let session = self.start_session(CodexSessionSpec {
-            task_id: request.task_id.clone(),
-            project_id: request.project_id.clone(),
-            generation: request.generation,
-            agent: request.agent.clone(),
-            cwd: local_path(&request.working_directory),
-            permission: request.permission_mode_wire.clone(),
-            model: request
-                .selected_model
-                .clone()
-                .filter(|m| !m.trim().is_empty()),
-            effort: request.reasoning_effort.clone(),
-            thread_id: Some(request.session_id.clone()),
-        });
+        let session = self.start_session(
+            CodexSessionSpec {
+                task_id: request.task_id.clone(),
+                project_id: request.project_id.clone(),
+                generation: request.generation,
+                agent: request.agent.clone(),
+                cwd: local_path(&request.working_directory),
+                permission: request.permission_mode_wire.clone(),
+                model: request
+                    .selected_model
+                    .clone()
+                    .filter(|m| !m.trim().is_empty()),
+                effort: request.reasoning_effort.clone(),
+                thread_id: Some(request.session_id.clone()),
+            },
+            &key,
+        );
         session.attach().map_err(|error| ExecutorFailure::Spawn {
             reason: error.to_string(),
         })

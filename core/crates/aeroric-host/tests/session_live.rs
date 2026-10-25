@@ -16,7 +16,7 @@ use aeroric_core::projects::ProjectService;
 use aeroric_core::runtime::registry::TaskRegistry;
 use aeroric_core::sessions::live::codex::rpc::Transport;
 use aeroric_core::sessions::live::codex::server::Launcher;
-use aeroric_core::sessions::live::executor::{Routing, StructuredExecutor};
+use aeroric_core::sessions::live::executor::{Routing, ServerKey, StructuredExecutor};
 use aeroric_core::storage_lock::LeaseOwner;
 use aeroric_core::tasks::{
     executor::HostWindowFacts, AgentFamilies, Attachments, NewTask, ProtocolFamily, TaskService,
@@ -97,10 +97,16 @@ struct TestRouting {
 }
 
 impl Routing for TestRouting {
-    fn structured(&self, family: ProtocolFamily, _agent: &str, config: Option<&str>) -> bool {
-        family == ProtocolFamily::Codex && config.is_none()
+    fn route(
+        &self,
+        family: ProtocolFamily,
+        agent: &str,
+        config: Option<&str>,
+    ) -> Option<ServerKey> {
+        (family == ProtocolFamily::Codex && config.is_none())
+            .then(|| ServerKey::Agent(agent.to_string()))
     }
-    fn codex_launcher(&self, _agent: &str) -> Launcher {
+    fn codex_launcher(&self, _key: &ServerKey) -> Launcher {
         Arc::clone(&self.launcher)
     }
 }

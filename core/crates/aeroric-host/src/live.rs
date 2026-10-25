@@ -17,7 +17,7 @@ use aeroric_core::agents::launch::LaunchInput;
 use aeroric_core::context::CoreContext;
 use aeroric_core::events::EventLog;
 use aeroric_core::sessions::live::codex::server::{process_launcher, Launcher, ProcessSpec};
-use aeroric_core::sessions::live::executor::Routing;
+use aeroric_core::sessions::live::executor::{Routing, ServerKey};
 use aeroric_core::sessions::live::LiveStatusSink;
 use aeroric_core::settings::get_login_shell_env;
 use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
@@ -121,18 +121,20 @@ impl HostRouting {
 }
 
 impl Routing for HostRouting {
-    fn structured(
+    fn route(
         &self,
         family: ProtocolFamily,
         agent: &str,
         agent_config_id: Option<&str>,
-    ) -> bool {
-        family == ProtocolFamily::Codex
+    ) -> Option<ServerKey> {
+        (family == ProtocolFamily::Codex
             && agent_config_id.is_none_or(|id| id.trim().is_empty())
-            && legacy_mapping(self.context.paths.data_dir(), agent).is_none()
+            && legacy_mapping(self.context.paths.data_dir(), agent).is_none())
+        .then(|| ServerKey::Agent(agent.to_string()))
     }
 
-    fn codex_launcher(&self, agent: &str) -> Launcher {
+    fn codex_launcher(&self, key: &ServerKey) -> Launcher {
+        let (ServerKey::Agent(agent) | ServerKey::Config(agent)) = key;
         // The harness's own CLI path from settings (`codex_path`) wins, as for
         // a configuration launch; otherwise the agent's legacy launch input.
         let input = match harness_path(&self.context, agent) {

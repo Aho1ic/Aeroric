@@ -36,18 +36,28 @@ impl TaskExecutor for Inner {
     }
 }
 
-struct FakeRouting(Launcher);
+/// Codex goes structured without a configuration (built-in server) and with a
+/// `native-` configuration (one server per configuration); anything else is PTY.
+struct FakeRouting(Launcher, Mutex<Vec<ServerKey>>);
 
 impl Routing for FakeRouting {
-    fn structured(
+    fn route(
         &self,
         family: ProtocolFamily,
-        _agent: &str,
+        agent: &str,
         agent_config_id: Option<&str>,
-    ) -> bool {
-        family == ProtocolFamily::Codex && agent_config_id.is_none()
+    ) -> Option<ServerKey> {
+        if family != ProtocolFamily::Codex {
+            return None;
+        }
+        match agent_config_id {
+            None => Some(ServerKey::Agent(agent.to_string())),
+            Some(id) if id.starts_with("native-") => Some(ServerKey::Config(id.to_string())),
+            Some(_) => None,
+        }
     }
-    fn codex_launcher(&self, _agent: &str) -> Launcher {
+    fn codex_launcher(&self, key: &ServerKey) -> Launcher {
+        self.1.lock().push(key.clone());
         Arc::clone(&self.0)
     }
 }
@@ -65,7 +75,7 @@ fn setup() -> Setup {
     let sink = Arc::new(Sink::default());
     let executor = StructuredExecutor::new(
         Arc::clone(&inner) as Arc<dyn TaskExecutor>,
-        Arc::new(FakeRouting(launcher)),
+        Arc::new(FakeRouting(launcher, Mutex::default())),
         Arc::clone(&sink) as Arc<dyn LiveStatusSink>,
         tokio::runtime::Handle::current(),
     );
@@ -287,4 +297,34 @@ async fn a_closed_session_s_log_is_kept_for_the_retention_then_dropped() {
         .sweep(now_ms() + super::super::CLOSED_LOG_RETENTION_MS)
         .await;
     assert!(s.executor.registry().log("t1").is_none());
+}
+
+#[tokio::test]
+async fn each_configuration_gets_its_own_server_and_shares_it_across_tasks() {
+    let (launcher, _peers) = launcher();
+    let routing = Arc::new(FakeRouting(launcher, Mutex::default()));
+    let executor = StructuredExecutor::new(
+        Arc::new(Inner::default()) as Arc<dyn TaskExecutor>,
+        Arc::clone(&routing) as Arc<dyn Routing>,
+        Arc::new(Sink::default()) as Arc<dyn LiveStatusSink>,
+        tokio::runtime::Handle::current(),
+    );
+    let with = |task: &str, config: Option<&str>| LaunchRequest {
+        agent_config_id: config.map(str::to_string),
+        prompt: String::new(),
+        ..launch(task, ProtocolFamily::Codex)
+    };
+    executor.launch(&with("t1", None)).unwrap();
+    executor.launch(&with("t2", Some("native-a"))).unwrap();
+    executor.launch(&with("t3", Some("native-a"))).unwrap();
+    executor.launch(&with("t4", Some("native-b"))).unwrap();
+    assert_eq!(
+        *routing.1.lock(),
+        vec![
+            ServerKey::Agent("codex".into()),
+            ServerKey::Config("native-a".into()),
+            ServerKey::Config("native-b".into()),
+        ]
+    );
+    assert!(executor.registry().get("t3").is_some());
 }
