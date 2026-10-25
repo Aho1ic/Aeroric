@@ -196,6 +196,11 @@ final class AppServices {
                     self.projectConfigurations.removeAll()
                     self.configurationEpoch = UUID()
                 }
+            },
+            // After the handshake: before it the advertised capabilities are
+            // empty and every request fails `notConnected` (N6a: the native
+            // session page, imports and the canvas were never enabled).
+            connectionReady: { connection in
                 let advertised = await connection.advertisedCapabilities
                 await MainActor.run {
                     self.legacyCleanupStore.attach(
