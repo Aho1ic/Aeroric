@@ -260,3 +260,31 @@ async fn resuming_an_open_session_rebinds_it_instead_of_starting_another() {
     peer.silent().await;
     assert!(s.peers.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn a_closed_session_s_log_is_kept_for_the_retention_then_dropped() {
+    let mut s = setup();
+    s.executor
+        .launch(&launch("t1", ProtocolFamily::Codex))
+        .unwrap();
+    let mut peer = running(&mut s).await;
+    s.executor
+        .cancel(
+            "t1",
+            &CancelTarget::Local {
+                project_path: "/w".into(),
+            },
+        )
+        .unwrap();
+    let interrupt = peer.expect("turn/interrupt").await;
+    peer.reply(&interrupt, json!({}));
+    s.executor.sweep(now_ms()).await;
+    assert!(
+        s.executor.registry().log("t1").is_some(),
+        "kept for clients catching up"
+    );
+    s.executor
+        .sweep(now_ms() + super::super::CLOSED_LOG_RETENTION_MS)
+        .await;
+    assert!(s.executor.registry().log("t1").is_none());
+}

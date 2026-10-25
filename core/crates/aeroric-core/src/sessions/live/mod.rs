@@ -11,10 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use serde::Serialize;
 
 use crate::tasks::{ProtocolFamily, TaskStatus};
-use update::{PlanEntry, Replay, SessionUpdate, SessionUpdateKind, UpdateLog};
+use update::{Replay, SessionUpdate, SessionUpdateKind, UpdateLog};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Decision {
@@ -59,33 +58,7 @@ pub enum DriverError {
     Transport(String),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PendingPermission {
-    pub id: String,
-    pub kind: String,
-    pub summary: String,
-    pub tool_call_id: Option<String>,
-}
-
-/// What a client that just (re)connected needs besides replayed updates.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionSnapshot {
-    pub task_id: String,
-    pub session_id: Option<String>,
-    pub turn_active: bool,
-    pub pending: Vec<PendingPermission>,
-    pub plan: Vec<PlanEntry>,
-    pub model: Option<String>,
-    pub permission: Option<String>,
-    pub effort: Option<String>,
-    pub context_used: Option<u64>,
-    pub context_limit: Option<u64>,
-    pub input_tokens: Option<u64>,
-    pub output_tokens: Option<u64>,
-    pub latest_seq: u64,
-}
+pub use aeroric_protocol::session_live::{PendingPermission, SessionState};
 
 pub trait SessionDriver: Send + Sync {
     fn family(&self) -> ProtocolFamily;
@@ -98,7 +71,7 @@ pub trait SessionDriver: Send + Sync {
     fn configure(&self, change: ConfigChange) -> Result<(), DriverError>;
     fn command(&self, command: SlashCommand) -> Result<(), DriverError>;
     fn close(&self) -> Result<(), DriverError>;
-    fn snapshot(&self) -> SessionSnapshot;
+    fn snapshot(&self) -> SessionState;
     /// True when idle long enough to release its process (no turn, no pending approval).
     fn idle_since_ms(&self) -> Option<u64>;
     /// Release the process; the next `prompt` resumes the same session transparently.
@@ -146,28 +119,41 @@ impl SharedLog {
     pub fn since(&self, after: u64) -> Replay {
         self.0.lock().since(after)
     }
+    pub fn page(&self, after: u64, limit: usize) -> Replay {
+        self.0.lock().page(after, limit)
+    }
     pub fn latest_seq(&self) -> u64 {
         self.0.lock().latest_seq()
     }
 }
 
-/// Live drivers by task id, plus their logs (kept after close for replay).
+/// A closed session's log stays this long for clients catching up (N3 D5).
+pub const CLOSED_LOG_RETENTION_MS: u64 = 10 * 60_000;
+
+/// Live drivers by task id, plus their logs (kept a while after close).
 #[derive(Default)]
 pub struct DriverRegistry {
     drivers: Mutex<HashMap<String, Arc<dyn SessionDriver>>>,
     logs: Mutex<HashMap<String, SharedLog>>,
+    closed_at: Mutex<HashMap<String, u64>>,
 }
 
 impl DriverRegistry {
     pub fn insert(&self, task_id: &str, driver: Arc<dyn SessionDriver>, log: SharedLog) {
         self.drivers.lock().insert(task_id.to_string(), driver);
         self.logs.lock().insert(task_id.to_string(), log);
+        self.closed_at.lock().remove(task_id);
     }
     pub fn get(&self, task_id: &str) -> Option<Arc<dyn SessionDriver>> {
         self.drivers.lock().get(task_id).cloned()
     }
+    /// Take the driver out; its log stays for [`CLOSED_LOG_RETENTION_MS`].
     pub fn remove(&self, task_id: &str) -> Option<Arc<dyn SessionDriver>> {
-        self.drivers.lock().remove(task_id)
+        let removed = self.drivers.lock().remove(task_id);
+        if removed.is_some() {
+            self.closed_at.lock().insert(task_id.to_string(), now_ms());
+        }
+        removed
     }
     pub fn log(&self, task_id: &str) -> Option<SharedLog> {
         self.logs.lock().get(task_id).cloned()
@@ -178,6 +164,22 @@ impl DriverRegistry {
             .iter()
             .map(|(k, v)| (k.clone(), Arc::clone(v)))
             .collect()
+    }
+    /// Drop the logs of sessions closed longer than the retention.
+    pub fn prune_logs(&self, now: u64) {
+        let expired: Vec<String> = self
+            .closed_at
+            .lock()
+            .iter()
+            .filter(|(_, at)| now.saturating_sub(**at) >= CLOSED_LOG_RETENTION_MS)
+            .map(|(task, _)| task.clone())
+            .collect();
+        for task in expired {
+            self.closed_at.lock().remove(&task);
+            if !self.drivers.lock().contains_key(&task) {
+                self.logs.lock().remove(&task);
+            }
+        }
     }
 }
 

@@ -21,7 +21,7 @@ use super::server::{CodexServer, Connection, SERVER_EXITED};
 use crate::sessions::live::update::{PlanEntry, SessionUpdateKind, TurnEndReason};
 use crate::sessions::live::{
     now_ms, ConfigChange, Decision, DriverError, LiveStatusSink, PendingPermission, SessionDriver,
-    SessionSnapshot, SharedLog, SlashCommand,
+    SessionState, SharedLog, SlashCommand,
 };
 use crate::tasks::{ProtocolFamily, TaskStatus};
 
@@ -218,10 +218,12 @@ impl SessionDriver for CodexSession {
         Ok(())
     }
 
-    fn snapshot(&self) -> SessionSnapshot {
+    fn snapshot(&self) -> SessionState {
         let state = self.state.lock();
-        SessionSnapshot {
+        SessionState {
             task_id: self.task_id.clone(),
+            live: true,
+            family: Some(ProtocolFamily::Codex),
             session_id: state.thread_id.clone(),
             turn_active: state.active_turn.is_some(),
             pending: state.pending.iter().map(|p| p.view.clone()).collect(),

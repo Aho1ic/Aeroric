@@ -88,6 +88,7 @@ impl StructuredExecutor {
                 driver.suspend();
             }
         }
+        self.registry.prune_logs(now);
         let servers: Vec<_> = self.servers.lock().values().cloned().collect();
         for server in servers {
             server.stop_if_unused(now).await;
@@ -139,7 +140,8 @@ impl StructuredExecutor {
         session
     }
 
-    fn close_session(&self, task_id: &str) -> bool {
+    /// Close and drop a task's driver; false when it has none.
+    pub fn close_session(&self, task_id: &str) -> bool {
         match self.registry.remove(task_id) {
             Some(driver) => {
                 let _ = driver.close();

@@ -1,159 +1,20 @@
-//! Session updates for structured agents (ADR-043). Shaped after ACP
-//! `session/update`: every driver turns its own protocol into these, so the
-//! host, the contract and the UI never branch on the agent family.
+//! Per-session update log for structured agents (ADR-043). The update types
+//! are the wire contract in `aeroric_protocol::session_live`; every driver
+//! turns its own protocol into them, so the host, the contract and the UI
+//! never branch on the agent family.
 
 use std::collections::VecDeque;
 
-use serde::Serialize;
 use serde_json::Value;
 
 /// Updates kept per session for watermark replay; older ones are a gap the
 /// client fills by re-reading history.
 pub const UPDATE_LOG_CAPACITY: usize = 2000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TurnEndReason {
-    Completed,
-    Interrupted,
-    Failed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ToolKind {
-    Command,
-    FileChange,
-    Mcp,
-    WebSearch,
-    Subagent,
-    Other,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ToolStatus {
-    Running,
-    Completed,
-    Failed,
-    Declined,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanEntry {
-    pub text: String,
-    /// `pending` | `inProgress` | `completed` (the agent's own vocabulary).
-    pub status: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum SessionUpdateKind {
-    TurnStarted {
-        turn_id: String,
-    },
-    TurnEnded {
-        turn_id: String,
-        reason: TurnEndReason,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-    },
-    MessageChunk {
-        message_id: String,
-        role: String,
-        text: String,
-    },
-    MessageCompleted {
-        message_id: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        text: Option<String>,
-    },
-    ThoughtChunk {
-        id: String,
-        text: String,
-        summary: bool,
-    },
-    ToolCall {
-        id: String,
-        kind: ToolKind,
-        title: String,
-        input: Value,
-    },
-    ToolCallUpdate {
-        id: String,
-        status: ToolStatus,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output_delta: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        result: Option<Value>,
-    },
-    Plan {
-        entries: Vec<PlanEntry>,
-    },
-    PermissionRequest {
-        id: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        tool_call_id: Option<String>,
-        /// `command` | `fileChange` | `permissions` | the agent's tool name.
-        kind: String,
-        summary: String,
-        /// Decisions the agent accepts for this request.
-        options: Vec<String>,
-    },
-    PermissionResolved {
-        id: String,
-        decision: String,
-    },
-    Subagent {
-        id: String,
-        title: String,
-        status: String,
-    },
-    Usage {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        context_used: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        context_limit: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        input_tokens: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output_tokens: Option<u64>,
-    },
-    ConfigChanged {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        model: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        permission: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        effort: Option<String>,
-    },
-    Error {
-        message: String,
-        recoverable: bool,
-    },
-    /// Protocol content this build does not interpret; kept with its source
-    /// kind, never dropped or guessed at (INV-12).
-    Unknown {
-        kind: String,
-        payload: Value,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionUpdate {
-    pub task_id: String,
-    /// Per session, starting at 1, no gaps.
-    pub seq: u64,
-    pub at_ms: u64,
-    #[serde(flatten)]
-    pub kind: SessionUpdateKind,
-}
+pub use aeroric_protocol::session_live::{
+    PlanEntry, SessionUpdate, SessionUpdateKind, ToolKind, ToolStatus, TurnEndReason,
+};
+use aeroric_protocol::session_live::{MAX_BATCH_BYTES, MAX_ITEM_BYTES, TRUNCATION_MARKER};
 
 /// Replay answer: the updates after a watermark, or the oldest seq still held
 /// when the watermark is older than the buffer.
@@ -189,7 +50,7 @@ impl UpdateLog {
             task_id: self.task_id.clone(),
             seq: self.next_seq,
             at_ms,
-            kind,
+            kind: bounded(kind),
         };
         self.next_seq += 1;
         if self.buffer.len() == self.capacity {
@@ -202,6 +63,27 @@ impl UpdateLog {
     /// Last seq handed out (0 before the first update).
     pub fn latest_seq(&self) -> u64 {
         self.next_seq - 1
+    }
+
+    /// One page for `session.updates`: at most `limit` updates and about
+    /// [`MAX_BATCH_BYTES`] of JSON, always at least one when any are newer.
+    pub fn page(&self, after: u64, limit: usize) -> Replay {
+        match self.since(after) {
+            Replay::Updates(updates) => {
+                let mut bytes = 0;
+                let mut page = Vec::new();
+                for update in updates.into_iter().take(limit.max(1)) {
+                    let size = serde_json::to_vec(&update).map(|v| v.len()).unwrap_or(0);
+                    if !page.is_empty() && bytes + size > MAX_BATCH_BYTES {
+                        break;
+                    }
+                    bytes += size;
+                    page.push(update);
+                }
+                Replay::Updates(page)
+            }
+            gap => gap,
+        }
     }
 
     /// Updates with `seq > after`. `after` older than the buffer is a gap.
@@ -219,6 +101,98 @@ impl UpdateLog {
             ),
         }
     }
+}
+
+/// Cut a single update's large text / JSON to [`MAX_ITEM_BYTES`] (N3 D6), so
+/// no page can exceed the transport's frame limit.
+fn bounded(kind: SessionUpdateKind) -> SessionUpdateKind {
+    use SessionUpdateKind as K;
+    match kind {
+        K::MessageChunk {
+            message_id,
+            role,
+            text,
+        } => K::MessageChunk {
+            message_id,
+            role,
+            text: cut(text),
+        },
+        K::MessageCompleted { message_id, text } => K::MessageCompleted {
+            message_id,
+            text: text.map(cut),
+        },
+        K::ThoughtChunk { id, text, summary } => K::ThoughtChunk {
+            id,
+            text: cut(text),
+            summary,
+        },
+        K::ToolCall {
+            id,
+            kind,
+            title,
+            input,
+        } => K::ToolCall {
+            id,
+            kind,
+            title: cut(title),
+            input: cut_value(input),
+        },
+        K::ToolCallUpdate {
+            id,
+            status,
+            output_delta,
+            result,
+        } => K::ToolCallUpdate {
+            id,
+            status,
+            output_delta: output_delta.map(cut),
+            result: result.map(cut_value),
+        },
+        K::PermissionRequest {
+            id,
+            tool_call_id,
+            kind,
+            summary,
+            options,
+        } => K::PermissionRequest {
+            id,
+            tool_call_id,
+            kind,
+            summary: cut(summary),
+            options,
+        },
+        K::Error {
+            message,
+            recoverable,
+        } => K::Error {
+            message: cut(message),
+            recoverable,
+        },
+        K::Unknown { kind, payload } => K::Unknown {
+            kind,
+            payload: cut_value(payload),
+        },
+        other => other,
+    }
+}
+
+fn cut(text: String) -> String {
+    if text.len() <= MAX_ITEM_BYTES {
+        return text;
+    }
+    let mut end = MAX_ITEM_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{TRUNCATION_MARKER}", &text[..end])
+}
+
+fn cut_value(value: Value) -> Value {
+    let encoded = value.to_string();
+    if encoded.len() <= MAX_ITEM_BYTES {
+        return value;
+    }
+    Value::String(cut(encoded))
 }
 
 #[cfg(test)]
@@ -287,5 +261,73 @@ mod tests {
             json!({"taskId": "t1", "seq": 1, "atMs": 42, "type": "toolCallUpdate",
                    "id": "i1", "status": "running", "outputDelta": "ok\n"})
         );
+    }
+
+    #[test]
+    fn oversized_items_are_cut_and_marked() {
+        let mut log = UpdateLog::new("t1");
+        let big = "汉".repeat(MAX_ITEM_BYTES);
+        let update = log.push(
+            SessionUpdateKind::ToolCallUpdate {
+                id: "c".into(),
+                status: crate::sessions::live::update::ToolStatus::Running,
+                output_delta: Some(big.clone()),
+                result: Some(json!({ "output": big })),
+            },
+            0,
+        );
+        let SessionUpdateKind::ToolCallUpdate {
+            output_delta,
+            result,
+            ..
+        } = update.kind
+        else {
+            panic!("kind changed")
+        };
+        let delta = output_delta.unwrap();
+        assert!(delta.len() <= MAX_ITEM_BYTES + TRUNCATION_MARKER.len());
+        assert!(delta.ends_with(TRUNCATION_MARKER));
+        assert!(result
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .ends_with(TRUNCATION_MARKER));
+    }
+
+    #[test]
+    fn a_page_stops_at_the_byte_budget_and_the_limit() {
+        let mut log = UpdateLog::new("t1");
+        let chunk = "x".repeat(MAX_ITEM_BYTES / 2);
+        for _ in 0..8 {
+            log.push(
+                SessionUpdateKind::MessageChunk {
+                    message_id: "m".into(),
+                    role: "assistant".into(),
+                    text: chunk.clone(),
+                },
+                0,
+            );
+        }
+        let Replay::Updates(page) = log.page(0, 500) else {
+            panic!("gap")
+        };
+        let bytes: usize = page
+            .iter()
+            .map(|u| serde_json::to_vec(u).unwrap().len())
+            .sum();
+        assert!(
+            !page.is_empty() && page.len() < 8 && bytes <= MAX_BATCH_BYTES,
+            "{} updates, {bytes} bytes",
+            page.len()
+        );
+        assert_eq!(page[0].seq, 1);
+        let Replay::Updates(limited) = log.page(0, 1) else {
+            panic!("gap")
+        };
+        assert_eq!(limited.len(), 1);
+        let Replay::Updates(rest) = log.page(page.last().unwrap().seq, 500) else {
+            panic!("gap")
+        };
+        assert_eq!(rest[0].seq, page.last().unwrap().seq + 1);
     }
 }
