@@ -744,7 +744,7 @@ extension AppServices: WorkspaceStateProviding {
                 id: section.sidebarID,
                 title: section.title,
                 systemImage: section.systemImage,
-                badge: section == .tasks ? openTaskCount : nil,
+                badge: section == .tasks ? openTaskCount : section == .attention ? attentionCount : nil,
                 group: section.group
             )
         }
@@ -775,6 +775,12 @@ extension AppServices: WorkspaceStateProviding {
         }
         return [SidebarItem(id: SessionNavigation.globalDraft, title: "新建会话",
                             systemImage: "plus", group: .work)] + sections + projects + unassigned
+    }
+
+    /// A19 badge: how many tasks need the user; nil renders no zero.
+    var attentionCount: Int? {
+        let count = AttentionQueue.items(taskStore.tasks, nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
+        return count > 0 ? count : nil
     }
 
     static func importedItem(_ session: ImportsClient.ImportedSession) -> SidebarItem {
