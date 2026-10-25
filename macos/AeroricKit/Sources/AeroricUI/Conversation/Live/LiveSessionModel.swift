@@ -24,6 +24,21 @@ public enum LiveItem: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A05: one turn's working-tree changes.
+public struct LiveTurnChanges: Equatable, Sendable {
+    public var turnId: String
+    public var files: [LiveFileChange]
+    public var additions: UInt64
+    public var deletions: UInt64
+    public var truncated: Bool
+
+    /// `+12 −3 · 2 个文件` (`+` 前缀的文件数在截断时为“至少”)。
+    public var summary: String {
+        let count = truncated ? "\(files.count)+" : "\(files.count)"
+        return "+\(additions) −\(deletions) · \(count) 个文件"
+    }
+}
+
 public struct LiveTool: Equatable, Sendable {
     public var id: String
     public var kind: LiveToolKind
@@ -67,6 +82,9 @@ public struct LiveSessionModel: Equatable, Sendable {
     public private(set) var usage: UsageSummary
     public private(set) var config: LiveConfig
     public private(set) var turnActive: Bool
+    /// A05: the last finished turn's working-tree changes. Kept apart from
+    /// `items`, which history replaces after a turn.
+    public private(set) var lastTurnChanges: LiveTurnChanges?
     private var echoCount = 0
 
     public init(state: LiveSessionState) {
@@ -185,6 +203,9 @@ public struct LiveSessionModel: Equatable, Sendable {
             setConfig(LiveConfig(model: model, permission: permission, effort: effort))
         case let .error(message, recoverable):
             items.append(.notice(id: "seq\(update.seq)", message: message, recoverable: recoverable))
+        case let .turnChanges(turnId, files, additions, deletions, truncated):
+            lastTurnChanges = LiveTurnChanges(turnId: turnId, files: files, additions: additions,
+                                              deletions: deletions, truncated: truncated)
         case let .unknown(kind, _):
             items.append(.unknown(id: "seq\(update.seq)", kind: kind))
         }

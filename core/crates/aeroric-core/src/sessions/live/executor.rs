@@ -71,6 +71,8 @@ pub struct StructuredExecutor {
     inner: Arc<dyn TaskExecutor>,
     routing: Arc<dyn Routing>,
     sink: Arc<dyn LiveStatusSink>,
+    /// A05: snapshots each session's repository at turn boundaries.
+    turn_changes: Arc<super::turn_changes::TurnChangeTracker>,
     runtime: tokio::runtime::Handle,
     registry: Arc<DriverRegistry>,
     servers: Mutex<HashMap<ServerKey, Arc<CodexServer>>>,
@@ -85,12 +87,17 @@ impl StructuredExecutor {
         sink: Arc<dyn LiveStatusSink>,
         runtime: tokio::runtime::Handle,
     ) -> Arc<Self> {
+        let registry: Arc<DriverRegistry> = Arc::default();
+        let turn_changes = super::turn_changes::TurnChangeTracker::new(sink, Arc::clone(&registry));
+        let sink: Arc<dyn LiveStatusSink> =
+            Arc::new(super::turn_changes::TrackingSink(Arc::clone(&turn_changes)));
         let executor = Arc::new(Self {
             inner,
             routing,
             sink,
+            turn_changes,
             runtime: runtime.clone(),
-            registry: Arc::default(),
+            registry,
             servers: Mutex::default(),
             claude_launchers: Mutex::default(),
         });
@@ -183,6 +190,7 @@ impl StructuredExecutor {
             .registry
             .log(&spec.task_id)
             .unwrap_or_else(|| SharedLog::new(&spec.task_id));
+        self.turn_changes.watch(&spec.task_id, &spec.cwd);
         let session: Arc<dyn SessionDriver> = match route {
             Route::Codex(key) => CodexSession::start(
                 spec.clone(),

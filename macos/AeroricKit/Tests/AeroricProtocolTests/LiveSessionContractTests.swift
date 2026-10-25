@@ -18,10 +18,10 @@ final class LiveSessionContractTests: XCTestCase {
 
     func testEveryUpdateKindInTheFixtureDecodesAsKnown() throws {
         let batch = try LiveUpdatesBatch.decode(try fixture()["updates"] ?? .null)
-        XCTAssertEqual(batch.updates.count, 16)
-        XCTAssertEqual(batch.latestSeq, 16)
+        XCTAssertEqual(batch.updates.count, 17)
+        XCTAssertEqual(batch.latestSeq, 17)
         XCTAssertNil(batch.gapOldestAvailable)
-        XCTAssertEqual(batch.updates.map(\.seq), Array(1...16))
+        XCTAssertEqual(batch.updates.map(\.seq), Array(1...17))
         XCTAssertEqual(batch.updates[0], LiveSessionUpdate(taskId: "task-1", seq: 1, atMs: 1_761_350_400_000,
                                                            kind: .turnStarted(turnId: "u1")))
         let kinds = batch.updates.map(\.kind)
@@ -34,6 +34,10 @@ final class LiveSessionContractTests: XCTestCase {
                                             LivePlanEntry(text: "改代码", status: "inProgress")])))
         XCTAssertTrue(kinds.contains(.usage(contextUsed: 1200, contextLimit: 200_000, inputTokens: 1500, outputTokens: 300)))
         XCTAssertTrue(kinds.contains(.unknown(kind: "item/futureThing", payload: .object(["x": .number("1")]))))
+        XCTAssertTrue(kinds.contains(.turnChanges(turnId: "u1", files: [
+            LiveFileChange(path: "src/calc.py", additions: 3, deletions: 1),
+            LiveFileChange(path: "docs/diagram.png", additions: nil, deletions: nil),
+        ], additions: 3, deletions: 1, truncated: false)))
         XCTAssertEqual(kinds.last, .turnEnded(turnId: "u1", reason: .completed, error: nil))
         // Only the fixture's deliberate `unknown` row is unknown: every other kind is understood.
         let unknown = kinds.filter { if case .unknown = $0 { true } else { false } }

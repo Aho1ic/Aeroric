@@ -76,6 +76,18 @@ pub struct PlanEntry {
     pub status: String,
 }
 
+/// One file in a [`SessionUpdateKind::TurnChanges`]; counts are absent for
+/// binary files.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnFileChange {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -160,6 +172,16 @@ pub enum SessionUpdateKind {
         permission: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         effort: Option<String>,
+    },
+    /// A05: what the working tree changed during one turn (host git snapshot).
+    TurnChanges {
+        turn_id: String,
+        files: Vec<TurnFileChange>,
+        additions: u64,
+        deletions: u64,
+        /// More files changed than `files` lists (the totals count them all).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        truncated: bool,
     },
     Error {
         message: String,
@@ -406,6 +428,24 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
             message: "上下文已压缩".into(),
             recoverable: true,
         },
+        K::TurnChanges {
+            turn_id: "u1".into(),
+            files: vec![
+                TurnFileChange {
+                    path: "src/calc.py".into(),
+                    additions: Some(3),
+                    deletions: Some(1),
+                },
+                TurnFileChange {
+                    path: "docs/diagram.png".into(),
+                    additions: None,
+                    deletions: None,
+                },
+            ],
+            additions: 3,
+            deletions: 1,
+            truncated: false,
+        },
         K::Unknown {
             kind: "item/futureThing".into(),
             payload: json!({"x": 1}),
@@ -587,6 +627,11 @@ pub fn schema() -> Value {
                     update_variant("usage", json!([]), json!({"contextUsed": {"type": "integer"}, "contextLimit": {"type": "integer"},
                         "inputTokens": {"type": "integer"}, "outputTokens": {"type": "integer"}})),
                     update_variant("configChanged", json!([]), json!({"model": s, "permission": s, "effort": s})),
+                    update_variant("turnChanges", json!(["turnId", "files", "additions", "deletions"]), json!({"turnId": s,
+                        "files": {"type": "array", "items": {"type": "object", "required": ["path"],
+                            "properties": {"path": s, "additions": {"type": "integer"}, "deletions": {"type": "integer"}}}},
+                        "additions": {"type": "integer", "minimum": 0}, "deletions": {"type": "integer", "minimum": 0},
+                        "truncated": {"type": "boolean"}})),
                     update_variant("error", json!(["message", "recoverable"]), json!({"message": s, "recoverable": {"type": "boolean"}})),
                     update_variant("unknown", json!(["kind", "payload"]), json!({"kind": s, "payload": {}}))
                 ]}
@@ -643,6 +688,7 @@ mod tests {
             "subagent",
             "usage",
             "configChanged",
+            "turnChanges",
             "error",
             "unknown",
         ] {

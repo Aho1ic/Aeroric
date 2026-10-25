@@ -79,7 +79,7 @@
     "turnActive": true
   },
   "updates": {
-    "latestSeq": 16,
+    "latestSeq": 17,
     "updates": [
       {
         "atMs": 1761350400000,
@@ -214,27 +214,46 @@
         "type": "error"
       },
       {
+        "additions": 3,
         "atMs": 1761350400013,
+        "deletions": 1,
+        "files": [
+          {
+            "additions": 3,
+            "deletions": 1,
+            "path": "src/calc.py"
+          },
+          {
+            "path": "docs/diagram.png"
+          }
+        ],
+        "seq": 14,
+        "taskId": "task-1",
+        "turnId": "u1",
+        "type": "turnChanges"
+      },
+      {
+        "atMs": 1761350400014,
         "kind": "item/futureThing",
         "payload": {
           "x": 1
         },
-        "seq": 14,
+        "seq": 15,
         "taskId": "task-1",
         "type": "unknown"
       },
       {
-        "atMs": 1761350400014,
+        "atMs": 1761350400015,
         "messageId": "m1",
-        "seq": 15,
+        "seq": 16,
         "taskId": "task-1",
         "text": "我来看看",
         "type": "messageCompleted"
       },
       {
-        "atMs": 1761350400015,
+        "atMs": 1761350400016,
         "reason": "completed",
-        "seq": 16,
+        "seq": 17,
         "taskId": "task-1",
         "turnId": "u1",
         "type": "turnEnded"

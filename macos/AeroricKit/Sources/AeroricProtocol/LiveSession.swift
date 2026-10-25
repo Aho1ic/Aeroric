@@ -56,8 +56,23 @@ public enum LiveUpdateKind: Equatable, Sendable {
     case usage(contextUsed: UInt64?, contextLimit: UInt64?, inputTokens: UInt64?, outputTokens: UInt64?)
     case configChanged(model: String?, permission: String?, effort: String?)
     case error(message: String, recoverable: Bool)
+    /// A05: what the working tree changed during one turn (host git snapshot).
+    case turnChanges(turnId: String, files: [LiveFileChange], additions: UInt64, deletions: UInt64, truncated: Bool)
     /// Kept with its source `type` (or the agent's own kind for host-side unknowns).
     case unknown(kind: String, payload: JSONValue)
+}
+
+/// One file of a `turnChanges` update; counts are nil for binary files.
+public struct LiveFileChange: Equatable, Sendable {
+    public var path: String
+    public var additions: UInt64?
+    public var deletions: UInt64?
+
+    public init(path: String, additions: UInt64?, deletions: UInt64?) {
+        self.path = path
+        self.additions = additions
+        self.deletions = deletions
+    }
 }
 
 public struct LiveSessionUpdate: Equatable, Sendable {
@@ -241,6 +256,16 @@ extension LiveUpdateKind {
         case "error":
             guard let message = string(f, "message"), let recoverable = f["recoverable"]?.boolValue else { return nil }
             return .error(message: message, recoverable: recoverable)
+        case "turnChanges":
+            guard let id = string(f, "turnId"), let files = f["files"]?.arrayValue,
+                  let additions = uint(f["additions"]), let deletions = uint(f["deletions"]) else { return nil }
+            let decoded = files.compactMap { item -> LiveFileChange? in
+                guard let path = string(item.fields, "path") else { return nil }
+                return LiveFileChange(path: path, additions: uint(item["additions"]), deletions: uint(item["deletions"]))
+            }
+            guard decoded.count == files.count else { return nil }
+            return .turnChanges(turnId: id, files: decoded, additions: additions, deletions: deletions,
+                                truncated: f["truncated"]?.boolValue ?? false)
         case "unknown":
             guard let kind = string(f, "kind") else { return nil }
             return .unknown(kind: kind, payload: f["payload"] ?? .null)

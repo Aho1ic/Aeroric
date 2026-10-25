@@ -514,6 +514,55 @@
             },
             {
               "properties": {
+                "additions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "deletions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "files": {
+                  "items": {
+                    "properties": {
+                      "additions": {
+                        "type": "integer"
+                      },
+                      "deletions": {
+                        "type": "integer"
+                      },
+                      "path": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "truncated": {
+                  "type": "boolean"
+                },
+                "turnId": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "turnChanges"
+                }
+              },
+              "required": [
+                "type",
+                "turnId",
+                "files",
+                "additions",
+                "deletions"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "message": {
                   "type": "string"
                 },

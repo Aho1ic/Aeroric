@@ -394,3 +394,82 @@ async fn a_paginated_codex_session_resumes_on_the_driver() {
     assert!(s.inner.calls.lock().is_empty(), "not handed to the PTY");
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// A05: a turn run in a git workspace gets a `turnChanges` update after it ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_turn_in_a_git_workspace_reports_what_it_changed() {
+    let repo = std::env::temp_dir().join(format!(
+        "aeroric-exec-turn-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("calc.py"), "a\nb\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "init"]);
+
+    let mut s = setup();
+    let mut request = launch("tg", ProtocolFamily::Codex);
+    request.working_directory = WorkingDirectory::Local {
+        path: repo.to_string_lossy().into_owned(),
+    };
+    s.executor.launch(&request).unwrap();
+    let mut peer = launched(&mut s.peers).await;
+    peer.handshake().await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(&start, json!({"thread": {"id": "th1"}}));
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th1", "turn": {"id": "u1"}}),
+    );
+    // Let the start snapshot land before the "agent" edits.
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    std::fs::write(repo.join("calc.py"), "a\nB\nc\n").unwrap();
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th1", "turn": {"id": "u1", "status": "completed"}}),
+    );
+    let sink = Arc::clone(&s.sink);
+    until("turn changes", move || {
+        sink.update_types().iter().any(|t| t == "turnChanges")
+    })
+    .await;
+    let changes = s
+        .sink
+        .updates
+        .lock()
+        .iter()
+        .find_map(|u| match &u.kind {
+            crate::sessions::live::update::SessionUpdateKind::TurnChanges {
+                turn_id,
+                files,
+                additions,
+                deletions,
+                ..
+            } => Some((turn_id.clone(), files.clone(), *additions, *deletions)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(changes.0, "u1");
+    assert_eq!(changes.1.len(), 1);
+    assert_eq!(changes.1[0].path, "calc.py");
+    assert_eq!((changes.2, changes.3), (2, 1));
+    std::fs::remove_dir_all(&repo).ok();
+}
