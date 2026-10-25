@@ -100,7 +100,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         switch self {
         case .tasks, .attention, .canvas: .wired
         case .files: .comingSoon("浏览、搜索与编辑项目文件。当前请用右侧面板的“文件”只读浏览。")
-        case .git: .comingSoon("暂存、提交、分支、worktree 与历史。当前请用右侧面板的“改动”查看 diff。")
+        case .git: .partial("只读：查看当前项目的更改、逐文件 diff、分支与历史。暂存、提交、推送等写操作下一批接入。")
         case .ide: .comingSoon("问题列表、符号大纲与调试会话。")
         case .connections: .comingSoon("SSH 主机、主机密钥确认与 SFTP 文件传输。")
         case .infrastructure: .comingSoon("Docker 容器与镜像、端口占用、Conda 环境。")
@@ -900,6 +900,11 @@ struct TaskWorkspaceView: View {
         .accessibilityIdentifier("tasks.workspace")
     }
 
+    /// The project the Git page reads: the window's project context.
+    private var gitProjectPath: String? {
+        services.taskStore.projects.first { $0.id == projectContextID }?.path
+    }
+
     @ViewBuilder
     private var sectionContent: some View {
         switch activeSection {
@@ -916,8 +921,15 @@ struct TaskWorkspaceView: View {
                 }
             }
         case .git:
-            GitPanel(store: services.gitStore)
+            if let path = gitProjectPath {
+                GitPanel(store: services.gitStore, onSelect: { change in
+                    Task { await services.loadGitDiff(projectPath: path, change: change) }
+                })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .task(id: path) { await services.refreshGit(projectPath: path) }
+            } else {
+                PaneEmptyState(systemImage: "folder", title: "先选一个项目", hint: "Git 页显示侧栏当前项目的仓库。")
+            }
         case .ide:
             HSplitView {
                 ProblemsView(store: services.diagnosticsStore)

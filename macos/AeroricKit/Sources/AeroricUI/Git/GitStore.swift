@@ -112,6 +112,11 @@ public final class GitStore {
         stashReadState = .loading
     }
 
+    /// One part failed while the others loaded (an empty repository has
+    /// changes but no history).
+    public func failChanges(_ reason: String) { changesReadState = .failed(reason) }
+    public func failHistory(_ reason: String) { historyReadState = .failed(reason) }
+
     public func failRead(_ reason: String) {
         changesReadState = .failed(reason)
         historyReadState = .failed(reason)

@@ -4,11 +4,15 @@ import SwiftUI
 public struct GitPanel: View {
     let store: GitStore
     public var onAction: ((_ action: GitAction) -> Void)?
+    /// A file was picked in the change list (its diff is shown on the right).
+    public var onSelect: ((GitStore.Change) -> Void)?
     @State private var tab = "changes"
 
-    public init(store: GitStore, onAction: ((_ action: GitAction) -> Void)? = nil) {
+    public init(store: GitStore, onAction: ((_ action: GitAction) -> Void)? = nil,
+                onSelect: ((GitStore.Change) -> Void)? = nil) {
         self.store = store
         self.onAction = onAction
+        self.onSelect = onSelect
     }
 
     public var body: some View {
@@ -45,7 +49,7 @@ public struct GitPanel: View {
                     StashView(store: store, onAction: onAction)
                 default:
                     HSplitView {
-                        ChangeList(store: store, onAction: onAction)
+                        ChangeList(store: store, onAction: onAction, onSelect: onSelect)
                             .frame(minWidth: 240, maxWidth: 360)
                         Group {
                             if store.changesReadState == .loaded {
@@ -86,10 +90,13 @@ public enum GitAction: Equatable {
 public struct ChangeList: View {
     let store: GitStore
     public var onAction: ((_ action: GitAction) -> Void)?
+    public var onSelect: ((GitStore.Change) -> Void)?
 
-    public init(store: GitStore, onAction: ((_ action: GitAction) -> Void)? = nil) {
+    public init(store: GitStore, onAction: ((_ action: GitAction) -> Void)? = nil,
+                onSelect: ((GitStore.Change) -> Void)? = nil) {
         self.store = store
         self.onAction = onAction
+        self.onSelect = onSelect
     }
 
     public var body: some View {
@@ -154,6 +161,9 @@ public struct ChangeList: View {
                     .font(.caption2)
             }
         }
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect?(change) }
+        .help(change.path)
         .accessibilityIdentifier("git.change.\(change.path)")
     }
 

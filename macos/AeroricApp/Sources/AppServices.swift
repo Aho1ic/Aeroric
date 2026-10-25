@@ -777,6 +777,49 @@ extension AppServices: WorkspaceStateProviding {
                             systemImage: "plus", group: .work)] + sections + projects + unassigned
     }
 
+    /// B1 Git page (read-only): status, branches and history of `projectPath`.
+    func refreshGit(projectPath: String) async {
+        guard let connection = attachedConnection else { return }
+        let client = GitClient(connection: connection)
+        gitStore.beginRead()
+        gitStore.ingest(stash: [])
+        do {
+            let status = try await client.status(projectPath: projectPath)
+            gitStore.ingest(changes: status.map { GitStore.Change(path: $0.path, status: $0.status, staged: $0.staged) },
+                            conflictPaths: [])
+        } catch {
+            gitStore.failChanges("读取更改失败：\(Self.gitReason(error))")
+        }
+        gitStore.setDiff("")
+        if let branches = try? await client.branches(projectPath: projectPath) {
+            gitStore.ingest(branches: branches.map { GitStore.Branch(name: $0.name, current: $0.current, remote: $0.remote) })
+        }
+        do {
+            let commits = try await client.log(projectPath: projectPath)
+            gitStore.ingest(commits: commits.map {
+                GitStore.Commit(hash: $0.hash, shortHash: $0.shortHash, author: $0.author, date: $0.date, message: $0.message)
+            })
+        } catch {
+            let reason = Self.gitReason(error)
+            gitStore.failHistory(reason.contains("does not have any commits") ? "这个仓库还没有提交" : "读取历史失败：\(reason)")
+        }
+    }
+
+    func loadGitDiff(projectPath: String, change: GitStore.Change) async {
+        guard let connection = attachedConnection else { return }
+        do {
+            gitStore.setDiff(try await GitClient(connection: connection)
+                .fileDiff(projectPath: projectPath, filePath: change.path, staged: change.staged))
+        } catch {
+            gitStore.setDiff("读取 diff 失败：\(Self.gitReason(error))")
+        }
+    }
+
+    private static func gitReason(_ error: Error) -> String {
+        if case let .refused(failure)? = error as? ConnectionError { return failure.error.message }
+        return String(describing: error)
+    }
+
     /// A19 badge: how many tasks need the user; nil renders no zero.
     var attentionCount: Int? {
         let count = AttentionQueue.items(taskStore.tasks, nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
