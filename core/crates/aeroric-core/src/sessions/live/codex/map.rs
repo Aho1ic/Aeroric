@@ -31,6 +31,16 @@ fn u64_at(value: &Value, path: &[&str]) -> Option<u64> {
     path.iter().try_fold(value, |v, key| v.get(key))?.as_u64()
 }
 
+/// Advisory notifications, shown as a recoverable notice. Codex repeats some of
+/// them on every turn (an unknown model's metadata), so the driver shows each
+/// distinct message once per session.
+pub const WARNING_METHODS: &[&str] = &[
+    "warning",
+    "configWarning",
+    "deprecationNotice",
+    "guardianWarning",
+];
+
 /// Notification → updates (+ a turn signal when it starts or ends a turn).
 pub fn map_notification(
     method: &str,
@@ -140,7 +150,7 @@ pub fn map_notification(
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         }),
-        "warning" | "configWarning" | "deprecationNotice" | "guardianWarning" => one(K::Error {
+        m if WARNING_METHODS.contains(&m) => one(K::Error {
             message: s(params, "message")
                 .map(str::to_string)
                 .unwrap_or_else(|| params.to_string()),

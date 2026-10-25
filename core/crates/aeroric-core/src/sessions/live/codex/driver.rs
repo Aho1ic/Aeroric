@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 
 use super::map::{
     approval_response, codex_policy, map_approval_request, map_notification, TurnSignal,
+    WARNING_METHODS,
 };
 use super::rpc::{Inbound, RpcClient};
 use super::server::{CodexServer, Connection, SERVER_EXITED};
@@ -127,6 +128,7 @@ impl CodexSession {
             state: Arc::clone(&state),
             inbox,
             connection: None,
+            warned: Default::default(),
         };
         runtime.spawn(actor.run(command_rx, inbox_rx));
         Arc::new(Self {
@@ -264,6 +266,8 @@ struct Actor {
     state: Arc<Mutex<State>>,
     inbox: mpsc::UnboundedSender<Inbound>,
     connection: Option<Connection>,
+    /// Advisory messages already shown in this session (N6a C2).
+    warned: std::collections::HashSet<String>,
 }
 
 impl Actor {
@@ -554,7 +558,15 @@ impl Actor {
                 self.drop_pending(|p| p.view.id == id, "resolved");
             }
             Inbound::Notification { method, params } => {
-                let (updates, signal) = map_notification(&method, &params);
+                let (mut updates, signal) = map_notification(&method, &params);
+                if WARNING_METHODS.contains(&method.as_str()) {
+                    updates.retain(|update| match update {
+                        SessionUpdateKind::Error { message, .. } => {
+                            self.warned.insert(message.clone())
+                        }
+                        _ => true,
+                    });
+                }
                 for update in updates {
                     self.remember(&update);
                     self.push(update);

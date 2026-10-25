@@ -131,6 +131,33 @@ async fn a_prompt_runs_one_turn_and_settles_done() {
 }
 
 #[tokio::test]
+async fn a_repeated_warning_is_shown_once_per_session() {
+    let mut h = start(spec());
+    let peer = running(&mut h).await;
+    for message in [
+        "Model metadata not found",
+        "Model metadata not found",
+        "Other",
+    ] {
+        peer.notify("warning", json!({"threadId": "th1", "message": message}));
+    }
+    complete(&peer, "completed");
+    let sink = Arc::clone(&h.sink);
+    until("done", move || sink.last_status() == Some(TaskStatus::Done)).await;
+    let Replay::Updates(updates) = h.log.since(0) else {
+        panic!("no gap expected")
+    };
+    let notices: Vec<String> = updates
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::Error { message, .. } => Some(message.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices, ["Model metadata not found", "Other"]);
+}
+
+#[tokio::test]
 async fn an_approval_waits_for_the_user_and_a_reasoned_denial_steers() {
     let mut h = start(spec());
     let mut peer = running(&mut h).await;
