@@ -49,6 +49,12 @@ final class LiveSessionContractTests: XCTestCase {
         let state = try LiveSessionState.decode(fixture["state"] ?? .null)
         XCTAssertTrue(state.live)
         XCTAssertTrue(state.structured)
+        XCTAssertNil(state.resumeBlocked)
+        var blocked = state
+        blocked.resumeBlocked = "x"
+        var fields = fixture["state"]?.objectValue ?? [:]
+        fields["resumeBlocked"] = .string("x")
+        XCTAssertEqual(try LiveSessionState.decode(.object(fields)), blocked)
         XCTAssertEqual(state.family, "codex")
         XCTAssertEqual(state.sessionId, "th-1")
         XCTAssertEqual(state.pending, [LivePendingPermission(id: "7", kind: "command", summary: "ls -la", toolCallId: "c1",

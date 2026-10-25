@@ -274,6 +274,7 @@ async fn resuming_an_open_session_rebinds_it_instead_of_starting_another() {
         family: ProtocolFamily::Codex,
         agent: "codex".into(),
         session_id: "th1".into(),
+        session_path: None,
         permission_mode: PermissionMode::Ask,
         permission_mode_wire: "ask".into(),
         selected_model: None,
@@ -354,4 +355,67 @@ async fn each_configuration_gets_its_own_server_and_shares_it_across_tasks() {
         ]
     );
     assert!(executor.registry().get("t3").is_some());
+}
+
+#[tokio::test]
+async fn a_paginated_codex_session_is_refused_with_a_read_only_reason() {
+    let dir = std::env::temp_dir().join(format!("aeroric-paginated-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let rollout = dir.join("rollout.jsonl");
+    std::fs::write(
+        &rollout,
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"th9\",\"history_mode\":\"paginated\"}}\n",
+    )
+    .unwrap();
+    let plain = dir.join("plain.jsonl");
+    std::fs::write(
+        &plain,
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"th8\"}}\n",
+    )
+    .unwrap();
+    let path = rollout.to_string_lossy().into_owned();
+    let reason = resume_blocked(ProtocolFamily::Codex, Some(&path), "th9").expect("blocked");
+    assert!(reason.contains("codex resume th9"), "{reason}");
+    assert_eq!(
+        resume_blocked(ProtocolFamily::Codex, Some(&plain.to_string_lossy()), "th8"),
+        None
+    );
+    assert_eq!(
+        resume_blocked(ProtocolFamily::Claude, Some(&path), "x"),
+        None
+    );
+    assert_eq!(
+        resume_blocked(ProtocolFamily::Codex, Some("/no/such/file"), "x"),
+        None
+    );
+
+    let s = setup();
+    let request = ResumeRequest {
+        task_id: "t9".into(),
+        project_id: "p1".into(),
+        operation_key: "op".into(),
+        generation: 2,
+        family: ProtocolFamily::Codex,
+        agent: "codex".into(),
+        session_id: "th9".into(),
+        session_path: Some(path),
+        permission_mode: PermissionMode::Ask,
+        permission_mode_wire: "ask".into(),
+        selected_model: None,
+        reasoning_effort: None,
+        speed: None,
+        dsh_agent_preset: None,
+        agent_config_id: None,
+        prompt: None,
+        working_directory: WorkingDirectory::Local { path: "/w".into() },
+        terminal_size: None,
+    };
+    let refused = s.executor.resume(&request).unwrap_err();
+    assert!(refused.to_string().contains("分页"), "{refused}");
+    assert!(s.executor.registry().get("t9").is_none());
+    assert!(
+        s.inner.calls.lock().is_empty(),
+        "not handed to the PTY either"
+    );
+    std::fs::remove_dir_all(dir).ok();
 }

@@ -609,3 +609,49 @@ async fn a_host_without_a_structured_executor_offers_no_session_methods() {
         .unwrap_err();
     assert_eq!(refused["code"], "UNSUPPORTED_CAPABILITY");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_paginated_codex_session_reports_why_it_cannot_continue() {
+    let host = Host::start(true).await;
+    host.service
+        .create(
+            &host.project,
+            NewTask {
+                id: "task-1".into(),
+                project_id: "project-1".into(),
+                prompt: "old".into(),
+                agent: "codex".into(),
+                permission_mode: "ask".into(),
+                immediate: false,
+                selected_model: None,
+                reasoning_effort: None,
+                speed: None,
+                dsh_agent_preset: None,
+                agent_config_id: None,
+                images: vec![],
+                texts: vec![],
+            },
+        )
+        .expect("create");
+    let rollout = host._root.join("rollout-paginated.jsonl");
+    std::fs::write(&rollout, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"th-old\",\"history_mode\":\"paginated\"}}\n").unwrap();
+    host.service
+        .attach_session(
+            "project-1",
+            "task-1",
+            ProtocolFamily::Codex,
+            "codex",
+            Some("th-old"),
+            Some(&rollout.to_string_lossy()),
+        )
+        .expect("attach");
+    let state = host.state().await;
+    assert_eq!(state["live"], false);
+    assert!(
+        state["resumeBlocked"]
+            .as_str()
+            .unwrap()
+            .contains("codex resume th-old"),
+        "{state}"
+    );
+}

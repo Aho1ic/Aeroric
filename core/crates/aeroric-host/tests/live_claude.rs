@@ -303,6 +303,7 @@ async fn a_resumed_session_starts_with_resume_on_its_first_prompt() {
         family: ProtocolFamily::Claude,
         agent: "claude".into(),
         session_id: "cs-old".into(),
+        session_path: None,
         permission_mode: PermissionMode::Ask,
         permission_mode_wire: "ask".into(),
         selected_model: None,

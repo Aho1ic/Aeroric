@@ -362,6 +362,7 @@ async fn an_old_gateway_task_continues_its_thread_on_the_driver() {
         family: ProtocolFamily::Codex,
         agent: "codex".into(),
         session_id: "th-old".into(),
+        session_path: None,
         permission_mode: PermissionMode::Ask,
         permission_mode_wire: "ask".into(),
         selected_model: Some("mapped-model".into()),

@@ -111,11 +111,13 @@ public struct LiveSessionState: Equatable, Sendable {
     public var inputTokens: UInt64?
     public var outputTokens: UInt64?
     public var latestSeq: UInt64
+    /// Why this session cannot continue natively (e.g. a Codex paginated session).
+    public var resumeBlocked: String? = nil
 
     public init(taskId: String, live: Bool, structured: Bool, family: String?, sessionId: String?, turnActive: Bool,
                 pending: [LivePendingPermission], plan: [LivePlanEntry], model: String?, permission: String?,
                 effort: String?, contextUsed: UInt64?, contextLimit: UInt64?, inputTokens: UInt64?,
-                outputTokens: UInt64?, latestSeq: UInt64) {
+                outputTokens: UInt64?, latestSeq: UInt64, resumeBlocked: String? = nil) {
         self.taskId = taskId
         self.live = live
         self.structured = structured
@@ -132,6 +134,7 @@ public struct LiveSessionState: Equatable, Sendable {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.latestSeq = latestSeq
+        self.resumeBlocked = resumeBlocked
     }
 }
 
@@ -285,7 +288,8 @@ extension LiveSessionState {
             turnActive: turnActive, pending: permissions, plan: entries,
             model: string(f, "model"), permission: string(f, "permission"), effort: string(f, "effort"),
             contextUsed: uint(f["contextUsed"]), contextLimit: uint(f["contextLimit"]),
-            inputTokens: uint(f["inputTokens"]), outputTokens: uint(f["outputTokens"]), latestSeq: latest
+            inputTokens: uint(f["inputTokens"]), outputTokens: uint(f["outputTokens"]), latestSeq: latest,
+            resumeBlocked: string(f, "resumeBlocked")
         )
     }
 }

@@ -204,6 +204,13 @@ pub fn resume_request(
         family: launch,
         agent: string(record, "agent").unwrap_or_default(),
         session_id: session_id.to_string(),
+        session_path: string(
+            record,
+            &format!(
+                "{}SessionPath",
+                family_prefix(resolve_session_owner(record, families).family)
+            ),
+        ),
         permission_mode: permission_mode(record),
         permission_mode_wire: string(record, "permissionMode").unwrap_or_default(),
         selected_model: string(record, "selectedModel"),

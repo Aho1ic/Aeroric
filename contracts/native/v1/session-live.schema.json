@@ -153,6 +153,9 @@
           },
           "type": "array"
         },
+        "resumeBlocked": {
+          "type": "string"
+        },
         "sessionId": {
           "type": [
             "string",

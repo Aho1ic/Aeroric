@@ -229,6 +229,7 @@ impl Env {
             family: ProtocolFamily::Claude,
             agent: agent.into(),
             session_id: "session-1".into(),
+            session_path: None,
             permission_mode: PermissionMode::Ask,
             permission_mode_wire: "ask".into(),
             selected_model: Some("mapped-model".into()),

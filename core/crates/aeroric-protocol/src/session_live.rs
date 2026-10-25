@@ -222,6 +222,10 @@ pub struct SessionState {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub latest_seq: u64,
+    /// Set when this session cannot be continued natively (e.g. a Codex
+    /// paginated session): the page shows this instead of the composer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_blocked: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -455,6 +459,7 @@ pub fn fixture_state() -> SessionState {
         input_tokens: Some(1500),
         output_tokens: Some(300),
         latest_seq: 16,
+        resume_blocked: None,
     }
 }
 
@@ -559,7 +564,7 @@ pub fn schema() -> Value {
                 "plan": {"type": "array", "items": {"$ref": "#/$defs/planEntry"}},
                 "model": opt_string, "permission": opt_string, "effort": opt_string,
                 "contextUsed": opt_u64, "contextLimit": opt_u64, "inputTokens": opt_u64, "outputTokens": opt_u64,
-                "latestSeq": {"type": "integer", "minimum": 0}}},
+                "latestSeq": {"type": "integer", "minimum": 0}, "resumeBlocked": s}},
             "planEntry": {"type": "object", "required": ["text", "status"], "properties": {"text": s, "status": s}},
             "update": {"allOf": [
                 {"type": "object", "required": ["taskId", "seq", "atMs", "type"], "properties": {

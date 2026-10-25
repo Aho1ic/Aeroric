@@ -134,6 +134,9 @@ pub struct ResumeRequest {
     pub family: ProtocolFamily,
     pub agent: String,
     pub session_id: String,
+    /// The session file the record knows for this session, when it knows one: a
+    /// structured resume checks it can continue that format (N6 D3).
+    pub session_path: Option<String>,
     pub permission_mode: PermissionMode,
     /// See [`LaunchRequest::permission_mode_wire`].
     pub permission_mode_wire: String,

@@ -156,20 +156,35 @@ public struct LiveSessionView: View {
                     .font(.system(size: AeroricType.caption))
                     .foregroundStyle(AeroricColor.warning)
             }
-            if !suggestions.isEmpty { suggestionList }
-            ComposerCard(
-                text: $draft, placeholder: store.turnActive ? "补充说明会发给正在进行的这一轮…" : "继续对话，或输入 / 使用命令",
-                isEditable: store.state != nil, sendState: sendState, identifierPrefix: "session.live",
-                onSend: send, onStop: { Task { await store.interrupt() } }
-            ) {
-                HStack(spacing: AeroricSpace.xs) {
-                    modelPicker
-                    permissionPicker
-                    effortPicker
-                }
+            if let blocked = store.state?.resumeBlocked, store.state?.live == false {
+                Label(blocked, systemImage: "lock")
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, AeroricSpace.l)
+                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                    .glassSurface(.floatingCard, in: AeroricRadius.shape(AeroricRadius.l))
+                    .accessibilityIdentifier("session.live.resume-blocked")
+            } else {
+                composer
             }
             UsageBar(usage: store.model?.usage ?? UsageSummary(contextUsed: nil, contextLimit: nil,
                                                                 inputTokens: nil, outputTokens: nil))
+        }
+    }
+
+    @ViewBuilder private var composer: some View {
+        if !suggestions.isEmpty { suggestionList }
+        ComposerCard(
+            text: $draft, placeholder: store.turnActive ? "补充说明会发给正在进行的这一轮…" : "继续对话，或输入 / 使用命令",
+            isEditable: store.state != nil, sendState: sendState, identifierPrefix: "session.live",
+            onSend: send, onStop: { Task { await store.interrupt() } }
+        ) {
+            HStack(spacing: AeroricSpace.xs) {
+                modelPicker
+                permissionPicker
+                effortPicker
+            }
         }
     }
 

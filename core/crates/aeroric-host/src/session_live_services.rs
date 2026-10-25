@@ -363,10 +363,19 @@ fn state(live: &Live, request: &Request) -> Frame {
                     &cwd,
                 )
             });
+            let resume_blocked = aeroric_core::sessions::live::executor::resume_blocked(
+                family,
+                record.get("codexSessionPath").and_then(Value::as_str),
+                record
+                    .get("codexSessionId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
             SessionState {
                 task_id: p.task_id.clone(),
                 live: false,
                 structured,
+                resume_blocked,
                 family: Some(family),
                 session_id,
                 model: text("selectedModel"),

@@ -258,6 +258,7 @@ impl SessionDriver for ClaudeSession {
             input_tokens: state.input_tokens,
             output_tokens: state.output_tokens,
             latest_seq: self.log.latest_seq(),
+            resume_blocked: None,
         }
     }
 
