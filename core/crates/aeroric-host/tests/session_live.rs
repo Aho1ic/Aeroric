@@ -14,9 +14,12 @@ use aeroric_core::location::{StorageLocation, StorageLocationProbe, VolumeKind};
 use aeroric_core::paths::AppPaths;
 use aeroric_core::projects::ProjectService;
 use aeroric_core::runtime::registry::TaskRegistry;
+use aeroric_core::sessions::live::claude::driver::{ClaudeLauncher, ClaudeStart};
 use aeroric_core::sessions::live::codex::rpc::Transport;
 use aeroric_core::sessions::live::codex::server::Launcher;
-use aeroric_core::sessions::live::executor::{Routing, ServerKey, StructuredExecutor};
+use aeroric_core::sessions::live::executor::{
+    ClaudeKey, Route, Routing, ServerKey, StructuredExecutor,
+};
 use aeroric_core::storage_lock::LeaseOwner;
 use aeroric_core::tasks::{
     executor::HostWindowFacts, AgentFamilies, Attachments, NewTask, ProtocolFamily, TaskService,
@@ -97,17 +100,15 @@ struct TestRouting {
 }
 
 impl Routing for TestRouting {
-    fn route(
-        &self,
-        family: ProtocolFamily,
-        agent: &str,
-        config: Option<&str>,
-    ) -> Option<ServerKey> {
+    fn route(&self, family: ProtocolFamily, agent: &str, config: Option<&str>) -> Option<Route> {
         (family == ProtocolFamily::Codex && config.is_none())
-            .then(|| ServerKey::Agent(agent.to_string()))
+            .then(|| Route::Codex(ServerKey::Agent(agent.to_string())))
     }
     fn codex_launcher(&self, _key: &ServerKey) -> Launcher {
         Arc::clone(&self.launcher)
+    }
+    fn claude_launcher(&self, _key: &ClaudeKey) -> ClaudeLauncher {
+        Arc::new(|_: &ClaudeStart| Err("no claude in this test".to_string()))
     }
 }
 

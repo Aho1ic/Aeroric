@@ -147,12 +147,11 @@ impl LiveStatusSink for Sink {
         &self,
         _project: &str,
         _task: &str,
-        family: ProtocolFamily,
+        _family: ProtocolFamily,
         _agent: &str,
         id: &str,
         path: Option<&str>,
     ) {
-        assert_eq!(family, ProtocolFamily::Codex);
         self.sessions
             .lock()
             .push((id.to_string(), path.map(str::to_string)));

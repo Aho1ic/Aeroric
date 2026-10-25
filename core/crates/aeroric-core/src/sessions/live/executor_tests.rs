@@ -46,19 +46,29 @@ impl Routing for FakeRouting {
         family: ProtocolFamily,
         agent: &str,
         agent_config_id: Option<&str>,
-    ) -> Option<ServerKey> {
-        if family != ProtocolFamily::Codex {
-            return None;
-        }
-        match agent_config_id {
-            None => Some(ServerKey::Agent(agent.to_string())),
-            Some(id) if id.starts_with("native-") => Some(ServerKey::Config(id.to_string())),
-            Some(_) => None,
+    ) -> Option<Route> {
+        match (family, agent_config_id) {
+            (ProtocolFamily::Codex, None) => {
+                Some(Route::Codex(ServerKey::Agent(agent.to_string())))
+            }
+            (ProtocolFamily::Codex, Some(id)) if id.starts_with("native-") => {
+                Some(Route::Codex(ServerKey::Config(id.to_string())))
+            }
+            (ProtocolFamily::Claude, config) => Some(Route::Claude(ClaudeKey {
+                agent: agent.to_string(),
+                config: config.map(str::to_string),
+            })),
+            _ => None,
         }
     }
     fn codex_launcher(&self, key: &ServerKey) -> Launcher {
         self.1.lock().push(key.clone());
         Arc::clone(&self.0)
+    }
+    fn claude_launcher(&self, _key: &ClaudeKey) -> ClaudeLauncher {
+        Arc::new(|_: &crate::sessions::live::claude::driver::ClaudeStart| {
+            Err("no claude in this test".to_string())
+        })
     }
 }
 
@@ -171,6 +181,23 @@ async fn codex_in_a_local_workspace_goes_to_the_driver_and_the_rest_to_the_pty_e
         vec!["launch t2", "launch t3", "launch t4"]
     );
     assert!(s.executor.registry().get("t2").is_none());
+
+    // Claude goes to its own driver (N5), never to the PTY executor.
+    s.executor
+        .launch(&launch("t5", ProtocolFamily::Claude))
+        .unwrap();
+    assert_eq!(
+        s.executor.registry().get("t5").map(|d| d.family()),
+        Some(ProtocolFamily::Claude)
+    );
+    let sink = Arc::clone(&s.sink);
+    until("the claude launch failure", move || {
+        sink.statuses.lock().iter().any(|(status, reason, _)| {
+            *status == TaskStatus::Failed && reason.as_deref() == Some("no claude in this test")
+        })
+    })
+    .await;
+    assert_eq!(s.inner.calls.lock().len(), 3);
 }
 
 #[tokio::test]

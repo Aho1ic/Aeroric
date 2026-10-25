@@ -152,6 +152,7 @@ mod process {
             args: vec![],
             env: vec![("FAKE_MARK".into(), "set".into())],
             unset_env: vec![],
+            cwd: None,
         }
     }
 

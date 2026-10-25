@@ -2,4 +2,5 @@
 //! `claude` process per session, driven the way the Claude Agent SDK drives it.
 
 pub mod control;
+pub mod driver;
 pub mod map;

@@ -8,7 +8,8 @@
 //!   built-in Codex shares one server; each agent configuration whose harness
 //!   is Codex gets its own (N4b), with the configuration's managed home and
 //!   gateway environment, and a gateway token per server process that is
-//!   revoked when the process goes away.
+//!   revoked when the process goes away. Claude (N5) runs one process per
+//!   session, so its gateway token stays per task, as on the PTY path.
 
 use std::sync::{Arc, Mutex, Weak};
 
@@ -18,8 +19,14 @@ use aeroric_core::agents::environment::{terminal_env_ops, EnvOp};
 use aeroric_core::agents::launch::LaunchInput;
 use aeroric_core::context::CoreContext;
 use aeroric_core::events::EventLog;
-use aeroric_core::sessions::live::codex::server::{process_launcher, Launcher, ProcessSpec};
-use aeroric_core::sessions::live::executor::{Routing, ServerKey};
+use aeroric_core::sessions::live::claude::driver::{ClaudeLauncher, ClaudeStart};
+use aeroric_core::sessions::live::claude::map::{
+    claude_permission_mode, version_supported as claude_version_supported,
+};
+use aeroric_core::sessions::live::codex::server::{
+    process_launcher, spawn_checked, Launcher, ProcessSpec,
+};
+use aeroric_core::sessions::live::executor::{ClaudeKey, Route, Routing, ServerKey};
 use aeroric_core::sessions::live::LiveStatusSink;
 use aeroric_core::settings::get_login_shell_env;
 use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
@@ -130,8 +137,8 @@ impl Routing for HostRouting {
         family: ProtocolFamily,
         agent: &str,
         agent_config_id: Option<&str>,
-    ) -> Option<ServerKey> {
-        if family != ProtocolFamily::Codex {
+    ) -> Option<Route> {
+        if !matches!(family, ProtocolFamily::Codex | ProtocolFamily::Claude) {
             return None;
         }
         let data_dir = self.context.paths.data_dir();
@@ -141,12 +148,24 @@ impl Routing for HostRouting {
             Some(id) => Some(resolve_config(data_dir, id).ok()?),
             None => legacy_mapping(data_dir, agent),
         };
-        match config {
-            Some(config) if config.harness == Harness::Codex => {
-                Some(ServerKey::Config(config.config_id))
+        match (family, config) {
+            (ProtocolFamily::Codex, Some(config)) if config.harness == Harness::Codex => {
+                Some(Route::Codex(ServerKey::Config(config.config_id)))
             }
-            Some(_) => None,
-            None => Some(ServerKey::Agent(agent.to_string())),
+            (ProtocolFamily::Claude, Some(config)) if config.harness == Harness::Claude => {
+                Some(Route::Claude(ClaudeKey {
+                    agent: agent.to_string(),
+                    config: Some(config.config_id),
+                }))
+            }
+            (_, Some(_)) => None,
+            (ProtocolFamily::Codex, None) => {
+                Some(Route::Codex(ServerKey::Agent(agent.to_string())))
+            }
+            (_, None) => Some(Route::Claude(ClaudeKey {
+                agent: agent.to_string(),
+                config: None,
+            })),
         }
     }
 
@@ -156,6 +175,104 @@ impl Routing for HostRouting {
             ServerKey::Config(id) => config_launcher(Arc::clone(&self.context), id.clone()),
         }
     }
+
+    fn claude_launcher(&self, key: &ClaudeKey) -> ClaudeLauncher {
+        claude_launcher(Arc::clone(&self.context), key.clone())
+    }
+}
+
+/// Claude Code in stream-json control mode (N5). One process per session:
+/// argv and environment are built per start — the model, permission tier and
+/// `--resume` change between starts. A configuration launch gets the managed
+/// home and the gateway with a token for this task, revoked with the process.
+fn claude_launcher(context: Arc<CoreContext>, key: ClaudeKey) -> ClaudeLauncher {
+    Arc::new(move |start: &ClaudeStart| {
+        let (input, passes_model) = match &key.config {
+            Some(_) => (harness_launch_input(&context, "claude"), true),
+            None if key.agent == "claude" => (
+                harness_path(&context, "claude")
+                    .map(LaunchInput::new)
+                    .unwrap_or_else(|| LaunchInput::new("claude")),
+                true,
+            ),
+            // A custom Claude-family wrapper owns its model, as on the PTY path.
+            None => (resolve_launch_input(&context, &key.agent), false),
+        };
+        let mut spec = spec_with_login_env(input);
+        spec.cwd = Some(start.cwd.clone());
+        let args = claude_args(start, passes_model);
+        let mut revoke: Option<Box<dyn FnOnce() + Send>> = None;
+        if let Some(config_id) = &key.config {
+            let config = resolve_config(context.paths.data_dir(), config_id)?;
+            push_ops(&mut spec, config_home_env(&context, &config)?);
+            let token = aeroric_core::local_router::task_tokens::issue(
+                &start.task_id,
+                Some(config_id.clone()),
+            );
+            let task_id = start.task_id.clone();
+            revoke = Some(Box::new(move || {
+                aeroric_core::local_router::task_tokens::revoke(&task_id)
+            }));
+            match gateway_env_ops(context.paths.data_dir(), ProtocolFamily::Claude, &token) {
+                Ok(ops) => push_ops(&mut spec, ops),
+                Err(reason) => {
+                    if let Some(revoke) = revoke {
+                        revoke();
+                    }
+                    return Err(reason);
+                }
+            }
+        }
+        match spawn_checked(&spec, claude_version_supported, &args, "Claude Code") {
+            Ok((transport, guard)) => Ok((
+                transport,
+                guard.map(|guard| match revoke {
+                    Some(revoke) => guard.with_cleanup(revoke),
+                    None => guard,
+                }),
+            )),
+            Err(reason) => {
+                if let Some(revoke) = revoke {
+                    revoke();
+                }
+                Err(reason)
+            }
+        }
+    })
+}
+
+/// The flags the Claude Agent SDK starts Claude Code with, minus its isolation
+/// flags (N5 D6), plus permission to switch to full access later (D3).
+pub fn claude_args(start: &ClaudeStart, passes_model: bool) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--input-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--permission-prompt-tool",
+        "stdio",
+        "--permission-mode",
+        claude_permission_mode(&start.permission),
+        "--allow-dangerously-skip-permissions",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    if let (true, Some(model)) = (
+        passes_model,
+        start.model.as_deref().filter(|m| !m.trim().is_empty()),
+    ) {
+        args.extend(["--model".to_string(), model.to_string()]);
+    }
+    if let Some(effort) = start.effort.as_deref().filter(|e| !e.trim().is_empty()) {
+        args.extend(["--effort".to_string(), effort.to_string()]);
+    }
+    if let Some(session) = &start.resume {
+        args.extend(["--resume".to_string(), session.clone()]);
+    }
+    args
 }
 
 fn spec_with_login_env(input: LaunchInput) -> ProcessSpec {

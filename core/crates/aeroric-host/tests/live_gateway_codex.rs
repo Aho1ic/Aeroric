@@ -17,7 +17,9 @@ use aeroric_core::local_router::task_tokens;
 use aeroric_core::location::{StorageLocation, StorageLocationProbe, VolumeKind};
 use aeroric_core::paths::AppPaths;
 use aeroric_core::sessions::live::codex::server::{CodexServer, SERVER_IDLE_MS};
-use aeroric_core::sessions::live::executor::{Routing, ServerKey, StructuredExecutor};
+use aeroric_core::sessions::live::executor::{
+    ClaudeKey, Route, Routing, ServerKey, StructuredExecutor,
+};
 use aeroric_core::sessions::live::LiveStatusSink;
 use aeroric_core::storage_lock::LeaseOwner;
 use aeroric_core::tasks::executor::{CancelTarget, Execution, ResetOutcome};
@@ -175,16 +177,16 @@ fn codex_configurations_get_their_own_server_and_everything_else_stays_put() {
     let config = env.codex_config.as_str();
     assert_eq!(
         route(ProtocolFamily::Codex, "codex", Some(config)),
-        Some(ServerKey::Config(config.into()))
+        Some(Route::Codex(ServerKey::Config(config.into())))
     );
     assert_eq!(
         route(ProtocolFamily::Codex, "codex", None),
-        Some(ServerKey::Agent("codex".into()))
+        Some(Route::Codex(ServerKey::Agent("codex".into())))
     );
     assert_eq!(
         route(ProtocolFamily::Codex, "codex", Some("cfg-claude")),
         None,
-        "a Claude harness is not ours"
+        "a Claude harness under a Codex family is not ours"
     );
     assert_eq!(
         route(ProtocolFamily::Codex, "codex", Some("cfg-gone")),
@@ -193,8 +195,13 @@ fn codex_configurations_get_their_own_server_and_everything_else_stays_put() {
     );
     assert_eq!(
         route(ProtocolFamily::Claude, "claude", Some("cfg-claude")),
-        None
+        Some(Route::Claude(ClaudeKey {
+            agent: "claude".into(),
+            config: Some("cfg-claude".into())
+        })),
+        "Claude configurations run natively per session (N5)"
     );
+    assert_eq!(route(ProtocolFamily::Omp, "omp", None), None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -377,10 +384,11 @@ async fn an_old_gateway_task_continues_its_thread_on_the_driver() {
     assert!(env.recorded("CODEX_HOME").unwrap().contains("agent-homes"));
     assert!(pty.0.lock().is_empty(), "nothing went to the PTY executor");
 
-    executor.resume(&resume("cfg-claude")).unwrap();
-    assert_eq!(
-        *pty.0.lock(),
-        ["resume task-cfg-claude"],
-        "a Claude configuration stays on the PTY"
-    );
+    executor
+        .resume(&ResumeRequest {
+            family: ProtocolFamily::Omp,
+            ..resume(&env.codex_config)
+        })
+        .unwrap();
+    assert_eq!(pty.0.lock().len(), 1, "other families stay on the PTY");
 }

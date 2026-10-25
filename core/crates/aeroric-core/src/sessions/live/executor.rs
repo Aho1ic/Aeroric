@@ -9,6 +9,7 @@ use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 
+use super::claude::driver::{ClaudeLauncher, ClaudeSession, ClaudeSessionSpec};
 use super::codex::driver::{CodexSession, CodexSessionSpec};
 use super::codex::server::{CodexServer, Launcher};
 use super::{now_ms, DriverRegistry, LiveStatusSink, SessionDriver, SharedLog};
@@ -31,8 +32,24 @@ pub enum ServerKey {
     Config(String),
 }
 
+/// Which Claude launch a run uses (N5): one process per session, so the key
+/// only picks the program and environment — the built-in or custom agent, or
+/// an agent configuration.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ClaudeKey {
+    pub agent: String,
+    pub config: Option<String>,
+}
+
+/// Where a structured run goes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Route {
+    Codex(ServerKey),
+    Claude(ClaudeKey),
+}
+
 /// What the host decides per run: whether `(family, agent, agent configuration)`
-/// goes structured — and on which server — and how to start that server.
+/// goes structured — and how — and how to start the agent.
 pub trait Routing: Send + Sync {
     /// `None` keeps the run on the PTY executor.
     fn route(
@@ -40,8 +57,9 @@ pub trait Routing: Send + Sync {
         family: ProtocolFamily,
         agent: &str,
         agent_config_id: Option<&str>,
-    ) -> Option<ServerKey>;
+    ) -> Option<Route>;
     fn codex_launcher(&self, key: &ServerKey) -> Launcher;
+    fn claude_launcher(&self, key: &ClaudeKey) -> ClaudeLauncher;
 }
 
 pub struct StructuredExecutor {
@@ -51,6 +69,7 @@ pub struct StructuredExecutor {
     runtime: tokio::runtime::Handle,
     registry: Arc<DriverRegistry>,
     servers: Mutex<HashMap<ServerKey, Arc<CodexServer>>>,
+    claude_launchers: Mutex<HashMap<ClaudeKey, ClaudeLauncher>>,
 }
 
 impl StructuredExecutor {
@@ -68,6 +87,7 @@ impl StructuredExecutor {
             runtime: runtime.clone(),
             registry: Arc::default(),
             servers: Mutex::default(),
+            claude_launchers: Mutex::default(),
         });
         let weak: Weak<Self> = Arc::downgrade(&executor);
         runtime.spawn(async move {
@@ -114,18 +134,29 @@ impl StructuredExecutor {
         )
     }
 
-    /// The server a run with these facts goes to; `None` = the PTY executor.
+    /// Where a run with these facts goes; `None` = the PTY executor.
     fn route_task(
         &self,
         family: ProtocolFamily,
         agent: &str,
         config: Option<&str>,
         cwd: &WorkingDirectory,
-    ) -> Option<ServerKey> {
-        if family != ProtocolFamily::Codex || !matches!(cwd, WorkingDirectory::Local { .. }) {
+    ) -> Option<Route> {
+        if !matches!(family, ProtocolFamily::Codex | ProtocolFamily::Claude)
+            || !matches!(cwd, WorkingDirectory::Local { .. })
+        {
             return None;
         }
         self.routing.route(family, agent, config)
+    }
+
+    fn claude_launcher(&self, key: &ClaudeKey) -> ClaudeLauncher {
+        let mut launchers = self.claude_launchers.lock();
+        Arc::clone(
+            launchers
+                .entry(key.clone())
+                .or_insert_with(|| self.routing.claude_launcher(key)),
+        )
     }
 
     /// Whether a run with these facts goes to a structured driver.
@@ -139,7 +170,7 @@ impl StructuredExecutor {
         self.route_task(family, agent, config, cwd).is_some()
     }
 
-    fn start_session(&self, spec: CodexSessionSpec, key: &ServerKey) -> Arc<CodexSession> {
+    fn start_session(&self, spec: CodexSessionSpec, route: &Route) -> Arc<dyn SessionDriver> {
         if let Some(old) = self.registry.remove(&spec.task_id) {
             let _ = old.close();
         }
@@ -147,19 +178,34 @@ impl StructuredExecutor {
             .registry
             .log(&spec.task_id)
             .unwrap_or_else(|| SharedLog::new(&spec.task_id));
-        let server = self.server(key);
-        let session = CodexSession::start(
-            spec.clone(),
-            server,
-            Arc::clone(&self.sink),
-            log.clone(),
-            &self.runtime,
-        );
-        self.registry.insert(
-            &spec.task_id,
-            Arc::clone(&session) as Arc<dyn SessionDriver>,
-            log,
-        );
+        let session: Arc<dyn SessionDriver> = match route {
+            Route::Codex(key) => CodexSession::start(
+                spec.clone(),
+                self.server(key),
+                Arc::clone(&self.sink),
+                log.clone(),
+                &self.runtime,
+            ),
+            Route::Claude(key) => ClaudeSession::start(
+                ClaudeSessionSpec {
+                    task_id: spec.task_id.clone(),
+                    project_id: spec.project_id.clone(),
+                    generation: spec.generation,
+                    agent: spec.agent.clone(),
+                    cwd: spec.cwd.clone(),
+                    permission: spec.permission.clone(),
+                    model: spec.model.clone(),
+                    effort: spec.effort.clone(),
+                    session_id: spec.thread_id.clone(),
+                },
+                self.claude_launcher(key),
+                Arc::clone(&self.sink),
+                log.clone(),
+                &self.runtime,
+            ),
+        };
+        self.registry
+            .insert(&spec.task_id, Arc::clone(&session), log);
         session
     }
 
@@ -206,7 +252,7 @@ fn local_path(cwd: &WorkingDirectory) -> String {
 impl TaskExecutor for StructuredExecutor {
     fn launch(&self, request: &LaunchRequest) -> Execution<()> {
         let config = request.agent_config_id.as_deref();
-        let Some(key) = self.route_task(
+        let Some(route) = self.route_task(
             request.family,
             &request.agent,
             config,
@@ -229,7 +275,7 @@ impl TaskExecutor for StructuredExecutor {
                 effort: request.reasoning_effort.clone(),
                 thread_id: request.session_id.clone(),
             },
-            &key,
+            &route,
         );
         let prompt = request
             .prompt_override
@@ -247,7 +293,7 @@ impl TaskExecutor for StructuredExecutor {
 
     fn resume(&self, request: &ResumeRequest) -> Execution<()> {
         let config = request.agent_config_id.as_deref();
-        let Some(key) = self.route_task(
+        let Some(route) = self.route_task(
             request.family,
             &request.agent,
             config,
@@ -277,7 +323,7 @@ impl TaskExecutor for StructuredExecutor {
                 effort: request.reasoning_effort.clone(),
                 thread_id: Some(request.session_id.clone()),
             },
-            &key,
+            &route,
         );
         session.attach().map_err(|error| ExecutorFailure::Spawn {
             reason: error.to_string(),

@@ -236,12 +236,16 @@ pub struct ProcessSpec {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub unset_env: Vec<String>,
+    pub cwd: Option<String>,
 }
 
 impl ProcessSpec {
     fn command(&self) -> std::process::Command {
         let mut command = std::process::Command::new(&self.program);
         command.args(&self.args);
+        if let Some(cwd) = &self.cwd {
+            command.current_dir(cwd);
+        }
         for key in &self.unset_env {
             command.env_remove(key);
         }
@@ -270,6 +274,29 @@ pub fn process_launcher(spec: ProcessSpec) -> Launcher {
             .map(|(transport, guard)| (transport, Some(guard)))
             .map_err(|e| format!("无法启动 Codex app-server（{}）：{e}", spec.program))
     })
+}
+
+/// `<program> [fixed args] --version` must pass `check`, then
+/// `<program> [fixed args] <args>` is spawned speaking line JSON on stdio
+/// (the Claude driver's launch, N5).
+pub fn spawn_checked(
+    spec: &ProcessSpec,
+    check: fn(&str) -> Result<(), String>,
+    args: &[String],
+    label: &str,
+) -> Result<(Transport, Option<ChildGuard>), String> {
+    let mut version = spec.command();
+    version.current_dir(std::env::temp_dir());
+    let output = version
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("无法启动 {label}（{}）：{e}", spec.program))?;
+    check(&String::from_utf8_lossy(&output.stdout))?;
+    let mut command = spec.command();
+    command.args(args);
+    Transport::spawn(tokio::process::Command::from(command))
+        .map(|(transport, guard)| (transport, Some(guard)))
+        .map_err(|e| format!("无法启动 {label}（{}）：{e}", spec.program))
 }
 
 #[cfg(test)]
