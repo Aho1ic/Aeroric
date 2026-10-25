@@ -180,6 +180,32 @@ struct GeneralSettingsPane: View {
     }
 }
 
+/// A14: keep the Mac awake while tasks run (host-held; on by default).
+struct KeepAwakeSettingsCard: View {
+    let store: KeepAwakeStore
+
+    var body: some View {
+        SettingsCard("电源") {
+            SettingsRow("运行任务时阻止 Mac 睡眠", detail: detail) {
+                Toggle("", isOn: Binding(
+                    get: { store.state?.enabled ?? true },
+                    set: { on in Task { await store.setEnabled(on) } }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .accessibilityIdentifier("settings.keep-awake")
+            }
+        }
+        .task { await store.refresh() }
+    }
+
+    private var detail: String {
+        guard let state = store.state else { return "有任务在运行或排队时，阻止 Mac 进入空闲睡眠；合盖睡眠不受影响。" }
+        if state.active { return "正在阻止睡眠：\(state.activeTasks) 个任务在运行。" }
+        return state.enabled ? "当前没有任务在运行，Mac 可以正常睡眠。" : "已关闭：任务运行时 Mac 也可能进入空闲睡眠。"
+    }
+}
+
 struct AppearanceSettingsPane: View {
     @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
     @AppStorage("settings.surfacePreference") private var surfaceRaw = SurfacePreference.glass.rawValue

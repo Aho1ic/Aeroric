@@ -69,6 +69,9 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
         case .general:
             GeneralSettingsPane(controller: state.settingsInteractionMode, fallbackMode: interactionMode,
                                 onFallbackSave: onInteractionModeSave, fallbackError: interactionModeSaveError)
+            if let keepAwake = state.settingsKeepAwake, keepAwake.isAvailable {
+                KeepAwakeSettingsCard(store: keepAwake)
+            }
         case .appearance:
             AppearanceSettingsPane()
         case .agents:

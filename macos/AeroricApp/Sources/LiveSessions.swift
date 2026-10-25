@@ -106,8 +106,12 @@ extension AppServices {
         statusPumpTask?.cancel()
         statusCursor = nil
         statusPumpTask = Task { @MainActor [weak self] in
+            var tick = 0
             while !Task.isCancelled {
                 await self?.pumpStatusOnce()
+                // A14: the keep-awake indicator changes on the host's 2s watch; 5s is enough.
+                if tick % 5 == 0 { await self?.keepAwakeStore.refresh() }
+                tick += 1
                 try? await Task.sleep(for: .seconds(1))
             }
         }

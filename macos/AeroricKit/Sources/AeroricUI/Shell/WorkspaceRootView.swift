@@ -129,7 +129,8 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                 phaseText: state.phaseText,
                 environmentLabel: state.environmentLabel,
                 context: state.statusContext,
-                counts: state.activityCounts
+                counts: state.activityCounts,
+                keepingAwake: state.keepingAwake
             )
         }
         .background(AeroricColor.canvas.ignoresSafeArea())

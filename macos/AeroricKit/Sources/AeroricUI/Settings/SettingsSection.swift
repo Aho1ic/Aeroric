@@ -44,6 +44,8 @@ public protocol SettingsStateProviding: AnyObject {
     var connectionPhaseText: String? { get }
     /// Imported sessions (M4); nil or unavailable hides the 导入 pane.
     var settingsImportBook: ImportBook? { get }
+    /// Keep-awake switch (A14); nil or unavailable hides it.
+    var settingsKeepAwake: KeepAwakeStore? { get }
 }
 
 public extension SettingsStateProviding {
@@ -51,4 +53,5 @@ public extension SettingsStateProviding {
     var settingsInteractionMode: InteractionModeController? { nil }
     var connectionPhaseText: String? { nil }
     var settingsImportBook: ImportBook? { nil }
+    var settingsKeepAwake: KeepAwakeStore? { nil }
 }

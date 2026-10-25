@@ -194,12 +194,15 @@ public protocol WorkspaceStateProviding: AnyObject {
     var paletteCommands: [PaletteCommand] { get }
     /// Live counts for the status bar; nil until the task mirror is loaded.
     var activityCounts: ActivityCounts? { get }
+    /// The host is keeping the Mac awake for running tasks (A14).
+    var keepingAwake: Bool { get }
     /// Open `path` as a project (from "添加为项目…" on an unassigned import).
     func addProject(path: String)
 }
 
 public extension WorkspaceStateProviding {
     var activityCounts: ActivityCounts? { nil }
+    var keepingAwake: Bool { false }
     func addProject(path: String) {}
 }
 

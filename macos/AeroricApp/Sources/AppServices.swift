@@ -55,6 +55,7 @@ final class AppServices {
     let legacyCleanupStore = LegacyCleanupStore()
     /// Imported Claude/Codex sessions (M4); gated on the host's `imports` capability.
     let importBook = ImportBook()
+    let keepAwakeStore = KeepAwakeStore()
     /// Canvas boards and node layout (M5); gated on the host's `canvas` capability.
     let canvasBook = CanvasBook()
     /// AP7:外部协议只读状态(OAuth/沙箱/工具/媒体/语音)。
@@ -214,6 +215,10 @@ final class AppServices {
                     self.canvasBook.attach(
                         client: CanvasClient(connection: connection),
                         capabilityEnabled: advertised[CanvasClient.capability] == true
+                    )
+                    self.keepAwakeStore.attach(
+                        client: PowerClient(connection: connection),
+                        capabilityEnabled: advertised[PowerClient.capability] == true
                     )
                     self.liveCapability = advertised[SessionsClient.liveCapability] == true
                     self.liveStructured.removeAll()
@@ -844,4 +849,6 @@ extension AppServices: SettingsStateProviding {
     var settingsInteractionMode: InteractionModeController? { interactionModeController }
     var connectionPhaseText: String? { phaseText }
     var settingsImportBook: ImportBook? { importBook }
+    var settingsKeepAwake: KeepAwakeStore? { keepAwakeStore }
+    var keepingAwake: Bool { keepAwakeStore.active }
 }

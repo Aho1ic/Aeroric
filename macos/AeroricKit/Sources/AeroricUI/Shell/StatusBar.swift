@@ -23,19 +23,23 @@ public struct StatusBar: View {
     let context: String?
     /// Live running / waiting counts (overhaul M1); nil until the mirror loads.
     let counts: ActivityCounts?
+    /// The host holds a no-idle-sleep assertion for running tasks (A14).
+    let keepingAwake: Bool
 
     public init(
         phase: ConnectionPhaseSnapshot,
         phaseText: String,
         environmentLabel: String,
         context: String? = nil,
-        counts: ActivityCounts? = nil
+        counts: ActivityCounts? = nil,
+        keepingAwake: Bool = false
     ) {
         self.phase = phase
         self.phaseText = phaseText
         self.environmentLabel = environmentLabel
         self.context = context
         self.counts = counts
+        self.keepingAwake = keepingAwake
     }
 
     public var body: some View {
@@ -53,6 +57,12 @@ public struct StatusBar: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .accessibilityIdentifier("statusbar.context")
+            }
+            if keepingAwake {
+                Label("阻止睡眠中", systemImage: "cup.and.saucer")
+                    .labelStyle(.titleAndIcon)
+                    .help("有任务在运行，Aeroric 正在阻止 Mac 进入空闲睡眠")
+                    .accessibilityIdentifier("statusbar.keep-awake")
             }
             if let counts {
                 countLabel(.running, "运行中", counts.running)
