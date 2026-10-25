@@ -199,58 +199,13 @@ impl CliPtyExecutor {
     /// The harness's own CLI: the configured `claude_path`/`codex_path`, else the
     /// name on PATH. Never a custom profile's wrapper or fixed args.
     fn harness_input(&self, agent: &str) -> LaunchInput {
-        aeroric_core::storage::load_settings(&self.context)
-            .ok()
-            .and_then(|outcome| outcome.found())
-            .and_then(|fields| {
-                fields
-                    .get(&format!("{agent}_path"))
-                    .and_then(Value::as_str)
-                    .filter(|path| !path.trim().is_empty())
-                    .map(str::to_string)
-            })
-            .map(LaunchInput::new)
-            .unwrap_or_else(|| LaunchInput::new(agent))
+        harness_launch_input(&self.context, agent)
     }
 
     /// Managed home for a configuration launch, isolated like the legacy wrappers
     /// did, so the user's own CLI config cannot redirect the request elsewhere.
     fn config_home_ops(&self, config: &ConfigLaunch) -> Result<Vec<EnvOp>, String> {
-        let home = self
-            .context
-            .paths
-            .data_dir()
-            .join("agent-homes")
-            .join(&config.home_dir_name);
-        let session_env = home.join("session-env");
-        let tmp = home.join("tmp");
-        for dir in [&home, &session_env, &tmp] {
-            aeroric_core::settings::ensure_private_dir(dir)
-                .map_err(|e| format!("cannot prepare managed agent home {}: {e}", dir.display()))?;
-        }
-        let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
-        Ok(match config.harness {
-            Harness::Codex => vec![
-                EnvOp::Set("CODEX_HOME".into(), path(&home)),
-                EnvOp::Unset("OPENAI_ORG_ID".into()),
-                EnvOp::Unset("OPENAI_PROJECT".into()),
-            ],
-            _ => vec![
-                EnvOp::Set("CLAUDE_CONFIG_DIR".into(), path(&home)),
-                EnvOp::Set("CLAUDE_CODE_SESSION_ENV_DIR".into(), path(&session_env)),
-                EnvOp::Set("TMPDIR".into(), path(&tmp)),
-                EnvOp::Set(
-                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(),
-                    "1".into(),
-                ),
-                EnvOp::Set("CLAUDE_CODE_ATTRIBUTION_HEADER".into(), "0".into()),
-                EnvOp::Unset("ANTHROPIC_MODEL".into()),
-                EnvOp::Unset("ANTHROPIC_DEFAULT_OPUS_MODEL".into()),
-                EnvOp::Unset("ANTHROPIC_DEFAULT_SONNET_MODEL".into()),
-                EnvOp::Unset("ANTHROPIC_DEFAULT_HAIKU_MODEL".into()),
-                EnvOp::Unset("AGENT_ROUTER_TOKEN".into()),
-            ],
-        })
+        config_home_env(&self.context, config)
     }
 }
 
@@ -289,6 +244,65 @@ pub(crate) fn resolve_launch_input(context: &CoreContext, agent: &str) -> Launch
     LaunchInput::new(agent)
 }
 
+/// The harness's own CLI: the configured `claude_path`/`codex_path`, else the
+/// name on PATH. Never a custom profile's wrapper or fixed args.
+pub(crate) fn harness_launch_input(context: &CoreContext, agent: &str) -> LaunchInput {
+    aeroric_core::storage::load_settings(context)
+        .ok()
+        .and_then(|outcome| outcome.found())
+        .and_then(|fields| {
+            fields
+                .get(&format!("{agent}_path"))
+                .and_then(Value::as_str)
+                .filter(|path| !path.trim().is_empty())
+                .map(str::to_string)
+        })
+        .map(LaunchInput::new)
+        .unwrap_or_else(|| LaunchInput::new(agent))
+}
+
+/// Managed home for a configuration launch, isolated like the legacy wrappers
+/// did, so the user's own CLI config cannot redirect the request elsewhere.
+pub(crate) fn config_home_env(
+    context: &CoreContext,
+    config: &ConfigLaunch,
+) -> Result<Vec<EnvOp>, String> {
+    let home = context
+        .paths
+        .data_dir()
+        .join("agent-homes")
+        .join(&config.home_dir_name);
+    let session_env = home.join("session-env");
+    let tmp = home.join("tmp");
+    for dir in [&home, &session_env, &tmp] {
+        aeroric_core::settings::ensure_private_dir(dir)
+            .map_err(|e| format!("cannot prepare managed agent home {}: {e}", dir.display()))?;
+    }
+    let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+    Ok(match config.harness {
+        Harness::Codex => vec![
+            EnvOp::Set("CODEX_HOME".into(), path(&home)),
+            EnvOp::Unset("OPENAI_ORG_ID".into()),
+            EnvOp::Unset("OPENAI_PROJECT".into()),
+        ],
+        _ => vec![
+            EnvOp::Set("CLAUDE_CONFIG_DIR".into(), path(&home)),
+            EnvOp::Set("CLAUDE_CODE_SESSION_ENV_DIR".into(), path(&session_env)),
+            EnvOp::Set("TMPDIR".into(), path(&tmp)),
+            EnvOp::Set(
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(),
+                "1".into(),
+            ),
+            EnvOp::Set("CLAUDE_CODE_ATTRIBUTION_HEADER".into(), "0".into()),
+            EnvOp::Unset("ANTHROPIC_MODEL".into()),
+            EnvOp::Unset("ANTHROPIC_DEFAULT_OPUS_MODEL".into()),
+            EnvOp::Unset("ANTHROPIC_DEFAULT_SONNET_MODEL".into()),
+            EnvOp::Unset("ANTHROPIC_DEFAULT_HAIKU_MODEL".into()),
+            EnvOp::Unset("AGENT_ROUTER_TOKEN".into()),
+        ],
+    })
+}
+
 fn config_family(config: &ConfigLaunch) -> ProtocolFamily {
     match config.harness {
         Harness::Codex => ProtocolFamily::Codex,
@@ -314,7 +328,7 @@ fn refuse_remote_config(
 /// Environment that points a Claude/Codex CLI at the gateway with its task token.
 /// Any upstream key the CLI would otherwise pick up is unset, so a misconfigured
 /// task fails at the gateway instead of silently spending a different account.
-fn gateway_env_ops(
+pub(crate) fn gateway_env_ops(
     data_dir: &std::path::Path,
     family: ProtocolFamily,
     token: &str,

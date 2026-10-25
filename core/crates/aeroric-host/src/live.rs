@@ -4,14 +4,16 @@
 //!   and out as `task-status`, exactly like a PTY exit; its thread id is
 //!   attached to the task record as the Codex session.
 //! - [`HostRouting`]: which runs go structured, and how `codex app-server` is
-//!   started — the same program and login-shell environment a PTY launch of
-//!   that agent gets (Q16). Runs under an agent configuration stay on the PTY
-//!   path in N2: their gateway token is issued per task, and one shared
-//!   app-server cannot carry a per-task token.
+//!   started — the same program and environment a PTY launch gets (Q16). A
+//!   built-in Codex shares one server; each agent configuration whose harness
+//!   is Codex gets its own (N4b), with the configuration's managed home and
+//!   gateway environment, and a gateway token per server process that is
+//!   revoked when the process goes away.
 
 use std::sync::{Arc, Mutex, Weak};
 
-use aeroric_core::agent_connections::launch::legacy_mapping;
+use aeroric_core::agent_connections::launch::{legacy_mapping, resolve_config, ConfigLaunch};
+use aeroric_core::agent_connections::model::Harness;
 use aeroric_core::agents::environment::{terminal_env_ops, EnvOp};
 use aeroric_core::agents::launch::LaunchInput;
 use aeroric_core::context::CoreContext;
@@ -23,7 +25,9 @@ use aeroric_core::settings::get_login_shell_env;
 use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
 use aeroric_core::tasks::{ProtocolFamily, TaskService, TaskStatus};
 
-use crate::executor::resolve_launch_input;
+use crate::executor::{
+    config_home_env, gateway_env_ops, harness_launch_input, resolve_launch_input,
+};
 
 pub struct TaskServiceSink {
     service: Mutex<Weak<TaskService>>,
@@ -127,33 +131,108 @@ impl Routing for HostRouting {
         agent: &str,
         agent_config_id: Option<&str>,
     ) -> Option<ServerKey> {
-        (family == ProtocolFamily::Codex
-            && agent_config_id.is_none_or(|id| id.trim().is_empty())
-            && legacy_mapping(self.context.paths.data_dir(), agent).is_none())
-        .then(|| ServerKey::Agent(agent.to_string()))
+        if family != ProtocolFamily::Codex {
+            return None;
+        }
+        let data_dir = self.context.paths.data_dir();
+        let config = match agent_config_id.filter(|id| !id.trim().is_empty()) {
+            // A pinned configuration that is gone stays on the PTY path, which
+            // refuses it with its reason instead of falling back.
+            Some(id) => Some(resolve_config(data_dir, id).ok()?),
+            None => legacy_mapping(data_dir, agent),
+        };
+        match config {
+            Some(config) if config.harness == Harness::Codex => {
+                Some(ServerKey::Config(config.config_id))
+            }
+            Some(_) => None,
+            None => Some(ServerKey::Agent(agent.to_string())),
+        }
     }
 
     fn codex_launcher(&self, key: &ServerKey) -> Launcher {
-        let (ServerKey::Agent(agent) | ServerKey::Config(agent)) = key;
-        // The harness's own CLI path from settings (`codex_path`) wins, as for
-        // a configuration launch; otherwise the agent's legacy launch input.
-        let input = match harness_path(&self.context, agent) {
-            Some(path) => LaunchInput::new(path),
-            None => resolve_launch_input(&self.context, agent),
-        };
-        let mut spec = ProcessSpec {
-            program: input.program,
-            args: input.args,
-            ..ProcessSpec::default()
-        };
-        for op in terminal_env_ops(get_login_shell_env()) {
-            match op {
-                EnvOp::Set(key, value) => spec.env.push((key, value)),
-                EnvOp::Unset(key) => spec.unset_env.push(key),
+        match key {
+            ServerKey::Agent(agent) => agent_launcher(&self.context, agent),
+            ServerKey::Config(id) => config_launcher(Arc::clone(&self.context), id.clone()),
+        }
+    }
+}
+
+fn spec_with_login_env(input: LaunchInput) -> ProcessSpec {
+    let mut spec = ProcessSpec {
+        program: input.program,
+        args: input.args,
+        ..ProcessSpec::default()
+    };
+    push_ops(&mut spec, terminal_env_ops(get_login_shell_env()));
+    spec
+}
+
+fn push_ops(spec: &mut ProcessSpec, ops: Vec<EnvOp>) {
+    for op in ops {
+        match op {
+            EnvOp::Set(key, value) => {
+                spec.unset_env.retain(|k| k != &key);
+                spec.env.retain(|(k, _)| k != &key);
+                spec.env.push((key, value));
+            }
+            EnvOp::Unset(key) => {
+                spec.env.retain(|(k, _)| k != &key);
+                spec.unset_env.push(key);
             }
         }
-        process_launcher(spec)
     }
+}
+
+/// Built-in (or legacy custom) Codex: `codex_path` from settings wins, else
+/// the agent's legacy launch input.
+fn agent_launcher(context: &CoreContext, agent: &str) -> Launcher {
+    let input = match harness_path(context, agent) {
+        Some(path) => LaunchInput::new(path),
+        None => resolve_launch_input(context, agent),
+    };
+    process_launcher(spec_with_login_env(input))
+}
+
+/// The gateway token's identity for one configuration's server (N4b D2).
+pub fn server_token_id(config_id: &str) -> String {
+    format!("codex-app-server:{config_id}")
+}
+
+/// One agent configuration's server: the harness CLI, the configuration's
+/// managed home and the gateway environment with a token minted for this
+/// process (N4b D1/D2/D4). The configuration is re-read on every (re)start, so
+/// a deleted one fails with its reason.
+fn config_launcher(context: Arc<CoreContext>, config_id: String) -> Launcher {
+    Arc::new(move || {
+        let data_dir = context.paths.data_dir();
+        let config: ConfigLaunch = resolve_config(data_dir, &config_id)?;
+        let mut spec = spec_with_login_env(harness_launch_input(&context, "codex"));
+        push_ops(&mut spec, config_home_env(&context, &config)?);
+        let token_id = server_token_id(&config_id);
+        let token =
+            aeroric_core::local_router::task_tokens::issue(&token_id, Some(config_id.clone()));
+        let revoke = {
+            let token_id = token_id.clone();
+            move || aeroric_core::local_router::task_tokens::revoke(&token_id)
+        };
+        match gateway_env_ops(data_dir, ProtocolFamily::Codex, &token) {
+            Ok(ops) => push_ops(&mut spec, ops),
+            Err(reason) => {
+                revoke();
+                return Err(reason);
+            }
+        }
+        match process_launcher(spec)() {
+            Ok((transport, guard)) => {
+                Ok((transport, guard.map(|guard| guard.with_cleanup(revoke))))
+            }
+            Err(reason) => {
+                revoke();
+                Err(reason)
+            }
+        }
+    })
 }
 
 fn harness_path(context: &CoreContext, agent: &str) -> Option<String> {
