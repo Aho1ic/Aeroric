@@ -299,6 +299,12 @@ impl HostServices {
     ) -> Arc<Self> {
         let mut set = ServiceSet::new();
         let mut capabilities: Vec<aeroric_protocol::capability::Capability> = Vec::new();
+        // A13: what `diagnostics.export_report` reads; taken before the pieces
+        // move into their own registrations.
+        let report_context = Arc::clone(&context);
+        let report_service = service.clone();
+        let report_degradations = Arc::clone(&wiring.degradations);
+        let report_home = wiring.agent_config_external_home.clone();
         // AP7 适配器探测面。必须在 handshake 闭包捕获 `capabilities` **之前**读懂,
         // 否则广告会落在快照之后(实测:握手应答里根本没有 session-controls)。
         let adapters = wiring.adapters.take();
@@ -487,6 +493,16 @@ impl HostServices {
             }
             advertised
         };
+        crate::diagnostic_report_services::register_diagnostic_report_services(
+            &mut set,
+            crate::diagnostic_report_services::ReportInputs {
+                context: report_context,
+                service: report_service,
+                degradations: report_degradations,
+                capabilities: capabilities.clone(),
+                home: report_home,
+            },
+        );
         {
             let token = Arc::clone(&token);
             let capabilities = capabilities.clone();

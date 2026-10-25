@@ -9,6 +9,7 @@ pub mod canvas_services;
 pub mod codec;
 pub mod connection_services;
 pub mod database_services;
+pub mod diagnostic_report_services;
 pub mod diagnostics;
 pub mod dispatcher;
 pub mod executor;

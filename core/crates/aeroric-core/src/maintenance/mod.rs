@@ -15,6 +15,7 @@
 //! [`crate::metrics`]）、`src/taskCleanup.ts`（规则已在 [`crate::tasks::cleanup`]）。
 
 pub mod cleanup;
+pub mod diagnostic_report;
 pub mod diagnostics;
 pub mod notifications;
 pub mod reports;
