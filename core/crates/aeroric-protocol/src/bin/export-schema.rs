@@ -1208,6 +1208,20 @@ fn main() -> Result<(), String> {
                 "applyResult":aeroric_protocol::legacy_cleanup::fixture_apply()
             }),
         ),
+        (
+            "v1/session-live.schema.json".into(),
+            aeroric_protocol::session_live::schema(),
+        ),
+        (
+            "v1/fixtures/session-live.json".into(),
+            serde_json::json!({
+                "contract":"session-live.schema.json",
+                "requests":aeroric_protocol::session_live::fixture_requests(),
+                "updates":aeroric_protocol::session_live::fixture_batch(),
+                "gap":aeroric_protocol::session_live::fixture_gap(),
+                "state":aeroric_protocol::session_live::fixture_state()
+            }),
+        ),
         ("v1/envelope.schema.json".into(), envelope_schema()),
         (
             "v1/methods.schema.json".into(),

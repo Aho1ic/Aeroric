@@ -1,0 +1,780 @@
+{
+  "$defs": {
+    "batch": {
+      "properties": {
+        "gap": {
+          "properties": {
+            "oldestAvailable": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "oldestAvailable"
+          ],
+          "type": "object"
+        },
+        "latestSeq": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "updates": {
+          "items": {
+            "$ref": "#/$defs/update"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "updates",
+        "latestSeq"
+      ],
+      "type": "object"
+    },
+    "planEntry": {
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "status"
+      ],
+      "type": "object"
+    },
+    "state": {
+      "properties": {
+        "contextLimit": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "contextUsed": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "family": {
+          "enum": [
+            "claude",
+            "codex",
+            "dsh",
+            "omp",
+            null
+          ]
+        },
+        "inputTokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "latestSeq": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "live": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outputTokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pending": {
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "toolCallId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "summary"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "permission": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan": {
+          "items": {
+            "$ref": "#/$defs/planEntry"
+          },
+          "type": "array"
+        },
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "turnActive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "taskId",
+        "live",
+        "turnActive",
+        "pending",
+        "plan",
+        "latestSeq"
+      ],
+      "type": "object"
+    },
+    "update": {
+      "allOf": [
+        {
+          "properties": {
+            "atMs": {
+              "type": "integer"
+            },
+            "seq": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "taskId": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "taskId",
+            "seq",
+            "atMs",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "turnId": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "turnStarted"
+                }
+              },
+              "required": [
+                "type",
+                "turnId"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "reason": {
+                  "enum": [
+                    "completed",
+                    "interrupted",
+                    "failed"
+                  ]
+                },
+                "turnId": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "turnEnded"
+                }
+              },
+              "required": [
+                "type",
+                "turnId",
+                "reason"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "messageId": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "messageChunk"
+                }
+              },
+              "required": [
+                "type",
+                "messageId",
+                "role",
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "messageId": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "messageCompleted"
+                }
+              },
+              "required": [
+                "type",
+                "messageId"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "boolean"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "thoughtChunk"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "text",
+                "summary"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "input": {},
+                "kind": {
+                  "enum": [
+                    "command",
+                    "fileChange",
+                    "mcp",
+                    "webSearch",
+                    "subagent",
+                    "other"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "toolCall"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "kind",
+                "title",
+                "input"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "outputDelta": {
+                  "type": "string"
+                },
+                "result": {},
+                "status": {
+                  "enum": [
+                    "running",
+                    "completed",
+                    "failed",
+                    "declined"
+                  ]
+                },
+                "type": {
+                  "const": "toolCallUpdate"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "entries": {
+                  "items": {
+                    "$ref": "#/$defs/planEntry"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "plan"
+                }
+              },
+              "required": [
+                "type",
+                "entries"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "options": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "toolCallId": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "permissionRequest"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "kind",
+                "summary",
+                "options"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "decision": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "permissionResolved"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "decision"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "subagent"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "title",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "contextLimit": {
+                  "type": "integer"
+                },
+                "contextUsed": {
+                  "type": "integer"
+                },
+                "inputTokens": {
+                  "type": "integer"
+                },
+                "outputTokens": {
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "usage"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "effort": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "permission": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "configChanged"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "recoverable": {
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "error"
+                }
+              },
+              "required": [
+                "type",
+                "message",
+                "recoverable"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "payload": {},
+                "type": {
+                  "const": "unknown"
+                }
+              },
+              "required": [
+                "type",
+                "kind",
+                "payload"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "capability": "session.live",
+  "delivery": "session.update payloads are read by cursor polling (session.updates {after}); a cursor older than the buffer answers gap and the client re-reads history plus session.state",
+  "hostLocal": "Not forwarded by the remote plane.",
+  "limits": {
+    "defaultBatchLimit": 500,
+    "maxBatchBytes": 786432,
+    "maxBatchLimit": 2000,
+    "maxItemBytes": 262144,
+    "truncationMarker": "…（已截断，完整内容见会话文件）"
+  },
+  "methods": {
+    "session.close": {
+      "mutating": true,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "taskId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "session.command": {
+      "mutating": true,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "enum": [
+              "compact",
+              "review"
+            ]
+          },
+          "taskId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "command"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "session.configure": {
+      "mutating": true,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "permission": {
+            "enum": [
+              "ask",
+              "auto_edit",
+              "full_access",
+              null
+            ]
+          },
+          "taskId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "session.interrupt": {
+      "mutating": true,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "taskId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "session.prompt": {
+      "mutating": true,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "taskId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "text"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "type": "object"
+      }
+    },
+    "session.respond": {
+      "mutating": true,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "enum": [
+              "allowOnce",
+              "allowForSession",
+              "deny"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "taskId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "requestId",
+          "decision"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "session.state": {
+      "mutating": false,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "taskId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/state"
+      }
+    },
+    "session.updates": {
+      "mutating": false,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "limit": {
+            "maximum": 2000,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "taskId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "after"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/batch"
+      }
+    }
+  },
+  "source": "aeroric-protocol/src/session_live.rs (ADR-043, N3)",
+  "title": "aeroric-native-session-live-v1",
+  "unknownUpdate": "a client keeps an update whose type it does not know and must not fail the batch"
+}

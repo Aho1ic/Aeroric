@@ -1,0 +1,238 @@
+{
+  "contract": "session-live.schema.json",
+  "gap": {
+    "gap": {
+      "oldestAvailable": 2201
+    },
+    "latestSeq": 4200,
+    "updates": []
+  },
+  "requests": {
+    "session.close": {
+      "taskId": "task-1"
+    },
+    "session.command": {
+      "command": "compact",
+      "taskId": "task-1"
+    },
+    "session.configure": {
+      "effort": "high",
+      "model": "gpt-5",
+      "permission": "full_access",
+      "taskId": "task-1"
+    },
+    "session.interrupt": {
+      "taskId": "task-1"
+    },
+    "session.prompt": {
+      "taskId": "task-1",
+      "text": "继续"
+    },
+    "session.respond": {
+      "decision": "deny",
+      "reason": "别删",
+      "requestId": "7",
+      "taskId": "task-1"
+    },
+    "session.state": {
+      "taskId": "task-1"
+    },
+    "session.updates": {
+      "after": 12,
+      "limit": 500,
+      "taskId": "task-1"
+    }
+  },
+  "state": {
+    "contextLimit": 200000,
+    "contextUsed": 1200,
+    "effort": null,
+    "family": "codex",
+    "inputTokens": 1500,
+    "latestSeq": 16,
+    "live": true,
+    "model": "gpt-5",
+    "outputTokens": 300,
+    "pending": [
+      {
+        "id": "7",
+        "kind": "command",
+        "summary": "ls -la",
+        "toolCallId": "c1"
+      }
+    ],
+    "permission": "ask",
+    "plan": [
+      {
+        "status": "inProgress",
+        "text": "读代码"
+      }
+    ],
+    "sessionId": "th-1",
+    "taskId": "task-1",
+    "turnActive": true
+  },
+  "updates": {
+    "latestSeq": 16,
+    "updates": [
+      {
+        "atMs": 1761350400000,
+        "seq": 1,
+        "taskId": "task-1",
+        "turnId": "u1",
+        "type": "turnStarted"
+      },
+      {
+        "atMs": 1761350400001,
+        "id": "r1",
+        "seq": 2,
+        "summary": true,
+        "taskId": "task-1",
+        "text": "先看目录",
+        "type": "thoughtChunk"
+      },
+      {
+        "atMs": 1761350400002,
+        "messageId": "m1",
+        "role": "assistant",
+        "seq": 3,
+        "taskId": "task-1",
+        "text": "我来",
+        "type": "messageChunk"
+      },
+      {
+        "atMs": 1761350400003,
+        "id": "c1",
+        "input": {
+          "command": "ls -la",
+          "cwd": "/w"
+        },
+        "kind": "command",
+        "seq": 4,
+        "taskId": "task-1",
+        "title": "ls -la",
+        "type": "toolCall"
+      },
+      {
+        "atMs": 1761350400004,
+        "id": "7",
+        "kind": "command",
+        "options": [
+          "allowOnce",
+          "allowForSession",
+          "deny"
+        ],
+        "seq": 5,
+        "summary": "ls -la",
+        "taskId": "task-1",
+        "toolCallId": "c1",
+        "type": "permissionRequest"
+      },
+      {
+        "atMs": 1761350400005,
+        "decision": "allowOnce",
+        "id": "7",
+        "seq": 6,
+        "taskId": "task-1",
+        "type": "permissionResolved"
+      },
+      {
+        "atMs": 1761350400006,
+        "id": "c1",
+        "outputDelta": "total 0\n",
+        "seq": 7,
+        "status": "running",
+        "taskId": "task-1",
+        "type": "toolCallUpdate"
+      },
+      {
+        "atMs": 1761350400007,
+        "id": "c1",
+        "result": {
+          "exitCode": 0
+        },
+        "seq": 8,
+        "status": "completed",
+        "taskId": "task-1",
+        "type": "toolCallUpdate"
+      },
+      {
+        "atMs": 1761350400008,
+        "entries": [
+          {
+            "status": "completed",
+            "text": "读代码"
+          },
+          {
+            "status": "inProgress",
+            "text": "改代码"
+          }
+        ],
+        "seq": 9,
+        "taskId": "task-1",
+        "type": "plan"
+      },
+      {
+        "atMs": 1761350400009,
+        "id": "s1",
+        "seq": 10,
+        "status": "running",
+        "taskId": "task-1",
+        "title": "检索",
+        "type": "subagent"
+      },
+      {
+        "atMs": 1761350400010,
+        "contextLimit": 200000,
+        "contextUsed": 1200,
+        "inputTokens": 1500,
+        "outputTokens": 300,
+        "seq": 11,
+        "taskId": "task-1",
+        "type": "usage"
+      },
+      {
+        "atMs": 1761350400011,
+        "model": "gpt-5",
+        "permission": "auto_edit",
+        "seq": 12,
+        "taskId": "task-1",
+        "type": "configChanged"
+      },
+      {
+        "atMs": 1761350400012,
+        "message": "上下文已压缩",
+        "recoverable": true,
+        "seq": 13,
+        "taskId": "task-1",
+        "type": "error"
+      },
+      {
+        "atMs": 1761350400013,
+        "kind": "item/futureThing",
+        "payload": {
+          "x": 1
+        },
+        "seq": 14,
+        "taskId": "task-1",
+        "type": "unknown"
+      },
+      {
+        "atMs": 1761350400014,
+        "messageId": "m1",
+        "seq": 15,
+        "taskId": "task-1",
+        "text": "我来看看",
+        "type": "messageCompleted"
+      },
+      {
+        "atMs": 1761350400015,
+        "reason": "completed",
+        "seq": 16,
+        "taskId": "task-1",
+        "turnId": "u1",
+        "type": "turnEnded"
+      }
+    ]
+  }
+}
