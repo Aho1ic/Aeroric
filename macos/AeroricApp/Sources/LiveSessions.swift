@@ -57,13 +57,21 @@ struct HostLiveSessionActions: LiveSessionActions {
 
 extension AppServices {
     /// Asks the host whether this task runs as a structured session.
+    /// A failed read is retried before the page falls back to the terminal: a
+    /// task the App sees right after submitting may not be committed yet, and
+    /// the connection may still be attaching. One failure used to pin the
+    /// terminal page for the App's lifetime (N6a).
     func resolveLive(taskID: String) async {
-        guard liveCapability, liveStructured[taskID] == nil, let client = sessionsClient else { return }
-        if let state = try? await client.state(taskId: taskID) {
-            liveStructured[taskID] = state.structured
-        } else {
-            liveStructured[taskID] = false
+        guard liveCapability, liveStructured[taskID] == nil else { return }
+        for attempt in 0..<5 {
+            if let client = sessionsClient, let state = try? await client.state(taskId: taskID) {
+                if liveStructured[taskID] == nil { liveStructured[taskID] = state.structured }
+                return
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000 << UInt64(attempt))
+            if Task.isCancelled || liveStructured[taskID] != nil { return }
         }
+        liveStructured[taskID] = false
     }
 
     func liveStore(for taskID: String) -> LiveSessionStore {
