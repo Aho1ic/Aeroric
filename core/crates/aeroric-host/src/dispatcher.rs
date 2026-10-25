@@ -344,7 +344,7 @@ impl HostServices {
         crate::settings_services::register_settings_services(
             &mut set,
             Arc::clone(&context),
-            wiring.agent_config_external_home.take(),
+            wiring.agent_config_external_home.clone(),
         );
         // B1 第 3 步：连接 / 模型目录 / 号池 / Agent 配置（Q23–Q34）。
         crate::agent_connections_services::register_agent_connection_services(
@@ -368,7 +368,11 @@ impl HostServices {
             note: Some("Host-local canvas boards and node layout".into()),
         });
         // UI 改版 M4：已有会话导入（授权后只读索引）与 Agent 安装检测；仅本机 UDS。
-        crate::imports_services::register_import_services(&mut set, Arc::clone(&context));
+        crate::imports_services::register_import_services(
+            &mut set,
+            Arc::clone(&context),
+            wiring.agent_config_external_home.clone(),
+        );
         capabilities.push(aeroric_protocol::capability::Capability {
             name: crate::imports_services::CAPABILITY.into(),
             enabled: true,

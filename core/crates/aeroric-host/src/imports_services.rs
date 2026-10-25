@@ -4,6 +4,7 @@
 //! `imports.estimate` 只做目录计数。扫描是按需增量的：授权后立即扫一次，之后 `imports.list` /
 //! `imports.status` 在上次扫描超过 [`RESCAN_AFTER`] 时先补扫（marker 未变的文件不读）。
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -40,29 +41,44 @@ static STATE: Mutex<ScanState> = Mutex::new(ScanState {
     last_error: None,
 });
 
-pub fn register_import_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
-    set.register("imports.status", blocking(&context, status));
-    set.register("imports.estimate", blocking(&context, estimate_handler));
-    set.register("imports.grant", blocking(&context, grant));
-    set.register("imports.revoke", blocking(&context, revoke));
-    set.register("imports.rescan", blocking(&context, rescan));
-    set.register("imports.list", blocking(&context, list));
-    set.register("imports.history", blocking(&context, history));
-    set.register("agents.detect", blocking(&context, detect));
+/// What the handlers read: the host context and the external user home the
+/// session roots live under. The shared context's home is `/` on purpose (metrics
+/// and discovery must not read outside history); a grant here is that consent,
+/// so imports — like the settings services — get the real home from the host.
+struct Env {
+    context: Arc<CoreContext>,
+    home: PathBuf,
+}
+
+pub fn register_import_services(
+    set: &mut ServiceSet,
+    context: Arc<CoreContext>,
+    external_home: Option<PathBuf>,
+) {
+    let home = external_home.unwrap_or_else(|| context.paths.user_home().to_path_buf());
+    let env = Arc::new(Env { context, home });
+    set.register("imports.status", blocking(&env, status));
+    set.register("imports.estimate", blocking(&env, estimate_handler));
+    set.register("imports.grant", blocking(&env, grant));
+    set.register("imports.revoke", blocking(&env, revoke));
+    set.register("imports.rescan", blocking(&env, rescan));
+    set.register("imports.list", blocking(&env, list));
+    set.register("imports.history", blocking(&env, history));
+    set.register("agents.detect", blocking(&env, detect));
 }
 
 fn blocking(
-    context: &Arc<CoreContext>,
-    run: impl Fn(Request, Arc<CoreContext>) -> Frame + Send + Sync + 'static,
+    env: &Arc<Env>,
+    run: impl Fn(Request, Arc<Env>) -> Frame + Send + Sync + 'static,
 ) -> Handler {
-    let context = Arc::clone(context);
+    let env = Arc::clone(env);
     let run = Arc::new(run);
     Arc::new(move |request: Request, _call| {
-        let context = Arc::clone(&context);
+        let env = Arc::clone(&env);
         let run = Arc::clone(&run);
         Box::pin(async move {
             let id = request.id.clone();
-            match tokio::task::spawn_blocking(move || run(request, context)).await {
+            match tokio::task::spawn_blocking(move || run(request, env)).await {
                 Ok(frame) => frame,
                 Err(e) => failure(id, ErrorCode::IoError, &e.to_string()),
             }
@@ -133,9 +149,10 @@ fn scan(context: &CoreContext, force: bool) -> Result<Option<ScanReport>, Import
     result.map(Some)
 }
 
-fn status(request: Request, context: Arc<CoreContext>) -> Frame {
-    let _ = scan(&context, false);
-    let store = store(&context);
+fn status(request: Request, env: Arc<Env>) -> Frame {
+    let context = &env.context;
+    let _ = scan(context, false);
+    let store = store(context);
     let grants = store.grants();
     let index = store.index();
     let state = STATE.lock();
@@ -148,7 +165,7 @@ fn status(request: Request, context: Arc<CoreContext>) -> Frame {
                 "granted": grant.is_some(),
                 "root": grant
                     .map(|g| g.root.clone())
-                    .unwrap_or_else(|| agent.default_root(context.paths.user_home())),
+                    .unwrap_or_else(|| agent.default_root(&env.home)),
                 "grantedAtMs": grant.map(|g| g.granted_at_ms),
                 "sessions": index.iter().filter(|s| s.agent == *agent).count(),
             })
@@ -165,11 +182,11 @@ fn status(request: Request, context: Arc<CoreContext>) -> Frame {
     )
 }
 
-fn estimate_handler(request: Request, context: Arc<CoreContext>) -> Frame {
+fn estimate_handler(request: Request, env: Arc<Env>) -> Frame {
     let Some(agent) = agent_param(&request) else {
         return bad_agent(&request);
     };
-    let root = agent.default_root(context.paths.user_home());
+    let root = agent.default_root(&env.home);
     let estimate = estimate(agent, &root);
     ok(
         &request,
@@ -177,17 +194,18 @@ fn estimate_handler(request: Request, context: Arc<CoreContext>) -> Frame {
     )
 }
 
-fn grant(request: Request, context: Arc<CoreContext>) -> Frame {
+fn grant(request: Request, env: Arc<Env>) -> Frame {
+    let context = &env.context;
     let Some(agent) = agent_param(&request) else {
         return bad_agent(&request);
     };
     // The root is always the host-computed default; a client cannot point the
     // importer at an arbitrary directory.
-    let root = agent.default_root(context.paths.user_home());
-    if let Err(error) = store(&context).grant(agent, root.clone(), now_ms()) {
+    let root = agent.default_root(&env.home);
+    if let Err(error) = store(context).grant(agent, root.clone(), now_ms()) {
         return io_failure(&request, error);
     }
-    match scan(&context, true) {
+    match scan(context, true) {
         Ok(report) => ok(
             &request,
             json!({ "agent": agent.as_str(), "root": root, "report": report }),
@@ -196,12 +214,13 @@ fn grant(request: Request, context: Arc<CoreContext>) -> Frame {
     }
 }
 
-fn revoke(request: Request, context: Arc<CoreContext>) -> Frame {
+fn revoke(request: Request, env: Arc<Env>) -> Frame {
+    let context = &env.context;
     let Some(agent) = agent_param(&request) else {
         return bad_agent(&request);
     };
     let _guard = STATE.lock();
-    match store(&context).revoke(agent) {
+    match store(context).revoke(agent) {
         Ok(()) => ok(
             &request,
             json!({ "agent": agent.as_str(), "revoked": true }),
@@ -210,19 +229,21 @@ fn revoke(request: Request, context: Arc<CoreContext>) -> Frame {
     }
 }
 
-fn rescan(request: Request, context: Arc<CoreContext>) -> Frame {
-    match scan(&context, true) {
+fn rescan(request: Request, env: Arc<Env>) -> Frame {
+    let context = &env.context;
+    match scan(context, true) {
         Ok(report) => ok(&request, json!({ "report": report })),
         Err(error) => io_failure(&request, error),
     }
 }
 
 /// `params.projectId` filters to one project; `params.unassigned: true` to the 未归类 group.
-fn list(request: Request, context: Arc<CoreContext>) -> Frame {
-    let _ = scan(&context, false);
+fn list(request: Request, env: Arc<Env>) -> Frame {
+    let context = &env.context;
+    let _ = scan(context, false);
     let project = request.params.get("projectId").and_then(Value::as_str);
     let unassigned = request.params.get("unassigned").and_then(Value::as_bool) == Some(true);
-    let sessions: Vec<_> = store(&context)
+    let sessions: Vec<_> = store(context)
         .index()
         .into_iter()
         .filter(|s| project.is_none_or(|id| s.project_id.as_deref() == Some(id)))
@@ -231,7 +252,8 @@ fn list(request: Request, context: Arc<CoreContext>) -> Frame {
     ok(&request, json!({ "sessions": sessions }))
 }
 
-fn history(request: Request, context: Arc<CoreContext>) -> Frame {
+fn history(request: Request, env: Arc<Env>) -> Frame {
+    let context = &env.context;
     let Some(id) = request.params.get("id").and_then(Value::as_str) else {
         return failure(
             request.id.clone(),
@@ -239,7 +261,7 @@ fn history(request: Request, context: Arc<CoreContext>) -> Frame {
             "imports.history requires params.id",
         );
     };
-    match store(&context).messages(id) {
+    match store(context).messages(id) {
         Ok((session, messages)) => {
             let family = match session.agent {
                 ImportAgent::Claude => ProtocolFamily::Claude,
@@ -260,9 +282,9 @@ fn history(request: Request, context: Arc<CoreContext>) -> Frame {
     }
 }
 
-fn detect(request: Request, context: Arc<CoreContext>) -> Frame {
+fn detect(request: Request, env: Arc<Env>) -> Frame {
     let path = std::env::var("PATH").ok();
-    let agents = detect_agents(path.as_deref(), context.paths.user_home());
+    let agents = detect_agents(path.as_deref(), &env.home);
     ok(&request, json!({ "agents": agents }))
 }
 
@@ -285,8 +307,18 @@ mod tests {
         }
     }
 
+    /// Like `aeroric-cli serve`: the shared context's home is `/`; the real
+    /// home (where the fake sessions are) comes in as the external home.
+    fn env(root: &Path) -> Arc<Env> {
+        let context = context(root);
+        Arc::new(Env {
+            context,
+            home: root.join("home"),
+        })
+    }
+
     fn context(root: &Path) -> Arc<CoreContext> {
-        let paths = AppPaths::from_user_home(root.join("home"));
+        let paths = AppPaths::with_data_dir("/", Some(&root.join("data")));
         std::fs::create_dir_all(paths.data_dir()).unwrap();
         std::fs::write(
             paths.data_dir().join("projects.json"),
@@ -345,12 +377,17 @@ mod tests {
     #[test]
     fn estimate_grant_list_history_and_revoke_round_trip() {
         let root = scratch();
-        let context = context(&root);
+        let context = env(&root);
 
         let estimated = result(estimate_handler(
             request("imports.estimate", json!({"agent":"claude"})),
             Arc::clone(&context),
         ));
+        assert_eq!(
+            estimated["root"],
+            root.join("home/.claude").to_string_lossy().as_ref(),
+            "the session root is under the external home, not the shared context's `/`"
+        );
         assert_eq!(estimated["estimate"]["sessions"], 1);
         assert_eq!(estimated["estimate"]["rootExists"], true);
         let status = result(super::status(
