@@ -67,6 +67,7 @@ fn script(path: &Path, marker: &str) {
              echo \"ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY\"\n\
              echo \"OPENAI_BASE_URL=$OPENAI_BASE_URL\"\n\
              echo \"OPENAI_API_KEY=$OPENAI_API_KEY\"\n\
+             echo \"AERORIC_GATEWAY_TOKEN=$AERORIC_GATEWAY_TOKEN\"\n\
              echo \"SECRET_HITS=$(env | grep -c {UPSTREAM_SECRET})\"\n\
              echo END-OF-FAKE\n"
         ),
@@ -288,6 +289,7 @@ fn assert_gateway_claude(out: &std::collections::BTreeMap<String, String>, home:
         "upstream credential reached the process"
     );
     assert!(out["ARGV"].contains("--model mapped-model"), "{out:?}");
+    assert!(!out["ARGV"].contains("model_provider"), "{out:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -331,6 +333,19 @@ async fn pinned_configuration_launches_the_harness_through_the_gateway() {
     assert!(out["OPENAI_BASE_URL"].ends_with("/codex/v1"), "{out:?}");
     assert!(!out["OPENAI_API_KEY"].is_empty());
     assert_eq!(out["SECRET_HITS"], "0");
+    // N6a B5: Codex takes the gateway as a `-c` provider; the token rides the env.
+    assert_eq!(out["AERORIC_GATEWAY_TOKEN"], out["OPENAI_API_KEY"]);
+    let argv = &out["ARGV"];
+    assert!(argv.starts_with("-c model_provider=\"aeroric\""), "{argv}");
+    assert!(
+        argv.contains(&format!(
+            "-c model_providers.aeroric.base_url=\"{}\"",
+            out["OPENAI_BASE_URL"]
+        )),
+        "{argv}"
+    );
+    assert!(argv.contains("model_providers.aeroric.env_key=\"AERORIC_GATEWAY_TOKEN\""));
+    assert!(!argv.contains(&out["OPENAI_API_KEY"]), "token in argv");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

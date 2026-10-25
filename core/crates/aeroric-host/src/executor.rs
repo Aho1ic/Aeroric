@@ -234,6 +234,18 @@ impl CliPtyExecutor {
         harness_launch_input(&self.context, agent)
     }
 
+    /// A configuration's harness CLI; a Codex one is also told to use the
+    /// gateway as its provider (N6a B5).
+    fn config_input(&self, config: &ConfigLaunch) -> Result<LaunchInput, ExecutorFailure> {
+        let mut input = self.harness_input(config.agent());
+        if config.harness == Harness::Codex {
+            let base = crate::gateway::ensure_running(self.context.paths.data_dir())
+                .map_err(|reason| ExecutorFailure::Spawn { reason })?;
+            input.args.extend(codex_gateway_args(&base));
+        }
+        Ok(input)
+    }
+
     /// Managed home for a configuration launch, isolated like the legacy wrappers
     /// did, so the user's own CLI config cannot redirect the request elsewhere.
     fn config_home_ops(&self, config: &ConfigLaunch) -> Result<Vec<EnvOp>, String> {
@@ -357,6 +369,25 @@ fn refuse_remote_config(
     Ok(())
 }
 
+/// The environment variable a gateway-bound Codex reads its token from.
+pub(crate) const GATEWAY_TOKEN_ENV: &str = "AERORIC_GATEWAY_TOKEN";
+
+/// Codex (0.163+) takes its provider from configuration and ignores
+/// `OPENAI_BASE_URL`, so a gateway launch declares one with `-c` overrides.
+/// The token stays in the environment (`env_key`), never in argv.
+pub fn codex_gateway_args(gateway_base: &str) -> Vec<String> {
+    [
+        "model_provider=\"aeroric\"".to_string(),
+        "model_providers.aeroric.name=\"Aeroric Gateway\"".to_string(),
+        format!("model_providers.aeroric.base_url=\"{gateway_base}/codex/v1\""),
+        format!("model_providers.aeroric.env_key=\"{GATEWAY_TOKEN_ENV}\""),
+        "model_providers.aeroric.wire_api=\"responses\"".to_string(),
+    ]
+    .into_iter()
+    .flat_map(|value| ["-c".to_string(), value])
+    .collect()
+}
+
 /// Environment that points a Claude/Codex CLI at the gateway with its task token.
 /// Any upstream key the CLI would otherwise pick up is unset, so a misconfigured
 /// task fails at the gateway instead of silently spending a different account.
@@ -375,6 +406,7 @@ pub(crate) fn gateway_env_ops(
         ProtocolFamily::Codex => vec![
             EnvOp::Set("OPENAI_BASE_URL".into(), format!("{base}/codex/v1")),
             EnvOp::Set("OPENAI_API_KEY".into(), token.to_string()),
+            EnvOp::Set(GATEWAY_TOKEN_ENV.into(), token.to_string()),
             EnvOp::Unset("CODEX_API_KEY".into()),
         ],
         _ => return Err("this agent family does not use the gateway yet".into()),
@@ -825,7 +857,7 @@ impl TaskExecutor for CliPtyExecutor {
             vec!["--".to_string(), prompt.clone()]
         };
         let input = match &config {
-            Some(config) => self.harness_input(config.agent()),
+            Some(config) => self.config_input(config)?,
             None => self.resolve_launch(&request.agent),
         };
         let mut plan = match family {
@@ -952,7 +984,7 @@ impl TaskExecutor for CliPtyExecutor {
             .as_ref()
             .map_or(request.agent.as_str(), |config| config.agent());
         let input = match &config {
-            Some(config) => self.harness_input(config.agent()),
+            Some(config) => self.config_input(config)?,
             None => self.resolve_launch(&request.agent),
         };
         let mut plan = match family {

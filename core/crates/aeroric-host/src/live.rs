@@ -34,7 +34,8 @@ use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
 use aeroric_core::tasks::{ProtocolFamily, TaskService, TaskStatus};
 
 use crate::executor::{
-    config_home_env, gateway_env_ops, harness_launch_input, resolve_launch_input,
+    codex_gateway_args, config_home_env, gateway_env_ops, harness_launch_input,
+    resolve_launch_input,
 };
 
 pub struct TaskServiceSink {
@@ -361,7 +362,13 @@ fn config_launcher(context: Arc<CoreContext>, config_id: String) -> Launcher {
     Arc::new(move || {
         let data_dir = context.paths.data_dir();
         let config: ConfigLaunch = resolve_config(data_dir, &config_id)?;
-        let mut spec = spec_with_login_env(harness_launch_input(&context, "codex"));
+        let mut input = harness_launch_input(&context, "codex");
+        input
+            .args
+            .extend(codex_gateway_args(&crate::gateway::ensure_running(
+                data_dir,
+            )?));
+        let mut spec = spec_with_login_env(input);
         push_ops(&mut spec, config_home_env(&context, &config)?);
         let token_id = server_token_id(&config_id);
         let token =

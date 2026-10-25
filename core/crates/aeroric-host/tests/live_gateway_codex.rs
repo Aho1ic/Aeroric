@@ -81,13 +81,14 @@ fn fake_codex(root: &Path) -> PathBuf {
         format!(
             "#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\n\
              if [ \"$last\" = \"--version\" ]; then echo 'codex-cli 0.162.1'; exit 0; fi\n\
-             env > '{env}'\n\
+             printf '%s\\n' \"$@\" > '{argv}'\nenv > '{env}'\n\
              read line\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}'\n\
              if [ -f '{crash}' ]; then exit 0; fi\n\
              read init_done\nread resume\n\
              echo '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"thread\":{{\"id\":\"th-old\"}}}}}}'\n\
              cat > /dev/null\n",
             env = env.display(),
+            argv = root.join("argv.txt").display(),
             crash = crash.display()
         ),
     )
@@ -236,6 +237,33 @@ async fn a_configuration_server_gets_its_home_and_gateway_and_its_token_dies_wit
     assert!(env.recorded("CODEX_API_KEY").is_none());
     assert!(env.recorded("OPENAI_ORG_ID").is_none());
     let token = env.recorded("OPENAI_API_KEY").unwrap();
+    // N6a B5: Codex ignores OPENAI_BASE_URL; the provider comes from `-c`.
+    assert_eq!(
+        env.recorded("AERORIC_GATEWAY_TOKEN").as_deref(),
+        Some(token.as_str())
+    );
+    let argv: Vec<String> = std::fs::read_to_string(env.root.join("argv.txt"))
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    for expected in [
+        "model_provider=\"aeroric\"".to_string(),
+        format!("model_providers.aeroric.base_url=\"{base}\""),
+        "model_providers.aeroric.env_key=\"AERORIC_GATEWAY_TOKEN\"".to_string(),
+        "model_providers.aeroric.wire_api=\"responses\"".to_string(),
+    ] {
+        let at = argv.iter().position(|a| *a == expected);
+        assert!(
+            at.is_some_and(|i| i > 0 && argv[i - 1] == "-c"),
+            "missing -c {expected} in {argv:?}"
+        );
+    }
+    assert_eq!(argv.last().map(String::as_str), Some("app-server"));
+    assert!(
+        argv.iter().all(|a| !a.contains(&token)),
+        "the token never goes on the command line"
+    );
     let grant = task_tokens::lookup(&token).expect("a live token while the server runs");
     assert_eq!(grant.task_id, server_token_id(&env.codex_config));
     assert_eq!(
