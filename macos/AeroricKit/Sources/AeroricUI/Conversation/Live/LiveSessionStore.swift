@@ -18,6 +18,29 @@ public protocol LiveSessionActions {
     func export(taskID: String) async throws
     /// `/clear` (N4 D6): open the new-session page prefilled like this task.
     func startNewSession(like taskID: String)
+    /// A05: the task's project's auto-check choice; nil when the host has none.
+    func autoCheck(taskID: String) async throws -> LiveAutoCheckSelection?
+    func setAutoCheck(taskID: String, _ selection: LiveAutoCheckSelection) async throws
+}
+
+extension LiveSessionActions {
+    public func autoCheck(taskID: String) async throws -> LiveAutoCheckSelection? { nil }
+    public func setAutoCheck(taskID: String, _ selection: LiveAutoCheckSelection) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持自动检查")
+    }
+}
+
+/// A05: which checks the task's project runs after a turn that changed files.
+public struct LiveAutoCheckSelection: Equatable, Sendable {
+    public var tests: Bool
+    public var diagnostics: Bool
+
+    public init(tests: Bool, diagnostics: Bool) {
+        self.tests = tests
+        self.diagnostics = diagnostics
+    }
+
+    public var isOn: Bool { tests || diagnostics }
 }
 
 /// What the composer should do after `send` when the input was a command.
@@ -43,6 +66,8 @@ public final class LiveSessionStore {
     /// Polling trouble, shown as a thin banner; cleared by the next good poll.
     public private(set) var connectionProblem: String?
     public var errorText: String?
+    /// A05: nil until read, or when the host does not offer auto checks.
+    public private(set) var autoCheck: LiveAutoCheckSelection?
 
     @ObservationIgnored private let actions: any LiveSessionActions
     @ObservationIgnored private var baseline = 0
@@ -89,6 +114,16 @@ public final class LiveSessionStore {
             baseline = LiveHistoryMerge.assistantCount(history)
         } catch {
             errorText = "读取会话失败：\(error)"
+        }
+        autoCheck = try? await actions.autoCheck(taskID: taskID)
+    }
+
+    public func setAutoCheck(_ selection: LiveAutoCheckSelection) async {
+        do {
+            try await actions.setAutoCheck(taskID: taskID, selection)
+            autoCheck = selection
+        } catch {
+            errorText = "保存自动检查设置失败：\(error)"
         }
     }
 

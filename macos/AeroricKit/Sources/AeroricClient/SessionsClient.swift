@@ -161,6 +161,25 @@ extension SessionsClient {
                                          params: LiveSessionRequest.close(taskId: taskId))
     }
 
+    /// A05: the task's project's auto-check choice (`session.autoCheck.get`).
+    public func autoCheck(taskId: String) async throws -> (tests: Bool, diagnostics: Bool) {
+        let frame = try await connection.request("session.autoCheck.get", params: .object(["taskId": .string(taskId)]))
+        return try Self.decodeAutoCheck(frame.result)
+    }
+
+    public func setAutoCheck(taskId: String, tests: Bool, diagnostics: Bool) async throws {
+        _ = try await connection.request("session.autoCheck.set", params: .object([
+            "taskId": .string(taskId), "tests": .bool(tests), "diagnostics": .bool(diagnostics),
+        ]))
+    }
+
+    public static func decodeAutoCheck(_ value: JSONValue) throws -> (tests: Bool, diagnostics: Bool) {
+        guard let tests = value["tests"]?.boolValue, let diagnostics = value["diagnostics"]?.boolValue else {
+            throw MalformedReply.malformedReply("session.autoCheck.get needs tests and diagnostics")
+        }
+        return (tests, diagnostics)
+    }
+
     public func state(taskId: String) async throws -> LiveSessionState {
         let frame = try await connection.request(LiveSessionContract.stateMethod,
                                                  params: LiveSessionRequest.state(taskId: taskId))

@@ -150,3 +150,96 @@ struct LiveTurnChangesRow: View {
         .accessibilityIdentifier("session.live.turn-changes")
     }
 }
+
+/// A05: the project's checks after the last turn; failures expand to the
+/// failing cases and the output's tail, and can be handed back to the agent.
+struct LiveAutoCheckRow: View {
+    let check: LiveAutoCheck
+    let stale: Bool
+    let onSendFailures: (String) -> Void
+    @State private var expanded = false
+
+    private var tint: Color {
+        if stale { return AeroricColor.textTertiary }
+        switch check.state {
+        case "passed": return AeroricColor.success
+        case "failed": return AeroricColor.danger
+        default: return AeroricColor.textSecondary
+        }
+    }
+
+    private var icon: String {
+        switch check.state {
+        case "running": "hourglass"
+        case "passed": "checkmark.seal"
+        case "failed": "xmark.seal"
+        default: "minus.circle"
+        }
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: AeroricSpace.s) {
+                ForEach(Array(check.items.enumerated()), id: \.offset) { _, item in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(item.label)：\(item.summary)")
+                            .font(.system(size: AeroricType.caption, weight: .medium))
+                            .foregroundStyle(item.state == "passed" ? AeroricColor.textSecondary : AeroricColor.danger)
+                        ForEach(Array(item.failures.enumerated()), id: \.offset) { _, failure in
+                            Text(failure)
+                                .font(.system(size: AeroricType.caption, design: .monospaced))
+                                .lineLimit(3)
+                                .textSelection(.enabled)
+                        }
+                        if item.state != "passed", item.failures.isEmpty, !item.outputTail.isEmpty {
+                            ScrollView {
+                                Text(item.outputTail)
+                                    .font(.system(size: AeroricType.caption, design: .monospaced))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                            }
+                            .frame(maxHeight: 160)
+                        }
+                    }
+                }
+                if !stale, let report = check.failureReport {
+                    Button("把失败发给 Agent") { onSendFailures(report) }
+                        .controlSize(.small)
+                        .accessibilityIdentifier("session.live.auto-check.send")
+                }
+            }
+            .padding(.top, AeroricSpace.xs)
+        } label: {
+            Label(stale ? "\(check.title)（之后又有改动，结果已过时）" : check.title, systemImage: icon)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(tint)
+        }
+        .disabled(check.items.isEmpty)
+        .padding(.horizontal, AeroricSpace.l)
+        .accessibilityIdentifier("session.live.auto-check")
+    }
+}
+
+/// A05: per-project switch for the checks, shown beside the turn's changes.
+struct LiveAutoCheckMenu: View {
+    let selection: LiveAutoCheckSelection
+    let onChange: (LiveAutoCheckSelection) -> Void
+
+    var body: some View {
+        Menu {
+            Toggle("改动后运行测试", isOn: Binding(get: { selection.tests }, set: { value in
+                onChange(LiveAutoCheckSelection(tests: value, diagnostics: selection.diagnostics))
+            }))
+            Toggle("改动后运行诊断（cargo check / tsc / ruff）", isOn: Binding(get: { selection.diagnostics }, set: { value in
+                onChange(LiveAutoCheckSelection(tests: selection.tests, diagnostics: value))
+            }))
+            Text("对这个项目生效；不会自动让 Agent 修复")
+        } label: {
+            Label(selection.isOn ? "自动检查：开" : "自动检查：关", systemImage: "checklist")
+                .font(.system(size: AeroricType.caption))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityIdentifier("session.live.auto-check.menu")
+    }
+}

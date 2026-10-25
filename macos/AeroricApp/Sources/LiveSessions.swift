@@ -55,6 +55,15 @@ struct HostLiveSessionActions: LiveSessionActions {
     }
 
     func startNewSession(like taskID: String) { services.requestedNewSessionLike = taskID }
+
+    func autoCheck(taskID: String) async throws -> LiveAutoCheckSelection? {
+        let choice = try await client().autoCheck(taskId: taskID)
+        return LiveAutoCheckSelection(tests: choice.tests, diagnostics: choice.diagnostics)
+    }
+
+    func setAutoCheck(taskID: String, _ selection: LiveAutoCheckSelection) async throws {
+        try await client().setAutoCheck(taskId: taskID, tests: selection.tests, diagnostics: selection.diagnostics)
+    }
 }
 
 extension AppServices {

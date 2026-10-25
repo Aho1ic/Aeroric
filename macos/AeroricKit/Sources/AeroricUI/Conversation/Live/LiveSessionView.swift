@@ -190,7 +190,22 @@ public struct LiveSessionView: View {
                 }
             }
             if !store.turnActive, let changes = store.model?.lastTurnChanges {
-                LiveTurnChangesRow(changes: changes)
+                HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.s) {
+                    LiveTurnChangesRow(changes: changes)
+                    if let selection = store.autoCheck {
+                        LiveAutoCheckMenu(selection: selection) { next in
+                            Task { await store.setAutoCheck(next) }
+                        }
+                        .padding(.trailing, AeroricSpace.l)
+                    }
+                }
+            }
+            if let check = store.model?.lastAutoCheck {
+                LiveAutoCheckRow(check: check, stale: check.isStale(given: store.model?.lastTurnChanges)) { report in
+                    Task {
+                        do { _ = try await store.send(report) } catch { store.errorText = "发送失败：\(error)" }
+                    }
+                }
             }
             UsageBar(usage: store.model?.usage ?? UsageSummary(contextUsed: nil, contextLimit: nil,
                                                                 inputTokens: nil, outputTokens: nil))
