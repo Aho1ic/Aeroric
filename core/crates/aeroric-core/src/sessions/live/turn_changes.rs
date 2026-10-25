@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-use super::update::{SessionUpdate, SessionUpdateKind, TurnFileChange};
+use super::auto_check::AutoChecker;
+use super::update::{SessionUpdate, SessionUpdateKind, TurnEndReason, TurnFileChange};
 use super::{now_ms, DriverRegistry, LiveStatusSink};
 use crate::tasks::{ProtocolFamily, TaskStatus};
 
@@ -39,29 +40,41 @@ struct Tree {
 pub struct TurnChangeTracker {
     inner: Arc<dyn LiveStatusSink>,
     registry: Arc<DriverRegistry>,
-    cwds: Mutex<HashMap<String, PathBuf>>,
+    /// task → (project, working directory).
+    cwds: Mutex<HashMap<String, (String, PathBuf)>>,
     started: Mutex<HashMap<String, Snapshot>>,
+    /// Runs the project's checks after a completed turn that changed files.
+    pub checks: Arc<AutoChecker>,
 }
 
 impl TurnChangeTracker {
     pub fn new(inner: Arc<dyn LiveStatusSink>, registry: Arc<DriverRegistry>) -> Arc<Self> {
+        let checks = AutoChecker::new(
+            Arc::clone(&inner),
+            Arc::clone(&registry),
+            crate::platform::login_shell_env().to_vec(),
+            super::auto_check::CHECK_TIMEOUT,
+        );
         Arc::new(Self {
             inner,
             registry,
             cwds: Mutex::default(),
             started: Mutex::default(),
+            checks,
         })
     }
 
     /// Where `task_id`'s agent works; set when its session starts.
-    pub fn watch(&self, task_id: &str, cwd: &str) {
-        self.cwds
-            .lock()
-            .insert(task_id.to_string(), PathBuf::from(cwd));
+    pub fn watch(&self, task_id: &str, project_id: &str, cwd: &str) {
+        self.cwds.lock().insert(
+            task_id.to_string(),
+            (project_id.to_string(), PathBuf::from(cwd)),
+        );
     }
 
     fn turn_started(&self, task_id: &str) {
-        let Some(cwd) = self.cwds.lock().get(task_id).cloned() else {
+        self.checks.cancel(task_id);
+        let Some((_, cwd)) = self.cwds.lock().get(task_id).cloned() else {
             return;
         };
         let (tx, rx) = mpsc::channel();
@@ -71,10 +84,11 @@ impl TurnChangeTracker {
         });
     }
 
-    fn turn_ended(self: &Arc<Self>, task_id: &str, turn_id: &str) {
+    fn turn_ended(self: &Arc<Self>, task_id: &str, turn_id: &str, reason: TurnEndReason) {
         let Some(before) = self.started.lock().remove(task_id) else {
             return;
         };
+        let watched = self.cwds.lock().get(task_id).cloned();
         let this = Arc::clone(self);
         let task_id = task_id.to_string();
         let turn_id = turn_id.to_string();
@@ -91,6 +105,9 @@ impl TurnChangeTracker {
             if let Some(log) = this.registry.log(&task_id) {
                 let update = log.push(kind, now_ms());
                 this.inner.update(&update);
+            }
+            if let (TurnEndReason::Completed, Some((project_id, cwd))) = (reason, watched) {
+                this.checks.start(&task_id, &project_id, &turn_id, &cwd);
             }
         });
     }
@@ -130,9 +147,9 @@ impl LiveStatusSink for TrackingSink {
     fn update(&self, update: &SessionUpdate) {
         match &update.kind {
             SessionUpdateKind::TurnStarted { .. } => self.0.turn_started(&update.task_id),
-            SessionUpdateKind::TurnEnded { turn_id, .. } => {
-                self.0.turn_ended(&update.task_id, turn_id)
-            }
+            SessionUpdateKind::TurnEnded {
+                turn_id, reason, ..
+            } => self.0.turn_ended(&update.task_id, turn_id, *reason),
             _ => {}
         }
         self.0.inner.update(update);

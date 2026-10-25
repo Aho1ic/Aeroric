@@ -58,6 +58,9 @@ public enum LiveUpdateKind: Equatable, Sendable {
     case error(message: String, recoverable: Bool)
     /// A05: what the working tree changed during one turn (host git snapshot).
     case turnChanges(turnId: String, files: [LiveFileChange], additions: UInt64, deletions: UInt64, truncated: Bool)
+    /// A05: the project's tests / diagnostics after that turn; a later one for
+    /// the same turn replaces the earlier (`running` first).
+    case autoCheck(turnId: String, state: String, items: [LiveAutoCheckItem])
     /// Kept with its source `type` (or the agent's own kind for host-side unknowns).
     case unknown(kind: String, payload: JSONValue)
 }
@@ -72,6 +75,30 @@ public struct LiveFileChange: Equatable, Sendable {
         self.path = path
         self.additions = additions
         self.deletions = deletions
+    }
+}
+
+/// One check of an `autoCheck` update.
+public struct LiveAutoCheckItem: Equatable, Sendable {
+    /// `tests` | `diagnostics`.
+    public var kind: String
+    public var profile: String
+    public var label: String
+    /// `passed` | `failed` | `error` | `timedOut` | `cancelled`.
+    public var state: String
+    public var summary: String
+    public var failures: [String]
+    public var outputTail: String
+
+    public init(kind: String, profile: String, label: String, state: String, summary: String,
+                failures: [String] = [], outputTail: String = "") {
+        self.kind = kind
+        self.profile = profile
+        self.label = label
+        self.state = state
+        self.summary = summary
+        self.failures = failures
+        self.outputTail = outputTail
     }
 }
 
@@ -266,6 +293,19 @@ extension LiveUpdateKind {
             guard decoded.count == files.count else { return nil }
             return .turnChanges(turnId: id, files: decoded, additions: additions, deletions: deletions,
                                 truncated: f["truncated"]?.boolValue ?? false)
+        case "autoCheck":
+            guard let id = string(f, "turnId"), let state = string(f, "state") else { return nil }
+            let items = f["items"]?.arrayValue ?? []
+            let decoded = items.compactMap { item -> LiveAutoCheckItem? in
+                let g = item.fields
+                guard let kind = string(g, "kind"), let profile = string(g, "profile"), let label = string(g, "label"),
+                      let itemState = string(g, "state"), let summary = string(g, "summary") else { return nil }
+                return LiveAutoCheckItem(kind: kind, profile: profile, label: label, state: itemState, summary: summary,
+                                         failures: g["failures"]?.arrayValue?.compactMap(\.stringValue) ?? [],
+                                         outputTail: string(g, "outputTail") ?? "")
+            }
+            guard decoded.count == items.count else { return nil }
+            return .autoCheck(turnId: id, state: state, items: decoded)
         case "unknown":
             guard let kind = string(f, "kind") else { return nil }
             return .unknown(kind: kind, payload: f["payload"] ?? .null)

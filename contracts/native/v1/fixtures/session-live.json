@@ -79,7 +79,7 @@
     "turnActive": true
   },
   "updates": {
-    "latestSeq": 17,
+    "latestSeq": 18,
     "updates": [
       {
         "atMs": 1761350400000,
@@ -234,26 +234,47 @@
       },
       {
         "atMs": 1761350400014,
+        "items": [
+          {
+            "failures": [
+              "test_add: assert 3 == 4"
+            ],
+            "kind": "tests",
+            "label": "Pytest",
+            "outputTail": "1 failed, 1 passed",
+            "profile": "python",
+            "state": "failed",
+            "summary": "2 项中 1 项失败"
+          }
+        ],
+        "seq": 15,
+        "state": "failed",
+        "taskId": "task-1",
+        "turnId": "u1",
+        "type": "autoCheck"
+      },
+      {
+        "atMs": 1761350400015,
         "kind": "item/futureThing",
         "payload": {
           "x": 1
         },
-        "seq": 15,
+        "seq": 16,
         "taskId": "task-1",
         "type": "unknown"
       },
       {
-        "atMs": 1761350400015,
+        "atMs": 1761350400016,
         "messageId": "m1",
-        "seq": 16,
+        "seq": 17,
         "taskId": "task-1",
         "text": "我来看看",
         "type": "messageCompleted"
       },
       {
-        "atMs": 1761350400016,
+        "atMs": 1761350400017,
         "reason": "completed",
-        "seq": 17,
+        "seq": 18,
         "taskId": "task-1",
         "turnId": "u1",
         "type": "turnEnded"

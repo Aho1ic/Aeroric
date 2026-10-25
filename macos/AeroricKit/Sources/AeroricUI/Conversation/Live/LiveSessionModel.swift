@@ -125,6 +125,50 @@ public struct LiveTurnChanges: Equatable, Sendable {
     }
 }
 
+/// A05: the project's checks after a turn that changed files.
+public struct LiveAutoCheck: Equatable, Sendable {
+    public var turnId: String
+    /// `running` | `passed` | `failed` | `cancelled` | `skipped`.
+    public var state: String
+    public var items: [LiveAutoCheckItem]
+
+    public var failing: [LiveAutoCheckItem] { items.filter { $0.state != "passed" && $0.state != "cancelled" } }
+
+    /// A later turn changed files again, so this verdict no longer describes the tree.
+    public func isStale(given changes: LiveTurnChanges?) -> Bool {
+        guard let changes else { return false }
+        return changes.turnId != turnId
+    }
+
+    public var title: String {
+        switch state {
+        case "running": "正在运行项目检查…"
+        case "passed": "项目检查通过"
+        case "failed": "项目检查失败 · \(failing.count) 项"
+        case "cancelled": "项目检查已取消（新一轮开始）"
+        case "skipped": "已开启自动检查，但没找到可运行的测试或诊断"
+        default: "项目检查：\(state)"
+        }
+    }
+
+    /// What “把失败发给 Agent” sends; nil when nothing failed.
+    public var failureReport: String? {
+        guard state == "failed", !failing.isEmpty else { return nil }
+        var lines = ["上一轮改动后自动运行的项目检查没有通过，请修复："]
+        for item in failing {
+            lines.append("")
+            lines.append("【\(item.label)】\(item.summary)")
+            if item.failures.isEmpty {
+                let tail = item.outputTail.split(separator: "\n", omittingEmptySubsequences: false).suffix(30)
+                if !tail.isEmpty { lines.append(tail.joined(separator: "\n")) }
+            } else {
+                lines.append(contentsOf: item.failures.map { "- \($0)" })
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
 public struct LiveTool: Equatable, Sendable {
     public var id: String
     public var kind: LiveToolKind
@@ -171,6 +215,8 @@ public struct LiveSessionModel: Equatable, Sendable {
     /// A05: the last finished turn's working-tree changes. Kept apart from
     /// `items`, which history replaces after a turn.
     public private(set) var lastTurnChanges: LiveTurnChanges?
+    /// A05: the latest project check (kept apart from `items` like the changes).
+    public private(set) var lastAutoCheck: LiveAutoCheck?
     /// A14: host time (ms) of the newest update applied; nil until one arrives.
     public private(set) var lastActivityAtMs: UInt64?
     /// A13: this turn's tool calls as signatures, for the runaway-loop hint.
@@ -300,6 +346,8 @@ public struct LiveSessionModel: Equatable, Sendable {
         case let .turnChanges(turnId, files, additions, deletions, truncated):
             lastTurnChanges = LiveTurnChanges(turnId: turnId, files: files, additions: additions,
                                               deletions: deletions, truncated: truncated)
+        case let .autoCheck(turnId, state, items):
+            lastAutoCheck = LiveAutoCheck(turnId: turnId, state: state, items: items)
         case let .unknown(kind, _):
             items.append(.unknown(id: "seq\(update.seq)", kind: kind))
         }

@@ -115,6 +115,33 @@ final class LiveSessionModelTests: XCTestCase {
         XCTAssertEqual(model.lastTurnChanges?.summary, "+3 −1 · 2 个文件")
     }
 
+    /// A05: the latest check replaces the earlier one, goes stale once a later
+    /// turn changes files, and only a failure offers a report for the agent.
+    func testAutoCheckStatesAndStaleness() {
+        var model = LiveSessionModel(state: state())
+        let files = [LiveFileChange(path: "a.py", additions: 1, deletions: 0)]
+        let failing = LiveAutoCheckItem(kind: "tests", profile: "python", label: "Pytest", state: "failed",
+                                        summary: "2 项中 1 项失败", failures: ["test_add: assert 3 == 4"])
+        let passing = LiveAutoCheckItem(kind: "diagnostics", profile: "ruff", label: "ruff", state: "passed",
+                                        summary: "无错误")
+        _ = model.apply(batch([
+            .turnChanges(turnId: "u1", files: files, additions: 1, deletions: 0, truncated: false),
+            .autoCheck(turnId: "u1", state: "running", items: []),
+        ]))
+        XCTAssertEqual(model.lastAutoCheck?.title, "正在运行项目检查…")
+        XCTAssertNil(model.lastAutoCheck?.failureReport)
+        _ = model.apply(batch([.autoCheck(turnId: "u1", state: "failed", items: [passing, failing])], from: 3))
+        let check = model.lastAutoCheck
+        XCTAssertEqual(check?.title, "项目检查失败 · 1 项")
+        XCTAssertEqual(check?.isStale(given: model.lastTurnChanges), false)
+        XCTAssertEqual(check?.failureReport,
+                       "上一轮改动后自动运行的项目检查没有通过，请修复：\n\n【Pytest】2 项中 1 项失败\n- test_add: assert 3 == 4")
+        _ = model.apply(batch([.turnChanges(turnId: "u2", files: files, additions: 1, deletions: 0, truncated: false)],
+                              from: 4))
+        XCTAssertEqual(model.lastAutoCheck?.isStale(given: model.lastTurnChanges), true)
+        XCTAssertEqual(LiveAutoCheck(turnId: "u2", state: "passed", items: [passing]).failureReport, nil)
+    }
+
     /// A14: quiet turns are flagged at 5 and 15 minutes; waiting on the user is not a stall.
     func testStallLevels() {
         let minute: UInt64 = 60_000

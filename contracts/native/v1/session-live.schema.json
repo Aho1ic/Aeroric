@@ -563,6 +563,79 @@
             },
             {
               "properties": {
+                "items": {
+                  "items": {
+                    "properties": {
+                      "failures": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "kind": {
+                        "enum": [
+                          "tests",
+                          "diagnostics"
+                        ]
+                      },
+                      "label": {
+                        "type": "string"
+                      },
+                      "outputTail": {
+                        "type": "string"
+                      },
+                      "profile": {
+                        "type": "string"
+                      },
+                      "state": {
+                        "enum": [
+                          "passed",
+                          "failed",
+                          "error",
+                          "timedOut",
+                          "cancelled"
+                        ]
+                      },
+                      "summary": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "profile",
+                      "label",
+                      "state",
+                      "summary"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "state": {
+                  "enum": [
+                    "running",
+                    "passed",
+                    "failed",
+                    "cancelled",
+                    "skipped"
+                  ]
+                },
+                "turnId": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "autoCheck"
+                }
+              },
+              "required": [
+                "type",
+                "turnId",
+                "state"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "message": {
                   "type": "string"
                 },

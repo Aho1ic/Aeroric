@@ -168,6 +168,30 @@ fn javascript_profile_command(
     Ok((command, args))
 }
 
+/// Diagnostics worth running unattended in `root` (A05 auto checks): fast,
+/// low-noise tools whose config is present. eslint and mypy are left to the
+/// manual Diagnostics panel.
+pub fn discover_diagnostic_profiles(root: &Path) -> Vec<(&'static str, &'static str)> {
+    let mut profiles = Vec::new();
+    if root.join("Cargo.toml").is_file() {
+        profiles.push(("cargo", "cargo check"));
+    }
+    if root.join("tsconfig.json").is_file() && detect_package_manager(root).is_some() {
+        profiles.push(("tsc", "tsc"));
+    }
+    let pyproject_has_ruff = std::fs::read_to_string(root.join("pyproject.toml"))
+        .is_ok_and(|text| text.contains("[tool.ruff"));
+    if root.join("ruff.toml").is_file() || root.join(".ruff.toml").is_file() || pyproject_has_ruff {
+        profiles.push(("ruff", "ruff"));
+    }
+    profiles
+}
+
+/// Program and arguments for a diagnostics profile (shared with auto checks).
+pub fn diagnostic_command(root: &Path, profile: &str) -> Result<(String, Vec<String>), String> {
+    diagnostic_profile_command(root, profile)
+}
+
 fn diagnostic_profile_command(root: &Path, profile: &str) -> Result<(String, Vec<String>), String> {
     match profile {
         "eslint" => javascript_profile_command(root, "eslint", &[".", "--format", "json"]),

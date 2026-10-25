@@ -116,6 +116,11 @@ impl StructuredExecutor {
     }
 
     /// Live drivers, for the host's session methods (N3).
+    /// A05: which projects run their tests / diagnostics after a turn.
+    pub fn set_auto_check_policy(&self, policy: Arc<dyn super::auto_check::AutoCheckPolicy>) {
+        self.turn_changes.checks.set_policy(policy);
+    }
+
     pub fn registry(&self) -> &Arc<DriverRegistry> {
         &self.registry
     }
@@ -190,7 +195,8 @@ impl StructuredExecutor {
             .registry
             .log(&spec.task_id)
             .unwrap_or_else(|| SharedLog::new(&spec.task_id));
-        self.turn_changes.watch(&spec.task_id, &spec.cwd);
+        self.turn_changes
+            .watch(&spec.task_id, &spec.project_id, &spec.cwd);
         let session: Arc<dyn SessionDriver> = match route {
             Route::Codex(key) => CodexSession::start(
                 spec.clone(),

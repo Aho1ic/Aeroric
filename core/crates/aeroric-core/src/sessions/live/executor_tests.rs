@@ -473,3 +473,120 @@ async fn a_turn_in_a_git_workspace_reports_what_it_changed() {
     assert_eq!((changes.2, changes.3), (2, 1));
     std::fs::remove_dir_all(&repo).ok();
 }
+
+struct TestsOnly;
+
+impl crate::sessions::live::auto_check::AutoCheckPolicy for TestsOnly {
+    fn selection(
+        &self,
+        _project_id: &str,
+    ) -> crate::sessions::live::auto_check::AutoCheckSelection {
+        crate::sessions::live::auto_check::AutoCheckSelection {
+            tests: true,
+            diagnostics: false,
+        }
+    }
+}
+
+/// A05: a project that opted in gets its own tests run after a turn that
+/// changed files — `running` first, then the verdict.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_turn_that_changed_files_runs_the_projects_tests() {
+    let repo = std::env::temp_dir().join(format!(
+        "aeroric-exec-check-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[package]\nname = \"calc\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join(".gitignore"), "target\n").unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+    )
+    .unwrap();
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "init"]);
+
+    let mut s = setup();
+    s.executor.set_auto_check_policy(Arc::new(TestsOnly));
+    let mut request = launch("tc", ProtocolFamily::Codex);
+    request.working_directory = WorkingDirectory::Local {
+        path: repo.to_string_lossy().into_owned(),
+    };
+    s.executor.launch(&request).unwrap();
+    let mut peer = launched(&mut s.peers).await;
+    peer.handshake().await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(&start, json!({"thread": {"id": "th1"}}));
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th1", "turn": {"id": "u1"}}),
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\n#[test]\nfn adds() { assert_eq!(add(1, 2), 3); }\n",
+    )
+    .unwrap();
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th1", "turn": {"id": "u1", "status": "completed"}}),
+    );
+    let checks = || {
+        s.sink
+            .updates
+            .lock()
+            .iter()
+            .filter_map(|u| match &u.kind {
+                crate::sessions::live::update::SessionUpdateKind::AutoCheck {
+                    turn_id,
+                    state,
+                    items,
+                } => Some((turn_id.clone(), state.clone(), items.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    while !checks().iter().any(|c| c.1 != "running") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no verdict: {:?}",
+            checks()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    let all = checks();
+    assert_eq!(all[0].1, "running");
+    let (turn_id, state, items) = all.last().unwrap().clone();
+    assert_eq!(turn_id, "u1");
+    assert_eq!(state, "passed", "{items:?}");
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        (items[0].kind.as_str(), items[0].profile.as_str()),
+        ("tests", "cargo")
+    );
+    std::fs::remove_dir_all(&repo).ok();
+}

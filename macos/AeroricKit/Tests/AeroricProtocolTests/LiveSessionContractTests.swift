@@ -18,10 +18,10 @@ final class LiveSessionContractTests: XCTestCase {
 
     func testEveryUpdateKindInTheFixtureDecodesAsKnown() throws {
         let batch = try LiveUpdatesBatch.decode(try fixture()["updates"] ?? .null)
-        XCTAssertEqual(batch.updates.count, 17)
-        XCTAssertEqual(batch.latestSeq, 17)
+        XCTAssertEqual(batch.updates.count, 18)
+        XCTAssertEqual(batch.latestSeq, 18)
         XCTAssertNil(batch.gapOldestAvailable)
-        XCTAssertEqual(batch.updates.map(\.seq), Array(1...17))
+        XCTAssertEqual(batch.updates.map(\.seq), Array(1...18))
         XCTAssertEqual(batch.updates[0], LiveSessionUpdate(taskId: "task-1", seq: 1, atMs: 1_761_350_400_000,
                                                            kind: .turnStarted(turnId: "u1")))
         let kinds = batch.updates.map(\.kind)
@@ -38,6 +38,11 @@ final class LiveSessionContractTests: XCTestCase {
             LiveFileChange(path: "src/calc.py", additions: 3, deletions: 1),
             LiveFileChange(path: "docs/diagram.png", additions: nil, deletions: nil),
         ], additions: 3, deletions: 1, truncated: false)))
+        XCTAssertTrue(kinds.contains(.autoCheck(turnId: "u1", state: "failed", items: [
+            LiveAutoCheckItem(kind: "tests", profile: "python", label: "Pytest", state: "failed",
+                              summary: "2 项中 1 项失败", failures: ["test_add: assert 3 == 4"],
+                              outputTail: "1 failed, 1 passed"),
+        ])))
         XCTAssertEqual(kinds.last, .turnEnded(turnId: "u1", reason: .completed, error: nil))
         // Only the fixture's deliberate `unknown` row is unknown: every other kind is understood.
         let unknown = kinds.filter { if case .unknown = $0 { true } else { false } }

@@ -88,6 +88,26 @@ pub struct TurnFileChange {
     pub deletions: Option<u64>,
 }
 
+/// One check of a [`SessionUpdateKind::AutoCheck`]: a test profile or a
+/// diagnostics profile run in the task's working directory.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoCheckItem {
+    /// `tests` | `diagnostics`.
+    pub kind: String,
+    pub profile: String,
+    pub label: String,
+    /// `passed` | `failed` | `error` | `timedOut` | `cancelled`.
+    pub state: String,
+    pub summary: String,
+    /// At most 20, each cut to 300 characters.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<String>,
+    /// The last 4000 characters of the command's output.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub output_tail: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -182,6 +202,15 @@ pub enum SessionUpdateKind {
         /// More files changed than `files` lists (the totals count them all).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         truncated: bool,
+    },
+    /// A05: the project's own tests / diagnostics after a turn changed files.
+    /// A later one for the same turn replaces the earlier (`running` first).
+    AutoCheck {
+        turn_id: String,
+        /// `running` | `passed` | `failed` | `cancelled` | `skipped`.
+        state: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        items: Vec<AutoCheckItem>,
     },
     Error {
         message: String,
@@ -446,6 +475,19 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
             deletions: 1,
             truncated: false,
         },
+        K::AutoCheck {
+            turn_id: "u1".into(),
+            state: "failed".into(),
+            items: vec![AutoCheckItem {
+                kind: "tests".into(),
+                profile: "python".into(),
+                label: "Pytest".into(),
+                state: "failed".into(),
+                summary: "2 项中 1 项失败".into(),
+                failures: vec!["test_add: assert 3 == 4".into()],
+                output_tail: "1 failed, 1 passed".into(),
+            }],
+        },
         K::Unknown {
             kind: "item/futureThing".into(),
             payload: json!({"x": 1}),
@@ -566,6 +608,12 @@ pub fn schema() -> Value {
         json!({"type": "object", "required": req, "properties": props})
     };
     let s = json!({"type": "string"});
+    // Its own value: nesting it inline exceeds `json!`'s recursion limit.
+    let auto_check_item = json!({"type": "object",
+        "required": ["kind", "profile", "label", "state", "summary"],
+        "properties": {"kind": {"enum": ["tests", "diagnostics"]}, "profile": s, "label": s,
+            "state": {"enum": ["passed", "failed", "error", "timedOut", "cancelled"]},
+            "summary": s, "failures": {"type": "array", "items": s}, "outputTail": s}});
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "aeroric-native-session-live-v1",
@@ -632,6 +680,9 @@ pub fn schema() -> Value {
                             "properties": {"path": s, "additions": {"type": "integer"}, "deletions": {"type": "integer"}}}},
                         "additions": {"type": "integer", "minimum": 0}, "deletions": {"type": "integer", "minimum": 0},
                         "truncated": {"type": "boolean"}})),
+                    update_variant("autoCheck", json!(["turnId", "state"]), json!({"turnId": s,
+                        "state": {"enum": ["running", "passed", "failed", "cancelled", "skipped"]},
+                        "items": {"type": "array", "items": auto_check_item}})),
                     update_variant("error", json!(["message", "recoverable"]), json!({"message": s, "recoverable": {"type": "boolean"}})),
                     update_variant("unknown", json!(["kind", "payload"]), json!({"kind": s, "payload": {}}))
                 ]}
@@ -689,6 +740,7 @@ mod tests {
             "usage",
             "configChanged",
             "turnChanges",
+            "autoCheck",
             "error",
             "unknown",
         ] {

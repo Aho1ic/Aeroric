@@ -5,6 +5,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod auto_check;
 pub mod executor;
 pub mod turn_changes;
 pub mod update;
