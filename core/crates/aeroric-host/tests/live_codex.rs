@@ -117,14 +117,15 @@ async fn a_codex_task_runs_its_first_turn_on_the_structured_driver() {
     std::fs::write(
         paths.settings_file(),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "custom_agents": [{ "id": "fake-codex", "path": script.to_string_lossy(), "args": [] }]
+            "codex_path": script.to_string_lossy()
         }))
         .expect("settings"),
     )
     .expect("write settings");
 
     let registry = Arc::new(TaskRegistry::default());
-    let log = Arc::new(EventLog::default());
+    let recorder = Arc::new(Recorder::default());
+    let log = Arc::new(EventLog::default().with_observer(Arc::clone(&recorder) as Arc<_>));
     let pty = CliPtyExecutor::new(
         Arc::clone(&context),
         Arc::clone(&registry),
@@ -168,7 +169,7 @@ async fn a_codex_task_runs_its_first_turn_on_the_structured_driver() {
                 id: "task-1".to_string(),
                 project_id: "project-1".to_string(),
                 prompt: "hi".to_string(),
-                agent: "fake-codex".to_string(),
+                agent: "codex".to_string(),
                 permission_mode: "ask".to_string(),
                 immediate: true,
                 selected_model: None,
@@ -228,4 +229,130 @@ async fn a_codex_task_runs_its_first_turn_on_the_structured_driver() {
         "no PTY was opened for this run"
     );
     assert!(structured.registry().get("task-1").is_some());
+
+    // N6 D8: the native run announces itself exactly like a PTY run does — the
+    // same `task-status` payload shape, seen by the push plane's observer.
+    // The record commits before the announcement is appended: wait for it.
+    for _ in 0..100 {
+        if log
+            .since(0)
+            .0
+            .iter()
+            .any(|e| e.event == "task-status" && e.data["status"] == "done")
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let statuses: Vec<serde_json::Value> = log
+        .since(0)
+        .0
+        .into_iter()
+        .filter(|event| event.event == "task-status")
+        .map(|event| event.data)
+        .collect();
+    assert!(
+        statuses.iter().any(|data| data["status"] == "done"),
+        "{statuses:?}"
+    );
+    for data in &statuses {
+        let mut keys: Vec<&str> = data
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort();
+        assert!(
+            keys == ["status", "task_id"] || keys == ["failure_reason", "status", "task_id"],
+            "{keys:?}"
+        );
+        assert_eq!(data["task_id"], "task-1");
+    }
+    let observed = recorder.0.lock().clone();
+    assert!(
+        observed
+            .iter()
+            .any(|(event, status)| event == "task-status" && status == "done"),
+        "{observed:?}"
+    );
+}
+
+#[derive(Default)]
+struct Recorder(parking_lot::Mutex<Vec<(String, String)>>);
+
+impl aeroric_core::events::log::EventObserver for Recorder {
+    fn observed(&self, event: &aeroric_core::events::log::LoggedEvent) {
+        let status = event.data["status"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        self.0.lock().push((event.event.clone(), status));
+    }
+}
+
+#[test]
+fn a_wrapped_pty_executor_refuses_local_built_in_claude_and_codex() {
+    use aeroric_core::tasks::executor::{ExecutorFailure, LaunchRequest, TaskExecutor};
+    use aeroric_core::tasks::{PermissionMode, WorkingDirectory};
+    let root = scratch_home();
+    let paths = AppPaths::from_user_home(root.join("home"));
+    let context = Arc::new(
+        CoreContext::acquire(
+            paths,
+            Arc::new(aeroric_core::clock::SystemClock),
+            &LeaseOwner {
+                application: "guard-test".into(),
+                version: "0-test".into(),
+            },
+            &LocalProbe,
+        )
+        .expect("writer context"),
+    );
+    let pty = CliPtyExecutor::new(
+        context,
+        Arc::new(TaskRegistry::default()),
+        Arc::new(TerminalService::new()),
+        Arc::new(EventLog::default()),
+    );
+    pty.mark_wrapped();
+    let request = |family, agent: &str| LaunchRequest {
+        task_id: "g1".into(),
+        project_id: "p".into(),
+        operation_key: "op".into(),
+        generation: 1,
+        family,
+        agent: agent.into(),
+        permission_mode: PermissionMode::Ask,
+        permission_mode_wire: "ask".into(),
+        prompt: "hi".into(),
+        prompt_override: None,
+        images: vec![],
+        texts: vec![],
+        inject_prompt_into_terminal: false,
+        session_id: None,
+        selected_model: None,
+        reasoning_effort: None,
+        speed: None,
+        dsh_agent_preset: None,
+        agent_config_id: None,
+        created_at_ms: 0,
+        dsh_window: None,
+        working_directory: WorkingDirectory::Local {
+            path: root.to_string_lossy().into_owned(),
+        },
+        terminal_size: None,
+    };
+    for (family, agent) in [
+        (ProtocolFamily::Claude, "claude"),
+        (ProtocolFamily::Codex, "codex"),
+    ] {
+        match pty.launch(&request(family, agent)) {
+            Err(ExecutorFailure::Unsupported { reason }) => {
+                assert!(reason.contains("native session"), "{reason}")
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+    std::fs::remove_dir_all(root).ok();
 }

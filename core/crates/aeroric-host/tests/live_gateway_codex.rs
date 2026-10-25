@@ -202,6 +202,15 @@ fn codex_configurations_get_their_own_server_and_everything_else_stays_put() {
         "Claude configurations run natively per session (N5)"
     );
     assert_eq!(route(ProtocolFamily::Omp, "omp", None), None);
+    assert_eq!(
+        route(ProtocolFamily::Codex, "my-wrapper", None),
+        None,
+        "an unmigrated custom wrapper stays on the PTY (N6 D2)"
+    );
+    assert_eq!(
+        route(ProtocolFamily::Claude, "my-claude-wrapper", None),
+        None
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

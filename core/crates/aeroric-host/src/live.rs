@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 use aeroric_core::agent_connections::launch::{legacy_mapping, resolve_config, ConfigLaunch};
 use aeroric_core::agent_connections::model::Harness;
 use aeroric_core::agents::environment::{terminal_env_ops, EnvOp};
+use aeroric_core::agents::families::is_builtin;
 use aeroric_core::agents::launch::LaunchInput;
 use aeroric_core::context::CoreContext;
 use aeroric_core::events::EventLog;
@@ -159,6 +160,9 @@ impl Routing for HostRouting {
                 }))
             }
             (_, Some(_)) => None,
+            // An unmigrated custom wrapper may not take the structured flags
+            // (fixed args, no `app-server`): it stays on the PTY (N6 D2).
+            (_, None) if !is_builtin(agent) => None,
             (ProtocolFamily::Codex, None) => {
                 Some(Route::Codex(ServerKey::Agent(agent.to_string())))
             }

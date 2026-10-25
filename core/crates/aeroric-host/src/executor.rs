@@ -51,6 +51,9 @@ pub struct CliPtyExecutor {
     supervisor: Arc<WatcherSupervisor>,
     service: Mutex<Weak<TaskService>>,
     leases: Mutex<std::collections::HashMap<String, aeroric_core::terminal::lease::ControlLease>>,
+    /// Set when a structured executor wraps this one (N6 D4): a local built-in
+    /// Claude/Codex run reaching the PTY is then a routing bug, refused loudly.
+    wrapped: std::sync::atomic::AtomicBool,
 }
 
 impl CliPtyExecutor {
@@ -68,7 +71,36 @@ impl CliPtyExecutor {
             supervisor: Arc::new(WatcherSupervisor::new()),
             service: Mutex::new(Weak::new()),
             leases: Mutex::new(std::collections::HashMap::new()),
+            wrapped: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// The structured executor now takes local built-in Claude/Codex runs.
+    pub fn mark_wrapped(&self) {
+        self.wrapped
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn refuse_structured(
+        &self,
+        family: ProtocolFamily,
+        agent: &str,
+        config: Option<&str>,
+        cwd: &WorkingDirectory,
+    ) -> Execution<()> {
+        let structured = self.wrapped.load(std::sync::atomic::Ordering::Relaxed)
+            && matches!(family, ProtocolFamily::Claude | ProtocolFamily::Codex)
+            && matches!(cwd, WorkingDirectory::Local { .. })
+            && config.is_none_or(|id| id.trim().is_empty())
+            && aeroric_core::agents::families::is_builtin(agent);
+        if structured {
+            return Err(ExecutorFailure::Unsupported {
+                reason: format!(
+                    "a local {agent} run belongs to a native session, not the terminal; this is a routing bug"
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// serve 装配在 `TaskService::new` 之后回链（构造环的唯一解开点）。
@@ -751,6 +783,12 @@ impl CliPtyExecutor {
 
 impl TaskExecutor for CliPtyExecutor {
     fn launch(&self, request: &LaunchRequest) -> Execution<()> {
+        self.refuse_structured(
+            request.family,
+            &request.agent,
+            request.agent_config_id.as_deref(),
+            &request.working_directory,
+        )?;
         let workspace_path = match &request.working_directory {
             WorkingDirectory::Wsl { distribution, .. } => {
                 return Err(ExecutorFailure::Unsupported {
@@ -883,6 +921,12 @@ impl TaskExecutor for CliPtyExecutor {
     /// TaskService 决定）；b1.1 只有 claude/codex 的 plan 吃 resume——
     /// omp 走 `omp_plan` 的 resume 参数。形状与 launch 同路径。
     fn resume(&self, request: &ResumeRequest) -> Execution<()> {
+        self.refuse_structured(
+            request.family,
+            &request.agent,
+            request.agent_config_id.as_deref(),
+            &request.working_directory,
+        )?;
         if request.family == ProtocolFamily::Dsh {
             return Err(ExecutorFailure::Unsupported {
                 reason: "dsh has no native resume; the continuation is a handoff into a new \
