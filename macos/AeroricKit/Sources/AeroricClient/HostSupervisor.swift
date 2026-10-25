@@ -197,6 +197,7 @@ public actor HostSupervisor {
     private let config: SupervisorConfig
     private let onChange: @Sendable (SupervisorPhase) -> Void
     private let configureConnection: @Sendable (HostConnection) async -> Void
+    private let connectionReady: @Sendable (HostConnection) async -> Void
     private var runTask: Task<Void, Never>?
     private var child: ChildHandle?
     private var connection: HostConnection?
@@ -204,10 +205,21 @@ public actor HostSupervisor {
     private var stopped = false
     public init(config: SupervisorConfig,
                 onChange: @escaping @Sendable (SupervisorPhase) -> Void,
-                configureConnection: @escaping @Sendable (HostConnection) async -> Void = { _ in }) {
+                configureConnection: @escaping @Sendable (HostConnection) async -> Void = { _ in },
+                connectionReady: @escaping @Sendable (HostConnection) async -> Void = { _ in }) {
         self.config = config
         self.onChange = onChange
         self.configureConnection = configureConnection
+        self.connectionReady = connectionReady
+    }
+
+    /// `configureConnection` runs before the handshake (sinks only); work that
+    /// needs a connected, handshaken host — advertised capabilities, the first
+    /// reads — goes here. It runs off the lifecycle watch so a slow read never
+    /// delays noticing a fault.
+    private func startReadyWork(_ connection: HostConnection) {
+        let ready = connectionReady
+        Task { await ready(connection) }
     }
 
     /// Idempotent start, also the restart path after `stop()`.
@@ -377,6 +389,7 @@ public actor HostSupervisor {
             await connection.close()
             return false
         }
+        startReadyWork(connection)
         self.connection = connection
         defer { if self.connection === connection { self.connection = nil } }
         if let runtimeData = try? Data(contentsOf: config.dataDir.appendingPathComponent("runtime.json")),
@@ -480,6 +493,7 @@ public actor HostSupervisor {
             child.terminate()
             throw error
         }
+        startReadyWork(connection)
 
         setPhase(.ready)
         // Watch: first lifecycle event (fault or exit) ends the attempt.

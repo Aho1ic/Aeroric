@@ -48,6 +48,9 @@ final class SupervisorTests: XCTestCase {
                 req = json.loads(line)
                 if req.get("method") == "events.since":
                     result = {"events": [], "latestSeq": 0, "reset": False}
+                elif req.get("method") == "handshake":
+                    result = {"clientId": "fake-host",
+                              "capabilities": [{"name": "session.live", "enabled": True, "since": 1}]}
                 else:
                     result = {"clientId": "fake-host"}
                 reply = {"v": 1, "id": req["id"], "ok": True, "result": result}
@@ -64,7 +67,9 @@ final class SupervisorTests: XCTestCase {
     private func makeSupervisor(fakeHost: URL?,
                                 dataDir: URL,
                                 readyTimeout: Duration = .seconds(5),
-                                phaseSink: (@Sendable (SupervisorPhase) -> Void)? = nil) -> HostSupervisor {
+                                phaseSink: (@Sendable (SupervisorPhase) -> Void)? = nil,
+                                configureConnection: @escaping @Sendable (HostConnection) async -> Void = { _ in },
+                                connectionReady: @escaping @Sendable (HostConnection) async -> Void = { _ in }) -> HostSupervisor {
         let config = SupervisorConfig(
             dataDir: dataDir,
             socketPath: dataDir.appendingPathComponent("host.sock").path,
@@ -72,7 +77,9 @@ final class SupervisorTests: XCTestCase {
             readyTimeout: readyTimeout,
             policy: ReconnectPolicy(baseDelayMs: 50, capDelayMs: 200)
         )
-        let supervisor = HostSupervisor(config: config, onChange: { phase in phaseSink?(phase) })
+        let supervisor = HostSupervisor(config: config, onChange: { phase in phaseSink?(phase) },
+                                        configureConnection: configureConnection,
+                                        connectionReady: connectionReady)
         supervisors.append(supervisor)
         return supervisor
     }
@@ -108,6 +115,42 @@ final class SupervisorTests: XCTestCase {
         let ready = await supervisor.currentReadyInfo
         XCTAssertEqual(ready?.epoch, "e1")
         XCTAssertEqual(ready?.socketPath, dataDir.appendingPathComponent("host.sock").path)
+    }
+
+    /// N6a: `configureConnection` runs before the handshake, so the App's
+    /// capability reads and first requests belong in `connectionReady`.
+    func testConnectionReadyRunsAfterTheHandshake() async throws {
+        actor Seen {
+            var before: [String: Bool]?
+            var after: [String: Bool]?
+            var requested = false
+            func setBefore(_ c: [String: Bool]) { before = c }
+            func setAfter(_ c: [String: Bool], requested r: Bool) { after = c; requested = r }
+        }
+        let seen = Seen()
+        let dataDir = makeDataDir()
+        let supervisor = makeSupervisor(
+            fakeHost: try makeFakeHost(), dataDir: dataDir,
+            configureConnection: { connection in
+                await seen.setBefore(await connection.advertisedCapabilities)
+            },
+            connectionReady: { connection in
+                let ok = (try? await connection.request("events.since", params: .object(["after": .number("0")]))) != nil
+                await seen.setAfter(await connection.advertisedCapabilities, requested: ok)
+            }
+        )
+        await supervisor.start()
+        _ = await waitForPhase({ $0 == .ready }, on: supervisor)
+        let deadline = Date().addingTimeInterval(5)
+        while await seen.after == nil, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        let before = await seen.before
+        let after = await seen.after
+        let requested = await seen.requested
+        XCTAssertEqual(before, [:], "nothing is advertised before the handshake")
+        XCTAssertEqual(after?["session.live"], true)
+        XCTAssertTrue(requested, "a request from connectionReady reaches the host")
     }
 
     func testChildKillLeadsToReconnecting() async throws {
