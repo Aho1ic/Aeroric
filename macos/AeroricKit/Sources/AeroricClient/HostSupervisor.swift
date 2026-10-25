@@ -539,7 +539,32 @@ public actor HostSupervisor {
         ]
         return try ChildHandle.spawn(executable: executable.path, arguments: argv,
                                      workingDirectory: config.dataDir.path,
-                                     environment: config.environment)
+                                     environment: config.environment,
+                                     stderrLog: Self.prepareHostLog(dataDir: config.dataDir))
+    }
+
+    /// A13: the host's stderr (already redacted by the host) is kept in
+    /// `<data>/logs/host.log` so a diagnostics export has something to read;
+    /// it used to go to /dev/null. One backup at 5 MB keeps the size bounded.
+    /// Returns nil (→ /dev/null) when the directory cannot be prepared.
+    static let hostLogLimitBytes = 5 * 1024 * 1024
+
+    static func prepareHostLog(dataDir: URL) -> String? {
+        let dir = dataDir.appendingPathComponent("logs", isDirectory: true)
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o700])
+        } catch {
+            return nil
+        }
+        let log = dir.appendingPathComponent("host.log")
+        if let size = (try? fm.attributesOfItem(atPath: log.path))?[.size] as? Int, size > hostLogLimitBytes {
+            let backup = dir.appendingPathComponent("host.log.1")
+            try? fm.removeItem(at: backup)
+            try? fm.moveItem(at: log, to: backup)
+        }
+        return log.path
     }
 
     private func readReadyLine(fd: Int32, timeout: Duration) async -> String? {
@@ -650,7 +675,8 @@ final class ChildHandle: @unchecked Sendable {
     static func spawn(executable: String,
                       arguments: [String],
                       workingDirectory: String,
-                      environment: [String: String]) throws -> ChildHandle {
+                      environment: [String: String],
+                      stderrLog: String? = nil) throws -> ChildHandle {
         var readyPipe: [Int32] = [0, 0]
         guard pipe(&readyPipe) == 0 else { throw SpawnFailure.posix(errno) }
 
@@ -681,13 +707,13 @@ final class ChildHandle: @unchecked Sendable {
         posix_spawn_file_actions_adddup2(&fileActions, readyPipe[1], 3)
         posix_spawn_file_actions_addclose(&fileActions, readyPipe[1])
         posix_spawn_file_actions_addopen(&fileActions, 1, "/dev/null", O_WRONLY, 0)
-        // serve's stderr goes to /dev/null by default (P4-01 baseline). When
-        // AERORIC_SERVE_STDERR_LOG is set (UI-test diagnostics only), it is
-        // appended to that file instead — the 2026-10-01 "supervisor never
+        // serve's stderr is appended to `<data>/logs/host.log` (A13; it was
+        // /dev/null before). AERORIC_SERVE_STDERR_LOG (UI-test diagnostics)
+        // still wins when set; it predates the host log — the 2026-10-01 "supervisor never
         // ready under testmanagerd" investigation had no way to see why the
         // child exited fast because stderr was unwritable-by-design.
-        if let stderrLog = ProcessInfo.processInfo.environment["AERORIC_SERVE_STDERR_LOG"],
-           !stderrLog.isEmpty {
+        if let stderrLog = ProcessInfo.processInfo.environment["AERORIC_SERVE_STDERR_LOG"].flatMap({ $0.isEmpty ? nil : $0 })
+            ?? stderrLog {
             posix_spawn_file_actions_addopen(&fileActions, 2, stderrLog,
                                              O_WRONLY | O_CREAT | O_APPEND, 0o600)
         } else {

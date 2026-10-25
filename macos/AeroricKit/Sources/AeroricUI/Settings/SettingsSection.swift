@@ -1,3 +1,4 @@
+import AeroricClient
 import SwiftUI
 
 /// Settings sections (P4-04 Action 3). Mirrors the React
@@ -46,6 +47,8 @@ public protocol SettingsStateProviding: AnyObject {
     var settingsImportBook: ImportBook? { get }
     /// Keep-awake switch (A14); nil or unavailable hides it.
     var settingsKeepAwake: KeepAwakeStore? { get }
+    /// A13: fetch the host's redacted diagnostics report; nil hides the entry.
+    var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? { get }
 }
 
 public extension SettingsStateProviding {
@@ -54,4 +57,5 @@ public extension SettingsStateProviding {
     var connectionPhaseText: String? { nil }
     var settingsImportBook: ImportBook? { nil }
     var settingsKeepAwake: KeepAwakeStore? { nil }
+    var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? { nil }
 }

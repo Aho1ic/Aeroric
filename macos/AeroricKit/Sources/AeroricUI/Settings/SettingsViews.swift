@@ -1,5 +1,7 @@
+import AeroricClient
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // Settings building blocks (M3). Only settings that something actually reads
 // live here; unwired ones were removed rather than shown as working (D4).
@@ -339,8 +341,47 @@ struct AboutSettingsPane<State: SettingsStateProviding>: View {
                         .accessibilityIdentifier("settings.application")
                 }
             }
+            if let exporter = state.settingsDiagnosticsExporter {
+                DiagnosticsExportCard(export: exporter)
+            }
         }
         .accessibilityIdentifier("settings.about")
+    }
+}
+
+/// A13: save the host's redacted diagnostics report where the user chooses.
+struct DiagnosticsExportCard: View {
+    let export: @MainActor () async throws -> DiagnosticsClient.Report
+    @State private var busy = false
+    @State private var message: String?
+
+    var body: some View {
+        SettingsCard("诊断") {
+            SettingsRow("导出诊断报告",
+                        detail: message ?? "版本、宿主能力、启动降级、任务状态计数、Agent 检测与宿主日志尾部；已脱敏，不含提示词、对话与凭据。") {
+                Button(busy ? "正在生成…" : "导出…") { Task { await run() } }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .disabled(busy)
+                    .accessibilityIdentifier("settings.diagnostics.export")
+            }
+        }
+    }
+
+    private func run() async {
+        busy = true
+        defer { busy = false }
+        do {
+            let report = try await export()
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = report.fileName
+            panel.allowedContentTypes = [.plainText]
+            panel.canCreateDirectories = true
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            try report.text.write(to: url, atomically: true, encoding: .utf8)
+            message = "已保存到 \(url.lastPathComponent)"
+        } catch {
+            message = "导出失败：\(error.localizedDescription)"
+        }
     }
 }
 

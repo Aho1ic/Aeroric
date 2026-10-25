@@ -850,5 +850,9 @@ extension AppServices: SettingsStateProviding {
     var connectionPhaseText: String? { phaseText }
     var settingsImportBook: ImportBook? { importBook }
     var settingsKeepAwake: KeepAwakeStore? { keepAwakeStore }
+    var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? {
+        guard let connection = attachedConnection else { return nil }
+        return { try await DiagnosticsClient(connection: connection).exportReport() }
+    }
     var keepingAwake: Bool { keepAwakeStore.active }
 }
