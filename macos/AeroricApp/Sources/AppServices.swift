@@ -805,6 +805,16 @@ extension AppServices: WorkspaceStateProviding {
         }
     }
 
+    /// Files page (read-only): one directory level of `projectID`.
+    func loadFiles(projectID: String, path: String) async {
+        guard let connection = attachedConnection else { return }
+        fileTreeStore.setLoading(path, loading: true)
+        let entries = (try? await ProjectResourcesClient(connection: connection).directory(projectID: projectID, path: path)) ?? []
+        fileTreeStore.ingestChildren(of: path, entries: entries.map {
+            FileTreeStore.Node(name: $0.name, path: $0.path, isDir: $0.isDir, isSymlink: $0.isSymlink)
+        })
+    }
+
     func loadGitDiff(projectPath: String, change: GitStore.Change) async {
         guard let connection = attachedConnection else { return }
         do {

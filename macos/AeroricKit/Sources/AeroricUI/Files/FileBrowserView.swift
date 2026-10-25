@@ -8,15 +8,19 @@ public struct FileBrowserView: View {
     let store: FileTreeStore
     public var onExpand: ((_ path: String) -> Void)?
     public var onOperation: ((_ operation: FilesOperation, _ path: String) -> Void)?
+    /// A file row was clicked (directories toggle instead).
+    public var onOpen: ((_ path: String) -> Void)?
 
     public init(
         store: FileTreeStore,
         onExpand: ((_ path: String) -> Void)? = nil,
-        onOperation: ((_ operation: FilesOperation, _ path: String) -> Void)? = nil
+        onOperation: ((_ operation: FilesOperation, _ path: String) -> Void)? = nil,
+        onOpen: ((_ path: String) -> Void)? = nil
     ) {
         self.store = store
         self.onExpand = onExpand
         self.onOperation = onOperation
+        self.onOpen = onOpen
     }
 
     public var body: some View {
@@ -42,10 +46,13 @@ public struct FileBrowserView: View {
                     },
                     onOperation: { operation in
                         onOperation?(operation, node.path)
-                    }
+                    },
+                    onOpen: onOpen.map { open in { open(node.path) } },
+                    allowsOperations: onOperation != nil
                 )
                 if store.expandedPaths.contains(node.path) {
-                    FileTreeBranch(store: store, path: node.path, onExpand: onExpand, onOperation: onOperation)
+                    FileTreeBranch(store: store, path: node.path, onExpand: onExpand, onOperation: onOperation,
+                                   onOpen: onOpen)
                 }
             }
         } else if store.isLoading(path) {
@@ -62,9 +69,10 @@ struct FileTreeBranch: View {
     let path: String
     var onExpand: ((_ path: String) -> Void)?
     var onOperation: ((_ operation: FilesOperation, _ path: String) -> Void)?
+    var onOpen: ((_ path: String) -> Void)?
 
     var body: some View {
-        FileBrowserBranchRows(store: store, path: path, onExpand: onExpand, onOperation: onOperation)
+        FileBrowserBranchRows(store: store, path: path, onExpand: onExpand, onOperation: onOperation, onOpen: onOpen)
     }
 }
 
@@ -73,6 +81,7 @@ struct FileBrowserBranchRows: View {
     let path: String
     var onExpand: ((_ path: String) -> Void)?
     var onOperation: ((_ operation: FilesOperation, _ path: String) -> Void)?
+    var onOpen: ((_ path: String) -> Void)?
 
     var body: some View {
         if let nodes = store.visibleChildren(of: path) {
@@ -88,11 +97,13 @@ struct FileBrowserBranchRows: View {
                     },
                     onOperation: { operation in
                         onOperation?(operation, node.path)
-                    }
+                    },
+                    onOpen: onOpen.map { open in { open(node.path) } },
+                    allowsOperations: onOperation != nil
                 )
                 if store.expandedPaths.contains(node.path) {
                     FileBrowserBranchRows(
-                        store: store, path: node.path, onExpand: onExpand, onOperation: onOperation
+                        store: store, path: node.path, onExpand: onExpand, onOperation: onOperation, onOpen: onOpen
                     )
                 }
             }
@@ -110,19 +121,26 @@ public struct FileRow: View {
     var isLoading: Bool
     var onToggle: () -> Void
     var onOperation: (FilesOperation) -> Void
+    var onOpen: (() -> Void)?
+    /// Without an operation handler the "…" menu would offer actions that do nothing.
+    var allowsOperations: Bool
 
     public init(
         node: FileTreeStore.Node,
         isExpanded: Bool,
         isLoading: Bool,
         onToggle: @escaping () -> Void,
-        onOperation: @escaping (FilesOperation) -> Void
+        onOperation: @escaping (FilesOperation) -> Void,
+        onOpen: (() -> Void)? = nil,
+        allowsOperations: Bool = true
     ) {
         self.node = node
         self.isExpanded = isExpanded
         self.isLoading = isLoading
         self.onToggle = onToggle
         self.onOperation = onOperation
+        self.onOpen = onOpen
+        self.allowsOperations = allowsOperations
     }
 
     public var body: some View {
@@ -146,7 +164,7 @@ public struct FileRow: View {
             Text(node.name)
                 .lineLimit(1)
             Spacer()
-            Menu("…") {
+            if allowsOperations { Menu("…") {
                 if node.isDir {
                     Button("新建文件…") { onOperation(.createFile(path: node.path)) }
                     Button("新建文件夹…") { onOperation(.createDirectory(path: node.path)) }
@@ -154,8 +172,10 @@ public struct FileRow: View {
                 Button("重命名…") { onOperation(.rename(path: node.path)) }
                 Button("删除（进废纸篓）", role: .destructive) { onOperation(.delete(path: node.path)) }
             }
-            .accessibilityIdentifier("files.menu.\(node.path)")
+            .accessibilityIdentifier("files.menu.\(node.path)") }
         }
+        .contentShape(Rectangle())
+        .onTapGesture { if node.isDir { onToggle() } else { onOpen?() } }
         .accessibilityIdentifier("files.row.\(node.path)")
     }
 }

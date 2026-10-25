@@ -99,7 +99,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     var status: ToolSectionStatus {
         switch self {
         case .tasks, .attention, .canvas: .wired
-        case .files: .comingSoon("浏览、搜索与编辑项目文件。当前请用右侧面板的“文件”只读浏览。")
+        case .files: .partial("只读：浏览当前项目的目录，点文件预览。新建、重命名、删除与编辑下一批接入。")
         case .git: .partial("只读：查看当前项目的更改、逐文件 diff、分支与历史。暂存、提交、推送等写操作下一批接入。")
         case .ide: .comingSoon("问题列表、符号大纲与调试会话。")
         case .connections: .comingSoon("SSH 主机、主机密钥确认与 SFTP 文件传输。")
@@ -911,14 +911,20 @@ struct TaskWorkspaceView: View {
         case .tasks, .attention, .canvas:
             EmptyView() // Mounted directly by centralContent.
         case .files:
-            HSplitView {
-                FileBrowserView(store: services.fileTreeStore)
-                    .frame(minWidth: 220, maxWidth: 340, maxHeight: .infinity)
-                VStack(spacing: 0) {
-                    EditorTabs(store: services.documentStore)
-                    SearchPanel(matches: [])
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let projectID = projectContextID, gitProjectPath != nil {
+                // Read-only for now: browse and preview; no create/rename/delete handler.
+                FileBrowserView(
+                    store: services.fileTreeStore,
+                    onExpand: { path in Task { await services.loadFiles(projectID: projectID, path: path) } },
+                    onOpen: { path in openPreview(.init(projectID: projectID, path: path, kind: .file)) }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .task(id: projectID) {
+                    services.fileTreeStore.reset(projectID: projectID)
+                    await services.loadFiles(projectID: projectID, path: "")
                 }
+            } else {
+                PaneEmptyState(systemImage: "folder", title: "先选一个项目", hint: "文件页浏览侧栏当前项目的目录。")
             }
         case .git:
             if let path = gitProjectPath {
