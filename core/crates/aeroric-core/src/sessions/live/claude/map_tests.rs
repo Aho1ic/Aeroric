@@ -216,6 +216,29 @@ fn a_result_ends_the_turn_with_running_totals() {
 }
 
 #[test]
+fn the_latest_call_usage_stands_in_for_context_size() {
+    let mut m = ClaudeMapper::default();
+    m.map(
+        &json!({"type": "assistant", "session_id": "s", "message": {"id": "m1", "content": [],
+        "usage": {"input_tokens": 3, "cache_read_input_tokens": 1000, "output_tokens": 20}}}),
+    );
+    m.map(&json!({"type": "assistant", "session_id": "s", "message": {"id": "m2", "content": [],
+        "usage": {"input_tokens": 5, "cache_read_input_tokens": 1020, "cache_creation_input_tokens": 3, "output_tokens": 7}}}));
+    let (updates, _) = m.map(
+        &json!({"type": "result", "subtype": "success", "is_error": false,
+        "session_id": "s", "usage": {"input_tokens": 8, "output_tokens": 27}}),
+    );
+    assert!(matches!(
+        &updates[0],
+        SessionUpdateKind::Usage {
+            context_used: Some(1035),
+            context_limit: None,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn unknown_messages_are_kept() {
     let mut m = ClaudeMapper::default();
     let (updates, _) = m.map(&json!({"type": "future_thing", "x": 1}));

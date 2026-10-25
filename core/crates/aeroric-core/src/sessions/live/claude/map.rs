@@ -31,6 +31,9 @@ pub struct ClaudeMapper {
     todo_tools: HashSet<String>,
     input_tokens: u64,
     output_tokens: u64,
+    /// Prompt plus reply of the latest API call: what the window holds now.
+    /// Fallback for when `get_context_usage` answers nothing (gateways).
+    last_context: Option<u64>,
 }
 
 fn s<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -246,6 +249,16 @@ impl ClaudeMapper {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        if let Some(usage) = message.pointer("/message/usage") {
+            let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+            let total = count("input_tokens")
+                + count("cache_read_input_tokens")
+                + count("cache_creation_input_tokens")
+                + count("output_tokens");
+            if total > 0 {
+                self.last_context = Some(total);
+            }
+        }
         let mut updates = Vec::new();
         for block in &blocks {
             match s(block, "type") {
@@ -373,7 +386,7 @@ impl ClaudeMapper {
         self.streaming = None;
         (
             vec![SessionUpdateKind::Usage {
-                context_used: None,
+                context_used: self.last_context,
                 context_limit: None,
                 input_tokens: Some(self.input_tokens),
                 output_tokens: Some(self.output_tokens),
