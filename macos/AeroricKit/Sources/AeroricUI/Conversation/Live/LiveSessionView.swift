@@ -168,6 +168,9 @@ public struct LiveSessionView: View {
             } else {
                 composer
             }
+            if !store.turnActive, let changes = store.model?.lastTurnChanges {
+                LiveTurnChangesRow(changes: changes)
+            }
             UsageBar(usage: store.model?.usage ?? UsageSummary(contextUsed: nil, contextLimit: nil,
                                                                 inputTokens: nil, outputTokens: nil))
         }

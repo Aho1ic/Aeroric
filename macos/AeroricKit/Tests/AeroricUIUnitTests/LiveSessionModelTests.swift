@@ -98,6 +98,36 @@ final class LiveSessionModelTests: XCTestCase {
         XCTAssertEqual(model.usage.text, "上下文 85% · 输入 12.3k · 输出 1.1k")
     }
 
+    /// A05: the turn's changes survive history replacing the live rows.
+    func testTurnChangesAreKeptApartFromLiveRows() {
+        var model = LiveSessionModel(state: state())
+        let files = [LiveFileChange(path: "src/a.rs", additions: 3, deletions: 1),
+                     LiveFileChange(path: "img.png", additions: nil, deletions: nil)]
+        _ = model.apply(batch([
+            .turnStarted(turnId: "u1"),
+            .messageChunk(messageId: "m", role: "assistant", text: "改好了"),
+            .turnEnded(turnId: "u1", reason: .completed, error: nil),
+            .turnChanges(turnId: "u1", files: files, additions: 3, deletions: 1, truncated: false),
+        ]))
+        model.clearItems()
+        XCTAssertTrue(model.items.isEmpty)
+        XCTAssertEqual(model.lastTurnChanges?.files, files)
+        XCTAssertEqual(model.lastTurnChanges?.summary, "+3 −1 · 2 个文件")
+    }
+
+    func testTurnChangesDecodeFromTheWire() throws {
+        let update = try LiveSessionUpdate.decode(.object([
+            "taskId": .string("t"), "seq": .number("4"), "atMs": .number("1"), "type": .string("turnChanges"),
+            "turnId": .string("u1"), "additions": .number("3"), "deletions": .number("1"), "truncated": .bool(true),
+            "files": .array([.object(["path": .string("src/a.rs"), "additions": .number("3"), "deletions": .number("1")]),
+                             .object(["path": .string("img.png")])]),
+        ]))
+        XCTAssertEqual(update.kind, .turnChanges(turnId: "u1", files: [
+            LiveFileChange(path: "src/a.rs", additions: 3, deletions: 1),
+            LiveFileChange(path: "img.png", additions: nil, deletions: nil),
+        ], additions: 3, deletions: 1, truncated: true))
+    }
+
     func testAFailedTurnShowsItsReason() {
         var model = LiveSessionModel(state: state())
         _ = model.apply(batch([.turnStarted(turnId: "u"), .turnEnded(turnId: "u", reason: .failed, error: "quota")]))
