@@ -161,7 +161,13 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
     )));
 
     let (candidates, policy) = match &config_grant {
-        Some(grant) => match resolve_config_targets(grant, &request_metadata.model).await {
+        Some(grant) => match resolve_config_targets(
+            grant,
+            &request_metadata.model,
+            runtime_config.config_data_dir.clone(),
+        )
+        .await
+        {
             Ok(targets) => {
                 // Every resolved channel is a failover candidate (Q25); the order
                 // already reflects the pool strategy, stickiness and cooldowns.
@@ -465,11 +471,15 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
 async fn resolve_config_targets(
     grant: &super::task_tokens::TaskGrant,
     model: &str,
+    data_dir: Option<std::path::PathBuf>,
 ) -> Result<Vec<UpstreamTarget>, String> {
     let grant = grant.clone();
     let model = model.to_string();
     let resolved = tokio::task::spawn_blocking(move || {
-        let data_dir = crate::settings::aeroric_dir()?;
+        let data_dir = match data_dir {
+            Some(dir) => dir,
+            None => crate::settings::aeroric_dir()?,
+        };
         let secrets = crate::settings::secret_fields::secret_store()
             .ok_or_else(|| "no credential store is configured for the router".to_string())?;
         Ok::<_, String>(super::config_routes::resolve_from_disk(

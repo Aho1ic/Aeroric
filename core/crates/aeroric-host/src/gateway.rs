@@ -61,7 +61,8 @@ pub fn ensure_running(data_dir: &std::path::Path) -> Result<String, String> {
         }
     }
     let port = free_loopback_port()?;
-    let config = RouterRuntimeConfig::new("127.0.0.1", port, false, RouterUpstreams::default());
+    let config = RouterRuntimeConfig::new("127.0.0.1", port, false, RouterUpstreams::default())
+        .with_config_data_dir(data_dir);
     // A short-lived thread so `block_on` never runs inside the caller's runtime.
     let info = std::thread::scope(|scope| {
         scope

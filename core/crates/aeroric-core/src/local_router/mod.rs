@@ -392,6 +392,9 @@ pub struct RouterRuntimeConfig {
     access_token: String,
     pub upstreams: RouterUpstreams,
     pub outbound_proxy: Option<RouterOutboundProxy>,
+    /// Data root that holds `agent-connections.json` for config-pinned tasks.
+    /// The host passes its own; `None` falls back to `settings::aeroric_dir()`.
+    pub config_data_dir: Option<PathBuf>,
     client: reqwest::Client,
 }
 
@@ -411,8 +414,14 @@ impl RouterRuntimeConfig {
             access_token: String::new(),
             upstreams,
             outbound_proxy: None,
+            config_data_dir: None,
             client,
         }
+    }
+
+    pub fn with_config_data_dir(mut self, data_dir: impl Into<PathBuf>) -> Self {
+        self.config_data_dir = Some(data_dir.into());
+        self
     }
 
     pub fn with_access_token(mut self, access_token: impl Into<String>) -> Self {
@@ -440,6 +449,7 @@ impl RouterRuntimeConfig {
             && self.access_token == other.access_token
             && self.upstreams == other.upstreams
             && self.outbound_proxy == other.outbound_proxy
+            && self.config_data_dir == other.config_data_dir
     }
 
     pub fn validate(&self) -> Result<SocketAddr, RouterError> {
