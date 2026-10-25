@@ -247,25 +247,6 @@ pub fn install_model_fetcher(executor: &Arc<StructuredExecutor>) {
     }));
 }
 
-/// Why a structured session cannot continue this session file, if it cannot:
-/// Codex app-server does not resume `history_mode = "paginated"` sessions (N6 D3).
-pub fn resume_blocked(
-    family: ProtocolFamily,
-    session_path: Option<&str>,
-    session_id: &str,
-) -> Option<String> {
-    let path = std::path::Path::new(session_path?);
-    if family != ProtocolFamily::Codex || !path.is_file() {
-        return None;
-    }
-    match crate::sessions::resume::session_file_supports_native_resume(path, true) {
-        Ok(false) => Some(format!(
-            "此会话是 Codex 分页格式，暂不能在原生会话中继续；可在终端运行 codex resume {session_id}"
-        )),
-        _ => None,
-    }
-}
-
 fn local_path(cwd: &WorkingDirectory) -> String {
     match cwd {
         WorkingDirectory::Local { path } => path.clone(),
@@ -326,16 +307,9 @@ impl TaskExecutor for StructuredExecutor {
         ) else {
             return self.inner.resume(request);
         };
-        if let (Route::Codex(_), Some(reason)) = (
-            &route,
-            resume_blocked(
-                ProtocolFamily::Codex,
-                request.session_path.as_deref(),
-                &request.session_id,
-            ),
-        ) {
-            return Err(ExecutorFailure::Unsupported { reason });
-        }
+        // Codex app-server resumes `history_mode = "paginated"` threads — 0.163
+        // writes every thread it starts that way — so they are not refused here
+        // (N6a, reversing N6 D3 after the real smoke).
         if let Some(driver) = self.registry.get(&request.task_id) {
             // Still open here: the same session continues under the new generation.
             driver.rebind(request.generation);

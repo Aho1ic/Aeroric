@@ -648,7 +648,7 @@ async fn a_host_without_a_structured_executor_offers_no_session_methods() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_paginated_codex_session_reports_why_it_cannot_continue() {
+async fn a_paginated_codex_session_is_not_blocked() {
     let host = Host::start(true).await;
     host.service
         .create(
@@ -682,15 +682,11 @@ async fn a_paginated_codex_session_reports_why_it_cannot_continue() {
             Some(&rollout.to_string_lossy()),
         )
         .expect("attach");
+    // Codex 0.163's app-server resumes paginated threads (N6a).
     let state = host.state().await;
     assert_eq!(state["live"], false);
-    assert!(
-        state["resumeBlocked"]
-            .as_str()
-            .unwrap()
-            .contains("codex resume th-old"),
-        "{state}"
-    );
+    assert_eq!(state["structured"], true);
+    assert!(state.get("resumeBlocked").is_none(), "{state}");
 }
 
 impl Peer {

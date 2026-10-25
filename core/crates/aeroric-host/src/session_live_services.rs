@@ -340,8 +340,7 @@ fn state(live: &Live, request: &Request) -> Frame {
                     "no task with that id in any known project",
                 );
             };
-            let (session_id, session_path) =
-                aeroric_core::tasks::session_owner::current_session(&record);
+            let session_id = aeroric_core::tasks::session_owner::current_session(&record).0;
             let text = |key: &str| record.get(key).and_then(Value::as_str).map(str::to_string);
             let family = launch_family_of(&record, live.families.as_ref());
             let structured = working_directory(&record, &project).is_some_and(|cwd| {
@@ -358,16 +357,11 @@ fn state(live: &Live, request: &Request) -> Frame {
                     &cwd,
                 )
             });
-            let resume_blocked = aeroric_core::sessions::live::executor::resume_blocked(
-                family,
-                session_path.as_deref(),
-                session_id.as_deref().unwrap_or_default(),
-            );
             SessionState {
                 task_id: p.task_id.clone(),
                 live: false,
                 structured,
-                resume_blocked,
+                resume_blocked: None,
                 family: Some(family),
                 session_id,
                 model: text("selectedModel"),
