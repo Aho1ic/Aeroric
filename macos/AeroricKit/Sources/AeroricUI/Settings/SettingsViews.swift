@@ -156,24 +156,16 @@ struct GeneralSettingsPane: View {
         }
     }
 
+    /// N6 D5 (Q6): Claude and Codex always run as native sessions now; the
+    /// old "advanced terminal mode" switch is retired to a read-only note.
     private var interaction: some View {
         SettingsCard("交互") {
-            SettingsRow("高级终端模式",
-                        detail: "开启后终端与原生面板并存。只改变呈现，不改变底层 Agent，也不会重启或取消运行中的任务。") {
-                Toggle("高级终端模式", isOn: Binding(
-                    get: { mode.toggleIsOn },
-                    set: { on in save(InteractionMode(toggleIsOn: on)) }
-                ))
-                .toggleStyle(.switch)
-                .labelsHidden()
-                .accessibilityIdentifier("settings.general.interaction-mode")
-            }
-            if let saveError {
-                Text("保存失败，已回滚：\(saveError)")
-                    .font(.system(size: AeroricType.caption))
-                    .foregroundStyle(AeroricColor.danger)
-                    .padding(AeroricSpace.l)
-                    .accessibilityIdentifier("settings.general.interaction-mode-error")
+            SettingsRow("会话呈现",
+                        detail: "Claude 与 Codex 始终使用原生会话（对话、审批卡、工具卡），不再提供终端模式开关。远程 SSH 工作区、未迁移的自定义 Agent 与 omp 仍在终端中运行。") {
+                Text("原生")
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .accessibilityIdentifier("settings.general.interaction-mode")
             }
         }
     }

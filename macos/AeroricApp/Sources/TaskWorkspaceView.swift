@@ -1046,7 +1046,9 @@ struct TaskWorkspaceView: View {
     @ViewBuilder
     private func legacyTaskBody(_ task: TaskStore.TaskEntry) -> some View {
         let presentation = SessionPresentation.resolve(
-            mode: forcedTerminalTaskIDs.contains(task.id) ? .advanced : services.interactionModeController.mode,
+            // N6 D5: the global mode is fixed native; only this window's explicit
+            // "switch to terminal" for a task still picks the terminal.
+            mode: forcedTerminalTaskIDs.contains(task.id) ? .advanced : .native,
             structuredCapabilitiesVerified: services.structuredCapabilitiesVerified(task)
         )
         switch presentation {
