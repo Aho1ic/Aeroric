@@ -360,6 +360,14 @@ struct AeroricNativeApp: App {
                 await services.startSupervisor()
                 await services.openInjectedTestProjectsIfRequested()
             }
+            // A16: `aeroric://task/<id>`, `aeroric://attention`.
+            .onOpenURL { url in
+                switch AeroricDeepLink.target(url) {
+                case let .task(id)?: services.requestedSelection = SessionNavigation.task(id)
+                case .attention?: services.requestedSelection = WorkspaceSection.attention.sidebarID
+                case nil: break
+                }
+            }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active else { return }
                 Task { await services.startSupervisor() }
