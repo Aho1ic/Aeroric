@@ -143,6 +143,23 @@ final class LiveSessionModelTests: XCTestCase {
         XCTAssertEqual(model.lastActivityAtMs, 900)
     }
 
+    /// A13: repeated and alternating tool calls within a turn are flagged.
+    func testRunawayLoopsAreDetectedOnlyAtTheTail() {
+        XCTAssertEqual(LiveLoop.of([]), .none)
+        XCTAssertEqual(LiveLoop.of(["a", "a"]), .none)
+        XCTAssertEqual(LiveLoop.of(["b", "a", "a", "a"]), .repeating(title: "", count: 3))
+        XCTAssertEqual(LiveLoop.of(["a", "a", "a", "b"]), .none, "the agent moved on")
+        XCTAssertEqual(LiveLoop.of(["x", "a", "b", "a", "b", "a", "b"]), .alternating(cycles: 3))
+        XCTAssertEqual(LiveLoop.of(["a", "b", "a", "b"]), .none)
+        var model = LiveSessionModel(state: state())
+        let call = { (id: String) in LiveUpdateKind.toolCall(id: id, kind: .command, title: "cargo test", input: .object(["cmd": .string("cargo test")])) }
+        _ = model.apply(batch([.turnStarted(turnId: "u1"), call("c1"), call("c2"), call("c3")]))
+        XCTAssertEqual(LiveLoop.of(model.turnToolSignatures), .repeating(title: "cargo test", count: 3))
+        XCTAssertNotNil(LiveLoop.of(model.turnToolSignatures).text)
+        _ = model.apply(batch([.turnStarted(turnId: "u2")], from: 5))
+        XCTAssertTrue(model.turnToolSignatures.isEmpty, "a new turn starts clean")
+    }
+
     func testTurnChangesDecodeFromTheWire() throws {
         let update = try LiveSessionUpdate.decode(.object([
             "taskId": .string("t"), "seq": .number("4"), "atMs": .number("1"), "type": .string("turnChanges"),

@@ -168,6 +168,14 @@ public struct LiveSessionView: View {
             } else {
                 composer
             }
+            if store.turnActive, let text = LiveLoop.of(store.model?.turnToolSignatures ?? []).text {
+                Label(text, systemImage: "arrow.triangle.2.circlepath")
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.warning)
+                    .padding(.horizontal, AeroricSpace.l)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("session.live.loop")
+            }
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 let stall = LiveStall.of(turnActive: store.turnActive, waitingOnUser: !store.pending.isEmpty,
                                          lastActivityAtMs: store.model?.lastActivityAtMs, since: store.openedAtMs,

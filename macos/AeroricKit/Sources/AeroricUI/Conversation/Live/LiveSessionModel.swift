@@ -24,6 +24,53 @@ public enum LiveItem: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A13: an agent repeating itself within one turn. Only a hint — the
+/// candidate library says runaway detection reminds, it never stops the agent.
+public enum LiveLoop: Equatable, Sendable {
+    case none
+    /// The same call `count` times in a row.
+    case repeating(title: String, count: Int)
+    /// Two calls alternating (A B A B …) for `cycles` rounds.
+    case alternating(cycles: Int)
+
+    public static let repeatThreshold = 3
+    public static let alternationCycles = 3
+
+    static func signature(kind: LiveToolKind, title: String, input: JSONValue) -> String {
+        "\(kind)|\(title)|\(input)"
+    }
+
+    /// Looks only at the tail: what the agent is doing right now.
+    public static func of(_ signatures: [String]) -> LiveLoop {
+        guard let last = signatures.last else { return .none }
+        let run = signatures.reversed().prefix { $0 == last }.count
+        if run >= repeatThreshold {
+            return .repeating(title: title(of: last), count: run)
+        }
+        let pairs = alternationCycles * 2
+        if signatures.count >= pairs {
+            let tail = Array(signatures.suffix(pairs))
+            let a = tail[0], b = tail[1]
+            if a != b, tail.enumerated().allSatisfy({ $0.element == ($0.offset % 2 == 0 ? a : b) }) {
+                return .alternating(cycles: alternationCycles)
+            }
+        }
+        return .none
+    }
+
+    private static func title(of signature: String) -> String {
+        signature.split(separator: "|", maxSplits: 2).dropFirst().first.map(String.init) ?? ""
+    }
+
+    public var text: String? {
+        switch self {
+        case .none: nil
+        case let .repeating(title, count): "Agent 连续 \(count) 次执行同一个操作（\(title)），可能在原地打转。"
+        case let .alternating(cycles): "Agent 在两个操作之间来回切换（\(cycles) 轮），可能在原地打转。"
+        }
+    }
+}
+
 /// A14: a running turn that has gone quiet. Only a hint — nothing is stopped or
 /// retried; a long command can legitimately print nothing for a while.
 public enum LiveStall: Equatable, Sendable {
@@ -126,6 +173,8 @@ public struct LiveSessionModel: Equatable, Sendable {
     public private(set) var lastTurnChanges: LiveTurnChanges?
     /// A14: host time (ms) of the newest update applied; nil until one arrives.
     public private(set) var lastActivityAtMs: UInt64?
+    /// A13: this turn's tool calls as signatures, for the runaway-loop hint.
+    public private(set) var turnToolSignatures: [String] = []
     private var echoCount = 0
 
     public init(state: LiveSessionState) {
@@ -178,6 +227,7 @@ public struct LiveSessionModel: Equatable, Sendable {
         switch update.kind {
         case .turnStarted:
             turnActive = true
+            turnToolSignatures = []
         case let .turnEnded(_, reason, error):
             turnActive = false
             pending.removeAll()
@@ -209,6 +259,8 @@ public struct LiveSessionModel: Equatable, Sendable {
                 items.append(.thought(id: id, text: text, summary: summary))
             }
         case let .toolCall(id, kind, title, input):
+            // Replays are already dropped by seq, so every call here is new.
+            turnToolSignatures.append(LiveLoop.signature(kind: kind, title: title, input: input))
             if !items.contains(where: { $0.id == "tool:\(id)" }) {
                 items.append(.tool(LiveTool(id: id, kind: kind, title: title, input: input, output: "",
                                             status: .running, result: nil)))
