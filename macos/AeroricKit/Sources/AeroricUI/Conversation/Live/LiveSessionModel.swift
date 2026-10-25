@@ -1,0 +1,248 @@
+import Foundation
+import AeroricProtocol
+
+/// One row of the live (not yet in history) part of a session.
+public enum LiveItem: Identifiable, Equatable, Sendable {
+    /// The user's own message, echoed locally until history has it.
+    case userEcho(id: String, text: String)
+    case message(id: String, text: String)
+    case thought(id: String, text: String, summary: Bool)
+    case tool(LiveTool)
+    case notice(id: String, message: String, recoverable: Bool)
+    /// Protocol content this build does not render (INV-12: shown, not dropped).
+    case unknown(id: String, kind: String)
+
+    public var id: String {
+        switch self {
+        case let .userEcho(id, _): "user:\(id)"
+        case let .message(id, _): "message:\(id)"
+        case let .thought(id, _, _): "thought:\(id)"
+        case let .tool(tool): "tool:\(tool.id)"
+        case let .notice(id, _, _): "notice:\(id)"
+        case let .unknown(id, _): "unknown:\(id)"
+        }
+    }
+}
+
+public struct LiveTool: Equatable, Sendable {
+    public var id: String
+    public var kind: LiveToolKind
+    public var title: String
+    public var input: JSONValue
+    public var output: String
+    public var status: LiveToolStatus
+    public var result: JSONValue?
+}
+
+public struct LiveSubagent: Equatable, Sendable {
+    public var id: String
+    public var title: String
+    public var status: String
+}
+
+public struct LiveConfig: Equatable, Sendable {
+    public var model: String?
+    public var permission: String?
+    public var effort: String?
+}
+
+/// What applying a batch asks of the caller.
+public enum LiveApplyOutcome: Equatable, Sendable {
+    /// Applied in order. `turnEnded` = a turn finished in this batch (reload history).
+    case applied(turnEnded: Bool)
+    /// A gap (host-reported, or a skipped seq): re-read history and `session.state`,
+    /// then `resync` — nothing after the hole was applied.
+    case needsResync
+}
+
+/// Pure reducer from `session.updates` batches to what the session page shows.
+/// Updates at or below the cursor are duplicates and dropped; the next seq is
+/// applied; anything past a hole stops the batch and asks for a resync.
+public struct LiveSessionModel: Equatable, Sendable {
+    public private(set) var cursor: UInt64
+    public private(set) var items: [LiveItem] = []
+    public private(set) var pending: [LivePendingPermission] = []
+    public private(set) var plan: [LivePlanEntry] = []
+    public private(set) var subagents: [LiveSubagent] = []
+    public private(set) var usage: UsageSummary
+    public private(set) var config: LiveConfig
+    public private(set) var turnActive: Bool
+    private var echoCount = 0
+
+    public init(state: LiveSessionState) {
+        cursor = state.latestSeq
+        pending = state.pending
+        plan = state.plan
+        usage = UsageSummary(contextUsed: state.contextUsed, contextLimit: state.contextLimit,
+                             inputTokens: state.inputTokens, outputTokens: state.outputTokens)
+        config = LiveConfig(model: state.model, permission: state.permission, effort: state.effort)
+        turnActive = state.turnActive
+    }
+
+    /// After a gap: start over from the host's snapshot (history is re-read by the caller).
+    public mutating func resync(_ state: LiveSessionState) {
+        self = LiveSessionModel(state: state)
+    }
+
+    /// History now holds this turn: drop the live rows (D3), keep the rest.
+    public mutating func clearItems() {
+        items.removeAll()
+    }
+
+    /// The message the user just sent, until history has it.
+    public mutating func echo(_ text: String) {
+        echoCount += 1
+        items.append(.userEcho(id: "local-\(echoCount)", text: text))
+    }
+
+    /// Optimistic config shown until the host's `configChanged` arrives.
+    public mutating func setConfig(_ change: LiveConfig) {
+        config = LiveConfig(model: change.model ?? config.model, permission: change.permission ?? config.permission,
+                            effort: change.effort ?? config.effort)
+    }
+
+    public mutating func apply(_ batch: LiveUpdatesBatch) -> LiveApplyOutcome {
+        if batch.gapOldestAvailable != nil { return .needsResync }
+        var turnEnded = false
+        for update in batch.updates {
+            if update.seq <= cursor { continue }
+            guard update.seq == cursor + 1 else { return .needsResync }
+            cursor = update.seq
+            if reduce(update) { turnEnded = true }
+        }
+        return .applied(turnEnded: turnEnded)
+    }
+
+    /// Returns true when the update ended a turn.
+    private mutating func reduce(_ update: LiveSessionUpdate) -> Bool {
+        switch update.kind {
+        case .turnStarted:
+            turnActive = true
+        case let .turnEnded(_, reason, error):
+            turnActive = false
+            pending.removeAll()
+            if reason == .failed {
+                items.append(.notice(id: "seq\(update.seq)", message: error ?? "这一轮失败了", recoverable: false))
+            } else if reason == .interrupted {
+                items.append(.notice(id: "seq\(update.seq)", message: "已中断", recoverable: true))
+            }
+            return true
+        case let .messageChunk(id, role, text):
+            if role == "user" { break }
+            if let index = items.firstIndex(where: { $0.id == "message:\(id)" }), case let .message(_, existing) = items[index] {
+                items[index] = .message(id: id, text: existing + text)
+            } else {
+                items.append(.message(id: id, text: text))
+            }
+        case let .messageCompleted(id, text):
+            guard let text else { break }
+            if let index = items.firstIndex(where: { $0.id == "message:\(id)" }) {
+                items[index] = .message(id: id, text: text)
+            } else {
+                items.append(.message(id: id, text: text))
+            }
+        case let .thoughtChunk(id, text, summary):
+            if let index = items.firstIndex(where: { $0.id == "thought:\(id)" }),
+               case let .thought(_, existing, isSummary) = items[index] {
+                items[index] = .thought(id: id, text: existing + text, summary: isSummary || summary)
+            } else {
+                items.append(.thought(id: id, text: text, summary: summary))
+            }
+        case let .toolCall(id, kind, title, input):
+            if !items.contains(where: { $0.id == "tool:\(id)" }) {
+                items.append(.tool(LiveTool(id: id, kind: kind, title: title, input: input, output: "",
+                                            status: .running, result: nil)))
+            }
+        case let .toolCallUpdate(id, status, outputDelta, result):
+            if let index = items.firstIndex(where: { $0.id == "tool:\(id)" }), case var .tool(tool) = items[index] {
+                tool.status = status
+                if let outputDelta { tool.output += outputDelta }
+                if let result { tool.result = result }
+                items[index] = .tool(tool)
+            } else {
+                items.append(.tool(LiveTool(id: id, kind: .other, title: "工具", input: .null,
+                                            output: outputDelta ?? "", status: status, result: result)))
+            }
+        case let .plan(entries):
+            plan = entries
+        case let .permissionRequest(id, toolCallId, kind, summary, _):
+            if !pending.contains(where: { $0.id == id }) {
+                pending.append(LivePendingPermission(id: id, kind: kind, summary: summary, toolCallId: toolCallId))
+            }
+        case let .permissionResolved(id, _):
+            pending.removeAll { $0.id == id }
+        case let .subagent(id, title, status):
+            if let index = subagents.firstIndex(where: { $0.id == id }) {
+                subagents[index] = LiveSubagent(id: id, title: title, status: status)
+            } else {
+                subagents.append(LiveSubagent(id: id, title: title, status: status))
+            }
+        case let .usage(used, limit, input, output):
+            usage = UsageSummary(contextUsed: used ?? usage.contextUsed, contextLimit: limit ?? usage.contextLimit,
+                                 inputTokens: input ?? usage.inputTokens, outputTokens: output ?? usage.outputTokens)
+        case let .configChanged(model, permission, effort):
+            setConfig(LiveConfig(model: model, permission: permission, effort: effort))
+        case let .error(message, recoverable):
+            items.append(.notice(id: "seq\(update.seq)", message: message, recoverable: recoverable))
+        case let .unknown(kind, _):
+            items.append(.unknown(id: "seq\(update.seq)", kind: kind))
+        }
+        return false
+    }
+}
+
+/// N4 D3: history and live updates do not share ids, so after a turn ends the
+/// live rows give way to history only once history has grown past what it held
+/// when those rows began.
+public enum LiveHistoryMerge {
+    public static func assistantCount(_ history: [SessionMessage]) -> Int {
+        history.filter { $0.role == "assistant" }.count
+    }
+
+    public static func historyCaughtUp(baseline: Int, history: [SessionMessage]) -> Bool {
+        assistantCount(history) > baseline
+    }
+}
+
+/// Bottom usage line (Q28).
+public struct UsageSummary: Equatable, Sendable {
+    public var contextUsed: UInt64?
+    public var contextLimit: UInt64?
+    public var inputTokens: UInt64?
+    public var outputTokens: UInt64?
+
+    public static let highThreshold = 0.8
+
+    public init(contextUsed: UInt64?, contextLimit: UInt64?, inputTokens: UInt64?, outputTokens: UInt64?) {
+        self.contextUsed = contextUsed
+        self.contextLimit = contextLimit
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+    }
+
+    /// 0…1, nil when either side is unknown.
+    public var fraction: Double? {
+        guard let used = contextUsed, let limit = contextLimit, limit > 0 else { return nil }
+        return min(1, Double(used) / Double(limit))
+    }
+
+    public var isHigh: Bool { (fraction ?? 0) > Self.highThreshold }
+    public var isEmpty: Bool { fraction == nil && inputTokens == nil && outputTokens == nil }
+
+    /// `上下文 42% · 输入 12.3k · 输出 1.1k`; unknown parts are omitted.
+    public var text: String {
+        var parts: [String] = []
+        if let fraction { parts.append("上下文 \(Int((fraction * 100).rounded()))%") }
+        if let inputTokens { parts.append("输入 \(Self.compact(inputTokens))") }
+        if let outputTokens { parts.append("输出 \(Self.compact(outputTokens))") }
+        return parts.joined(separator: " · ")
+    }
+
+    public static func compact(_ count: UInt64) -> String {
+        switch count {
+        case ..<1000: return "\(count)"
+        case ..<1_000_000: return String(format: "%.1fk", Double(count) / 1000).replacingOccurrences(of: ".0k", with: "k")
+        default: return String(format: "%.1fM", Double(count) / 1_000_000).replacingOccurrences(of: ".0M", with: "M")
+        }
+    }
+}
