@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # review-live-session.sh — build an ad-hoc Aeroric.app and an isolated data
-# root whose built-in Codex is the scripted fake app-server, for looking at
-# the native session page (N4 D8). Never touches ~/.aeroric, ~/.codex or the
-# Keychain; prints the command that opens the app on the sandbox.
+# root whose built-in Codex and Claude are the scripted fakes, for looking at
+# the native session page (N4/N5 D8). Never touches ~/.aeroric, ~/.codex,
+# ~/.claude or the Keychain; prints the command that opens the app on the sandbox.
 #
 # Usage: scripts/native/review-live-session.sh [sandbox-dir]
 set -euo pipefail
@@ -12,6 +12,7 @@ SANDBOX="${1:-$HOME/Library/Caches/aeroric-n4-review}"
 DERIVED="$ROOT/.artifacts/native/DerivedData"
 APP="$DERIVED/Build/Products/Debug/AeroricNative.app"
 FAKE="$ROOT/scripts/native/fake-codex-app-server.py"
+FAKE_CLAUDE="$ROOT/scripts/native/fake-claude.py"
 
 echo "== build aeroric-cli"
 (cd "$ROOT/core" && cargo build --locked -p aeroric-cli)
@@ -26,12 +27,13 @@ bash "$ROOT/scripts/native/verify-bundle.sh" "$APP"
 
 echo "== sandbox $SANDBOX"
 mkdir -p "$SANDBOX/data" "$SANDBOX/projects/demo-app/Sources/App"
-chmod +x "$FAKE"
-python3 - "$SANDBOX/data/settings.json" "$FAKE" <<'PY'
+chmod +x "$FAKE" "$FAKE_CLAUDE"
+python3 - "$SANDBOX/data/settings.json" "$FAKE" "$FAKE_CLAUDE" <<'PY'
 import json, os, sys
-path, fake = sys.argv[1], sys.argv[2]
+path, fake, fake_claude = sys.argv[1], sys.argv[2], sys.argv[3]
 settings = json.load(open(path)) if os.path.exists(path) else {}
 settings["codex_path"] = fake
+settings["claude_path"] = fake_claude
 json.dump(settings, open(path, "w"), ensure_ascii=False, indent=2)
 PY
 printf '# demo-app\n\n用于目检原生会话页的示例项目。\n' > "$SANDBOX/projects/demo-app/README.md"
@@ -43,5 +45,5 @@ Ready. Open the app on the sandbox with:
 
   open -n "$APP" --env AERORIC_DATA_DIR="$SANDBOX/data" --env AERORIC_TEST_OPEN_PROJECT="$SANDBOX/projects/demo-app"
 
-Then start a new session in demo-app with the built-in "Codex" configuration.
+Then start a new session in demo-app with the built-in "Codex" or "Claude Code" configuration.
 MSG
