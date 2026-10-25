@@ -79,11 +79,20 @@ public struct LivePendingPermission: Equatable, Sendable {
     public var kind: String
     public var summary: String
     public var toolCallId: String?
+
+    public init(id: String, kind: String, summary: String, toolCallId: String?) {
+        self.id = id
+        self.kind = kind
+        self.summary = summary
+        self.toolCallId = toolCallId
+    }
 }
 
 public struct LiveSessionState: Equatable, Sendable {
     public var taskId: String
     public var live: Bool
+    /// Runs as a structured session: show the live page even when no driver is open.
+    public var structured: Bool
     public var family: String?
     public var sessionId: String?
     public var turnActive: Bool
@@ -97,6 +106,28 @@ public struct LiveSessionState: Equatable, Sendable {
     public var inputTokens: UInt64?
     public var outputTokens: UInt64?
     public var latestSeq: UInt64
+
+    public init(taskId: String, live: Bool, structured: Bool, family: String?, sessionId: String?, turnActive: Bool,
+                pending: [LivePendingPermission], plan: [LivePlanEntry], model: String?, permission: String?,
+                effort: String?, contextUsed: UInt64?, contextLimit: UInt64?, inputTokens: UInt64?,
+                outputTokens: UInt64?, latestSeq: UInt64) {
+        self.taskId = taskId
+        self.live = live
+        self.structured = structured
+        self.family = family
+        self.sessionId = sessionId
+        self.turnActive = turnActive
+        self.pending = pending
+        self.plan = plan
+        self.model = model
+        self.permission = permission
+        self.effort = effort
+        self.contextUsed = contextUsed
+        self.contextLimit = contextLimit
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.latestSeq = latestSeq
+    }
 }
 
 public struct LiveUpdatesBatch: Equatable, Sendable {
@@ -105,6 +136,12 @@ public struct LiveUpdatesBatch: Equatable, Sendable {
     /// Set when the cursor is older than the host still holds (or belongs to an
     /// earlier log): re-read history and `session.state`, then continue from `latestSeq`.
     public var gapOldestAvailable: UInt64?
+
+    public init(updates: [LiveSessionUpdate], latestSeq: UInt64, gapOldestAvailable: UInt64? = nil) {
+        self.updates = updates
+        self.latestSeq = latestSeq
+        self.gapOldestAvailable = gapOldestAvailable
+    }
 }
 
 public enum LiveDecision: String, Equatable, Sendable {
@@ -237,7 +274,7 @@ extension LiveSessionState {
         let entries = plan.compactMap(LivePlanEntry.decode)
         guard entries.count == plan.count else { throw LiveSessionDecodeError("a plan entry needs text and status") }
         return LiveSessionState(
-            taskId: taskId, live: live, family: string(f, "family"), sessionId: string(f, "sessionId"),
+            taskId: taskId, live: live, structured: f["structured"]?.boolValue ?? false, family: string(f, "family"), sessionId: string(f, "sessionId"),
             turnActive: turnActive, pending: permissions, plan: entries,
             model: string(f, "model"), permission: string(f, "permission"), effort: string(f, "effort"),
             contextUsed: uint(f["contextUsed"]), contextLimit: uint(f["contextLimit"]),

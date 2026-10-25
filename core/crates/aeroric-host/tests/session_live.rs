@@ -376,6 +376,7 @@ async fn every_session_method_round_trips_through_the_host() {
         (json!(true), json!("codex"), json!("th-1"))
     );
     assert_eq!(state["pending"][0]["summary"], "rm -rf build");
+    assert_eq!(state["structured"], true);
     host.until("input_required", |h| {
         h.record()["status"] == "input_required"
     })
@@ -515,6 +516,10 @@ async fn every_session_method_round_trips_through_the_host() {
     );
     let latest = closed["latestSeq"].as_u64().unwrap();
     assert!(latest > 3, "the log outlives the close");
+    assert_eq!(
+        closed["structured"], true,
+        "a closed Codex task still opens the live page"
+    );
     assert_eq!(
         host.call("session.close", json!({"taskId": "task-1"}))
             .await

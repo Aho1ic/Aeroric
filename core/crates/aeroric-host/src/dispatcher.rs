@@ -430,6 +430,7 @@ impl HostServices {
                 crate::session_live_services::register_session_live_services(
                     &mut set,
                     live,
+                    Arc::clone(&families),
                     Arc::clone(&service),
                     Arc::clone(&context),
                 );

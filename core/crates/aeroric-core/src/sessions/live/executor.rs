@@ -104,7 +104,8 @@ impl StructuredExecutor {
         )
     }
 
-    fn takes(
+    /// Whether a run with these facts goes to a structured driver.
+    pub fn takes_task(
         &self,
         family: ProtocolFamily,
         agent: &str,
@@ -163,7 +164,7 @@ fn local_path(cwd: &WorkingDirectory) -> String {
 impl TaskExecutor for StructuredExecutor {
     fn launch(&self, request: &LaunchRequest) -> Execution<()> {
         let config = request.agent_config_id.as_deref();
-        if !self.takes(
+        if !self.takes_task(
             request.family,
             &request.agent,
             config,
@@ -201,7 +202,7 @@ impl TaskExecutor for StructuredExecutor {
 
     fn resume(&self, request: &ResumeRequest) -> Execution<()> {
         let config = request.agent_config_id.as_deref();
-        if !self.takes(
+        if !self.takes_task(
             request.family,
             &request.agent,
             config,

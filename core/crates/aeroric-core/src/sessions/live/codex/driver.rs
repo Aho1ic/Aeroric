@@ -223,6 +223,7 @@ impl SessionDriver for CodexSession {
         SessionState {
             task_id: self.task_id.clone(),
             live: true,
+            structured: true,
             family: Some(ProtocolFamily::Codex),
             session_id: state.thread_id.clone(),
             turn_active: state.active_turn.is_some(),

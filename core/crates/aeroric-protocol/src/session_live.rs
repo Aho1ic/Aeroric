@@ -201,6 +201,10 @@ pub struct SessionState {
     pub task_id: String,
     /// A driver is open for this task right now.
     pub live: bool,
+    /// This task runs as a structured session (not a PTY): the client shows the
+    /// live session page for it, whether or not a driver is open right now.
+    #[serde(default)]
+    pub structured: bool,
     pub family: Option<ProtocolFamily>,
     pub session_id: Option<String>,
     pub turn_active: bool,
@@ -424,6 +428,7 @@ pub fn fixture_state() -> SessionState {
     SessionState {
         task_id: "task-1".into(),
         live: true,
+        structured: true,
         family: Some(ProtocolFamily::Codex),
         session_id: Some("th-1".into()),
         turn_active: true,
@@ -540,8 +545,8 @@ pub fn schema() -> Value {
                 "updates": {"type": "array", "items": {"$ref": "#/$defs/update"}},
                 "latestSeq": {"type": "integer", "minimum": 0},
                 "gap": {"type": "object", "required": ["oldestAvailable"], "properties": {"oldestAvailable": {"type": "integer"}}}}},
-            "state": {"type": "object", "required": ["taskId", "live", "turnActive", "pending", "plan", "latestSeq"], "properties": {
-                "taskId": s, "live": {"type": "boolean"}, "family": {"enum": ["claude", "codex", "dsh", "omp", null]},
+            "state": {"type": "object", "required": ["taskId", "live", "structured", "turnActive", "pending", "plan", "latestSeq"], "properties": {
+                "taskId": s, "live": {"type": "boolean"}, "structured": {"type": "boolean"}, "family": {"enum": ["claude", "codex", "dsh", "omp", null]},
                 "sessionId": opt_string, "turnActive": {"type": "boolean"},
                 "pending": {"type": "array", "items": {"type": "object", "required": ["id", "kind", "summary"], "properties": {
                     "id": s, "kind": s, "summary": s, "toolCallId": opt_string}}},

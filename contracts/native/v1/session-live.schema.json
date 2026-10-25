@@ -149,6 +149,9 @@
             "null"
           ]
         },
+        "structured": {
+          "type": "boolean"
+        },
         "taskId": {
           "type": "string"
         },
@@ -159,6 +162,7 @@
       "required": [
         "taskId",
         "live",
+        "structured",
         "turnActive",
         "pending",
         "plan",

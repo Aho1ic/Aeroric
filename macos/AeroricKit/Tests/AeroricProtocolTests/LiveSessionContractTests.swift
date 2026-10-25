@@ -48,6 +48,7 @@ final class LiveSessionContractTests: XCTestCase {
         XCTAssertEqual(gap.gapOldestAvailable, 2201)
         let state = try LiveSessionState.decode(fixture["state"] ?? .null)
         XCTAssertTrue(state.live)
+        XCTAssertTrue(state.structured)
         XCTAssertEqual(state.family, "codex")
         XCTAssertEqual(state.sessionId, "th-1")
         XCTAssertEqual(state.pending, [LivePendingPermission(id: "7", kind: "command", summary: "ls -la", toolCallId: "c1")])

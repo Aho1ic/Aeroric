@@ -13,7 +13,9 @@ use aeroric_core::sessions::live::{
     ConfigChange, Decision, DriverError, SessionDriver, SlashCommand,
 };
 use aeroric_core::storage::Record;
-use aeroric_core::tasks::{ProtocolFamily, TaskService};
+use aeroric_core::tasks::launch_plan::working_directory;
+use aeroric_core::tasks::session_owner::launch_family_of;
+use aeroric_core::tasks::{AgentFamilies, TaskService};
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
 use aeroric_protocol::session_live::{
@@ -30,6 +32,7 @@ pub use wire::CAPABILITY;
 
 struct Live {
     executor: Arc<StructuredExecutor>,
+    families: Arc<dyn AgentFamilies>,
     service: Arc<TaskService>,
     context: Arc<CoreContext>,
 }
@@ -39,11 +42,13 @@ type Run = fn(&Live, &Request) -> Frame;
 pub fn register_session_live_services(
     set: &mut ServiceSet,
     executor: Arc<StructuredExecutor>,
+    families: Arc<dyn AgentFamilies>,
     service: Arc<TaskService>,
     context: Arc<CoreContext>,
 ) {
     let live = Arc::new(Live {
         executor,
+        families,
         service,
         context,
     });
@@ -331,7 +336,7 @@ fn state(live: &Live, request: &Request) -> Frame {
     let snapshot = match live.driver(&p.task_id) {
         Some(driver) => driver.snapshot(),
         None => {
-            let Some((_, record)) = live.record(&p.task_id) else {
+            let Some((project, record)) = live.record(&p.task_id) else {
                 return failure(
                     request.id.clone(),
                     ErrorCode::NotFound,
@@ -343,10 +348,26 @@ fn state(live: &Live, request: &Request) -> Frame {
                 .and_then(Value::as_str)
                 .map(str::to_string);
             let text = |key: &str| record.get(key).and_then(Value::as_str).map(str::to_string);
+            let family = launch_family_of(&record, live.families.as_ref());
+            let structured = working_directory(&record, &project).is_some_and(|cwd| {
+                live.executor.takes_task(
+                    family,
+                    record
+                        .get("agent")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    record
+                        .get("agentConfigId")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty()),
+                    &cwd,
+                )
+            });
             SessionState {
                 task_id: p.task_id.clone(),
                 live: false,
-                family: session_id.as_ref().map(|_| ProtocolFamily::Codex),
+                structured,
+                family: Some(family),
                 session_id,
                 model: text("selectedModel"),
                 permission: text("permissionMode"),

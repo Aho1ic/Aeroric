@@ -69,6 +69,7 @@
       }
     ],
     "sessionId": "th-1",
+    "structured": true,
     "taskId": "task-1",
     "turnActive": true
   },
