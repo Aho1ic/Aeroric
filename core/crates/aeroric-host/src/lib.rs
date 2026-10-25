@@ -29,6 +29,7 @@ pub mod push_host;
 pub mod remote_headless;
 pub mod search_services;
 pub mod services;
+pub mod session_live_services;
 pub mod settings_services;
 pub mod startup;
 pub mod submission_services;

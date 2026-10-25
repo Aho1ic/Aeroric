@@ -2967,7 +2967,7 @@ use aeroric_core::tasks::{executor::HostWindowFacts, NewTask, TaskService};
 
 /// 找到任务所在的 project record（与 `task.get` 同一条扫描链——**归属判定
 /// 只此一份逻辑**，两处扫描将来要合并成一个 helper）。
-fn find_project_of_task(
+pub(crate) fn find_project_of_task(
     context: &std::sync::Arc<aeroric_core::context::CoreContext>,
     task_id: &str,
 ) -> Option<aeroric_core::storage::Record> {

@@ -179,6 +179,9 @@ pub struct HostWiring {
     /// 形态没有结构化会话控制面(`session.control` = method-not-found),而不是
     /// 一个会假装工作的空壳。
     pub adapters: Option<Arc<crate::adapter_services::AdapterInjection>>,
+    /// ADR-043：结构化会话执行器。给了（且有任务服务）才注册 `session.prompt` 等
+    /// 方法并通告 `session.live`。
+    pub live: Option<Arc<aeroric_core::sessions::live::executor::StructuredExecutor>>,
 }
 
 /// remote plane 的装配参数(持有 core 的 `RemoteState` 与宿主 handle)。
@@ -421,6 +424,22 @@ impl HostServices {
                 terminal,
                 registry,
             );
+            // ADR-043 N3：原生结构化会话的 session.* 方法；只有装配了
+            // StructuredExecutor 的宿主才有（没有＝能力不存在）。仅本机 UDS。
+            if let Some(live) = wiring.live.take() {
+                crate::session_live_services::register_session_live_services(
+                    &mut set,
+                    live,
+                    Arc::clone(&service),
+                    Arc::clone(&context),
+                );
+                capabilities.push(aeroric_protocol::capability::Capability {
+                    name: crate::session_live_services::CAPABILITY.into(),
+                    enabled: true,
+                    since: Some(1),
+                    note: Some("Host-local live structured agent sessions (ADR-043)".into()),
+                });
+            }
             crate::services::register_session_services(&mut set, service, replay_context, families);
             crate::services::register_terminal_replay_services(
                 &mut set,

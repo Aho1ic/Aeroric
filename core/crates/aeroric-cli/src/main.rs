@@ -308,6 +308,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             // 客户端以为能力存在（见 `HostWiring::maintenance`）。
             let wiring = aeroric_host::dispatcher::HostWiring {
                 agent_config_external_home: Some(agent_config_external_home),
+                live: Some(Arc::clone(&structured)),
                 ..Default::default()
             };
             let services = HostServices::with_tasks_and_wiring(
