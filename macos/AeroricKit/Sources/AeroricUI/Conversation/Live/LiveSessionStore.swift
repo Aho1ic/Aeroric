@@ -58,6 +58,8 @@ public final class LiveSessionStore {
 
     public var family: String? { state?.family }
     public var turnActive: Bool { model?.turnActive ?? false }
+    /// A14: quiet time counts from here until the first update arrives.
+    public let openedAtMs = UInt64(Date().timeIntervalSince1970 * 1000)
     public var pending: [LivePendingPermission] { model?.pending ?? [] }
 
     private var wantsFastPolling: Bool { turnActive || !pending.isEmpty }

@@ -115,6 +115,34 @@ final class LiveSessionModelTests: XCTestCase {
         XCTAssertEqual(model.lastTurnChanges?.summary, "+3 −1 · 2 个文件")
     }
 
+    /// A14: quiet turns are flagged at 5 and 15 minutes; waiting on the user is not a stall.
+    func testStallLevels() {
+        let minute: UInt64 = 60_000
+        let base: UInt64 = 1_000_000
+        func level(active: Bool = true, waiting: Bool = false, last: UInt64? = base, now: UInt64) -> LiveStall {
+            LiveStall.of(turnActive: active, waitingOnUser: waiting, lastActivityAtMs: last, since: base - minute, nowMs: now)
+        }
+        XCTAssertEqual(level(now: base + 4 * minute), .none)
+        XCTAssertEqual(level(now: base + 5 * minute), .suspicious(minutes: 5))
+        XCTAssertEqual(level(now: base + 16 * minute), .severe(minutes: 16))
+        XCTAssertTrue(level(now: base + 16 * minute).isSevere)
+        XCTAssertEqual(level(active: false, now: base + 30 * minute), .none, "an idle session is not stalled")
+        XCTAssertEqual(level(waiting: true, now: base + 30 * minute), .none, "an approval waits on the user")
+        XCTAssertEqual(level(last: nil, now: base + 5 * minute), .suspicious(minutes: 6), "counts from when the page opened")
+        XCTAssertNil(LiveStall.none.text)
+        XCTAssertNotNil(LiveStall.suspicious(minutes: 5).text)
+    }
+
+    func testAppliedUpdatesAdvanceTheLastActivityTime() {
+        var model = LiveSessionModel(state: state())
+        XCTAssertNil(model.lastActivityAtMs)
+        _ = model.apply(LiveUpdatesBatch(updates: [
+            LiveSessionUpdate(taskId: "t", seq: 1, atMs: 500, kind: .turnStarted(turnId: "u")),
+            LiveSessionUpdate(taskId: "t", seq: 2, atMs: 900, kind: .messageChunk(messageId: "m", role: "assistant", text: "x")),
+        ], latestSeq: 2))
+        XCTAssertEqual(model.lastActivityAtMs, 900)
+    }
+
     func testTurnChangesDecodeFromTheWire() throws {
         let update = try LiveSessionUpdate.decode(.object([
             "taskId": .string("t"), "seq": .number("4"), "atMs": .number("1"), "type": .string("turnChanges"),

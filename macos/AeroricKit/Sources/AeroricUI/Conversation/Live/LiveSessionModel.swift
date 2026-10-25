@@ -24,6 +24,45 @@ public enum LiveItem: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A14: a running turn that has gone quiet. Only a hint — nothing is stopped or
+/// retried; a long command can legitimately print nothing for a while.
+public enum LiveStall: Equatable, Sendable {
+    case none
+    /// No new output for 5 minutes.
+    case suspicious(minutes: Int)
+    /// No new output for 15 minutes.
+    case severe(minutes: Int)
+
+    public static let suspiciousAfterMs: UInt64 = 5 * 60 * 1000
+    public static let severeAfterMs: UInt64 = 15 * 60 * 1000
+
+    /// Quiet time counts from the newest update, or from when the page first
+    /// saw the turn running (`since`). Waiting on the user is not a stall.
+    public static func of(turnActive: Bool, waitingOnUser: Bool, lastActivityAtMs: UInt64?,
+                          since: UInt64, nowMs: UInt64) -> LiveStall {
+        guard turnActive, !waitingOnUser else { return .none }
+        let last = max(lastActivityAtMs ?? since, since)
+        guard nowMs > last else { return .none }
+        let quiet = nowMs - last
+        let minutes = Int(quiet / 60_000)
+        if quiet >= severeAfterMs { return .severe(minutes: minutes) }
+        if quiet >= suspiciousAfterMs { return .suspicious(minutes: minutes) }
+        return .none
+    }
+
+    public var isSevere: Bool {
+        if case .severe = self { true } else { false }
+    }
+
+    public var text: String? {
+        switch self {
+        case .none: nil
+        case let .suspicious(minutes): "已 \(minutes) 分钟没有新输出：可能在跑长命令，也可能卡住了。"
+        case let .severe(minutes): "已 \(minutes) 分钟没有新输出，可能卡住了。可以中断这一轮后重试。"
+        }
+    }
+}
+
 /// A05: one turn's working-tree changes.
 public struct LiveTurnChanges: Equatable, Sendable {
     public var turnId: String
@@ -85,6 +124,8 @@ public struct LiveSessionModel: Equatable, Sendable {
     /// A05: the last finished turn's working-tree changes. Kept apart from
     /// `items`, which history replaces after a turn.
     public private(set) var lastTurnChanges: LiveTurnChanges?
+    /// A14: host time (ms) of the newest update applied; nil until one arrives.
+    public private(set) var lastActivityAtMs: UInt64?
     private var echoCount = 0
 
     public init(state: LiveSessionState) {
@@ -126,6 +167,7 @@ public struct LiveSessionModel: Equatable, Sendable {
             if update.seq <= cursor { continue }
             guard update.seq == cursor + 1 else { return .needsResync }
             cursor = update.seq
+            lastActivityAtMs = max(lastActivityAtMs ?? 0, update.atMs)
             if reduce(update) { turnEnded = true }
         }
         return .applied(turnEnded: turnEnded)

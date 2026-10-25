@@ -168,6 +168,19 @@ public struct LiveSessionView: View {
             } else {
                 composer
             }
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                let stall = LiveStall.of(turnActive: store.turnActive, waitingOnUser: !store.pending.isEmpty,
+                                         lastActivityAtMs: store.model?.lastActivityAtMs, since: store.openedAtMs,
+                                         nowMs: UInt64(context.date.timeIntervalSince1970 * 1000))
+                if let text = stall.text {
+                    Label(text, systemImage: "hourglass")
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(stall.isSevere ? AeroricColor.danger : AeroricColor.warning)
+                        .padding(.horizontal, AeroricSpace.l)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("session.live.stall")
+                }
+            }
             if !store.turnActive, let changes = store.model?.lastTurnChanges {
                 LiveTurnChangesRow(changes: changes)
             }
