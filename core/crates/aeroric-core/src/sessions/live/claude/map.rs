@@ -183,10 +183,13 @@ impl ClaudeMapper {
                 }],
                 None,
             ),
+            // `thinking_tokens` is a running estimate sent once per streamed
+            // thinking token; the thinking itself arrives as thoughtChunk (N6a C3).
             Some("hook_started")
             | Some("hook_response")
             | Some("status")
-            | Some("session_state_changed") => (vec![], None),
+            | Some("session_state_changed")
+            | Some("thinking_tokens") => (vec![], None),
             Some(other) => (vec![unknown(&format!("system/{other}"), message)], None),
             None => (vec![unknown("system", message)], None),
         }

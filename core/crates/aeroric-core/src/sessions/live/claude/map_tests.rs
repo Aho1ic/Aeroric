@@ -223,6 +223,10 @@ fn unknown_messages_are_kept() {
         matches!(&updates[0], SessionUpdateKind::Unknown { kind, .. } if kind == "future_thing")
     );
     let (system, _) = m.map(&json!({"type": "system", "subtype": "brand_new"}));
+    let (estimate, _) = m.map(
+        &json!({"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 3, "estimated_tokens_delta": 1}),
+    );
+    assert!(estimate.is_empty(), "a per-token estimate is not an update");
     assert!(
         matches!(&system[0], SessionUpdateKind::Unknown { kind, .. } if kind == "system/brand_new")
     );
