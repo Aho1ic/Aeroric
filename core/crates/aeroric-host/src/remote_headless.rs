@@ -301,9 +301,9 @@ impl RemoteHostHandle for CliRemoteHandle {
             let session_id = self
                 .task_record(&project_id, task_id)
                 .and_then(|record| {
-                    mutations::text(&record, "sessionId")
-                        .or_else(|| mutations::text(&record, "sessionPath"))
-                        .map(str::to_string)
+                    let (session_id, session_path) =
+                        aeroric_core::tasks::session_owner::current_session(&record);
+                    session_id.or(session_path)
                 })
                 .unwrap_or_else(|| "default-session".to_string());
             let operation_key = format!("cli-remote-resume-{task_id}");

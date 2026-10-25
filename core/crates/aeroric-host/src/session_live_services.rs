@@ -142,17 +142,14 @@ impl Live {
                 "no task with that id in any known project",
             )));
         };
-        let Some(session_id) = record
-            .get("codexSessionId")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
+        let Some(session_id) = aeroric_core::tasks::session_owner::current_session(&record).0
         else {
             return Err(Box::new(no_session(request)));
         };
         let operation_key = format!("session-prompt-{task_id}-{}", now_ms());
         if let Err(error) =
             self.service
-                .resume(&project, task_id, session_id, &operation_key, true, None)
+                .resume(&project, task_id, &session_id, &operation_key, true, None)
         {
             return Err(Box::new(failure(
                 request.id.clone(),
@@ -343,10 +340,8 @@ fn state(live: &Live, request: &Request) -> Frame {
                     "no task with that id in any known project",
                 );
             };
-            let session_id = record
-                .get("codexSessionId")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+            let (session_id, session_path) =
+                aeroric_core::tasks::session_owner::current_session(&record);
             let text = |key: &str| record.get(key).and_then(Value::as_str).map(str::to_string);
             let family = launch_family_of(&record, live.families.as_ref());
             let structured = working_directory(&record, &project).is_some_and(|cwd| {
@@ -365,11 +360,8 @@ fn state(live: &Live, request: &Request) -> Frame {
             });
             let resume_blocked = aeroric_core::sessions::live::executor::resume_blocked(
                 family,
-                record.get("codexSessionPath").and_then(Value::as_str),
-                record
-                    .get("codexSessionId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
+                session_path.as_deref(),
+                session_id.as_deref().unwrap_or_default(),
             );
             SessionState {
                 task_id: p.task_id.clone(),

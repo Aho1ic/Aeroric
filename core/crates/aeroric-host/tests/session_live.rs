@@ -46,20 +46,29 @@ impl StorageLocationProbe for LocalProbe {
     }
 }
 
-struct CodexFamilies;
+/// `claude` is the Claude family; every other agent is Codex.
+struct Families;
 
-impl AgentFamilies for CodexFamilies {
-    fn launch_family(&self, _agent: &str) -> ProtocolFamily {
+fn family_of(agent: &str) -> ProtocolFamily {
+    if agent == "claude" {
+        ProtocolFamily::Claude
+    } else {
         ProtocolFamily::Codex
     }
-    fn session_family(&self, _agent: &str) -> ProtocolFamily {
-        ProtocolFamily::Codex
+}
+
+impl AgentFamilies for Families {
+    fn launch_family(&self, agent: &str) -> ProtocolFamily {
+        family_of(agent)
+    }
+    fn session_family(&self, agent: &str) -> ProtocolFamily {
+        family_of(agent)
     }
     fn is_builtin(&self, _agent: &str) -> bool {
         false
     }
-    fn native_resume_family(&self, _agent: &str) -> ProtocolFamily {
-        ProtocolFamily::Codex
+    fn native_resume_family(&self, agent: &str) -> ProtocolFamily {
+        family_of(agent)
     }
 }
 
@@ -97,18 +106,27 @@ impl Peer {
 
 struct TestRouting {
     launcher: Launcher,
+    claude: ClaudeLauncher,
 }
 
 impl Routing for TestRouting {
     fn route(&self, family: ProtocolFamily, agent: &str, config: Option<&str>) -> Option<Route> {
-        (family == ProtocolFamily::Codex && config.is_none())
-            .then(|| Route::Codex(ServerKey::Agent(agent.to_string())))
+        if config.is_some() {
+            return None;
+        }
+        Some(match family {
+            ProtocolFamily::Claude => Route::Claude(ClaudeKey {
+                agent: agent.to_string(),
+                config: None,
+            }),
+            _ => Route::Codex(ServerKey::Agent(agent.to_string())),
+        })
     }
     fn codex_launcher(&self, _key: &ServerKey) -> Launcher {
         Arc::clone(&self.launcher)
     }
     fn claude_launcher(&self, _key: &ClaudeKey) -> ClaudeLauncher {
-        Arc::new(|_: &ClaudeStart| Err("no claude in this test".to_string()))
+        Arc::clone(&self.claude)
     }
 }
 
@@ -119,6 +137,8 @@ struct Host {
     service: Arc<TaskService>,
     capabilities: Vec<String>,
     peers: mpsc::UnboundedReceiver<Peer>,
+    /// Each Claude process start, with the peer for its stdio.
+    claude_peers: mpsc::UnboundedReceiver<(ClaudeStart, Peer)>,
     project: aeroric_core::storage::Record,
     _root: PathBuf,
 }
@@ -150,6 +170,18 @@ impl Host {
             });
             Ok((transport, None))
         });
+        let (claude_tx, claude_peers) = mpsc::unbounded_channel();
+        let claude: ClaudeLauncher = Arc::new(move |start: &ClaudeStart| {
+            let (transport, from_client, to_client) = Transport::pair();
+            let _ = claude_tx.send((
+                start.clone(),
+                Peer {
+                    from_client,
+                    to_client,
+                },
+            ));
+            Ok((transport, None))
+        });
         let registry = Arc::new(TaskRegistry::default());
         let terminal = Arc::new(TerminalService::new());
         let log = Arc::new(EventLog::default());
@@ -162,11 +194,11 @@ impl Host {
         let sink = TaskServiceSink::new(Arc::clone(&log));
         let structured = StructuredExecutor::new(
             pty.clone() as Arc<_>,
-            Arc::new(TestRouting { launcher }),
+            Arc::new(TestRouting { launcher, claude }),
             Arc::clone(&sink) as Arc<_>,
             tokio::runtime::Handle::current(),
         );
-        let families: Arc<dyn AgentFamilies> = Arc::new(CodexFamilies);
+        let families: Arc<dyn AgentFamilies> = Arc::new(Families);
         let service = Arc::new(
             TaskService::new(
                 Arc::clone(&context),
@@ -229,6 +261,7 @@ impl Host {
             service,
             capabilities,
             peers,
+            claude_peers,
             project: upserted.project,
             _root: root,
         }
@@ -243,6 +276,10 @@ impl Host {
     }
 
     fn start_task(&self, prompt: &str) {
+        self.start_agent_task("codex", prompt);
+    }
+
+    fn start_agent_task(&self, agent: &str, prompt: &str) {
         self.service
             .create(
                 &self.project,
@@ -250,7 +287,7 @@ impl Host {
                     id: "task-1".into(),
                     project_id: "project-1".into(),
                     prompt: prompt.into(),
-                    agent: "codex".into(),
+                    agent: agent.into(),
                     permission_mode: "ask".into(),
                     immediate: true,
                     selected_model: None,
@@ -654,4 +691,70 @@ async fn a_paginated_codex_session_reports_why_it_cannot_continue() {
             .contains("codex resume th-old"),
         "{state}"
     );
+}
+
+impl Peer {
+    /// The next Claude control_request of `subtype`; returns its request_id.
+    async fn expect_control(&mut self, subtype: &str) -> String {
+        let message = self.next().await;
+        assert_eq!(message["type"], "control_request", "{message}");
+        assert_eq!(message["request"]["subtype"], subtype, "{message}");
+        message["request_id"].as_str().unwrap().to_string()
+    }
+    fn control_ok(&self, request_id: &str, response: Value) {
+        self.send(json!({"type": "control_response", "response":
+            {"subtype": "success", "request_id": request_id, "response": response}}));
+    }
+    /// Claude's side of one turn: handshake, the prompt, init, a result.
+    async fn claude_turn(&mut self, session_id: &str, prompt: &str) {
+        let id = self.expect_control("initialize").await;
+        self.control_ok(&id, json!({"commands": []}));
+        let user = self.next().await;
+        assert_eq!(user["message"]["content"], prompt, "{user}");
+        self.send(json!({"type": "system", "subtype": "init", "session_id": session_id, "model": "sonnet"}));
+        self.send(
+            json!({"type": "result", "subtype": "success", "is_error": false,
+            "session_id": session_id, "usage": {"input_tokens": 1, "output_tokens": 1}}),
+        );
+        let id = self.expect_control("get_context_usage").await;
+        self.control_ok(&id, json!({"totalTokens": 10, "maxTokens": 200000}));
+    }
+}
+
+/// N6a B4: a closed Claude session reopens on the next prompt with `--resume`
+/// of the session recorded under the Claude-prefixed fields.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_closed_claude_session_reopens_with_its_recorded_session() {
+    let mut host = Host::start(true).await;
+    host.start_agent_task("claude", "hi");
+    let (start, mut peer) = tokio::time::timeout(WAIT, host.claude_peers.recv())
+        .await
+        .expect("claude started")
+        .expect("launcher");
+    assert_eq!(start.resume, None);
+    peer.claude_turn("cs-1", "hi").await;
+    host.until("claude session recorded", |h| {
+        h.record()["claudeSessionId"] == "cs-1"
+    })
+    .await;
+    host.until_state("idle", |s| s["turnActive"] == false).await;
+    host.call("session.close", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    let closed = host.state().await;
+    assert_eq!(closed["live"], false);
+    assert_eq!(closed["sessionId"], "cs-1", "{closed}");
+
+    host.call(
+        "session.prompt",
+        json!({"taskId": "task-1", "text": "again"}),
+    )
+    .await
+    .unwrap();
+    let (start, mut peer) = tokio::time::timeout(WAIT, host.claude_peers.recv())
+        .await
+        .expect("claude restarted")
+        .expect("launcher");
+    assert_eq!(start.resume.as_deref(), Some("cs-1"));
+    peer.claude_turn("cs-1", "again").await;
 }

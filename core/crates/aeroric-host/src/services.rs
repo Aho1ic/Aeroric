@@ -3564,9 +3564,9 @@ fn task_resume(
             let record = tasks
                 .iter()
                 .find(|r| mutations::text(r, "id") == Some(task_id))?;
-            mutations::text(record, "sessionId")
-                .or_else(|| mutations::text(record, "sessionPath"))
-                .map(str::to_string)
+            let (session_id, session_path) =
+                aeroric_core::tasks::session_owner::current_session(record);
+            session_id.or(session_path)
         })
         .unwrap_or_else(|| "default-session".to_string());
     let operation_key = format!("cli-resume-{task_id}");
@@ -4183,12 +4183,14 @@ fn session_list(
             continue;
         };
         for record in &stamped.records {
-            if let Some(path) = mutations::text(record, "sessionPath") {
+            let (session_id, session_path) =
+                aeroric_core::tasks::session_owner::current_session(record);
+            if let Some(path) = session_path {
                 sessions.push(json!({
                     "taskId": mutations::text(record, "id"),
                     "projectId": project_id,
                     "sessionPath": path,
-                    "sessionId": mutations::text(record, "sessionId"),
+                    "sessionId": session_id,
                 }));
             }
         }
@@ -4218,15 +4220,18 @@ fn session_history(
     let Some((record, _project)) = find_task_record(&context, task_id) else {
         return failure(id, ErrorCode::NotFound, "no task with that id");
     };
-    let Some(path) = mutations::text(&record, "sessionPath") else {
+    let (recorded_id, recorded_path) = aeroric_core::tasks::session_owner::current_session(&record);
+    let Some(path) = recorded_path else {
         return failure(
             id,
             ErrorCode::NotFound,
             "this task has no session transcript on disk yet",
         );
     };
-    let raw = match std::fs::read_to_string(path) {
+    let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
+        // A new session's transcript appears with its first message (N6a D3).
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => {
             return failure(
                 id,
@@ -4238,12 +4243,8 @@ fn session_history(
     let lines: Vec<String> = raw.lines().map(str::to_string).collect();
     let agent = mutations::text(&record, "agent").unwrap_or_default();
     let family = families.session_family(agent);
-    let session_id = mutations::text(&record, "sessionId").unwrap_or(task_id);
-    let page = session_page(
-        session_id.to_string(),
-        family,
-        parse_messages(&lines, family),
-    );
+    let session_id = recorded_id.unwrap_or_else(|| task_id.to_string());
+    let page = session_page(session_id, family, parse_messages(&lines, family));
     let mut reply = serde_json::to_value(page).unwrap_or_default();
     reply["path"] = json!(path);
     ok(&request, reply)
@@ -4282,7 +4283,8 @@ fn session_export(
     let Some((record, _project)) = find_task_record(&context, task_id) else {
         return failure(id, ErrorCode::NotFound, "no task with that id");
     };
-    let Some(path) = mutations::text(&record, "sessionPath") else {
+    let (recorded_id, recorded_path) = aeroric_core::tasks::session_owner::current_session(&record);
+    let Some(path) = recorded_path else {
         return failure(
             id,
             ErrorCode::NotFound,
@@ -4306,14 +4308,14 @@ fn session_export(
         created_at: mutations::text(&record, "createdAt")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0),
-        session_id: mutations::text(&record, "sessionId").map(str::to_string),
+        session_id: recorded_id,
         worktree_branch: mutations::text(&record, "worktreeBranch").map(str::to_string),
         base_branch: mutations::text(&record, "baseBranch").map(str::to_string),
         additions: None,
         deletions: None,
         failure_reason: mutations::text(&record, "failureReason").map(str::to_string),
     };
-    match export_session_markdown(std::path::Path::new(path), out, source, &meta) {
+    match export_session_markdown(std::path::Path::new(&path), out, source, &meta) {
         Ok(()) => ok(&request, json!({ "exported": out })),
         Err(e) => failure(id, ErrorCode::IoError, &e),
     }

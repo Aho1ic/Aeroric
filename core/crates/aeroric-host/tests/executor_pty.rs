@@ -494,6 +494,20 @@ async fn session_history_reads_the_record_transcript_via_the_family_parser() {
                 "id": "t1", "projectId": "p1", "prompt": "问", "agent": "claude",
                 "permissionMode": "ask", "status": "done",
                 "sessionPath": transcript.to_string_lossy()
+            },
+            // N6a B1: native sessions record the owner family's prefixed fields.
+            {
+                "id": "t2", "projectId": "p1", "prompt": "问", "agent": "claude",
+                "permissionMode": "ask", "status": "done", "sessionFamily": "claude",
+                "claudeSessionId": "c-2",
+                "claudeSessionPath": transcript.to_string_lossy()
+            },
+            // N6a D3: the transcript is written with the first message.
+            {
+                "id": "t3", "projectId": "p1", "prompt": "问", "agent": "claude",
+                "permissionMode": "ask", "status": "done", "sessionFamily": "claude",
+                "claudeSessionId": "c-3",
+                "claudeSessionPath": root.join("not-yet.jsonl").to_string_lossy()
             }
         ]))
         .expect("tasks"),
@@ -563,7 +577,7 @@ async fn session_history_reads_the_record_transcript_via_the_family_parser() {
             "session.history",
             serde_json::json!({ "taskId": "t1" }),
         ),
-        call,
+        Arc::clone(&call),
     )
     .await;
     match frame {
@@ -590,6 +604,43 @@ async fn session_history_reads_the_record_transcript_via_the_family_parser() {
             assert_eq!(result_block["sourceId"], "tu1");
             assert_eq!(result_block["payload"]["output"], "ok");
             assert!(messages.iter().all(|m| m["id"].as_str().is_some()));
+        }
+        other => panic!("expected success, got {other:?}"),
+    }
+    for (task, session, count) in [("t2", "c-2", 3), ("t3", "c-3", 0)] {
+        let frame = aeroric_host::dispatcher::dispatch(
+            req(
+                "2",
+                "session.history",
+                serde_json::json!({ "taskId": task }),
+            ),
+            Arc::clone(&call),
+        )
+        .await;
+        match frame {
+            aeroric_protocol::envelope::Frame::Success(success) => {
+                assert_eq!(success.result["sessionId"], session, "{task}");
+                assert_eq!(
+                    success.result["messages"].as_array().map(Vec::len),
+                    Some(count),
+                    "{task}"
+                );
+            }
+            other => panic!("{task}: expected success, got {other:?}"),
+        }
+    }
+    let frame =
+        aeroric_host::dispatcher::dispatch(req("3", "session.list", serde_json::json!({})), call)
+            .await;
+    match frame {
+        aeroric_protocol::envelope::Frame::Success(success) => {
+            let ids: Vec<&str> = success.result["sessions"]
+                .as_array()
+                .expect("sessions")
+                .iter()
+                .filter_map(|s| s["taskId"].as_str())
+                .collect();
+            assert_eq!(ids, ["t1", "t2", "t3"]);
         }
         other => panic!("expected success, got {other:?}"),
     }

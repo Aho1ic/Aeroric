@@ -371,6 +371,32 @@ pub fn apply_resolved_session(
     next
 }
 
+/// The task's current session as `(id, path)`, for readers that only need to find
+/// it (history, export, the session list, resume). Reads the recorded owner
+/// family's prefixed fields first, then any other family's, then the unprefixed
+/// `sessionId`/`sessionPath` that only very old records carry. Without a recorded
+/// family the codex fields come first; `apply_resolved_session` leaves one family.
+pub fn current_session(record: &Record) -> (Option<String>, Option<String>) {
+    let family = record
+        .get("sessionFamily")
+        .and_then(Value::as_str)
+        .and_then(|name| serde_json::from_value(Value::String(name.to_string())).ok())
+        .unwrap_or(ProtocolFamily::Codex);
+    let fields = session_fields(record, family);
+    let non_empty = |value: Option<String>| value.filter(|v| !v.is_empty());
+    let (id, path) = match (non_empty(fields.session_id), non_empty(fields.session_path)) {
+        (None, None) => (
+            non_empty(fields.legacy_session_id),
+            non_empty(fields.legacy_session_path),
+        ),
+        found => found,
+    };
+    (
+        id.or_else(|| non_empty(string_field(record, "sessionId"))),
+        path.or_else(|| non_empty(string_field(record, "sessionPath"))),
+    )
+}
+
 /// The fake family table the task tests share: four built-ins plus one custom profile
 /// whose family only `Table` knows about.
 #[cfg(test)]
@@ -672,5 +698,33 @@ mod tests {
             !has_task_session(&record(json!({"claudeSessionId": ""}))),
             "an empty id is not a session"
         );
+    }
+
+    #[test]
+    fn current_session_reads_the_owner_familys_prefixed_fields() {
+        let claude = record(json!({
+            "sessionFamily": "claude",
+            "claudeSessionId": "c-1",
+            "claudeSessionPath": "/t/c-1.jsonl"
+        }));
+        assert_eq!(
+            current_session(&claude),
+            (Some("c-1".into()), Some("/t/c-1.jsonl".into()))
+        );
+        let codex = record(json!({ "codexSessionId": "x-1", "codexSessionPath": "/t/x.jsonl" }));
+        assert_eq!(
+            current_session(&codex),
+            (Some("x-1".into()), Some("/t/x.jsonl".into()))
+        );
+        // A session recorded under another family is still found.
+        let moved = record(json!({ "sessionFamily": "codex", "claudeSessionId": "c-2" }));
+        assert_eq!(current_session(&moved), (Some("c-2".into()), None));
+        // Only very old records carry the unprefixed fields.
+        let old = record(json!({ "sessionId": "o-1", "sessionPath": "/t/o.jsonl" }));
+        assert_eq!(
+            current_session(&old),
+            (Some("o-1".into()), Some("/t/o.jsonl".into()))
+        );
+        assert_eq!(current_session(&record(json!({}))), (None, None));
     }
 }
