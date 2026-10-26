@@ -320,6 +320,105 @@ fn fetch_models_handler(context: &Arc<CoreContext>) -> Handler {
     })
 }
 
+/// G: live cooldowns from the gateway (same process), for the pool page.
+fn status(request: Request, _context: Arc<CoreContext>) -> Frame {
+    ok(
+        &request,
+        json!({ "cooldowns": aeroric_core::local_router::config_routes::cooldown_report() }),
+    )
+}
+
+/// G1: the user's own Codex / Claude Code login, read on demand; never tokens.
+fn official_status(request: Request, _context: Arc<CoreContext>) -> Frame {
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return failure(request.id.clone(), ErrorCode::IoError, "HOME is not set");
+    };
+    let status = aeroric_core::agent_connections::official::detect(
+        &home,
+        |cli| !aeroric_core::platform::detect_path(cli).trim().is_empty(),
+        claude_keychain_item_exists,
+    );
+    ok(&request, json!(status))
+}
+
+/// Whether the Claude Code credential item exists. Attributes only: without
+/// `-w` the secret is never read, so no keychain prompt appears.
+fn claude_keychain_item_exists() -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", "Claude Code-credentials"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// G2: one tiny request through a connection, to prove key, URL and model.
+fn test_connection_handler(context: &Arc<CoreContext>) -> Handler {
+    let context = Arc::clone(context);
+    Arc::new(move |request: Request, _call| {
+        let context = Arc::clone(&context);
+        Box::pin(async move {
+            let (id, model) = match (
+                param::<String>(&request, "connectionId"),
+                param::<String>(&request, "model"),
+            ) {
+                (Ok(id), Ok(model)) => (id, model),
+                (Err(e), _) | (_, Err(e)) => {
+                    return failure(request.id.clone(), ErrorCode::InvalidArgument, &e)
+                }
+            };
+            let ctx = Arc::clone(&context);
+            let prepared = tokio::task::spawn_blocking(move || {
+                let doc = store::load(&doc_path(&ctx))?;
+                let connection = doc
+                    .connections
+                    .iter()
+                    .find(|c| c.id == id)
+                    .cloned()
+                    .ok_or_else(|| "connection not found".to_string())?;
+                let secret = store::get_credential(ctx.secrets.as_ref(), &id)?
+                    .ok_or_else(|| "no credential stored for this connection".to_string())?;
+                Ok::<_, String>((connection, secret))
+            })
+            .await;
+            let (connection, secret) = match prepared {
+                Ok(Ok(pair)) => pair,
+                Ok(Err(e)) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &e),
+                Err(e) => return failure(request.id.clone(), ErrorCode::IoError, &e.to_string()),
+            };
+            // Chat Completions when offered (cheapest to read back), else the first.
+            let protocol = if connection
+                .protocols
+                .contains(&aeroric_core::agent_connections::model::WireProtocol::ChatCompletions)
+            {
+                "chat_completions"
+            } else {
+                connection
+                    .protocols
+                    .first()
+                    .map(|p| p.as_str())
+                    .unwrap_or("chat_completions")
+            };
+            match aeroric_core::settings::model_detect::probe_connection(
+                &connection.base_url,
+                &secret,
+                connection.use_global_proxy,
+                protocol,
+                &model,
+            )
+            .await
+            {
+                Ok(probe) => ok(&request, json!({ "protocol": protocol, "probe": probe })),
+                Err(e) => failure(request.id.clone(), ErrorCode::IoError, &e),
+            }
+        })
+    })
+}
+
 fn wire_step(step: legacy_cleanup::CleanupStep) -> wire::CleanupStep {
     match step {
         legacy_cleanup::CleanupStep::RemoveProfile => wire::CleanupStep::RemoveProfile,
@@ -404,6 +503,15 @@ fn legacy_cleanup_apply(request: Request, context: Arc<CoreContext>) -> Frame {
 
 pub fn register_agent_connection_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     set.register("agentConnections.load", blocking(&context, load));
+    set.register("agentConnections.status", blocking(&context, status));
+    set.register(
+        "agentConnections.officialStatus",
+        blocking(&context, official_status),
+    );
+    set.register(
+        "agentConnections.testConnection",
+        test_connection_handler(&context),
+    );
     set.register(
         "agentConnections.putConnection",
         blocking(&context, put_connection),

@@ -9,6 +9,7 @@ pub mod launch;
 pub mod legacy_cleanup;
 pub mod migration;
 pub mod model;
+pub mod official;
 pub mod routing;
 pub mod service;
 pub mod store;

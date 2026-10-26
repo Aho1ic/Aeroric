@@ -393,6 +393,49 @@ pub fn forget_task(task_id: &str) {
     });
 }
 
+/// One live cooldown, for the pool page (G): which connection (and model),
+/// until when, and why.
+#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CooldownEntry {
+    pub connection_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub until_epoch_s: u64,
+    pub reason: String,
+}
+
+/// Cooldowns still running, soonest-ending first.
+pub fn cooldown_report() -> Vec<CooldownEntry> {
+    let now = now_epoch_s();
+    let mut entries: Vec<CooldownEntry> = with_state(|state| {
+        state
+            .cooldowns
+            .iter()
+            .filter(|(_, until)| **until > now)
+            .map(|(key, until)| {
+                let (connection, model) = match key.split_once('\u{1f}') {
+                    Some((connection, model)) => (connection.to_string(), Some(model.to_string())),
+                    None => (key.clone(), None),
+                };
+                let reason = state
+                    .reasons
+                    .get(key)
+                    .map(|class| format!("{class:?}"))
+                    .unwrap_or_else(|| "Unknown".into());
+                CooldownEntry {
+                    connection_id: connection,
+                    model,
+                    until_epoch_s: *until,
+                    reason,
+                }
+            })
+            .collect()
+    });
+    entries.sort_by_key(|e| e.until_epoch_s);
+    entries
+}
+
 /// Snapshot of current cooldowns for the UI (connection id → epoch s).
 pub fn cooldowns() -> Cooldowns {
     with_state(|state| state.cooldowns.clone())
@@ -558,6 +601,24 @@ mod tests {
         let table = cooldowns();
         assert!(!table.contains_key(&routing::model_key("nf-a", "ds-gone")));
         assert!(table.get("nf-a").is_some_and(|until| *until > now + 100));
+    }
+
+    #[test]
+    fn the_report_names_the_connection_model_and_reason() {
+        record_failure(
+            "cr-t9",
+            "conn:rep-a",
+            "ds-gone",
+            FailureClass::NotFound,
+            None,
+        );
+        let entry = cooldown_report()
+            .into_iter()
+            .find(|e| e.connection_id == "rep-a")
+            .unwrap();
+        assert_eq!(entry.model.as_deref(), Some("ds-gone"));
+        assert_eq!(entry.reason, "NotFound");
+        assert!(entry.until_epoch_s > now_epoch_s());
     }
 
     #[test]

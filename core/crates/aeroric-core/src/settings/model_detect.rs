@@ -312,3 +312,86 @@ pub async fn fetch_connection_catalog(
     .await?;
     Ok(models)
 }
+
+/// What a one-off test request to a connection returned.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionProbe {
+    pub elapsed_ms: u64,
+    pub status: u16,
+    /// The start of the reply text, or of the error body.
+    pub excerpt: String,
+}
+
+/// Send one minimal request (`ping`, a token or so of output) to a connection
+/// over `protocol` (`responses` | `messages` | `chat_completions`). Costs a
+/// tiny amount of quota; the UI says so before the user clicks (G2).
+pub async fn probe_connection(
+    base_url: &str,
+    api_key: &str,
+    use_global_proxy: bool,
+    protocol: &str,
+    model: &str,
+) -> Result<ConnectionProbe, String> {
+    let policy = ModelDetectionPolicy::LocalUser;
+    let base_url = validate_model_base_url(base_url, policy)?;
+    let proxy_settings = if use_global_proxy {
+        let proxy = tokio::task::spawn_blocking(|| load_settings_internal().proxy_settings)
+            .await
+            .map_err(|error| error.to_string())?;
+        if normalize_proxy_url(&proxy.url).is_empty() {
+            return Err("Global proxy is not configured; no request was sent".to_string());
+        }
+        proxy
+    } else {
+        ProxySettings::default()
+    };
+    let client = build_detect_client(&base_url, &proxy_settings, policy, &[])?;
+    let root = base_url.as_str().trim_end_matches('/');
+    let api_key = api_key.trim();
+    let request = match protocol {
+        "messages" => client
+            .post(format!("{root}/messages"))
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&serde_json::json!({
+                "model": model, "max_tokens": 1,
+                "messages": [{"role": "user", "content": "ping"}]
+            })),
+        "responses" => client
+            .post(format!("{root}/responses"))
+            .bearer_auth(api_key)
+            // OpenAI refuses fewer than 16 output tokens on Responses.
+            .json(&serde_json::json!({"model": model, "input": "ping", "max_output_tokens": 16})),
+        _ => client
+            .post(format!("{root}/chat/completions"))
+            .bearer_auth(api_key)
+            .json(&serde_json::json!({
+                "model": model, "max_tokens": 1, "stream": false,
+                "messages": [{"role": "user", "content": "ping"}]
+            })),
+    };
+    let started = std::time::Instant::now();
+    let response = request
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    let status = response.status().as_u16();
+    let body = response.text().await.unwrap_or_default();
+    let value = serde_json::from_str::<serde_json::Value>(&body).ok();
+    let text = value.as_ref().and_then(|value| {
+        value
+            .pointer("/choices/0/message/content")
+            .or_else(|| value.pointer("/content/0/text"))
+            .or_else(|| value.pointer("/output_text"))
+            .or_else(|| value.pointer("/error/message"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    });
+    Ok(ConnectionProbe {
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        status,
+        excerpt: text.unwrap_or(body).chars().take(200).collect(),
+    })
+}

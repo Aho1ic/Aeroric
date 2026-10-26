@@ -312,3 +312,75 @@ async fn fetch_without_credential_fails_and_keeps_the_catalog() {
     assert!(failed.is_err(), "{failed:?}");
     assert_eq!(rig.document(), before);
 }
+
+/// A one-shot Chat Completions upstream: answers the first request with
+/// "pong" and reports the Authorization header it saw.
+async fn one_shot_chat() -> (String, tokio::task::JoinHandle<String>) {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/v1", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request = String::from_utf8_lossy(&buf[..n]).to_string();
+        let body = r#"{"choices":[{"message":{"role":"assistant","content":"pong"}}]}"#;
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(reply.as_bytes()).await.unwrap();
+        request
+    });
+    (base, task)
+}
+
+#[tokio::test]
+async fn a_test_message_goes_through_the_connection_with_its_key() {
+    let rig = Rig::start("probe").await;
+    let (base, upstream) = one_shot_chat().await;
+    let mut conn = connection("p", "chat_completions", "m-1");
+    conn["base_url"] = json!(base);
+    rig.call(
+        "agentConnections.putConnection",
+        json!({ "connection": conn, "credential": "sk-probe" }),
+    )
+    .await
+    .expect("put");
+    let reply = rig
+        .call(
+            "agentConnections.testConnection",
+            json!({ "connectionId": "p", "model": "m-1" }),
+        )
+        .await
+        .expect("probe");
+    assert_eq!(reply["protocol"], "chat_completions");
+    assert_eq!(reply["probe"]["status"], 200);
+    assert_eq!(reply["probe"]["excerpt"], "pong");
+    let request = upstream.await.unwrap();
+    assert!(request.contains("/v1/chat/completions"));
+    assert!(request
+        .to_ascii_lowercase()
+        .contains("authorization: bearer sk-probe"));
+    assert!(request.contains("\"max_tokens\":1"));
+}
+
+#[tokio::test]
+async fn status_and_official_logins_are_reported_without_secrets() {
+    let rig = Rig::start("status").await;
+    let status = rig
+        .call("agentConnections.status", json!({}))
+        .await
+        .expect("status");
+    assert!(status["cooldowns"].is_array());
+    let official = rig
+        .call("agentConnections.officialStatus", json!({}))
+        .await
+        .expect("official");
+    for cli in ["codex", "claude"] {
+        assert!(official[cli]["signedIn"].is_boolean(), "{official}");
+        assert!(official[cli]["sources"].is_array());
+    }
+    let wire = official.to_string();
+    assert!(!wire.contains("access_token") && !wire.contains("refresh_token"));
+}
