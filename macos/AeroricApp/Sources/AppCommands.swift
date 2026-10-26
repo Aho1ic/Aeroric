@@ -88,6 +88,7 @@ struct AeroricCommands: Commands {
     @FocusedValue(\.workspaceActivity) private var workspaceActivity
     @FocusedValue(\.sidebarCollapse) private var sidebarCollapse
     @FocusedValue(\.newSessionAction) private var newSessionAction
+    @FocusedValue(\.closeFileTabAction) private var closeFileTabAction
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -120,8 +121,9 @@ struct AeroricCommands: Commands {
                 WorkspaceActions.showMainWindow()
             }
 
-            Button("关闭窗口") {
-                NSApp.keyWindow?.performClose(nil)
+            // A file tab in front takes ⌘W; otherwise it closes the window.
+            Button(closeFileTabAction == nil ? "关闭窗口" : "关闭标签") {
+                if let closeFileTabAction { closeFileTabAction() } else { NSApp.keyWindow?.performClose(nil) }
             }
             .keyboardShortcut("w")
         }

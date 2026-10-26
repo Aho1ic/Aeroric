@@ -3,7 +3,7 @@ import Foundation
 import Observation
 
 public enum ResourceListSection: String, Hashable, Sendable { case files, git }
-public enum ResourcePreviewKind: String, Hashable, Sendable {
+public enum ResourcePreviewKind: String, Hashable, Sendable, Codable {
     case file, stagedDiff, unstagedDiff, untracked
     public var label: String {
         switch self {
@@ -14,7 +14,7 @@ public enum ResourcePreviewKind: String, Hashable, Sendable {
         }
     }
 }
-public struct ResourcePreviewTarget: Hashable, Sendable {
+public struct ResourcePreviewTarget: Hashable, Sendable, Codable {
     public let projectID: String
     public let path: String
     public let kind: ResourcePreviewKind
@@ -105,6 +105,16 @@ public struct ProjectResourceScene: Sendable {
     public var branchState: ResourceReadStatus = .notLoaded
     public var target: ResourcePreviewTarget?
     public var previewActive = false
+    /// Open file tabs, left to right; the fixed "任务" tab is implicit and is
+    /// in front while `previewActive` is false (2026-10-26 C).
+    public var tabs: [ResourcePreviewTarget] = []
+    /// Unsaved edits of `.file` tabs; equal to the read text means clean.
+    public var drafts: [ResourcePreviewTarget: String] = [:]
+    /// What the read text was when each draft started, to tell dirty apart.
+    public var draftBases: [ResourcePreviewTarget: String] = [:]
+    /// The file list's single-click selection; it opens nothing.
+    public var listSelection: String?
+    public var tabsRestored = false
     public var previewState: ResourceReadStatus = .notLoaded
     public var previewText: String?
     public var previewLines: [ResourcePreviewLine] = []
@@ -131,7 +141,87 @@ public final class ProjectResourceBook {
         var value = scene(projectID); body(&value); scenes[projectID] = value
     }
     public func showTask(projectID: String) { edit(projectID) { $0.previewActive = false } }
-    public func select(_ target: ResourcePreviewTarget) {
+    /// Open a tab (or bring an open one to front) and show it.
+    public func select(_ target: ResourcePreviewTarget) { open(target) }
+    public func open(_ target: ResourcePreviewTarget) {
+        edit(target.projectID) { value in
+            if !value.tabs.contains(target) { value.tabs.append(target) }
+        }
+        activate(target)
+        saveTabs(projectID: target.projectID)
+    }
+    /// Remove a tab. Closing the one in front shows its right neighbour, else
+    /// its left one, else the task. Returns what is in front afterwards.
+    @discardableResult
+    public func close(_ target: ResourcePreviewTarget) -> ResourcePreviewTarget? {
+        let value = scene(target.projectID)
+        guard let index = value.tabs.firstIndex(of: target) else { return value.previewActive ? value.target : nil }
+        var tabs = value.tabs
+        tabs.remove(at: index)
+        let wasFront = value.previewActive && value.target == target
+        edit(target.projectID) {
+            $0.tabs = tabs
+            $0.drafts.removeValue(forKey: target)
+            $0.draftBases.removeValue(forKey: target)
+        }
+        saveTabs(projectID: target.projectID)
+        guard wasFront else { return value.previewActive ? value.target : nil }
+        if tabs.isEmpty {
+            showTask(projectID: target.projectID)
+            return nil
+        }
+        let next = tabs[min(index, tabs.count - 1)]
+        activate(next)
+        return next
+    }
+    public func isDirty(_ target: ResourcePreviewTarget) -> Bool {
+        let value = scene(target.projectID)
+        guard let draft = value.drafts[target] else { return false }
+        return draft != value.draftBases[target]
+    }
+    public func setDraft(_ text: String, for target: ResourcePreviewTarget) {
+        edit(target.projectID) { value in
+            if value.draftBases[target] == nil { value.draftBases[target] = value.previewText ?? "" }
+            value.drafts[target] = text
+        }
+    }
+    /// After a successful save the draft becomes the new clean text.
+    public func markSaved(_ target: ResourcePreviewTarget, text: String) {
+        edit(target.projectID) { value in
+            value.draftBases[target] = text
+            value.drafts[target] = text
+            if value.target == target { value.previewText = text }
+        }
+    }
+
+    // MARK: Tab persistence (Q21): per project, restored once per window.
+
+    public static func tabsKey(_ projectID: String) -> String { "fileTabs.\(projectID)" }
+    public var defaults: UserDefaults = .standard
+
+    private func saveTabs(projectID: String) {
+        let tabs = scene(projectID).tabs
+        if let data = try? JSONEncoder().encode(tabs) { defaults.set(data, forKey: Self.tabsKey(projectID)) }
+    }
+
+    /// Reopen this project's remembered tabs (task stays in front). Files that
+    /// no longer exist are dropped: `exists` answers per remembered target.
+    public func restoreTabs(projectID: String, exists: (ResourcePreviewTarget) async -> Bool) async {
+        guard !scene(projectID).tabsRestored else { return }
+        edit(projectID) { $0.tabsRestored = true }
+        guard let data = defaults.data(forKey: Self.tabsKey(projectID)),
+              let saved = try? JSONDecoder().decode([ResourcePreviewTarget].self, from: data) else { return }
+        var kept: [ResourcePreviewTarget] = []
+        for target in saved where target.projectID == projectID {
+            if await exists(target) { kept.append(target) }
+        }
+        edit(projectID) { value in
+            value.tabs = kept + value.tabs.filter { !kept.contains($0) }
+        }
+        saveTabs(projectID: projectID)
+    }
+
+    private func activate(_ target: ResourcePreviewTarget) {
         edit(target.projectID) { value in
             if value.target != target {
                 value.target = target

@@ -121,6 +121,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
             }
         }
         .background(alignment: .topLeading) { selectionProbe }
+        .modifier(HiddenWindowTitle())
         .safeAreaInset(edge: .bottom, spacing: 0) {
             StatusBar(
                 phase: state.phaseSnapshot,
@@ -334,7 +335,16 @@ public struct NewSessionActionKey: FocusedValueKey {
     public typealias Value = () -> Void
 }
 
+/// ⌘W closes the file tab in front instead of the window (2026-10-26 C).
+public struct CloseFileTabActionKey: FocusedValueKey {
+    public typealias Value = () -> Void
+}
+
 public extension FocusedValues {
+    var closeFileTabAction: (() -> Void)? {
+        get { self[CloseFileTabActionKey.self] }
+        set { self[CloseFileTabActionKey.self] = newValue }
+    }
     var newSessionAction: (() -> Void)? {
         get { self[NewSessionActionKey.self] }
         set { self[NewSessionActionKey.self] = newValue }
@@ -357,5 +367,15 @@ public extension FocusedValues {
     var workspaceActivity: Bool? {
         get { self[WorkspaceActivityKey.self] }
         set { self[WorkspaceActivityKey.self] = newValue }
+    }
+}
+
+/// Nothing beside the sidebar toggle (2026-10-26 UI review): without the
+/// old crumb the system would show the app name there. An empty title, not
+/// `.toolbar(removing: .title)`: removing the item also drops the flexible
+/// space that keeps the action buttons on the trailing edge.
+private struct HiddenWindowTitle: ViewModifier {
+    func body(content: Content) -> some View {
+        content.navigationTitle("")
     }
 }

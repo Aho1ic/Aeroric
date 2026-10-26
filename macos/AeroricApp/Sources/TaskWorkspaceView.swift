@@ -199,7 +199,7 @@ struct TaskWorkspaceView: View {
     private var layout: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-                previewNavigation
+                fileTabs
                 centralContent
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -244,7 +244,10 @@ struct TaskWorkspaceView: View {
             }
         }
         .onChange(of: resourceProjectID, initial: true) { _, id in
-            if let id { visitedResourceProjects.insert(id) }
+            if let id {
+                visitedResourceProjects.insert(id)
+                Task { await restoreTabs(id) }
+            }
         }
         .onChange(of: navigationEpoch) { _, _ in
             // An explicit task/draft navigation wins even when its sidebar
@@ -288,6 +291,7 @@ struct TaskWorkspaceView: View {
             }
         }
         .focusedSceneValue(\.newSessionAction, { openNewSession() })
+        .focusedSceneValue(\.closeFileTabAction, closeFrontFileTab)
         .onChange(of: selectedTask?.id, initial: true) { _, newValue in
             guard let newValue, let task = services.taskStore.tasks.first(where: { $0.id == newValue })
             else {
@@ -562,7 +566,8 @@ struct TaskWorkspaceView: View {
                     projectName: resourceProject?.name ?? "原项目不可用",
                     projectAvailable: resourceProject != nil,
                     onRetry: { loadPreview(target) },
-                    onOpenFile: { openPreview(.init(projectID: id, path: target.path, kind: .file)) }
+                    onOpenFile: { openPreview(.init(projectID: id, path: target.path, kind: .file)) },
+                    onSave: target.kind == .file ? { text in Task { await saveTab(target, text: text) } } : nil
                 )
                 .id(target)
             }
@@ -608,37 +613,95 @@ struct TaskWorkspaceView: View {
         activeSection == .tasks && draftScope == nil && !previewActive
             && SessionNavigation.taskID(selection) == selectedTaskID && selectedTaskID != nil
     }
-    private enum CentralPage: Hashable { case task, preview }
-    // MSR01 keeps the two central segments visible even before a preview
-    // target exists; the preview segment disables instead of disappearing.
-    @ViewBuilder private var previewNavigation: some View {
-        if !usesFullWorkspace {
-            let id = resourceProjectID
-            let target = id.flatMap { resourceBook.scene($0).target }
-            NativeSegmentedControl(
-                selection: Binding(
-                    get: { previewActive ? CentralPage.preview : .task },
-                    set: { page in
-                        guard let id else { return }
-                        if page == .task {
-                            resourceBook.showTask(projectID: id)
-                        } else if let target {
-                            taskInputGate.leave()
-                            services.suspendTerminalInput(presentationOwner: terminalPresentationOwner)
-                            resourceBook.select(target)
-                        }
-                    }
-                ),
-                groupTitle: "中央工作面",
-                segments: [
-                    .init(value: .task, title: "当前任务", isEnabled: true),
-                    .init(value: .preview, title: "预览", isEnabled: target != nil),
-                ]
+    /// 2026-10-26 C: document tabs replace the old "当前任务/预览" switch.
+    /// Present only while this project has an open file tab.
+    @ViewBuilder private var fileTabs: some View {
+        if !usesFullWorkspace, let id = resourceProjectID, !resourceBook.scene(id).tabs.isEmpty {
+            let scene = resourceBook.scene(id)
+            FileTabStrip(
+                tabs: scene.tabs, active: scene.previewActive ? scene.target : nil,
+                isDirty: { resourceBook.isDirty($0) },
+                onShowTask: { resourceBook.showTask(projectID: id) },
+                onSelect: openPreview,
+                onClose: closeTab
             )
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .accessibilityIdentifier("workspace.central-pages")
         }
     }
+
+    /// Close a tab, asking first when it holds unsaved edits (Q20).
+    private func closeTab(_ target: ResourcePreviewTarget) {
+        if resourceBook.isDirty(target) {
+            let alert = NSAlert()
+            alert.messageText = "“\((target.path as NSString).lastPathComponent)”有未保存的修改"
+            alert.informativeText = "关闭前要保存吗？"
+            alert.addButton(withTitle: "保存")
+            alert.addButton(withTitle: "不保存")
+            alert.addButton(withTitle: "取消")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                let text = resourceBook.scene(target.projectID).drafts[target] ?? ""
+                Task {
+                    if await saveTab(target, text: text) { closeTabNow(target) }
+                }
+                return
+            case .alertSecondButtonReturn:
+                break
+            default:
+                return
+            }
+        }
+        closeTabNow(target)
+    }
+
+    private func closeTabNow(_ target: ResourcePreviewTarget) {
+        if let next = resourceBook.close(target) { loadPreview(next) }
+    }
+
+    /// Write a `.file` tab through the host; false (with an alert) on failure.
+    @discardableResult
+    private func saveTab(_ target: ResourcePreviewTarget, text: String) async -> Bool {
+        guard let reader = services.projectResourceReader else {
+            presentSaveFailure("宿主未连接")
+            return false
+        }
+        do {
+            try await reader.write(projectID: target.projectID, path: target.path, content: text)
+            resourceBook.markSaved(target, text: text)
+            return true
+        } catch {
+            presentSaveFailure(error.localizedDescription)
+            return false
+        }
+    }
+
+    private func presentSaveFailure(_ reason: String) {
+        let alert = NSAlert()
+        alert.messageText = "保存失败"
+        alert.informativeText = reason
+        alert.runModal()
+    }
+
+    /// The ⌘W target while a file tab is in front.
+    private var closeFrontFileTab: (() -> Void)? {
+        guard !usesFullWorkspace, let id = resourceProjectID else { return nil }
+        let scene = resourceBook.scene(id)
+        guard scene.previewActive, let target = scene.target else { return nil }
+        return { closeTab(target) }
+    }
+
+    /// Reopen the project's remembered tabs once per window (Q21); a file
+    /// whose parent listing no longer has it is dropped.
+    private func restoreTabs(_ projectID: String) async {
+        let reader = services.projectResourceReader
+        await resourceBook.restoreTabs(projectID: projectID) { target in
+            guard let reader else { return false }
+            let parent = (target.path as NSString).deletingLastPathComponent
+            let name = (target.path as NSString).lastPathComponent
+            guard let entries = try? await reader.directory(projectID: projectID, path: parent) else { return false }
+            return entries.contains { $0.name == name }
+        }
+    }
+
     private var resourceInspector: some View {
         ZStack {
             // Keep native List identities per window × project, including
@@ -659,7 +722,8 @@ struct TaskWorkspaceView: View {
                                 change, projectID: id, projectPath: project.path,
                                 reader: services.projectResourceReader
                             ) }
-                        }
+                        },
+                        localRoot: FileManager.default.fileExists(atPath: project.path) ? project.path : nil
                     )
                     .opacity(resourceProjectID == id ? 1 : 0)
                     .allowsHitTesting(resourceProjectID == id)

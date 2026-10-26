@@ -9,6 +9,18 @@ public protocol ProjectResourceReading: Sendable {
     func changes(projectPath: String) async throws -> [ResourceGitChange]
     func branches(projectPath: String) async throws -> [ResourceGitBranch]
     func diff(projectPath: String, path: String, staged: Bool) async throws -> String
+    /// Save an edited file tab (2026-10-26 C). Readers that cannot write throw.
+    func write(projectID: String, path: String, content: String) async throws
+}
+
+public struct ResourceWriteUnsupported: LocalizedError, Sendable {
+    public var errorDescription: String? { "此连接不支持保存文件" }
+}
+
+extension ProjectResourceReading {
+    public func write(projectID: String, path: String, content: String) async throws {
+        throw ResourceWriteUnsupported()
+    }
 }
 
 public struct ResourceGitChange: Identifiable, Equatable, Hashable, Sendable {
@@ -45,6 +57,9 @@ public struct ProjectResourcesClient: ProjectResourceReading {
     }
     public func text(projectID: String, path: String) async throws -> String {
         try await FilesClient(connection: connection).readFile(projectId: projectID, path: path)
+    }
+    public func write(projectID: String, path: String, content: String) async throws {
+        try await FilesClient(connection: connection).writeFile(projectId: projectID, path: path, content: content)
     }
     public func changes(projectPath: String) async throws -> [ResourceGitChange] {
         let reply = try await connection.request("git.git_status", params: .object(["projectPath": .string(projectPath)]))

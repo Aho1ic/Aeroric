@@ -1,4 +1,5 @@
 import AeroricClient
+import QuickLook
 import SwiftUI
 
 /// Repository panel lists (M3): a file tree and the change list with inline
@@ -12,14 +13,38 @@ public struct ProjectResourceInspector: View {
     let onLoadDirectory: (String) -> Void
     let onRefresh: () -> Void
     let onToggleChange: (ResourceGitChange) -> Void
+    /// The project's folder on this Mac; nil for remote projects, which have
+    /// no local file for Quick Look.
+    let localRoot: String?
+    /// Space shows the system Quick Look panel for the selected file.
+    @State private var quickLookURL: URL?
 
     public init(book: ProjectResourceBook, projectID: String, projectName: String,
                 onOpen: @escaping (ResourcePreviewTarget) -> Void,
                 onLoadDirectory: @escaping (String) -> Void, onRefresh: @escaping () -> Void,
-                onToggleChange: @escaping (ResourceGitChange) -> Void = { _ in }) {
+                onToggleChange: @escaping (ResourceGitChange) -> Void = { _ in },
+                localRoot: String? = nil) {
         self.book = book; self.projectID = projectID; self.projectName = projectName
         self.onOpen = onOpen; self.onLoadDirectory = onLoadDirectory; self.onRefresh = onRefresh
-        self.onToggleChange = onToggleChange
+        self.onToggleChange = onToggleChange; self.localRoot = localRoot
+    }
+
+    private func localURL(_ path: String?) -> URL? {
+        guard let localRoot, let path else { return nil }
+        return URL(fileURLWithPath: localRoot).appendingPathComponent(path)
+    }
+
+    /// Space toggles Quick Look for `path`; ignored for remote projects.
+    private func toggleQuickLook(_ path: String?) -> KeyPress.Result {
+        if quickLookURL != nil { quickLookURL = nil; return .handled }
+        guard let url = localURL(path) else { return .ignored }
+        quickLookURL = url
+        return .handled
+    }
+
+    /// Selected changed file, for Quick Look in the change list.
+    private var expandedChangePath: String? {
+        scene.changes.first { $0.id == scene.expandedChange }?.path
     }
     private var scene: ProjectResourceScene { book.scene(projectID) }
     static var rowHeight: CGFloat { 26 }
@@ -75,11 +100,18 @@ public struct ProjectResourceInspector: View {
         }
         return children("", depth: 0)
     }
+    /// Single click only selects (2026-10-26 C); double click or Return opens
+    /// a tab through the list's primary action.
     private var fileSelection: Binding<String?> {
-        Binding(get: { scene.target?.kind == .file ? scene.target?.path : nil }, set: { path in
+        Binding(get: { scene.listSelection }, set: { path in
             guard let path, rows.contains(where: { $0.id == path && !$0.node.isDir }) else { return }
-            onOpen(.init(projectID: projectID, path: path, kind: .file))
+            book.edit(projectID) { $0.listSelection = path }
+            // Quick Look follows the selection while its panel is open.
+            if quickLookURL != nil { quickLookURL = localURL(path) }
         })
+    }
+    private var fileURLs: [URL] {
+        rows.filter { !$0.node.isDir }.compactMap { localURL($0.id) }
     }
     private var fileList: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -140,6 +172,13 @@ public struct ProjectResourceInspector: View {
                 }
                 .listRowSeparator(.hidden)
             }
+            .contextMenu(forSelectionType: String?.self, menu: { _ in EmptyView() }, primaryAction: { paths in
+                guard let path = paths.compactMap({ $0 }).first,
+                      rows.contains(where: { $0.id == path && !$0.node.isDir }) else { return }
+                onOpen(.init(projectID: projectID, path: path, kind: .file))
+            })
+            .onKeyPress(.space) { toggleQuickLook(scene.listSelection) }
+            .quickLookPreview($quickLookURL, in: fileURLs)
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, Self.rowHeight)
@@ -164,6 +203,10 @@ public struct ProjectResourceInspector: View {
             .padding(.horizontal, AeroricSpace.s)
             .padding(.vertical, AeroricSpace.s)
         }
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(.space) { toggleQuickLook(expandedChangePath) }
+        .quickLookPreview($quickLookURL, in: scene.changes.compactMap { localURL($0.path) })
         .accessibilityIdentifier("resources.git")
     }
 
@@ -315,24 +358,43 @@ public struct CentralResourcePreview: View {
     let projectAvailable: Bool
     let onRetry: () -> Void
     let onOpenFile: () -> Void
+    /// Saves a `.file` tab's text; nil keeps the tab read-only.
+    let onSave: ((String) -> Void)?
     public init(book: ProjectResourceBook, target: ResourcePreviewTarget, projectName: String,
-                projectAvailable: Bool, onRetry: @escaping () -> Void, onOpenFile: @escaping () -> Void) {
+                projectAvailable: Bool, onRetry: @escaping () -> Void, onOpenFile: @escaping () -> Void,
+                onSave: ((String) -> Void)? = nil) {
         self.book = book; self.target = target; self.projectName = projectName
         self.projectAvailable = projectAvailable; self.onRetry = onRetry; self.onOpenFile = onOpenFile
+        self.onSave = onSave
     }
     private var scene: ProjectResourceScene { book.scene(target.projectID) }
+    /// A loaded text file with a save path is edited in place (2026-10-26 C).
+    private var editable: Bool {
+        target.kind == .file && onSave != nil && scene.previewState == .loaded && scene.previewText != nil
+    }
+    private var draft: Binding<String> {
+        Binding(get: { scene.drafts[target] ?? scene.previewText ?? "" },
+                set: { book.setDraft($0, for: target) })
+    }
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
-                    Text("\(projectName) · \(target.kind.label)")
+                    Text("\(projectName) · \(editable ? "文件" : target.kind.label)")
                     Spacer()
+                    if editable, book.isDirty(target) {
+                        Button("保存") { onSave?(draft.wrappedValue) }
+                            .keyboardShortcut("s")
+                            .controlSize(.small)
+                            .accessibilityIdentifier("preview.save")
+                    }
                     NativeIconButton(systemImage: "arrow.clockwise", label: "重新读取此预览",
                                      identifier: "preview.retry", action: onRetry)
                         .disabled(!projectAvailable)
                 }
                 Text(target.path).font(AeroricType.mono(AeroricType.secondary)).textSelection(.enabled)
-                Text("只读 · 宿主快照 · 版本未知").foregroundStyle(AeroricColor.textTertiary)
+                Text(editable ? "可编辑 · ⌘S 保存" : "只读 · 宿主快照 · 版本未知")
+                    .foregroundStyle(AeroricColor.textTertiary)
                 if target.kind != .file {
                     Text("只读 · 宿主完整 diff（超过 1 MiB 会明确失败，不截断）")
                         .foregroundStyle(AeroricColor.textSecondary)
@@ -355,7 +417,15 @@ public struct CentralResourcePreview: View {
                         Text(target.kind == .file ? "空文件" : "此文件没有可显示的文本 diff")
                             .font(AeroricType.mono(AeroricType.caption)).padding(12)
                     }
-                    sourceLines
+                    if editable {
+                        TextEditor(text: draft)
+                            .font(AeroricType.mono(AeroricType.code))
+                            .scrollContentBackground(.hidden)
+                            .padding(8)
+                            .accessibilityIdentifier("preview.editor")
+                    } else {
+                        sourceLines
+                    }
                 } else {
                     Spacer(minLength: 0)
                 }
