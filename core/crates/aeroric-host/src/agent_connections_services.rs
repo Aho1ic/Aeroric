@@ -321,12 +321,19 @@ fn fetch_models_handler(context: &Arc<CoreContext>) -> Handler {
 }
 
 /// G: live cooldowns from the gateway (same process), for the pool page; R8:
-/// tasks whose last answer came from a fallback model, for the session page.
+/// tasks whose last answer came from a fallback model, for the session page;
+/// R7: connections that refused replayed thinking, for the connection page.
 fn status(request: Request, _context: Arc<CoreContext>) -> Frame {
-    use aeroric_core::local_router::config_routes::{cooldown_report, downgrade_report};
+    use aeroric_core::local_router::config_routes::{
+        cooldown_report, downgrade_report, reasoning_stripped_report,
+    };
     ok(
         &request,
-        json!({ "cooldowns": cooldown_report(), "downgrades": downgrade_report() }),
+        json!({
+            "cooldowns": cooldown_report(),
+            "downgrades": downgrade_report(),
+            "reasoningStripped": reasoning_stripped_report(),
+        }),
     )
 }
 

@@ -410,6 +410,7 @@ async fn status_and_official_logins_are_reported_without_secrets() {
         .expect("status");
     assert!(status["cooldowns"].is_array());
     assert!(status["downgrades"].is_array());
+    assert!(status["reasoningStripped"].is_array());
     let official = rig
         .call("agentConnections.officialStatus", json!({}))
         .await

@@ -535,6 +535,8 @@ pub fn record_failure(
 /// auth, credit and missing-model cooldowns on it and its models — but keep
 /// rate-limit rests, which an edit does not cure.
 pub fn connection_changed(connection_id: &str) {
+    // R7: an edit may have fixed what refused replayed thinking; try it again.
+    super::reasoning_memory::forget(&format!("{TARGET_PREFIX}{connection_id}"));
     let model_prefix = routing::model_key(connection_id, "");
     with_state(|state| {
         let cleared: Vec<String> = state
@@ -654,6 +656,14 @@ pub fn cooldown_report() -> Vec<CooldownEntry> {
     });
     entries.sort_by_key(|e| e.until_epoch_s);
     entries
+}
+
+/// R7: connections that refused replayed thinking and now get it stripped.
+pub fn reasoning_stripped_report() -> Vec<String> {
+    super::reasoning_memory::report()
+        .into_iter()
+        .filter_map(|id| connection_of(&id).map(str::to_string))
+        .collect()
 }
 
 /// Snapshot of current cooldowns for the UI (connection id → epoch s).

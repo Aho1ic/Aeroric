@@ -7,6 +7,7 @@ mod inline_tool_calls;
 mod messages_bridge;
 mod moonshot_schema;
 mod pivot_bridge;
+pub mod reasoning_memory;
 mod server;
 mod session;
 pub mod task_tokens;

@@ -340,9 +340,71 @@ pub fn shape_responses_for_upstream(json: Option<&Value>, openai: bool) -> Optio
     changed.then(|| serde_json::to_vec(&body).ok()).flatten()
 }
 
+/// R7: drop thinking another model produced that the agent replays as
+/// history — Responses `reasoning` input items, and Chat assistant
+/// `reasoning_content` / `reasoning`. Only for an upstream that refused them
+/// once: some (DeepSeek thinking mode with tools) require them back. Returns
+/// the new body only when something was removed.
+pub fn strip_replayed_reasoning(body: &[u8]) -> Option<Vec<u8>> {
+    let mut value: Value = serde_json::from_slice(body).ok()?;
+    let object = value.as_object_mut()?;
+    let mut changed = false;
+    if let Some(input) = object.get_mut("input").and_then(Value::as_array_mut) {
+        let before = input.len();
+        input.retain(|item| item.get("type").and_then(Value::as_str) != Some("reasoning"));
+        changed |= input.len() != before;
+    }
+    if let Some(messages) = object.get_mut("messages").and_then(Value::as_array_mut) {
+        for message in messages.iter_mut() {
+            if message.get("role").and_then(Value::as_str) != Some("assistant") {
+                continue;
+            }
+            if let Some(message) = message.as_object_mut() {
+                for key in ["reasoning_content", "reasoning"] {
+                    changed |= message.remove(key).is_some();
+                }
+            }
+        }
+    }
+    changed.then(|| serde_json::to_vec(&value).ok()).flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replayed_reasoning_is_stripped_in_both_shapes() {
+        let responses = json!({
+            "input": [
+                {"type": "message", "role": "user", "content": "hi"},
+                {"type": "reasoning", "summary": [], "content": [{"type": "reasoning_text", "text": "t"}]},
+            ]
+        });
+        let out: Value = serde_json::from_slice(
+            &strip_replayed_reasoning(&serde_json::to_vec(&responses).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["input"].as_array().unwrap().len(), 1);
+
+        let chat = json!({
+            "messages": [
+                {"role": "user", "content": "hi", "reasoning": "keep: not replayed by an assistant"},
+                {"role": "assistant", "content": "ok", "reasoning_content": "plan"},
+            ]
+        });
+        let out: Value = serde_json::from_slice(
+            &strip_replayed_reasoning(&serde_json::to_vec(&chat).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert!(out["messages"][1].get("reasoning_content").is_none());
+        assert_eq!(out["messages"][1]["content"], "ok");
+        assert!(out["messages"][0].get("reasoning").is_some());
+
+        let plain = json!({"messages": [{"role": "assistant", "content": "ok"}]});
+        assert!(strip_replayed_reasoning(&serde_json::to_vec(&plain).unwrap()).is_none());
+        assert!(strip_replayed_reasoning(b"not json").is_none());
+    }
 
     #[test]
     fn responses_bodies_are_shaped_per_upstream() {

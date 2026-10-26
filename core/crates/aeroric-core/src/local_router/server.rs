@@ -660,8 +660,15 @@ async fn attempt_target(
             current_body = shaped;
         }
     }
+    // R7: this target refused replayed thinking before; drop it up front.
+    if super::reasoning_memory::is_stripped(target.id()) {
+        if let Some(stripped) = transforms::strip_replayed_reasoning(&current_body) {
+            current_body = stripped;
+        }
+    }
 
     let mut rectifier_retried = false;
+    let mut reasoning_retried = false;
 
     loop {
         let headers = match outbound_headers(
@@ -732,6 +739,16 @@ async fn attempt_target(
             let status = raw.status;
             let (mut headers, body) = raw.into_buffered();
             let summary = upstream_error_summary(status, &headers, &body);
+            // R7: a refusal of replayed thinking is a request error, which never
+            // fails over, so the session would be stuck. Retry once without it
+            // (R7-Q1: whatever the wording) and remember the target on success.
+            if !reasoning_retried && matches!(status.as_u16(), 400 | 422) {
+                if let Some(stripped) = transforms::strip_replayed_reasoning(&current_body) {
+                    current_body = stripped;
+                    reasoning_retried = true;
+                    continue;
+                }
+            }
             // Rectifiers edit Anthropic request fields; a bridged body is Chat.
             if !rectifier_retried
                 && policy.rectifier_enabled
@@ -803,6 +820,9 @@ async fn attempt_target(
                 attempt_count: 0,
                 class: None,
             });
+        }
+        if reasoning_retried {
+            super::reasoning_memory::remember(target.id());
         }
 
         let semantic_protocol = policy
@@ -2511,6 +2531,108 @@ mod tests {
         assert_eq!(recent[0].error_summary, None);
         // 非流式请求没有首字概念,该列必须留空。
         assert_eq!(recent[0].ttft_ms, None);
+        router.stop().await.unwrap();
+        upstream_task.abort();
+        let _ = upstream_task.await;
+        remove_database(&database_path);
+    }
+
+    /// R7: a 400 on replayed thinking is retried once without it, and the
+    /// target then gets it stripped up front; other 400s are not retried.
+    #[tokio::test]
+    async fn refused_replayed_reasoning_is_retried_once_then_remembered() {
+        let seen: Arc<Mutex<Vec<bool>>> = Arc::default();
+        let log = seen.clone();
+        let upstream = Router::new().fallback(any(move |body: axum::body::Bytes| {
+            let log = log.clone();
+            async move {
+                let text = String::from_utf8_lossy(&body).to_string();
+                let replayed = text.contains("\"reasoning\"");
+                log.lock().await.push(replayed);
+                if replayed || text.contains("bad-request") {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error":{"message":"input[1]: unsupported item"}})),
+                    )
+                } else {
+                    (
+                        StatusCode::OK,
+                        Json(json!({"id":"resp_ok","model":"m","output":[],"usage":{}})),
+                    )
+                }
+            }
+        }));
+        let (address, upstream_task) = start_mock_upstream(upstream).await;
+        let id = format!("r7-{}", Uuid::new_v4().simple());
+        let target = UpstreamTarget::with_details(
+            id.clone(),
+            "Relay",
+            format!("http://{address}/v1"),
+            "",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone());
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                runtime_with_target(
+                    RouterAgent::Codex,
+                    target,
+                    RouterAgentPolicy {
+                        active_target: id.clone(),
+                        ..RouterAgentPolicy::default()
+                    },
+                ),
+            ))
+            .await
+            .unwrap();
+        let send = |input: Value| {
+            let url = format!("{}/codex/v1/responses", info.base_url);
+            async move {
+                test_client()
+                    .post(url)
+                    .header(ROUTE_AGENT_HEADER, "codex")
+                    .json(&json!({"model": "m", "input": input}))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status()
+            }
+        };
+        let replay = json!([
+            {"type": "message", "role": "user", "content": "hi"},
+            {"type": "reasoning", "summary": [], "content": [{"type": "reasoning_text", "text": "t"}]},
+        ]);
+
+        assert_eq!(send(replay.clone()).await, StatusCode::OK);
+        assert_eq!(
+            *seen.lock().await,
+            vec![true, false],
+            "refused once, then sent without it"
+        );
+        assert!(super::super::reasoning_memory::is_stripped(&id));
+
+        assert_eq!(send(replay).await, StatusCode::OK);
+        assert_eq!(
+            seen.lock().await[2..],
+            [false],
+            "remembered: stripped before sending"
+        );
+
+        assert_eq!(send(json!("bad-request")).await, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            seen.lock().await.len(),
+            4,
+            "an unrelated 400 is not retried"
+        );
+
+        super::super::reasoning_memory::forget(&id);
         router.stop().await.unwrap();
         upstream_task.abort();
         let _ = upstream_task.await;
