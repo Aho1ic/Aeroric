@@ -225,6 +225,7 @@ async fn run_startup_with_secrets_inner(
     if migrate_legacy_agent_settings {
         aeroric_core::agent_connections::migration::migrate_legacy_agent_settings(&context)
             .map_err(StartupError::DataCompat)?;
+        migrate_omp_plaintext_keys(options.paths.data_dir());
     }
 
     // 3.5 token —— 握手判据的载体在 listener 之前落位：绑上端口却没有 token，
@@ -264,6 +265,31 @@ async fn run_startup_with_secrets_inner(
         socket_path: options.socket_path.clone(),
         token: std::sync::Arc::new(token),
     })
+}
+
+/// cc-switch 复查 D2：Aeroric 早先在 omp 档案的 models.yml 里写了明文 apiKey，
+/// 启动时把它们换成变量名。尽力而为：失败只记日志，不挡启动（omp 照旧能读明文）。
+fn migrate_omp_plaintext_keys(data_dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(data_dir.join("agent-homes")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let home = entry.path();
+        if !home.is_dir() {
+            continue;
+        }
+        match aeroric_core::settings::omp_home::migrate_plaintext_models_yml(&home) {
+            Ok(true) => eprintln!(
+                "aeroric-host: replaced the plaintext omp apiKey in {}",
+                home.join("models.yml").display()
+            ),
+            Ok(false) => {}
+            Err(error) => eprintln!(
+                "aeroric-host: cannot migrate {}: {error}",
+                home.join("models.yml").display()
+            ),
+        }
+    }
 }
 
 /// data-dir 的标识哈希（canonical 路径的 sha256 前 16 位十六进制；

@@ -235,7 +235,9 @@ async fn four_families_and_managed_homes_execute_in_cli_pty_executor() {
                 observed.contains("PI_PROF=unset") && observed.contains("OMP_PROF=unset"),
                 "OMP must unset PI_PROFILE and OMP_PROFILE (INV-06):\n{observed}"
             );
-            let expected_omp_dir = paths.data_dir().join("agent-homes/omp");
+            // A custom omp profile runs in its own home, where its models.yml
+            // lives (cc-switch recheck D2); only the built-in omp uses `omp`.
+            let expected_omp_dir = paths.data_dir().join("agent-homes/c-omp");
             assert!(
                 observed.contains(&format!("PI_DIR={}", expected_omp_dir.display())),
                 "OMP must inject managed PI_CODING_AGENT_DIR:\n{observed}"

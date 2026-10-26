@@ -31,6 +31,7 @@ use aeroric_core::events::EventLog;
 use aeroric_core::runtime::manager::WatcherSupervisor;
 use aeroric_core::runtime::registry::{RunKey, TaskRegistry};
 use aeroric_core::settings::get_login_shell_env;
+use aeroric_core::settings::omp_home::OMP_API_KEY_ENV;
 use aeroric_core::tasks::executor::{
     CancelTarget, Execution, ExecutorFailure, LaunchRequest, LiveRuns, ResetOutcome, ResumeRequest,
     TaskEvent, TaskExecutor,
@@ -286,6 +287,45 @@ pub(crate) fn resolve_launch_input(context: &CoreContext, agent: &str) -> Launch
         }
     }
     LaunchInput::new(agent)
+}
+
+/// The built-in omp runs in `agent-homes/omp`; a custom omp profile in its own
+/// `agent-homes/<id>`, where its models.yml was written — launching it in the
+/// built-in home silently dropped the profile's gateway. When that models.yml
+/// refers to [`OMP_API_KEY_ENV`], the key comes from the (keychain-hydrated)
+/// settings; a missing key refuses the launch rather than letting omp send the
+/// variable name as a key.
+pub(crate) fn omp_agent_env_for(
+    data_dir: &std::path::Path,
+    agent: &str,
+    settings: Option<&serde_json::Map<String, Value>>,
+) -> Result<Vec<(String, String)>, String> {
+    let homes = data_dir.join("agent-homes");
+    let home = if agent == "omp" {
+        homes.join("omp")
+    } else {
+        aeroric_core::settings::agent_config_roots::custom_home(agent, || Ok(homes.clone()))?
+    };
+    std::fs::create_dir_all(&home)
+        .map_err(|e| format!("cannot prepare managed agent home {}: {e}", home.display()))?;
+    let mut env = vec![(
+        "PI_CODING_AGENT_DIR".to_string(),
+        home.to_string_lossy().into_owned(),
+    )];
+    let names_key = std::fs::read_to_string(home.join("models.yml"))
+        .is_ok_and(|content| content.contains(OMP_API_KEY_ENV));
+    if agent != "omp" && names_key {
+        let key = settings
+            .and_then(|fields| fields.get("custom_agents"))
+            .and_then(Value::as_array)
+            .and_then(|list| list.iter().find(|p| p["id"].as_str() == Some(agent)))
+            .and_then(|profile| profile["api_key"].as_str())
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .ok_or_else(|| format!("读不到 omp 档案 {agent} 的 API Key（钥匙串被锁或条目丢失）"))?;
+        env.push((OMP_API_KEY_ENV.to_string(), key.to_string()));
+    }
+    Ok(env)
 }
 
 /// The harness's own CLI: the configured `claude_path`/`codex_path`, else the
@@ -771,6 +811,17 @@ impl CliPtyExecutor {
         Ok(dir)
     }
 
+    /// omp's launch environment: its managed home, and for a custom profile the
+    /// profile's API key under [`OMP_API_KEY_ENV`] (models.yml names only the
+    /// variable).
+    fn omp_agent_env(&self, agent: &str) -> Result<Vec<(String, String)>, ExecutorFailure> {
+        let settings = aeroric_core::storage::load_settings(&self.context)
+            .ok()
+            .and_then(|outcome| outcome.found());
+        omp_agent_env_for(self.context.paths.data_dir(), agent, settings.as_ref())
+            .map_err(|reason| ExecutorFailure::Spawn { reason })
+    }
+
     fn ssh_program(&self) -> String {
         aeroric_core::storage::load_settings(&self.context)
             .ok()
@@ -925,11 +976,7 @@ impl TaskExecutor for CliPtyExecutor {
                 p
             }
             ProtocolFamily::Omp => {
-                let omp_home = self.managed_agent_home("omp")?;
-                let agent_env = vec![(
-                    "PI_CODING_AGENT_DIR".to_string(),
-                    omp_home.to_string_lossy().into_owned(),
-                )];
+                let agent_env = self.omp_agent_env(agent)?;
                 let mut p = omp_plan(
                     &input,
                     &request.permission_mode_wire,
@@ -1044,11 +1091,7 @@ impl TaskExecutor for CliPtyExecutor {
                 p
             }
             ProtocolFamily::Omp => {
-                let omp_home = self.managed_agent_home("omp")?;
-                let agent_env = vec![(
-                    "PI_CODING_AGENT_DIR".to_string(),
-                    omp_home.to_string_lossy().into_owned(),
-                )];
+                let agent_env = self.omp_agent_env(agent)?;
                 let mut p = omp_plan(
                     &input,
                     &request.permission_mode_wire,
@@ -1175,6 +1218,42 @@ mod gateway_home_invariants {
 
 #[cfg(test)]
 mod tests {
+
+    /// D2: a custom omp profile runs in its own home and gets its key from
+    /// the environment; the built-in omp gets neither.
+    #[test]
+    fn custom_omp_profiles_get_their_home_and_key() {
+        let root = std::env::temp_dir().join(format!("aeroric-omp-env-{}", uuid::Uuid::new_v4()));
+        let settings = json!({"custom_agents": [{"id": "my-omp", "api_key": "sk-live"}]});
+        let fields = settings.as_object().unwrap();
+
+        let builtin = omp_agent_env_for(&root, "omp", Some(fields)).unwrap();
+        assert_eq!(builtin.len(), 1);
+        assert!(builtin[0].1.ends_with("agent-homes/omp"));
+
+        let home = root.join("agent-homes").join("my-omp");
+        std::fs::create_dir_all(&home).unwrap();
+        // No models.yml naming the variable: nothing to inject.
+        assert_eq!(
+            omp_agent_env_for(&root, "my-omp", Some(fields))
+                .unwrap()
+                .len(),
+            1
+        );
+        std::fs::write(
+            home.join("models.yml"),
+            format!("    apiKey: \"{OMP_API_KEY_ENV}\"\n"),
+        )
+        .unwrap();
+        let env = omp_agent_env_for(&root, "my-omp", Some(fields)).unwrap();
+        assert!(env[0].1.ends_with("agent-homes/my-omp"));
+        assert_eq!(env[1], (OMP_API_KEY_ENV.to_string(), "sk-live".to_string()));
+
+        let locked = json!({"custom_agents": [{"id": "my-omp", "api_key": ""}]});
+        let refused = omp_agent_env_for(&root, "my-omp", locked.as_object()).unwrap_err();
+        assert!(refused.contains("API Key"));
+        let _ = std::fs::remove_dir_all(root);
+    }
     use super::*;
     use aeroric_core::agents::launch::LaunchPlan;
 
