@@ -32,6 +32,8 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     /// A19: tasks waiting on the user, and recent failures.
     case attention
     case canvas
+    /// G: connections, pools, routes and agent configurations.
+    case agentConfigs
     case files
     case git
     case ide
@@ -51,6 +53,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .tasks: "任务"
         case .attention: "需要我处理"
         case .canvas: "画布"
+        case .agentConfigs: "Agent 配置"
         case .files: "文件"
         case .git: "Git"
         case .ide: "IDE"
@@ -76,6 +79,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .tasks: "checklist"
         case .attention: "bell.badge"
         case .canvas: "square.on.square.dashed"
+        case .agentConfigs: "slider.horizontal.3"
         case .files: "folder"
         case .git: "arrow.triangle.branch"
         case .ide: "ladybug"
@@ -98,7 +102,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     /// Agent tools gets real data today; the rest explain what they will do.
     var status: ToolSectionStatus {
         switch self {
-        case .tasks, .attention, .canvas: .wired
+        case .tasks, .attention, .canvas, .agentConfigs: .wired
         case .files: .partial("只读：浏览当前项目的目录，点文件预览。新建、重命名、删除与编辑下一批接入。")
         case .git: .partial("只读：查看当前项目的更改、逐文件 diff、分支与历史。暂存、提交、推送等写操作下一批接入。")
         case .ide: .comingSoon("问题列表、符号大纲与调试会话。")
@@ -115,7 +119,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
 
     var group: SidebarGroup {
         switch self {
-        case .tasks, .attention, .canvas: .work
+        case .tasks, .attention, .canvas, .agentConfigs: .work
         case .files, .git, .ide, .database, .notebook, .agentTools: .tools
         case .connections, .infrastructure, .extensions, .remote, .operations: .system
         }
@@ -532,6 +536,11 @@ struct TaskWorkspaceView: View {
                 .opacity(previewActive ? 0 : 1)
                 .allowsHitTesting(!previewActive)
                 .accessibilityHidden(previewActive)
+            } else if activeSection == .agentConfigs {
+                AgentConfigPage(store: services.agentConfigStore)
+                    .opacity(previewActive ? 0 : 1)
+                    .allowsHitTesting(!previewActive)
+                    .accessibilityHidden(previewActive)
             } else if activeSection == .canvas {
                 CanvasPage(
                     book: services.canvasBook, resolver: canvasResolver,
@@ -952,7 +961,7 @@ struct TaskWorkspaceView: View {
     @ViewBuilder
     private var sectionContent: some View {
         switch activeSection {
-        case .tasks, .attention, .canvas:
+        case .tasks, .attention, .canvas, .agentConfigs:
             EmptyView() // Mounted directly by centralContent.
         case .files:
             if let projectID = projectContextID, gitProjectPath != nil {

@@ -505,6 +505,22 @@ final class AppServices {
     // MARK: - P5-04 会话/审批（SessionsClient 接线）
 
     /// P5-04：会话/审批类型化客户端（连接附着后创建）。
+    /// G: `agentConnections.*`, while attached.
+    var agentConnectionsClient: AgentConnectionsClient? {
+        guard let connection = attachedConnection else { return nil }
+        return AgentConnectionsClient(connection: connection)
+    }
+
+    /// The Agent configuration page's state, made on first use and kept so a
+    /// half-edited draft survives switching sections.
+    var agentConfigStore: AgentConfigStore {
+        if let store = agentConfigStoreStorage { return store }
+        let store = AgentConfigStore(backend: HostAgentConfigBackend(services: self))
+        agentConfigStoreStorage = store
+        return store
+    }
+    @ObservationIgnored private var agentConfigStoreStorage: AgentConfigStore?
+
     var sessionsClient: SessionsClient? {
         guard let connection = attachedConnection else { return nil }
         return SessionsClient(connection: connection)
@@ -912,6 +928,12 @@ extension AppServices: SettingsStateProviding {
     var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? {
         guard let connection = attachedConnection else { return nil }
         return { try await DiagnosticsClient(connection: connection).exportReport() }
+    }
+    var settingsOpenAgentConfig: (@MainActor () -> Void)? {
+        { [weak self] in
+            WorkspaceActions.showMainWindow()
+            self?.requestedSelection = WorkspaceSection.agentConfigs.sidebarID
+        }
     }
     var keepingAwake: Bool { keepAwakeStore.active }
 }

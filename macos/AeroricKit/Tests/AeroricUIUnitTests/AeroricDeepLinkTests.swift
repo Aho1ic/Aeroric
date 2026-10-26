@@ -8,6 +8,8 @@ final class AeroricDeepLinkTests: XCTestCase {
         XCTAssertEqual(AeroricDeepLink.target(URL(string: "aeroric://task/\(id)")!), .task(id))
         XCTAssertEqual(AeroricDeepLink.target(AeroricDeepLink.url(for: .task(id))), .task(id))
         XCTAssertEqual(AeroricDeepLink.target(URL(string: "aeroric://attention")!), .attention)
+        XCTAssertEqual(AeroricDeepLink.target(URL(string: "aeroric://section/agentConfigs")!), .section("agentConfigs"))
+        XCTAssertNil(AeroricDeepLink.target(URL(string: "aeroric://section/a-b")!))
     }
 
     func testUnknownOrUnsafeLinksAreIgnored() {

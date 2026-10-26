@@ -76,7 +76,7 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
         case .appearance:
             AppearanceSettingsPane()
         case .agents:
-            AgentsSettingsPane()
+            AgentsSettingsPane(openAgentConfig: state.settingsOpenAgentConfig)
         case .imports:
             if let book = state.settingsImportBook { ImportsSettingsPane(book: book) }
         case .connection:

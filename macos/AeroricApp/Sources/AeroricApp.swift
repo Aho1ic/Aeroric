@@ -354,11 +354,16 @@ struct AeroricNativeApp: App {
                 await services.startSupervisor()
                 await services.openInjectedTestProjectsIfRequested()
             }
-            // A16: `aeroric://task/<id>`, `aeroric://attention`.
+            // A16: `aeroric://task/<id>`, `aeroric://attention`, `aeroric://section/<name>`.
+            // Without this an open window does not claim the link, so SwiftUI
+            // opens a second window to handle it and the visible one never moves.
+            .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
             .onOpenURL { url in
                 switch AeroricDeepLink.target(url) {
                 case let .task(id)?: services.requestedSelection = SessionNavigation.task(id)
                 case .attention?: services.requestedSelection = WorkspaceSection.attention.sidebarID
+                case let .section(name)?:
+                    if let section = WorkspaceSection(rawValue: name) { services.requestedSelection = section.sidebarID }
                 case nil: break
                 }
             }

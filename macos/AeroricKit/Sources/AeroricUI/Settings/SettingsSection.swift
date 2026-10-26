@@ -49,6 +49,8 @@ public protocol SettingsStateProviding: AnyObject {
     var settingsKeepAwake: KeepAwakeStore? { get }
     /// A13: fetch the host's redacted diagnostics report; nil hides the entry.
     var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? { get }
+    /// G: bring the main window to the Agent configuration page; nil hides the button.
+    var settingsOpenAgentConfig: (@MainActor () -> Void)? { get }
 }
 
 public extension SettingsStateProviding {
@@ -58,4 +60,5 @@ public extension SettingsStateProviding {
     var settingsImportBook: ImportBook? { nil }
     var settingsKeepAwake: KeepAwakeStore? { nil }
     var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? { nil }
+    var settingsOpenAgentConfig: (@MainActor () -> Void)? { nil }
 }

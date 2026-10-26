@@ -278,6 +278,8 @@ struct AppearanceSettingsPane: View {
 }
 
 struct AgentsSettingsPane: View {
+    var openAgentConfig: (@MainActor () -> Void)?
+
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.xl) {
             SettingsCard("内置 Agent") {
@@ -288,8 +290,13 @@ struct AgentsSettingsPane: View {
                 }
             }
             SettingsCard {
-                SettingsRow("管理 Agent 配置", detail: "模型、权限与密钥的配置目录由宿主提供；在这里编辑尚未接通。") {
-                    ComingSoonBadge()
+                SettingsRow("管理 Agent 配置", detail: "第三方 API 连接、号池、模型路由与 Agent 配置，在主窗口侧栏的“Agent 配置”页。") {
+                    if let openAgentConfig {
+                        Button("打开 Agent 配置") { openAgentConfig() }
+                            .accessibilityIdentifier("settings.agents.open-config")
+                    } else {
+                        ComingSoonBadge()
+                    }
                 }
             }
         }

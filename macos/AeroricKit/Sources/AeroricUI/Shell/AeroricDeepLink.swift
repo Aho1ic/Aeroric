@@ -6,16 +6,25 @@ public enum AeroricDeepLink {
     public enum Target: Equatable, Sendable {
         case task(String)
         case attention
+        /// A sidebar surface by its raw name, e.g. `agentConfigs` (the App
+        /// decides whether it exists).
+        case section(String)
     }
 
     public static let scheme = "aeroric"
 
-    /// `aeroric://task/<id>` or `aeroric://attention`.
+    /// `aeroric://task/<id>`, `aeroric://attention` or `aeroric://section/<name>`.
     public static func target(_ url: URL) -> Target? {
         guard url.scheme?.lowercased() == scheme, let host = url.host?.lowercased() else { return nil }
         switch host {
         case "attention":
             return .attention
+        case "section":
+            let name = url.pathComponents.filter { $0 != "/" }.first ?? ""
+            guard !name.isEmpty, name.count <= 64, name.unicodeScalars.allSatisfy(CharacterSet.alphanumerics.contains) else {
+                return nil
+            }
+            return .section(name)
         case "task":
             let id = url.pathComponents.filter { $0 != "/" }.first ?? ""
             let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
@@ -30,6 +39,7 @@ public enum AeroricDeepLink {
         switch target {
         case let .task(id): URL(string: "\(scheme)://task/\(id)")!
         case .attention: URL(string: "\(scheme)://attention")!
+        case let .section(name): URL(string: "\(scheme)://section/\(name)")!
         }
     }
 }
