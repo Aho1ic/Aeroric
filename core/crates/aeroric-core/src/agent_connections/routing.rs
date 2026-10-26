@@ -52,8 +52,25 @@ pub enum Unavailable {
 
 /// Which protocol to talk to an upstream in, and whether translation is needed.
 pub fn reach(harness: Harness, connection: &Connection) -> Result<Reach, Unavailable> {
+    reach_protocols(harness, &connection.protocols)
+}
+
+/// The protocols one model is served over: its own override (R10, for
+/// aggregators that route models by protocol), else the connection's.
+pub fn model_protocols<'a>(
+    connection: &'a Connection,
+    entry: &'a ModelEntry,
+) -> &'a [WireProtocol] {
+    if entry.protocols.is_empty() {
+        &connection.protocols
+    } else {
+        &entry.protocols
+    }
+}
+
+pub fn reach_protocols(harness: Harness, protocols: &[WireProtocol]) -> Result<Reach, Unavailable> {
     let native = harness.native_protocol();
-    if connection.protocols.contains(&native) {
+    if protocols.contains(&native) {
         return Ok(Reach::Direct);
     }
     // Translation preference: keep tool-call semantics closest to the source.
@@ -62,7 +79,7 @@ pub fn reach(harness: Harness, connection: &Connection) -> Result<Reach, Unavail
         WireProtocol::Responses => [WireProtocol::ChatCompletions, WireProtocol::Messages],
         WireProtocol::ChatCompletions => [WireProtocol::Responses, WireProtocol::Messages],
     };
-    let Some(to) = order.into_iter().find(|p| connection.protocols.contains(p)) else {
+    let Some(to) = order.into_iter().find(|p| protocols.contains(p)) else {
         return Err(Unavailable::NoProtocol);
     };
     if !harness.gateway_supported() {
@@ -82,9 +99,34 @@ pub struct Candidate {
     pub free: bool,
 }
 
-/// Cooldown keyed by `connection_id`; value is the epoch second it ends.
-/// Global across pools and configs (Q31).
+/// Cooldown keyed by `connection_id`, or by [`model_key`] for failures that are
+/// about one model (R3); value is the epoch second it ends. Global across pools
+/// and configs (Q31).
 pub type Cooldowns = HashMap<String, u64>;
+
+/// Cooldown key for one model on one connection.
+pub fn model_key(connection_id: &str, upstream_model: &str) -> String {
+    format!("{connection_id}\u{1f}{upstream_model}")
+}
+
+/// When a candidate's cooldown ends: its connection's or its model's, whichever is later.
+pub fn cooling_until(cooldowns: &Cooldowns, candidate: &Candidate) -> u64 {
+    let connection = cooldowns
+        .get(&candidate.connection_id)
+        .copied()
+        .unwrap_or(0);
+    let model = cooldowns
+        .get(&model_key(
+            &candidate.connection_id,
+            &candidate.upstream_model,
+        ))
+        .copied()
+        .unwrap_or(0);
+    connection.max(model)
+}
+
+/// Largest weight a member can carry (R6); the UI caps input at the same value.
+pub const MAX_WEIGHT: u32 = 100;
 
 /// Running counters a strategy may read, keyed by `connection_id`.
 #[derive(Clone, Debug, Default)]
@@ -92,6 +134,8 @@ pub struct UsageCounters {
     pub requests: HashMap<String, u64>,
     /// Round-robin cursor per pool/route key.
     pub cursor: HashMap<String, usize>,
+    /// Smooth weighted round-robin running weights per route key (R6).
+    pub smooth: HashMap<String, HashMap<String, i64>>,
 }
 
 fn member_meta<'a>(pool: Option<&'a Pool>, connection_id: &str) -> Option<&'a PoolMember> {
@@ -134,13 +178,13 @@ pub fn candidates(
             ));
             return;
         };
-        match reach(config.harness, connection) {
+        match reach_protocols(config.harness, model_protocols(connection, entry)) {
             Ok(reach) => out.push(Candidate {
                 connection_id: connection.id.clone(),
                 upstream_model: entry.upstream_id.clone(),
                 reach,
                 priority: member.map(|m| m.priority).unwrap_or(0),
-                weight: member.map(|m| m.weight.max(1)).unwrap_or(1),
+                weight: member.map(|m| m.weight.clamp(1, MAX_WEIGHT)).unwrap_or(1),
                 free: member.map(|m| m.free).unwrap_or(false),
             }),
             Err(reason) => excluded.push((connection.id.clone(), reason)),
@@ -211,8 +255,7 @@ pub fn order(
     usage: &mut UsageCounters,
     now_epoch_s: u64,
 ) -> Vec<Candidate> {
-    let cooling =
-        |c: &Candidate| cooldowns.get(&c.connection_id).copied().unwrap_or(0) > now_epoch_s;
+    let cooling = |c: &Candidate| cooling_until(cooldowns, c) > now_epoch_s;
     // Stable base order: priority, then id, so every strategy is deterministic.
     list.sort_by(|a, b| {
         a.priority
@@ -227,27 +270,43 @@ pub fn order(
         }
         PoolStrategy::FreeFirst => list.sort_by_key(|c| (!c.free, c.priority)),
         PoolStrategy::RoundRobin | PoolStrategy::WeightedRoundRobin => {
-            // Expand by weight for weighted RR, then rotate within the top priority bucket.
-            let expanded: Vec<Candidate> = if strategy == PoolStrategy::WeightedRoundRobin {
-                list.iter()
-                    .flat_map(|c| std::iter::repeat_n(c.clone(), c.weight as usize))
-                    .collect()
-            } else {
-                list.clone()
-            };
-            if !expanded.is_empty() {
-                let cursor = usage.cursor.entry(route_key.to_string()).or_insert(0);
-                let start = *cursor % expanded.len();
-                *cursor = cursor.wrapping_add(1);
-                let mut rotated: Vec<Candidate> = expanded[start..]
-                    .iter()
-                    .chain(expanded[..start].iter())
-                    .cloned()
-                    .collect();
-                rotated.dedup_by(|a, b| a.connection_id == b.connection_id);
-                let mut seen = std::collections::HashSet::new();
-                rotated.retain(|c| seen.insert(c.connection_id.clone()));
-                list = rotated;
+            // R6: rotate only inside the best priority that has a ready member;
+            // lower buckets stay behind it in base order.
+            if let Some(top) = list
+                .iter()
+                .filter(|c| !cooling(c))
+                .map(|c| c.priority)
+                .min()
+            {
+                let (mut bucket, rest): (Vec<_>, Vec<_>) = list
+                    .into_iter()
+                    .partition(|c| c.priority == top && !cooling(c));
+                if strategy == PoolStrategy::RoundRobin {
+                    let cursor = usage.cursor.entry(route_key.to_string()).or_insert(0);
+                    let start = *cursor % bucket.len();
+                    *cursor = cursor.wrapping_add(1);
+                    bucket.rotate_left(start);
+                } else {
+                    // Smooth weighted round-robin (nginx): add each weight, take
+                    // the largest running value, subtract the total from it.
+                    let running = usage.smooth.entry(route_key.to_string()).or_default();
+                    let total: i64 = bucket.iter().map(|c| i64::from(c.weight)).sum();
+                    for c in &bucket {
+                        *running.entry(c.connection_id.clone()).or_insert(0) += i64::from(c.weight);
+                    }
+                    let mut best = 0;
+                    for (index, c) in bucket.iter().enumerate() {
+                        if running[&c.connection_id] > running[&bucket[best].connection_id] {
+                            best = index;
+                        }
+                    }
+                    if let Some(value) = running.get_mut(&bucket[best].connection_id) {
+                        *value -= total;
+                    }
+                    let pick = bucket.remove(best);
+                    bucket.insert(0, pick);
+                }
+                list = bucket.into_iter().chain(rest).collect();
             }
         }
     }
@@ -258,20 +317,25 @@ pub fn order(
         }
     }
     let (ready, mut waiting): (Vec<_>, Vec<_>) = list.into_iter().partition(|c| !cooling(c));
-    waiting.sort_by_key(|c| cooldowns.get(&c.connection_id).copied().unwrap_or(0));
+    waiting.sort_by_key(|c| cooling_until(cooldowns, c));
     ready.into_iter().chain(waiting).collect()
 }
 
 /// Upstream outcome classes that decide retry vs. stop (Q25).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailureClass {
-    /// The request itself is wrong; another channel would fail the same way.
+    /// The request itself is wrong (or refused for its content); another
+    /// channel would fail the same way, so neither switch nor cool down (R2).
     RequestError,
     RateLimited,
     AuthFailed,
+    /// 402: out of credit (R6).
+    PaymentRequired,
     NotFound,
     ServerError,
     Network,
+    /// No first output in time (R3): first time only switches.
+    FirstByteTimeout,
 }
 
 impl FailureClass {
@@ -279,14 +343,97 @@ impl FailureClass {
         match status {
             400 | 405..=406 | 413..=415 | 422 | 501 => Self::RequestError,
             429 => Self::RateLimited,
-            401..=403 => Self::AuthFailed,
+            402 => Self::PaymentRequired,
+            401 | 403 => Self::AuthFailed,
             404 => Self::NotFound,
             _ => Self::ServerError,
         }
     }
 
+    /// An error that arrived inside a 200 stream, by its `type`/`code` and
+    /// message (R2): safety refusals and oversized prompts are request errors.
+    pub fn from_semantic(kind: &str, message: &str) -> Self {
+        let kind = kind.to_ascii_lowercase();
+        let message = message.to_ascii_lowercase();
+        let any = |words: &[&str]| {
+            words
+                .iter()
+                .any(|w| kind.contains(w) || message.contains(w))
+        };
+        if any(&[
+            "context_length",
+            "context_window",
+            "prompt is too long",
+            "maximum context",
+        ]) {
+            return Self::RequestError;
+        }
+        if any(&[
+            "insufficient_quota",
+            "quota",
+            "billing",
+            "credit",
+            "payment",
+        ]) {
+            return Self::PaymentRequired;
+        }
+        if any(&[
+            "rate_limit",
+            "rate limit",
+            "too many requests",
+            "usage_limit",
+        ]) {
+            return Self::RateLimited;
+        }
+        if any(&[
+            "authentication",
+            "permission",
+            "invalid_api_key",
+            "unauthorized",
+        ]) {
+            return Self::AuthFailed;
+        }
+        if any(&["not_found", "model_not_found", "does not exist"]) {
+            return Self::NotFound;
+        }
+        if any(&[
+            "invalid_request",
+            "content_filter",
+            "content_policy",
+            "safety",
+            "refusal",
+            "cyber_policy",
+            "invalid_prompt",
+        ]) {
+            return Self::RequestError;
+        }
+        Self::ServerError
+    }
+
     pub fn should_failover(self) -> bool {
         !matches!(self, Self::RequestError)
+    }
+
+    /// Cools only the failing model, not the whole connection (R3).
+    pub fn cools_model(self) -> bool {
+        matches!(self, Self::NotFound | Self::FirstByteTimeout)
+    }
+
+    /// May move a sticky session to another member (R4); transient errors
+    /// switch for one request only.
+    pub fn allows_rebind(self) -> bool {
+        matches!(
+            self,
+            Self::RateLimited | Self::AuthFailed | Self::PaymentRequired | Self::NotFound
+        )
+    }
+
+    /// Cleared when the connection's key or settings change (R5); rate limits stay.
+    pub fn cleared_by_edit(self) -> bool {
+        matches!(
+            self,
+            Self::AuthFailed | Self::NotFound | Self::PaymentRequired
+        )
     }
 
     /// CPA-style cooldown. `retry_after` wins for 429 (minimum 10 s).
@@ -296,9 +443,14 @@ impl FailureClass {
             Self::RateLimited => retry_after
                 .map(|s| s.max(10))
                 .unwrap_or_else(|| (10u64 << consecutive.min(6)).min(600)),
-            Self::AuthFailed => 30 * 60,
+            Self::AuthFailed | Self::PaymentRequired => 30 * 60,
             Self::NotFound => 12 * 60 * 60,
             Self::ServerError | Self::Network => (5u64 << consecutive.min(5)).min(300),
+            // `consecutive` counts earlier slow starts inside the window.
+            Self::FirstByteTimeout => match consecutive {
+                0 => 0,
+                n => (60u64 << (n - 1).min(5)).min(30 * 60),
+            },
         }
     }
 }
@@ -324,10 +476,10 @@ pub fn offered_models(doc: &ConnectionsDocument, config: &AgentConfig) -> Vec<St
                 continue;
             }
         }
-        if reach(config.harness, connection).is_err() {
-            continue;
-        }
         for model in connection.routable_models() {
+            if reach_protocols(config.harness, model_protocols(connection, model)).is_err() {
+                continue;
+            }
             let name = model.routing_name().to_string();
             if !name.is_empty() && !names.contains(&name) {
                 names.push(name);

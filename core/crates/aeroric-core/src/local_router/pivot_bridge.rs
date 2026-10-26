@@ -428,12 +428,7 @@ pub fn responses_to_chat_response(resp: &Value) -> Value {
     };
     let usage = resp
         .get("usage")
-        .map(|u| {
-            json!({
-                "prompt_tokens": u.get("input_tokens").cloned().unwrap_or(json!(0)),
-                "completion_tokens": u.get("output_tokens").cloned().unwrap_or(json!(0)),
-            })
-        })
+        .map(super::bridge_common::chat_usage_from_responses)
         .unwrap_or_else(|| json!({}));
     chat_completion(
         resp.get("model").unwrap_or(&json!("")),
@@ -483,18 +478,13 @@ pub fn messages_to_chat_response(msg: &Value) -> Value {
     }
     let finish = match msg.get("stop_reason").and_then(Value::as_str) {
         Some("tool_use") => "tool_calls",
-        Some("max_tokens") => "length",
+        Some("max_tokens") | Some("model_context_window_exceeded") => "length",
         _ if !calls.is_empty() => "tool_calls",
         _ => "stop",
     };
     let usage = msg
         .get("usage")
-        .map(|u| {
-            json!({
-                "prompt_tokens": u.get("input_tokens").cloned().unwrap_or(json!(0)),
-                "completion_tokens": u.get("output_tokens").cloned().unwrap_or(json!(0)),
-            })
-        })
+        .map(super::bridge_common::chat_usage_from_messages)
         .unwrap_or_else(|| json!({}));
     chat_completion(
         msg.get("model").unwrap_or(&json!("")),
@@ -517,12 +507,12 @@ fn chat_chunk(model: &str, delta: Value, finish: Option<&str>) -> Bytes {
     Bytes::from(format!("data: {chunk}\n\n"))
 }
 
-fn chat_usage_chunk(model: &str, input: u64, output: u64) -> Bytes {
+fn chat_usage_chunk(model: &str, input: u64, output: u64, cached: u64) -> Bytes {
     let chunk = json!({
         "object": "chat.completion.chunk",
         "model": model,
         "choices": [],
-        "usage": { "prompt_tokens": input, "completion_tokens": output },
+        "usage": super::bridge_common::chat_usage(input, output, cached),
     });
     Bytes::from(format!("data: {chunk}\n\n"))
 }
@@ -580,6 +570,9 @@ pub struct ResponsesSseToChat {
     buffer: Vec<u8>,
     /// output_index → Chat tool_call index.
     tools: std::collections::BTreeMap<u64, usize>,
+    /// output_index → reasoning text already streamed, so a longer summary in
+    /// `output_item.done` can send only what is missing (cc-switch 7ecce7c7).
+    reasoning_streamed: std::collections::BTreeMap<u64, String>,
     finished: bool,
 }
 
@@ -589,6 +582,7 @@ impl ResponsesSseToChat {
             model: model.into(),
             buffer: Vec::new(),
             tools: Default::default(),
+            reasoning_streamed: Default::default(),
             finished: false,
         }
     }
@@ -631,9 +625,44 @@ impl ResponsesSseToChat {
                 }
                 "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                     if let Some(d) = data.get("delta").and_then(Value::as_str) {
+                        let output_index = data
+                            .get("output_index")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        self.reasoning_streamed
+                            .entry(output_index)
+                            .or_default()
+                            .push_str(d);
                         out.push(chat_chunk(
                             &self.model,
                             json!({ "reasoning_content": d }),
+                            None,
+                        ));
+                    }
+                }
+                "response.output_item.done"
+                    if data["item"].get("type").and_then(Value::as_str) == Some("reasoning") =>
+                {
+                    let output_index = data
+                        .get("output_index")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let streamed = self
+                        .reasoning_streamed
+                        .remove(&output_index)
+                        .unwrap_or_default();
+                    let full: String = ["summary", "content"]
+                        .iter()
+                        .flat_map(|key| data["item"][key].as_array().into_iter().flatten())
+                        .filter_map(|part| part.get("text").and_then(Value::as_str))
+                        .collect();
+                    if let Some(tail) = full
+                        .strip_prefix(streamed.as_str())
+                        .filter(|t| !t.is_empty())
+                    {
+                        out.push(chat_chunk(
+                            &self.model,
+                            json!({ "reasoning_content": tail }),
                             None,
                         ));
                     }
@@ -689,6 +718,7 @@ impl ResponsesSseToChat {
                             &self.model,
                             u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
                             u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
+                            super::bridge_common::cached_prompt_tokens(u),
                         ));
                     }
                 }
@@ -715,6 +745,8 @@ pub struct MessagesSseToChat {
     /// content block index → Chat tool_call index.
     tools: std::collections::BTreeMap<u64, usize>,
     input_tokens: u64,
+    /// Cache reads inside `input_tokens`, reported as Chat's cached detail.
+    cached_tokens: u64,
     output_tokens: u64,
     stop_reason: Option<String>,
     finished: bool,
@@ -727,6 +759,7 @@ impl MessagesSseToChat {
             buffer: Vec::new(),
             tools: Default::default(),
             input_tokens: 0,
+            cached_tokens: 0,
             output_tokens: 0,
             stop_reason: None,
             finished: false,
@@ -753,7 +786,7 @@ impl MessagesSseToChat {
         self.finished = true;
         let finish = match self.stop_reason.as_deref() {
             Some("tool_use") => "tool_calls",
-            Some("max_tokens") => "length",
+            Some("max_tokens") | Some("model_context_window_exceeded") => "length",
             _ if !self.tools.is_empty() => "tool_calls",
             _ => "stop",
         };
@@ -762,6 +795,7 @@ impl MessagesSseToChat {
             &self.model,
             self.input_tokens,
             self.output_tokens,
+            self.cached_tokens,
         ));
     }
 
@@ -774,10 +808,12 @@ impl MessagesSseToChat {
             match event.as_str() {
                 "message_start" => {
                     let usage = &data["message"]["usage"];
-                    self.input_tokens = usage
-                        .get("input_tokens")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0);
+                    let get = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+                    // Chat counts cached input inside the prompt; Anthropic does not.
+                    self.cached_tokens = get("cache_read_input_tokens");
+                    self.input_tokens = get("input_tokens")
+                        + self.cached_tokens
+                        + get("cache_creation_input_tokens");
                 }
                 "content_block_start" => {
                     let block = &data["content_block"];
@@ -852,8 +888,80 @@ impl MessagesSseToChat {
     }
 }
 
+/// An Anthropic error, reshaped for Codex (OpenAI error shape). "prompt is too
+/// long" gains `code: context_length_exceeded`, which is what makes Codex
+/// compact and retry (CPA 43f27e3a). None when the body is not an Anthropic error.
+pub fn messages_error_to_openai(body: &[u8]) -> Option<Vec<u8>> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let error = value
+        .get("error")
+        .filter(|_| value.get("type").and_then(Value::as_str) == Some("error"))?;
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mut out = json!({
+        "error": {
+            "type": error.get("type").cloned().unwrap_or(json!("api_error")),
+            "message": message,
+        }
+    });
+    if message
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("prompt is too long")
+    {
+        out["error"]["code"] = json!("context_length_exceeded");
+    }
+    serde_json::to_vec(&out).ok()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_reasoning_summary_longer_than_its_deltas_sends_the_tail() {
+        let mut bridge = super::ResponsesSseToChat::new("m");
+        let events = vec![
+            (
+                "response.reasoning_summary_text.delta".to_string(),
+                serde_json::json!({"output_index": 0, "delta": "Think"}),
+            ),
+            (
+                "response.output_item.done".to_string(),
+                serde_json::json!({"output_index": 0, "item": {"type": "reasoning",
+                 "summary": [{"type": "summary_text", "text": "Thinking hard"}]}}),
+            ),
+        ];
+        let chunks: String = bridge
+            .handle(events)
+            .iter()
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .collect();
+        assert!(chunks.contains("\"reasoning_content\":\"Think\""));
+        assert!(chunks.contains("\"reasoning_content\":\"ing hard\""));
+    }
+
+    #[test]
+    fn an_oversized_prompt_tells_codex_to_compact() {
+        let body = br#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}"#;
+        let out: serde_json::Value =
+            serde_json::from_slice(&super::messages_error_to_openai(body).unwrap()).unwrap();
+        assert_eq!(out["error"]["code"], "context_length_exceeded");
+        assert_eq!(out["error"]["type"], "invalid_request_error");
+        let other = br#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#;
+        let out: serde_json::Value =
+            serde_json::from_slice(&super::messages_error_to_openai(other).unwrap()).unwrap();
+        assert!(out["error"].get("code").is_none());
+        assert!(super::messages_error_to_openai(b"not json").is_none());
+    }
+
+    #[test]
+    fn a_context_window_stop_is_a_length_stop() {
+        let msg = serde_json::json!({"content": [{"type": "text", "text": "partial"}], "stop_reason": "model_context_window_exceeded"});
+        let chat = super::messages_to_chat_response(&msg);
+        assert_eq!(chat["choices"][0]["finish_reason"], "length");
+    }
+
     use super::*;
     use crate::local_router::chat_bridge::{
         chat_response_to_responses, responses_to_chat, ChatSseTransformer,

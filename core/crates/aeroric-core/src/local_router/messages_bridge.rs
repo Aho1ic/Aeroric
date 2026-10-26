@@ -320,7 +320,17 @@ fn messages_usage(usage: Option<&Value>) -> Value {
             .and_then(Value::as_u64)
             .unwrap_or(0)
     };
-    json!({ "input_tokens": get("prompt_tokens"), "output_tokens": get("completion_tokens") })
+    let cached = usage
+        .map(super::bridge_common::cached_prompt_tokens)
+        .unwrap_or(0);
+    let mut out = json!({
+        "input_tokens": get("prompt_tokens").saturating_sub(cached),
+        "output_tokens": get("completion_tokens"),
+    });
+    if cached > 0 {
+        out["cache_read_input_tokens"] = json!(cached);
+    }
+    out
 }
 
 pub fn chat_response_to_messages(payload: &Value, requested_model: &str) -> Value {
@@ -414,6 +424,7 @@ pub struct ChatToMessagesSse {
     next_index: usize,
     open: Option<Open>,
     tools: BTreeMap<usize, PendingTool>,
+    call_indexes: super::bridge_common::CallIndexer,
     finish_reason: Option<String>,
     usage: Option<Value>,
 }
@@ -429,6 +440,7 @@ impl ChatToMessagesSse {
             next_index: 0,
             open: None,
             tools: BTreeMap::new(),
+            call_indexes: Default::default(),
             finish_reason: None,
             usage: None,
         }
@@ -522,13 +534,14 @@ impl ChatToMessagesSse {
                 self.delta(json!({ "type": "text_delta", "text": text }), output);
             }
         }
-        for call in delta
+        for (position, call) in delta
             .get("tool_calls")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
+            .enumerate()
         {
-            let index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let index = self.call_indexes.index(call, position);
             let function = call.get("function").unwrap_or(&Value::Null);
             let tool = self.tools.entry(index).or_insert_with(|| PendingTool {
                 id: String::new(),

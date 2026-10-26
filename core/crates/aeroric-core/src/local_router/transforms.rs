@@ -263,9 +263,84 @@ fn rectify_thinking_budget(body: &mut Value) -> bool {
     *body != before
 }
 
+/// Whether a Responses upstream is OpenAI's own API or ChatGPT's backend.
+pub fn is_openai_host(base_url: &reqwest::Url) -> bool {
+    base_url.host_str().is_some_and(|host| {
+        let host = host.to_ascii_lowercase();
+        host == "openai.com"
+            || host.ends_with(".openai.com")
+            || host == "chatgpt.com"
+            || host.ends_with(".chatgpt.com")
+    })
+}
+
+/// Shape a Codex Responses body for the upstream it is sent to unchanged
+/// (2026-10-26 recheck). Returns the new bytes only when something changed.
+/// - Not OpenAI: drop top-level `access_programs` (some relays answer 503).
+/// - OpenAI / ChatGPT: reasoning items may not carry `content`, and items
+///   without OpenAI's `encrypted_content` came from another vendor through
+///   the gateway; either makes the whole request 400, which never fails over
+///   (R7), so the session would be stuck.
+pub fn shape_responses_for_upstream(json: Option<&Value>, openai: bool) -> Option<Vec<u8>> {
+    let mut body = json?.clone();
+    let object = body.as_object_mut()?;
+    let mut changed = false;
+    if !openai {
+        changed |= object.remove("access_programs").is_some();
+    } else if let Some(input) = object.get_mut("input").and_then(Value::as_array_mut) {
+        let before = input.len();
+        input.retain(|item| {
+            item.get("type").and_then(Value::as_str) != Some("reasoning")
+                || item.get("encrypted_content").is_some_and(|v| !v.is_null())
+        });
+        changed |= input.len() != before;
+        for item in input.iter_mut() {
+            if item.get("type").and_then(Value::as_str) == Some("reasoning") {
+                if let Some(item) = item.as_object_mut() {
+                    changed |= item.remove("content").is_some();
+                }
+            }
+        }
+    }
+    changed.then(|| serde_json::to_vec(&body).ok()).flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn responses_bodies_are_shaped_per_upstream() {
+        let body = json!({
+            "model": "gpt-x",
+            "access_programs": ["a"],
+            "input": [
+                {"type": "message", "role": "user", "content": "hi"},
+                {"type": "reasoning", "summary": [], "content": [{"type": "reasoning_text", "text": "foreign"}]},
+                {"type": "reasoning", "summary": [], "encrypted_content": "gAAA", "content": [{"type": "reasoning_text", "text": "t"}]},
+            ]
+        });
+        let relay: Value =
+            serde_json::from_slice(&shape_responses_for_upstream(Some(&body), false).unwrap())
+                .unwrap();
+        assert!(relay.get("access_programs").is_none());
+        assert_eq!(relay["input"].as_array().unwrap().len(), 3);
+        let openai: Value =
+            serde_json::from_slice(&shape_responses_for_upstream(Some(&body), true).unwrap())
+                .unwrap();
+        assert_eq!(openai["access_programs"], json!(["a"]));
+        let input = openai["input"].as_array().unwrap();
+        assert_eq!(input.len(), 2, "the foreign reasoning item is dropped");
+        assert!(input[1].get("content").is_none());
+        assert_eq!(input[1]["encrypted_content"], "gAAA");
+        assert!(shape_responses_for_upstream(Some(&json!({"input": []})), true).is_none());
+        assert!(is_openai_host(
+            &reqwest::Url::parse("https://chatgpt.com/backend-api/codex").unwrap()
+        ));
+        assert!(!is_openai_host(
+            &reqwest::Url::parse("https://api.deepseek.com/v1").unwrap()
+        ));
+    }
     use crate::local_router::UpstreamTarget;
     use serde_json::json;
 

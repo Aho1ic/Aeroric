@@ -77,6 +77,47 @@ pub enum StartupError {
 
 /// 五步全序执行；任一步失败即停，错误带步骤名（supervisor 的 diagnostics
 /// 按这个前缀分类，不靠文案子串猜）。
+/// Raise the soft open-file limit to `min(hard, 10240)` (R1, cc-switch
+/// 04d0ebf5). An app started from Finder or as a login item inherits launchd's
+/// soft limit of 256; the gateway holds a client socket and an upstream
+/// connection per request, and the PTYs live here too, so a busy session would
+/// otherwise hit EMFILE and fail to open settings or SQLite. The hard limit is
+/// left alone; failure is only reported. Returns the soft limit in effect.
+#[cfg(unix)]
+#[allow(clippy::unnecessary_cast, reason = "rlim_t is not u64 on every unix")]
+pub fn raise_open_file_limit() -> Option<u64> {
+    const WANT: libc::rlim_t = 10240;
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit/setrlimit only read and write the struct we pass.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        return None;
+    }
+    let target = WANT.min(limit.rlim_max);
+    if limit.rlim_cur < target {
+        let raised = libc::rlimit {
+            rlim_cur: target,
+            rlim_max: limit.rlim_max,
+        };
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) } == 0 {
+            limit.rlim_cur = target;
+        } else {
+            eprintln!(
+                "aeroric-host: could not raise the open-file limit from {}",
+                limit.rlim_cur
+            );
+        }
+    }
+    Some(limit.rlim_cur as u64)
+}
+
+#[cfg(not(unix))]
+pub fn raise_open_file_limit() -> Option<u64> {
+    None
+}
+
 pub async fn run_startup(
     options: &HostOptions,
     clock: Arc<dyn Clock>,

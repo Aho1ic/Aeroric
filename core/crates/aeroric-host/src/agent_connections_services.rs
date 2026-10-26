@@ -123,10 +123,17 @@ fn put_connection(request: Request, context: Arc<CoreContext>) -> Frame {
             );
         }
     }
-    mutate(&request, &context, |doc| {
+    let id = connection.id.clone();
+    let frame = mutate(&request, &context, |doc| {
         service::put_connection(doc, connection);
         Ok(())
-    })
+    });
+    // R5: a new key or edited endpoint may fix auth/credit/missing-model
+    // failures; keep only the rate-limit rests.
+    if frame_is_ok(&frame) {
+        aeroric_core::local_router::config_routes::connection_changed(&id);
+    }
+    frame
 }
 
 fn set_credential(request: Request, context: Arc<CoreContext>) -> Frame {
@@ -159,6 +166,7 @@ fn set_credential(request: Request, context: Arc<CoreContext>) -> Frame {
             &format!("keychain: {e}"),
         );
     }
+    aeroric_core::local_router::config_routes::connection_changed(&id);
     ok(&request, snapshot(&context, &doc))
 }
 

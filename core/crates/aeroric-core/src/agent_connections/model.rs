@@ -129,6 +129,10 @@ pub struct ModelEntry {
     pub inputs: Vec<InputKind>,
     #[serde(default)]
     pub reasoning_tiers: Vec<ReasoningTier>,
+    /// Protocols this model is served over when they differ from the
+    /// connection's (R10); empty means "the connection's".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protocols: Vec<WireProtocol>,
     /// Disabled entries stay in the catalog (refresh keeps user edits, Q134)
     /// but are not routable.
     #[serde(default = "yes")]
@@ -172,6 +176,10 @@ pub struct Connection {
     /// Operator kill switch; disabled connections are never routed to.
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// R9: a 429 rests this connection for its cooldown. Off for relays and
+    /// aggregators whose 429s are momentary; the request still moves on.
+    #[serde(default = "yes")]
+    pub rest_on_limit: bool,
 }
 
 impl Connection {

@@ -14,6 +14,7 @@ fn model(upstream: &str, mapped: &str) -> ModelEntry {
         inputs: vec![InputKind::Text],
         reasoning_tiers: vec![],
         enabled: true,
+        protocols: vec![],
     }
 }
 
@@ -29,6 +30,7 @@ fn conn(id: &str, protocols: Vec<WireProtocol>, models: Vec<ModelEntry>) -> Conn
         models,
         catalog_revision: 1,
         enabled: true,
+        rest_on_limit: true,
     }
 }
 
@@ -297,4 +299,180 @@ fn document_round_trips_without_credentials() {
     );
     store::delete_credential(&secrets, "a").unwrap();
     assert_eq!(store::get_credential(&secrets, "a").unwrap(), None);
+}
+
+mod routing_r6_r10 {
+    use crate::agent_connections::model::*;
+    use crate::agent_connections::routing::*;
+
+    fn candidate(id: &str, priority: i32, weight: u32) -> Candidate {
+        Candidate {
+            connection_id: id.into(),
+            upstream_model: "m".into(),
+            reach: Reach::Direct,
+            priority,
+            weight,
+            free: false,
+        }
+    }
+
+    fn first(
+        strategy: PoolStrategy,
+        list: &[Candidate],
+        usage: &mut UsageCounters,
+        cooldowns: &Cooldowns,
+    ) -> String {
+        order(
+            list.to_vec(),
+            strategy,
+            "route",
+            None,
+            cooldowns,
+            usage,
+            1_000,
+        )[0]
+        .connection_id
+        .clone()
+    }
+
+    #[test]
+    fn smooth_weighted_round_robin_spreads_by_weight() {
+        let list = [
+            candidate("a", 0, 5),
+            candidate("b", 0, 1),
+            candidate("c", 0, 1),
+        ];
+        let mut usage = UsageCounters::default();
+        let picks: Vec<String> = (0..7)
+            .map(|_| {
+                first(
+                    PoolStrategy::WeightedRoundRobin,
+                    &list,
+                    &mut usage,
+                    &Cooldowns::new(),
+                )
+            })
+            .collect();
+        assert_eq!(picks.iter().filter(|p| *p == "a").count(), 5);
+        assert_eq!(picks.iter().filter(|p| *p == "b").count(), 1);
+        // Smooth: the heavy member is not taken five times in a row.
+        assert_ne!(picks[..5], ["a", "a", "a", "a", "a"]);
+    }
+
+    #[test]
+    fn round_robin_stays_inside_the_best_ready_priority() {
+        let list = [
+            candidate("a", 0, 1),
+            candidate("b", 0, 1),
+            candidate("c", 1, 1),
+        ];
+        let mut usage = UsageCounters::default();
+        let picks: Vec<String> = (0..4)
+            .map(|_| {
+                first(
+                    PoolStrategy::RoundRobin,
+                    &list,
+                    &mut usage,
+                    &Cooldowns::new(),
+                )
+            })
+            .collect();
+        assert!(!picks.contains(&"c".to_string()), "{picks:?}");
+        // With the top bucket cooling, the next priority serves.
+        let mut cooling = Cooldowns::new();
+        cooling.insert("a".into(), 2_000);
+        cooling.insert("b".into(), 2_000);
+        assert_eq!(
+            first(PoolStrategy::RoundRobin, &list, &mut usage, &cooling),
+            "c"
+        );
+    }
+
+    #[test]
+    fn a_model_cooldown_puts_only_that_model_last() {
+        let mut cooldowns = Cooldowns::new();
+        cooldowns.insert(model_key("a", "m"), 2_000);
+        let list = [candidate("a", 0, 1), candidate("b", 1, 1)];
+        let mut usage = UsageCounters::default();
+        assert_eq!(
+            first(PoolStrategy::Priority, &list, &mut usage, &cooldowns),
+            "b"
+        );
+    }
+
+    #[test]
+    fn stream_errors_are_classified_by_kind() {
+        use FailureClass::*;
+        for (summary, class) in [
+            (
+                "Responses upstream context_length_exceeded: too long",
+                RequestError,
+            ),
+            (
+                "Anthropic upstream invalid_request_error: prompt is too long",
+                RequestError,
+            ),
+            ("Responses upstream content_filter: blocked", RequestError),
+            (
+                "Responses upstream rate_limit_exceeded: slow down",
+                RateLimited,
+            ),
+            (
+                "Responses upstream insufficient_quota: out",
+                PaymentRequired,
+            ),
+            (
+                "Anthropic upstream authentication_error: bad key",
+                AuthFailed,
+            ),
+            ("Responses upstream model_not_found: gone", NotFound),
+            (
+                "Responses upstream server_error: stream overloaded",
+                ServerError,
+            ),
+        ] {
+            assert_eq!(FailureClass::from_semantic(summary, ""), class, "{summary}");
+        }
+        assert_eq!(FailureClass::from_status(402), PaymentRequired);
+        assert_eq!(PaymentRequired.cooldown_seconds(None, 0), 1800);
+        assert_eq!(FirstByteTimeout.cooldown_seconds(None, 0), 0);
+        assert_eq!(FirstByteTimeout.cooldown_seconds(None, 2), 120);
+    }
+
+    #[test]
+    fn a_model_may_override_its_connections_protocols() {
+        let connection = Connection {
+            id: "agg".into(),
+            label: "agg".into(),
+            kind: ConnectionKind::ApiKey,
+            vendor: Vendor::Other,
+            base_url: "https://agg.example/v1".into(),
+            protocols: vec![WireProtocol::ChatCompletions],
+            use_global_proxy: false,
+            models: vec![],
+            catalog_revision: 1,
+            enabled: true,
+            rest_on_limit: true,
+        };
+        let entry = ModelEntry {
+            upstream_id: "claude-x".into(),
+            mapped_name: String::new(),
+            display_name: String::new(),
+            source: ModelSource::Manual,
+            context_window: None,
+            max_output: None,
+            inputs: vec![],
+            reasoning_tiers: vec![],
+            protocols: vec![WireProtocol::Messages],
+            enabled: true,
+        };
+        assert_eq!(
+            reach_protocols(Harness::Claude, model_protocols(&connection, &entry)),
+            Ok(Reach::Direct)
+        );
+        assert!(matches!(
+            reach(Harness::Claude, &connection),
+            Ok(Reach::ViaGateway { .. })
+        ));
+    }
 }

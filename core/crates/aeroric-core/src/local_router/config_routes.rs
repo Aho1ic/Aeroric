@@ -4,15 +4,17 @@
 //! its targets from `agent-connections.json` instead of the legacy settings list.
 //! Resolution and ordering are the pure functions in `agent_connections::routing`;
 //! this module only adds the process-global state they read:
-//! - cooldowns, keyed by connection id and shared by every pool and config (Q31);
-//! - sticky sessions, keyed by task id (CPA session affinity);
+//! - cooldowns, keyed by connection id or (connection, model) and shared by
+//!   every pool and config (Q31, R3), each remembering why it was set (R5);
+//! - sticky sessions, keyed by task id (CPA session affinity), moved only after
+//!   quota/auth-class errors (R4);
 //! - usage counters for least-used / round-robin strategies.
 //!
 //! Translation the router cannot do yet is excluded with a reason rather than
 //! sent and left to fail upstream: today only Responses → Chat Completions is
 //! bridged (Messages translation lands in 4c/4d).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -36,12 +38,26 @@ pub const TARGET_PREFIX: &str = "conn:";
 #[derive(Default)]
 struct State {
     cooldowns: Cooldowns,
-    /// Consecutive failures per connection, for exponential cooldowns.
+    /// Why each cooldown key was set, so editing a connection can clear only
+    /// what an edit can fix (R5).
+    reasons: HashMap<String, FailureClass>,
+    /// Consecutive failures per cooldown key, for exponential cooldowns.
     streaks: HashMap<String, u32>,
+    /// Slow first output per (connection, model): (count in window, last at epoch s).
+    slow: HashMap<String, (u32, u64)>,
     /// task id → (connection id, expires at epoch s).
     sticky: HashMap<String, (String, u64)>,
+    /// task id → sticky lifetime from its pool (None: the target is not sticky).
+    sticky_ttl: HashMap<String, Option<u64>>,
+    /// Tasks whose last failure may move their sticky member (R4).
+    rebind: HashSet<String>,
+    /// Connections whose 429s do not rest them (R9).
+    no_rest_on_limit: HashSet<String>,
     usage: UsageCounters,
 }
+
+/// Slow starts inside this window count towards a model cooldown (R3).
+const SLOW_WINDOW_S: u64 = 30 * 60;
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
@@ -159,6 +175,14 @@ pub fn resolve(
     let (strategy, sticky_ttl, route_key) = strategy_and_ttl(doc, &config.target);
     let now = now_epoch_s();
     let ordered = with_state(|state| {
+        state.sticky_ttl.insert(grant.task_id.clone(), sticky_ttl);
+        for connection in &doc.connections {
+            if connection.rest_on_limit {
+                state.no_rest_on_limit.remove(&connection.id);
+            } else {
+                state.no_rest_on_limit.insert(connection.id.clone());
+            }
+        }
         let sticky = sticky_ttl.and_then(|_| {
             state
                 .sticky
@@ -236,8 +260,12 @@ fn connection_of(target_id: &str) -> Option<&str> {
     target_id.strip_prefix(TARGET_PREFIX)
 }
 
-/// Record a successful attempt: clears the streak, refreshes stickiness, counts usage.
-pub fn record_success(task_id: &str, target_id: &str, sticky_ttl_s: u64) {
+/// Record a successful attempt: clears the connection's streak and cooldown and
+/// counts usage. Stickiness moves to this member only when the task had none,
+/// it expired, it already pointed here, or the failure before allowed a rebind
+/// (R4) — a transient error elsewhere must not drag the session (and its prompt
+/// cache) to whichever member happened to answer.
+pub fn record_success(task_id: &str, target_id: &str) {
     let Some(connection) = connection_of(target_id) else {
         return;
     };
@@ -245,47 +273,123 @@ pub fn record_success(task_id: &str, target_id: &str, sticky_ttl_s: u64) {
     with_state(|state| {
         state.streaks.remove(connection);
         state.cooldowns.remove(connection);
+        state.reasons.remove(connection);
         *state
             .usage
             .requests
             .entry(connection.to_string())
             .or_insert(0) += 1;
-        state.sticky.insert(
-            task_id.to_string(),
-            (connection.to_string(), now + sticky_ttl_s),
-        );
+        let rebind = state.rebind.remove(task_id);
+        let Some(Some(ttl)) = state.sticky_ttl.get(task_id).copied() else {
+            return;
+        };
+        let current = state
+            .sticky
+            .get(task_id)
+            .filter(|(_, until)| *until > now)
+            .map(|(id, _)| id.clone());
+        if current.is_none() || rebind || current.as_deref() == Some(connection) {
+            state
+                .sticky
+                .insert(task_id.to_string(), (connection.to_string(), now + ttl));
+        }
     });
 }
 
-/// Record a failed attempt. Returns whether the router should try the next channel
-/// (Q25: request errors such as 400/422 never fail over).
-pub fn record_failure(target_id: &str, status: Option<u16>, retry_after_s: Option<u64>) -> bool {
-    let class = status
-        .map(FailureClass::from_status)
-        .unwrap_or(FailureClass::Network);
-    let Some(connection) = connection_of(target_id) else {
-        return class.should_failover();
-    };
-    if class.should_failover() {
-        let now = now_epoch_s();
-        with_state(|state| {
-            let streak = state.streaks.entry(connection.to_string()).or_insert(0);
-            let cooldown = class.cooldown_seconds(retry_after_s, *streak);
-            *streak = streak.saturating_add(1);
-            if cooldown > 0 {
-                state
-                    .cooldowns
-                    .insert(connection.to_string(), now + cooldown);
-            }
-        });
+/// Record a failed attempt of `upstream_model` on `target_id`. Returns whether
+/// the router should try the next channel (request errors never fail over and
+/// never cool anything down).
+pub fn record_failure(
+    task_id: &str,
+    target_id: &str,
+    upstream_model: &str,
+    class: FailureClass,
+    retry_after_s: Option<u64>,
+) -> bool {
+    if !class.should_failover() {
+        return false;
     }
-    class.should_failover()
+    let Some(connection) = connection_of(target_id) else {
+        return true;
+    };
+    let now = now_epoch_s();
+    with_state(|state| {
+        if class.allows_rebind() {
+            state.rebind.insert(task_id.to_string());
+        }
+        let key = if class.cools_model() {
+            routing::model_key(connection, upstream_model)
+        } else {
+            connection.to_string()
+        };
+        let cooldown = match class {
+            FailureClass::FirstByteTimeout => {
+                let entry = state.slow.entry(key.clone()).or_insert((0, 0));
+                entry.0 = if now.saturating_sub(entry.1) <= SLOW_WINDOW_S {
+                    entry.0 + 1
+                } else {
+                    1
+                };
+                entry.1 = now;
+                class.cooldown_seconds(None, entry.0 - 1)
+            }
+            FailureClass::RateLimited if state.no_rest_on_limit.contains(connection) => 0,
+            _ => {
+                let streak = state.streaks.entry(key.clone()).or_insert(0);
+                let cooldown = class.cooldown_seconds(retry_after_s, *streak);
+                *streak = streak.saturating_add(1);
+                cooldown
+            }
+        };
+        if cooldown > 0 {
+            state.cooldowns.insert(key.clone(), now + cooldown);
+            state.reasons.insert(key, class);
+        }
+    });
+    true
+}
+
+/// A connection's key or settings changed (R5): forget what the edit can fix —
+/// auth, credit and missing-model cooldowns on it and its models — but keep
+/// rate-limit rests, which an edit does not cure.
+pub fn connection_changed(connection_id: &str) {
+    let model_prefix = routing::model_key(connection_id, "");
+    with_state(|state| {
+        let cleared: Vec<String> = state
+            .reasons
+            .iter()
+            .filter(|(key, class)| {
+                (key.as_str() == connection_id || key.starts_with(&model_prefix))
+                    && class.cleared_by_edit()
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in cleared {
+            state.cooldowns.remove(&key);
+            state.reasons.remove(&key);
+            state.streaks.remove(&key);
+        }
+    });
+}
+
+/// Parse `Retry-After`: delta seconds or an HTTP date (R1).
+pub fn parse_retry_after(value: &str, now_epoch_s: u64) -> Option<u64> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds);
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(value)
+        .ok()?
+        .timestamp();
+    Some(u64::try_from(at).ok()?.saturating_sub(now_epoch_s))
 }
 
 /// Drop a finished task's stickiness.
 pub fn forget_task(task_id: &str) {
     with_state(|state| {
         state.sticky.remove(task_id);
+        state.sticky_ttl.remove(task_id);
+        state.rebind.remove(task_id);
     });
 }
 
@@ -319,9 +423,11 @@ mod tests {
                 inputs: vec![],
                 reasoning_tiers: vec![],
                 enabled: true,
+                protocols: vec![],
             }],
             catalog_revision: 1,
             enabled: true,
+            rest_on_limit: true,
         }
     }
 
@@ -395,17 +501,29 @@ mod tests {
         let secrets = MemorySecrets::default();
         let cooled = doc_with(Harness::Codex, "cool");
         assert!(
-            !record_failure("conn:cool-a", Some(422), None),
+            !record_failure(
+                "cr-t3",
+                "conn:cool-a",
+                "ds-a",
+                FailureClass::from_status(422),
+                None
+            ),
             "422 never fails over"
         );
-        assert!(record_failure("conn:cool-a", Some(503), None));
+        assert!(record_failure(
+            "cr-t3",
+            "conn:cool-a",
+            "ds-a",
+            FailureClass::from_status(503),
+            None
+        ));
         let got = ids(resolve(&cooled, &grant("cr-t3"), "", &secrets));
         assert_eq!(
             got.last().map(String::as_str),
             Some("conn:cool-a"),
             "cooling goes last"
         );
-        record_success("cr-t3", "conn:cool-a", 60);
+        record_success("cr-t3", "conn:cool-a");
         let got = ids(resolve(&cooled, &grant("cr-t3"), "", &secrets));
         assert_eq!(
             got.first().map(String::as_str),
@@ -413,6 +531,112 @@ mod tests {
             "sticky after success"
         );
         forget_task("cr-t3");
+    }
+
+    #[test]
+    fn a_missing_model_cools_the_model_not_the_connection() {
+        let now = now_epoch_s();
+        assert!(record_failure(
+            "cr-t5",
+            "conn:nf-a",
+            "ds-gone",
+            FailureClass::NotFound,
+            None
+        ));
+        let table = cooldowns();
+        assert!(!table.contains_key("nf-a"), "the connection stays usable");
+        assert!(table[&routing::model_key("nf-a", "ds-gone")] > now + 11 * 3600);
+        // R5: editing the connection clears it; a rate-limit rest would stay.
+        record_failure(
+            "cr-t5",
+            "conn:nf-a",
+            "ds-x",
+            FailureClass::RateLimited,
+            Some(120),
+        );
+        connection_changed("nf-a");
+        let table = cooldowns();
+        assert!(!table.contains_key(&routing::model_key("nf-a", "ds-gone")));
+        assert!(table.get("nf-a").is_some_and(|until| *until > now + 100));
+    }
+
+    #[test]
+    fn a_slow_start_switches_first_and_cools_the_second_time() {
+        let key = routing::model_key("slow-a", "ds-a");
+        assert!(record_failure(
+            "cr-t6",
+            "conn:slow-a",
+            "ds-a",
+            FailureClass::FirstByteTimeout,
+            None
+        ));
+        assert!(
+            !cooldowns().contains_key(&key),
+            "first slow start only switches"
+        );
+        record_failure(
+            "cr-t6",
+            "conn:slow-a",
+            "ds-a",
+            FailureClass::FirstByteTimeout,
+            None,
+        );
+        let until = cooldowns()[&key];
+        assert!(until >= now_epoch_s() + 59 && until <= now_epoch_s() + 61);
+    }
+
+    #[test]
+    fn stickiness_moves_only_after_quota_or_auth_errors() {
+        let secrets = MemorySecrets::default();
+        let doc = doc_with(Harness::Codex, "stk");
+        let task = "cr-t7";
+        let _ = resolve(&doc, &grant(task), "", &secrets);
+        record_success(task, "conn:stk-a");
+        // A transient failure answered elsewhere must not move the session.
+        record_failure(task, "conn:stk-a", "ds-a", FailureClass::ServerError, None);
+        record_success(task, "conn:stk-b");
+        with_state(|s| assert_eq!(s.sticky[task].0, "stk-a"));
+        // A rate limit does.
+        record_failure(
+            task,
+            "conn:stk-a",
+            "ds-a",
+            FailureClass::RateLimited,
+            Some(30),
+        );
+        record_success(task, "conn:stk-b");
+        with_state(|s| assert_eq!(s.sticky[task].0, "stk-b"));
+        forget_task(task);
+    }
+
+    #[test]
+    fn a_relay_that_does_not_rest_on_limits_is_not_cooled() {
+        let secrets = MemorySecrets::default();
+        let mut doc = doc_with(Harness::Codex, "relay");
+        doc.connections[0].rest_on_limit = false;
+        let _ = resolve(&doc, &grant("cr-t8"), "", &secrets);
+        assert!(record_failure(
+            "cr-t8",
+            "conn:relay-a",
+            "ds-a",
+            FailureClass::RateLimited,
+            Some(60)
+        ));
+        assert!(!cooldowns().contains_key("relay-a"));
+        forget_task("cr-t8");
+    }
+
+    #[test]
+    fn retry_after_takes_seconds_or_an_http_date() {
+        assert_eq!(parse_retry_after(" 30 ", 0), Some(30));
+        let now = chrono::DateTime::parse_from_rfc2822("Wed, 21 Oct 2026 07:28:00 GMT")
+            .unwrap()
+            .timestamp() as u64;
+        assert_eq!(
+            parse_retry_after("Wed, 21 Oct 2026 07:30:00 GMT", now),
+            Some(120)
+        );
+        assert_eq!(parse_retry_after("soon", now), None);
     }
 
     #[test]

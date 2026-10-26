@@ -152,6 +152,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
         run_startup_with_secrets_and_legacy_agent_migration, serve as serve_loop, HostOptions,
     };
 
+    let _ = aeroric_host::startup::raise_open_file_limit();
     let agent_config_external_home = match agent_config_external_home() {
         Ok(home) => home,
         Err(error) => {

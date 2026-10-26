@@ -305,6 +305,31 @@ pub(crate) fn harness_launch_input(context: &CoreContext, agent: &str) -> Launch
         .unwrap_or_else(|| LaunchInput::new(agent))
 }
 
+/// A gateway Codex must not find a ChatGPT login in its managed home (R1,
+/// cc-switch 92ec18d7): with one, Codex checks the official quota itself and,
+/// once it is spent, locks the model before any request reaches the gateway,
+/// so routing and pools are bypassed. The login is renamed aside, never
+/// deleted, so it can be restored by hand.
+pub(crate) fn set_aside_chatgpt_login(home: &std::path::Path) -> Result<(), String> {
+    let auth = home.join("auth.json");
+    let Ok(content) = std::fs::read_to_string(&auth) else {
+        return Ok(());
+    };
+    let has_login = serde_json::from_str::<Value>(&content)
+        .ok()
+        .and_then(|value| value.get("tokens").cloned())
+        .is_some_and(|tokens| !tokens.is_null());
+    if has_login {
+        std::fs::rename(&auth, home.join("auth.chatgpt-login.json.bak")).map_err(|e| {
+            format!(
+                "cannot set aside the ChatGPT login in {}: {e}",
+                home.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 /// Managed home for a configuration launch, isolated like the legacy wrappers
 /// did, so the user's own CLI config cannot redirect the request elsewhere.
 pub(crate) fn config_home_env(
@@ -323,6 +348,9 @@ pub(crate) fn config_home_env(
             .map_err(|e| format!("cannot prepare managed agent home {}: {e}", dir.display()))?;
     }
     let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+    if config.harness == Harness::Codex {
+        set_aside_chatgpt_login(&home)?;
+    }
     Ok(match config.harness {
         Harness::Codex => vec![
             EnvOp::Set("CODEX_HOME".into(), path(&home)),
@@ -1106,6 +1134,42 @@ impl RegistryLiveRuns {
 impl LiveRuns for RegistryLiveRuns {
     fn has_live_run(&self, task_id: &str) -> bool {
         self.registry.child_for(task_id).is_some()
+    }
+}
+
+#[cfg(test)]
+mod gateway_home_invariants {
+    use super::*;
+
+    #[test]
+    fn a_gateway_codex_home_keeps_no_chatgpt_login() {
+        let home =
+            std::env::temp_dir().join(format!("aeroric-codex-home-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join("auth.json"),
+            r#"{"auth_mode":"chatgpt","tokens":{"access_token":"t"}}"#,
+        )
+        .unwrap();
+        set_aside_chatgpt_login(&home).unwrap();
+        assert!(!home.join("auth.json").exists());
+        assert!(home.join("auth.chatgpt-login.json.bak").exists());
+        // An API-key auth file is left alone.
+        std::fs::write(
+            home.join("auth.json"),
+            r#"{"auth_mode":"apikey","OPENAI_API_KEY":"k"}"#,
+        )
+        .unwrap();
+        set_aside_chatgpt_login(&home).unwrap();
+        assert!(home.join("auth.json").exists());
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn gateway_codex_never_asks_for_openai_auth() {
+        let args = codex_gateway_args("http://127.0.0.1:1").join(" ");
+        assert!(!args.contains("requires_openai_auth"), "{args}");
+        assert!(args.contains("env_key"));
     }
 }
 

@@ -388,42 +388,55 @@ async fn read_claude_usage() -> UsageSource<ClaudeUsageData> {
     let token_result =
         tokio::task::spawn_blocking(|| -> Result<(String, Option<String>), String> {
             let shell_path = get_login_shell_path();
-            let mut cmd = Command::new("security");
-            crate::runtime::subprocess::configure_background_command(&mut cmd);
-            let output = cmd
-                .args([
-                    "find-generic-password",
-                    "-s",
-                    "Claude Code-credentials",
-                    "-w",
-                ])
-                .env("PATH", shell_path)
-                .stdin(Stdio::null())
-                .stderr(Stdio::piped())
-                .output()
-                .map_err(|e| format!("Failed to read Claude credentials: {e}"))?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                return Err(if stderr.is_empty() {
-                    "Claude credentials are unavailable.".to_string()
-                } else {
-                    stderr
-                });
+            // Ask for this user's item first, then any item under the service:
+            // with several items the unscoped query can return the wrong one,
+            // and an item holding only `mcpOAuth` has no Claude token
+            // (cc-switch e5b04221).
+            let user = std::env::var("USER").ok().filter(|user| !user.is_empty());
+            let mut attempts: Vec<Vec<String>> = Vec::new();
+            if let Some(user) = user {
+                attempts.push(vec!["-a".into(), user]);
             }
-
-            let raw = String::from_utf8(output.stdout)
-                .map_err(|e| format!("Claude credential output was not valid UTF-8: {e}"))?;
-            let parsed: Value = serde_json::from_str(raw.trim())
-                .map_err(|e| format!("Claude credentials JSON was invalid: {e}"))?;
-
-            let token = parsed
-                .pointer("/claudeAiOauth/accessToken")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| "Claude access token was missing from Keychain data.".to_string())?;
-
-            Ok((token.to_string(), detect_claude_version()))
+            attempts.push(Vec::new());
+            let mut last_error = "Claude credentials are unavailable.".to_string();
+            for account in attempts {
+                let mut cmd = Command::new("security");
+                crate::runtime::subprocess::configure_background_command(&mut cmd);
+                let output = cmd
+                    .args(["find-generic-password", "-s", "Claude Code-credentials"])
+                    .args(&account)
+                    .arg("-w")
+                    .env("PATH", shell_path)
+                    .stdin(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .map_err(|e| format!("Failed to read Claude credentials: {e}"))?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    if !stderr.is_empty() {
+                        last_error = stderr;
+                    }
+                    continue;
+                }
+                let raw = String::from_utf8(output.stdout)
+                    .map_err(|e| format!("Claude credential output was not valid UTF-8: {e}"))?;
+                let parsed: Value = match serde_json::from_str(raw.trim()) {
+                    Ok(parsed) => parsed,
+                    Err(e) => {
+                        last_error = format!("Claude credentials JSON was invalid: {e}");
+                        continue;
+                    }
+                };
+                if let Some(token) = parsed
+                    .pointer("/claudeAiOauth/accessToken")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                {
+                    return Ok((token.to_string(), detect_claude_version()));
+                }
+                last_error = "Claude access token was missing from Keychain data.".to_string();
+            }
+            Err(last_error)
         })
         .await;
 

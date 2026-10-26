@@ -519,15 +519,28 @@ pub(super) fn build_codex_model_catalog(
         .iter()
         .enumerate()
         .map(|(priority, selected)| {
-            let mut model = bundled_models
+            let exact = bundled_models
                 .iter()
                 .find(|model| {
                     model.get("slug").and_then(|slug| slug.as_str()) == Some(selected.as_str())
                 })
-                .cloned()
+                .cloned();
+            let borrowed = exact.is_none();
+            let mut model = exact
                 .or_else(|| template.clone())
                 .unwrap_or_else(|| fallback_codex_model(selected, priority));
             if let Some(object) = model.as_object_mut() {
+                if borrowed {
+                    // R11 (cc-switch 91fc2fcb): an official GPT template carries
+                    // `tool_mode: code_mode_only`; a model borrowing it would be
+                    // told to call `exec` it does not have. A distinct comp_hash
+                    // keeps Codex from treating it as the same tool group.
+                    object.remove("tool_mode");
+                    if let Some(hash) = object.get("comp_hash").and_then(|h| h.as_str()) {
+                        let hash = format!("{hash}-direct");
+                        object.insert("comp_hash".to_string(), hash.into());
+                    }
+                }
                 object.insert("slug".to_string(), selected.clone().into());
                 object.insert("display_name".to_string(), selected.clone().into());
                 object.insert(
@@ -1786,8 +1799,13 @@ pub(super) fn parse_codex_builtin_credentials_with_env(
             .and_then(|providers| providers.get(provider))
             .and_then(toml::Value::as_table)
     });
+    // Without a provider (or with the built-in `openai`) Codex reads the
+    // top-level `openai_base_url` (cc-switch de0a235a); `base_url` stays as a
+    // fallback for older files.
+    let builtin = matches!(provider, None | Some("openai"));
     credentials.base_url = provider_table
         .and_then(|provider| provider.get("base_url"))
+        .or_else(|| builtin.then(|| table.get("openai_base_url")).flatten())
         .or_else(|| table.get("base_url"))
         .and_then(toml::Value::as_str)
         .map(normalize_base_url)
@@ -2144,6 +2162,17 @@ fn claude_agent_script_is_current(script_path: &str, content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_top_level_openai_base_url_without_a_provider() {
+        let credentials = parse_codex_builtin_credentials(
+            r#"
+model = "gpt-5.5-codex"
+openai_base_url = "https://relay.example.com/v1/"
+"#,
+        );
+        assert_eq!(credentials.base_url, "https://relay.example.com/v1");
+    }
 
     #[test]
     fn parses_codex_builtin_provider_credentials() {
@@ -2767,6 +2796,26 @@ api_key = "sk-codex"
             "/tmp/deepseek_claude.sh",
             CLAUDE_AGENT_SCRIPT_MARKER
         ));
+    }
+
+    #[test]
+    fn a_borrowed_catalog_row_drops_the_official_tool_mode() {
+        let bundled = serde_json::json!({"models": [
+            {"slug": "gpt-6.1-sol", "tool_mode": "code_mode_only", "comp_hash": "h1"}
+        ]})
+        .to_string();
+        let catalog: serde_json::Value = serde_json::from_str(&build_codex_model_catalog(
+            &["gpt-6.1-sol".to_string(), "deepseek-v4.1-flash".to_string()],
+            Some(&bundled),
+        ))
+        .unwrap();
+        let models = catalog["models"].as_array().unwrap();
+        // The official model keeps its template exactly.
+        assert_eq!(models[0]["tool_mode"], "code_mode_only");
+        assert_eq!(models[0]["comp_hash"], "h1");
+        // A model borrowing the template does not inherit code mode.
+        assert!(models[1].get("tool_mode").is_none());
+        assert_eq!(models[1]["comp_hash"], "h1-direct");
     }
 
     #[test]

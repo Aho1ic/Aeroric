@@ -13,8 +13,11 @@ use uuid::Uuid;
 
 /// Header sent by Claude Code carrying its per-conversation session id.
 const CLAUDE_SESSION_HEADER: &str = "x-claude-code-session-id";
-/// Headers sent by Codex carrying its per-conversation session id.
-const CODEX_SESSION_HEADERS: &[&str] = &["session_id", "x-session-id"];
+/// Headers sent by Codex carrying its per-conversation session id, in order
+/// (cc-switch 2e1e2979 added the last two).
+const CODEX_SESSION_HEADERS: &[&str] = &["session_id", "x-session-id", "session-id", "thread-id"];
+/// Shorter header values are placeholders, not conversation ids.
+const MIN_SESSION_ID_LEN: usize = 8;
 
 /// Extract a session id for the given agent, falling back to a generated UUID
 /// when the request carries none. `body` is the parsed JSON request body (may
@@ -40,7 +43,9 @@ pub(crate) fn extract_session_id(
 
 fn extract_codex_session(headers: &HeaderMap, body: Option<&Value>) -> Option<String> {
     for header in CODEX_SESSION_HEADERS {
-        if let Some(value) = extract_header(headers, header) {
+        if let Some(value) =
+            extract_header(headers, header).filter(|value| value.len() >= MIN_SESSION_ID_LEN)
+        {
             return Some(value);
         }
     }
@@ -107,6 +112,13 @@ mod tests {
         let headers = headers(&[("x-session-id", "codex-header-000")]);
         let id = extract_session_id(RouterAgent::Codex, &headers, None);
         assert_eq!(id, "codex-header-000");
+    }
+
+    #[test]
+    fn extracts_codex_session_from_newer_headers_and_skips_short_values() {
+        let headers = headers(&[("session-id", "x"), ("thread-id", "codex-thread-0042")]);
+        let id = extract_session_id(RouterAgent::Codex, &headers, None);
+        assert_eq!(id, "codex-thread-0042");
     }
 
     #[test]

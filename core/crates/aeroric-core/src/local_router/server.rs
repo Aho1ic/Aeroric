@@ -28,6 +28,7 @@ mod guard;
 mod routing;
 mod semantic;
 
+use crate::agent_connections::routing::FailureClass;
 use axum::extract::{Request, State};
 use axum::http::header::{
     ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
@@ -440,6 +441,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
         target_id: String::new(),
         target_name: String::new(),
         attempt_count: attempted_targets,
+        class: None,
     });
     completion.set_target(
         &failure.target_id,
@@ -501,7 +503,7 @@ async fn resolve_config_targets(
 fn note_success(route: &SelectedRoute, config_task: Option<&str>, target_id: &str) -> bool {
     match config_task {
         Some(task_id) => {
-            super::config_routes::record_success(task_id, target_id, CONFIG_STICKY_TTL_S);
+            super::config_routes::record_success(task_id, target_id);
             false
         }
         None => route.target_id.is_none(),
@@ -511,21 +513,31 @@ fn note_success(route: &SelectedRoute, config_task: Option<&str>, target_id: &st
 /// After a failed attempt on a config-pinned task: cool the channel down (Q31,
 /// shared across pools and configs). Legacy targets keep only the circuit breaker.
 fn note_failure(config_task: Option<&str>, failure: &AttemptFailure) {
-    if config_task.is_some() {
+    if let Some(task_id) = config_task {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let retry_after = failure
             .headers
             .get(axum::http::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<u64>().ok());
+            .and_then(|v| super::config_routes::parse_retry_after(v, now));
+        let class = failure
+            .class
+            .or(failure
+                .upstream_status
+                .map(|s| FailureClass::from_status(s.as_u16())))
+            .unwrap_or(FailureClass::Network);
         super::config_routes::record_failure(
+            task_id,
             &failure.target_id,
-            failure.upstream_status.map(|s| s.as_u16()),
+            &failure.outbound_model,
+            class,
             retry_after,
         );
     }
 }
-
-const CONFIG_STICKY_TTL_S: u64 = 3600;
 
 async fn mark_active_target(context: &ServerContext, agent: RouterAgent, target_id: &str) {
     let mut config = context.config.write().await;
@@ -639,6 +651,15 @@ async fn attempt_target(
         }
     }
 
+    if route.agent == RouterAgent::Codex && !translated {
+        let openai = transforms::is_openai_host(target.base_url());
+        if let Some(shaped) =
+            transforms::shape_responses_for_upstream(current_json.as_ref(), openai)
+        {
+            current_body = shaped;
+        }
+    }
+
     let mut rectifier_retried = false;
 
     loop {
@@ -693,13 +714,16 @@ async fn attempt_target(
         {
             Ok(response) => response,
             Err(failure) => {
-                return AttemptResult::Retry(AttemptFailure::transport(
-                    target,
-                    failure.status,
-                    failure.summary,
-                    endpoint,
-                    outbound_model,
-                ));
+                return AttemptResult::Retry(
+                    AttemptFailure::transport(
+                        target,
+                        failure.status,
+                        failure.summary,
+                        endpoint,
+                        outbound_model,
+                    )
+                    .with_class(failure.class),
+                );
             }
         };
 
@@ -726,7 +750,20 @@ async fn attempt_target(
             }
 
             // Claude Code parses errors as Anthropic `{type:"error",error:{…}}`.
-            let body = if reply_as_messages {
+            let body = if pivot == Some(Pivot::CodexToMessages) {
+                // Codex reads OpenAI-shaped errors; see `messages_error_to_openai`.
+                match super::pivot_bridge::messages_error_to_openai(&decompress_upstream_body(
+                    &headers, &body,
+                )) {
+                    Some(converted) => {
+                        headers.remove(CONTENT_ENCODING);
+                        headers.remove(CONTENT_LENGTH);
+                        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                        Bytes::from(converted)
+                    }
+                    None => body,
+                }
+            } else if reply_as_messages {
                 headers.remove(CONTENT_ENCODING);
                 headers.remove(CONTENT_LENGTH);
                 headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -763,6 +800,7 @@ async fn attempt_target(
                 target_id: target.id().to_string(),
                 target_name: target.name().to_string(),
                 attempt_count: 0,
+                class: None,
             });
         }
 
@@ -780,14 +818,27 @@ async fn attempt_target(
             .await
             {
                 Ok(raw) => raw,
-                Err(failure) => {
-                    return AttemptResult::Retry(AttemptFailure::transport(
-                        target,
-                        failure.status,
+                // R2: a refusal or an oversized prompt fails the same way
+                // everywhere, so hand it back instead of trying other channels.
+                Err(failure) if failure.class == Some(FailureClass::RequestError) => {
+                    return AttemptResult::Return(AttemptResponse::local_error(
+                        StatusCode::BAD_REQUEST,
                         failure.summary,
                         endpoint,
                         outbound_model,
                     ));
+                }
+                Err(failure) => {
+                    return AttemptResult::Retry(
+                        AttemptFailure::transport(
+                            target,
+                            failure.status,
+                            failure.summary,
+                            endpoint,
+                            outbound_model,
+                        )
+                        .with_class(failure.class),
+                    );
                 }
             };
         }
@@ -1031,6 +1082,9 @@ fn outbound_headers(
 struct TransportFailure {
     status: StatusCode,
     summary: String,
+    /// Set when the failure says more than its status: an error inside a 200
+    /// stream (R2) or a slow first output (R3).
+    class: Option<FailureClass>,
 }
 
 struct RawAttemptResponse {
@@ -1116,6 +1170,7 @@ async fn send_upstream(
                     summary: format!(
                         "upstream did not produce its first response chunk within {first_byte_timeout}s"
                     ),
+                    class: Some(FailureClass::FirstByteTimeout),
                 })?
         } else {
             operation.await
@@ -1146,6 +1201,7 @@ async fn send_upstream(
                     summary: format!(
                         "upstream non-streaming request exceeded {non_streaming_timeout}s"
                     ),
+                    class: None,
                 })?
         } else {
             operation.await
@@ -1168,9 +1224,11 @@ async fn validate_success_response(
         RawAttemptBody::Buffered(body) => {
             let decoded = decompress_upstream_body(&headers, &body);
             if let Some(summary) = semantic_error_from_bytes(protocol, &decoded) {
+                let class = Some(FailureClass::from_semantic(&summary, ""));
                 return Err(TransportFailure {
                     status: StatusCode::BAD_GATEWAY,
                     summary,
+                    class,
                 });
             }
             RawAttemptBody::Buffered(body)
@@ -1226,9 +1284,11 @@ async fn prime_streaming_body(
                 });
             }
             StreamStartInspection::Failed(summary) => {
+                let class = Some(FailureClass::from_semantic(&summary, ""));
                 return Err(TransportFailure {
                     status: StatusCode::BAD_GATEWAY,
                     summary,
+                    class,
                 });
             }
             StreamStartInspection::Pending => {}
@@ -1241,6 +1301,7 @@ async fn prime_streaming_body(
                     "upstream produced no semantic output within the {} KiB stream preflight limit",
                     MAX_STREAM_PRIME_BYTES / 1024
                 ),
+                class: None,
             });
         }
 
@@ -1255,6 +1316,7 @@ async fn prime_streaming_body(
                     summary: format!(
                         "upstream produced no semantic output within {semantic_timeout_seconds}s"
                     ),
+                    class: Some(FailureClass::FirstByteTimeout),
                 });
             }
             tokio::time::timeout(remaining, rest.next())
@@ -1264,6 +1326,7 @@ async fn prime_streaming_body(
                     summary: format!(
                         "upstream produced no semantic output within {semantic_timeout_seconds}s"
                     ),
+                    class: Some(FailureClass::FirstByteTimeout),
                 })?
         };
 
@@ -1278,12 +1341,14 @@ async fn prime_streaming_body(
                     }),
                     StreamStartInspection::Failed(summary) => Err(TransportFailure {
                         status: StatusCode::BAD_GATEWAY,
+                        class: Some(FailureClass::from_semantic(&summary, "")),
                         summary,
                     }),
                     StreamStartInspection::Pending => Err(TransportFailure {
                         status: StatusCode::BAD_GATEWAY,
                         summary: "upstream stream ended before producing semantic output"
                             .to_string(),
+                        class: None,
                     }),
                 };
             }
@@ -1302,6 +1367,7 @@ async fn read_response_body_limited(
             return Err(TransportFailure {
                 status: StatusCode::BAD_GATEWAY,
                 summary: "upstream response exceeded the local router limit".to_string(),
+                class: None,
             });
         }
         body.extend_from_slice(&chunk);
@@ -1314,16 +1380,19 @@ fn transport_from_reqwest(error: reqwest::Error) -> TransportFailure {
         TransportFailure {
             status: StatusCode::GATEWAY_TIMEOUT,
             summary: "upstream request timed out".to_string(),
+            class: None,
         }
     } else if error.is_connect() {
         TransportFailure {
             status: StatusCode::BAD_GATEWAY,
             summary: "failed to connect to upstream".to_string(),
+            class: None,
         }
     } else {
         TransportFailure {
             status: StatusCode::BAD_GATEWAY,
             summary: "upstream request or response stream failed".to_string(),
+            class: None,
         }
     }
 }
@@ -1405,6 +1474,7 @@ struct AttemptFailure {
     target_id: String,
     target_name: String,
     attempt_count: usize,
+    class: Option<FailureClass>,
 }
 
 impl AttemptFailure {
@@ -1426,7 +1496,13 @@ impl AttemptFailure {
             target_id: target.id().to_string(),
             target_name: target.name().to_string(),
             attempt_count: 0,
+            class: None,
         }
+    }
+
+    fn with_class(mut self, class: Option<FailureClass>) -> Self {
+        self.class = class;
+        self
     }
 }
 
@@ -2656,6 +2732,168 @@ mod tests {
         let body = response.text().await.unwrap();
         assert!(body.contains("fallback output"));
         assert!(!body.contains("stream overloaded"));
+        let records = router.recent_requests(5).await.unwrap();
+        assert_eq!(records[0].target_id.as_deref(), Some("second"));
+        assert_eq!(records[0].attempt_count, 2);
+
+        router.stop().await.unwrap();
+        failing_task.abort();
+        healthy_task.abort();
+        let _ = failing_task.await;
+        let _ = healthy_task.await;
+        remove_database(&database_path);
+    }
+
+    #[tokio::test]
+    async fn a_context_overflow_inside_the_stream_does_not_fail_over() {
+        let failing = Router::new().fallback(any(|| async {
+            let chunks = vec![Ok::<Bytes, Infallible>(Bytes::from_static(
+                b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"prompt too large\"}}}\n\n",
+            ))];
+            let mut response = Response::new(Body::from_stream(stream::iter(chunks)));
+            response
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+            response
+        }));
+        let healthy = Router::new().fallback(any(|| async {
+            let chunks = vec![Ok::<Bytes, Infallible>(Bytes::from_static(
+                b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"fallback output\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+            ))];
+            let mut response = Response::new(Body::from_stream(stream::iter(chunks)));
+            response
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+            response
+        }));
+        let (failing_address, failing_task) = start_mock_upstream(failing).await;
+        let (healthy_address, healthy_task) = start_mock_upstream(healthy).await;
+        let targets = vec![
+            UpstreamTarget::with_details(
+                "first",
+                "First",
+                format!("http://{failing_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+            UpstreamTarget::with_details(
+                "second",
+                "Second",
+                format!("http://{healthy_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+        ];
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone());
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                failover_upstreams(RouterAgent::Codex, targets, &["first", "second"]),
+            ))
+            .await
+            .unwrap();
+
+        let response = test_client()
+            .post(format!("{}/codex/v1/responses", info.base_url))
+            .json(&json!({"model":"gpt-test","input":"hello","stream":true}))
+            .send()
+            .await
+            .unwrap();
+        // R2: every channel would refuse the same prompt; hand it back.
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.text().await.unwrap();
+        assert!(body.contains("context_length_exceeded"));
+        assert!(!body.contains("fallback output"));
+        let records = router.recent_requests(5).await.unwrap();
+        assert_eq!(records[0].target_id.as_deref(), Some("first"));
+        assert_eq!(records[0].attempt_count, 1);
+
+        router.stop().await.unwrap();
+        failing_task.abort();
+        healthy_task.abort();
+        let _ = failing_task.await;
+        let _ = healthy_task.await;
+        remove_database(&database_path);
+    }
+
+    #[tokio::test]
+    async fn bookkeeping_events_before_an_overload_still_fail_over() {
+        let failing = Router::new().fallback(any(|| async {
+            let chunks = vec![Ok::<Bytes, Infallible>(Bytes::from_static(
+                b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\nevent: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"primary\":{\"used_percent\":3}}\n\nevent: response.metadata\ndata: {\"type\":\"response.metadata\"}\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"type\":\"server_error\",\"message\":\"stream overloaded\"}}}\n\n",
+            ))];
+            let mut response = Response::new(Body::from_stream(stream::iter(chunks)));
+            response
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+            response
+        }));
+        let healthy = Router::new().fallback(any(|| async {
+            let chunks = vec![Ok::<Bytes, Infallible>(Bytes::from_static(
+                b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"fallback output\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+            ))];
+            let mut response = Response::new(Body::from_stream(stream::iter(chunks)));
+            response
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+            response
+        }));
+        let (failing_address, failing_task) = start_mock_upstream(failing).await;
+        let (healthy_address, healthy_task) = start_mock_upstream(healthy).await;
+        let targets = vec![
+            UpstreamTarget::with_details(
+                "first",
+                "First",
+                format!("http://{failing_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+            UpstreamTarget::with_details(
+                "second",
+                "Second",
+                format!("http://{healthy_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap(),
+        ];
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone());
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                failover_upstreams(RouterAgent::Codex, targets, &["first", "second"]),
+            ))
+            .await
+            .unwrap();
+
+        let response = test_client()
+            .post(format!("{}/codex/v1/responses", info.base_url))
+            .json(&json!({"model":"gpt-test","input":"hello","stream":true}))
+            .send()
+            .await
+            .unwrap();
+        // R1: rate-limit and metadata events are not output; the overload
+        // after them still fails over.
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.text().await.unwrap();
+        assert!(body.contains("fallback output"));
         let records = router.recent_requests(5).await.unwrap();
         assert_eq!(records[0].target_id.as_deref(), Some("second"));
         assert_eq!(records[0].attempt_count, 2);

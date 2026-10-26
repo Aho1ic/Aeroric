@@ -272,12 +272,26 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
     let mut messages = Vec::new();
     let mut pending_tool_calls = Vec::new();
     let mut pending_reasoning = String::new();
+    // Images returned by tool calls; Chat tool messages are text-only, so they
+    // follow the run of tool results as one user message (cc-switch tool_media).
+    let mut pending_tool_images: Vec<Value> = Vec::new();
 
     for item in items {
         let Some(item) = item.as_object() else {
             continue;
         };
         let item_type = item.get("type").and_then(Value::as_str);
+        if !matches!(
+            item_type,
+            Some(
+                "function_call_output"
+                    | "custom_tool_call_output"
+                    | "tool_search_output"
+                    | "reasoning"
+            )
+        ) {
+            flush_tool_images(&mut messages, &mut pending_tool_images);
+        }
         if item_type == Some("reasoning") {
             if let Some(summary) = item.get("summary").and_then(Value::as_array) {
                 for text in summary
@@ -348,7 +362,7 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
                         .or_else(|| item.get("id"))
                         .and_then(Value::as_str)
                         .unwrap_or_default(),
-                    "content":canonical_json(item.get("output").unwrap_or(&Value::Null))
+                    "content":tool_output_text(item.get("output").unwrap_or(&Value::Null), &mut pending_tool_images)
                 }),
             );
             continue;
@@ -389,12 +403,59 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
         }
     }
 
+    flush_tool_images(&mut messages, &mut pending_tool_images);
     flush_pending_tool_calls(
         &mut messages,
         &mut pending_tool_calls,
         &mut pending_reasoning,
     );
     messages
+}
+
+/// A tool result's text for a Chat `tool` message. Image parts move to
+/// `images` (sent next as a user message) and leave a placeholder, instead of
+/// pouring base64 into the text where the model cannot see the picture.
+fn tool_output_text(output: &Value, images: &mut Vec<Value>) -> String {
+    let Some(parts) = output.as_array() else {
+        return canonical_json(output);
+    };
+    let image_url = |part: &Value| -> Option<String> {
+        match part.get("type").and_then(Value::as_str) {
+            Some("input_image" | "image_url" | "output_image") => part
+                .get("image_url")
+                .and_then(|url| {
+                    url.as_str()
+                        .or_else(|| url.get("url").and_then(Value::as_str))
+                })
+                .map(str::to_string),
+            _ => None,
+        }
+    };
+    if !parts.iter().any(|part| image_url(part).is_some()) {
+        return canonical_json(output);
+    }
+    let mut text = Vec::new();
+    for part in parts {
+        if let Some(url) = image_url(part) {
+            images.push(json!({"type":"image_url","image_url":{"url":url}}));
+            text.push("[image attached in the next message]".to_string());
+        } else if let Some(t) = part.get("text").and_then(Value::as_str) {
+            text.push(t.to_string());
+        } else {
+            text.push(canonical_json(part));
+        }
+    }
+    text.join("\n")
+}
+
+fn flush_tool_images(messages: &mut Vec<Value>, images: &mut Vec<Value>) {
+    if images.is_empty() {
+        return;
+    }
+    let mut content =
+        vec![json!({"type":"text","text":"Images returned by the tool calls above:"})];
+    content.append(images);
+    append_message(messages, json!({"role":"user","content":content}));
 }
 
 fn response_tools_to_chat(tools: &Value) -> Vec<Value> {
@@ -542,11 +603,16 @@ fn responses_usage(usage: &Value) -> Value {
         .or_else(|| usage.get("output_tokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    json!({
+    let mut out = json!({
         "input_tokens":input,
         "output_tokens":output,
         "total_tokens":usage.get("total_tokens").and_then(Value::as_u64).unwrap_or(input.saturating_add(output))
-    })
+    });
+    let cached = super::bridge_common::cached_prompt_tokens(usage);
+    if cached > 0 {
+        out["input_tokens_details"] = json!({ "cached_tokens": cached });
+    }
+    out
 }
 
 fn extract_reasoning_text(value: &Value) -> Option<String> {
@@ -621,6 +687,7 @@ pub struct ChatSseTransformer {
     text: String,
     reasoning: String,
     tools: BTreeMap<usize, ToolState>,
+    call_indexes: super::bridge_common::CallIndexer,
     usage: Option<Value>,
     started: bool,
     text_started: bool,
@@ -638,6 +705,7 @@ impl ChatSseTransformer {
             text: String::new(),
             reasoning: String::new(),
             tools: BTreeMap::new(),
+            call_indexes: Default::default(),
             usage: None,
             started: false,
             text_started: false,
@@ -720,8 +788,8 @@ impl ChatSseTransformer {
             self.emit_text_delta(&content, output);
         }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
-            for call in tool_calls {
-                let index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            for (position, call) in tool_calls.iter().enumerate() {
+                let index = self.call_indexes.index(call, position);
                 let function = call.get("function").unwrap_or(&Value::Null);
                 // entry 一次完成「惰性建 + 取可变引用」,省掉后面一次 get_mut 查找。
                 // 首次见到某个 index 时同步发一条 output_item.added;这与改写前的
@@ -1014,6 +1082,40 @@ fn response_base(
 fn emit_event(event: &str, payload: Value, output: &mut Vec<Bytes>) {
     let payload = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
     output.push(Bytes::from(format!("event: {event}\ndata: {payload}\n\n")));
+}
+
+#[cfg(test)]
+mod tool_media_tests {
+    use super::*;
+
+    #[test]
+    fn tool_images_follow_the_tool_results_as_a_user_message() {
+        let chat = responses_to_chat(&json!({
+            "model": "m",
+            "input": [
+                {"type": "function_call", "call_id": "c1", "name": "shot", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": [
+                    {"type": "input_text", "text": "screen captured"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,AAAA"}
+                ]},
+                {"type": "message", "role": "user", "content": "what do you see?"}
+            ]
+        }));
+        let messages = chat["messages"].as_array().unwrap();
+        let tool = messages.iter().find(|m| m["role"] == "tool").unwrap();
+        let text = tool["content"].as_str().unwrap();
+        assert!(
+            text.contains("screen captured") && !text.contains("AAAA"),
+            "{text}"
+        );
+        let tool_at = messages.iter().position(|m| m["role"] == "tool").unwrap();
+        let images = &messages[tool_at + 1];
+        assert_eq!(images["role"], "user");
+        assert_eq!(
+            images["content"][1]["image_url"]["url"],
+            "data:image/png;base64,AAAA"
+        );
+    }
 }
 
 #[cfg(test)]

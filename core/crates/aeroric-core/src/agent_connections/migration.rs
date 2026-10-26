@@ -435,6 +435,7 @@ fn collect_builtin_migrations(
                 models,
                 catalog_revision: 1,
                 enabled: true,
+                rest_on_limit: true,
             },
             config: AgentConfig {
                 id: config_id,
@@ -559,6 +560,7 @@ pub(super) fn prepare_custom(
             models,
             catalog_revision: 1,
             enabled: true,
+            rest_on_limit: true,
         },
         config: AgentConfig {
             id: config_id,
@@ -590,6 +592,7 @@ fn model_entries(models: &[String]) -> Vec<ModelEntry> {
             inputs: Vec::<InputKind>::new(),
             reasoning_tiers: Vec::new(),
             enabled: true,
+            protocols: vec![],
         })
         .collect()
 }
@@ -882,6 +885,7 @@ mod tests {
                 models: model_entries(&["keep".to_string()]),
                 catalog_revision: 7,
                 enabled: true,
+                rest_on_limit: true,
             }],
             pools: Vec::new(),
             configs: Vec::new(),

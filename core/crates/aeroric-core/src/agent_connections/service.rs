@@ -125,6 +125,7 @@ pub fn merge_fetched_models(connection: &mut Connection, fetched: &[String]) -> 
             inputs: Vec::new(),
             reasoning_tiers: Vec::new(),
             enabled: true,
+            protocols: vec![],
         });
         added += 1;
     }

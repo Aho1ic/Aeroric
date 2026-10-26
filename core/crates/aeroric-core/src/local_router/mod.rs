@@ -1,6 +1,7 @@
 mod cache_injector;
 mod chat_bridge;
 mod circuit_breaker;
+mod bridge_common;
 pub mod config_routes;
 mod inline_tool_calls;
 mod messages_bridge;

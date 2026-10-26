@@ -89,6 +89,12 @@ pub(super) fn inspect_sse_block(protocol: SemanticProtocol, block: &str) -> Stre
             | "response.output_item.added"
             | "response.content_part.added"
             | "response.reasoning_summary_part.added"
+            // Bookkeeping that can precede a late failure (R1, CPA 9e79552f):
+            // committing on these would forbid failing over an overload.
+            | "response.metadata"
+            | "codex.rate_limits"
+            | "codex.response.metadata"
+            | "keepalive"
             | "" => StreamStartInspection::Pending,
             _ => StreamStartInspection::Safe,
         },

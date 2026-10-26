@@ -242,6 +242,14 @@ pub(super) fn model_endpoint_candidates(base_url: &url::Url) -> Vec<String> {
         if keeps_origin(stripped) {
             push_unique(&mut candidates, format!("{stripped}/v1/models"));
             push_unique(&mut candidates, format!("{stripped}/models"));
+            // 百炼 / 千问 Token Plan:`/v1/models`、`/models` 都 404,目录在兼容模式下
+            // (cc-switch c3ad9bb0)。
+            if root.ends_with("/apps/anthropic") {
+                push_unique(
+                    &mut candidates,
+                    format!("{stripped}/compatible-mode/v1/models"),
+                );
+            }
         }
     }
 
@@ -1342,6 +1350,15 @@ mod tests {
         assert_eq!(
             candidates("https://agentrouter.org"),
             vec!["https://agentrouter.org/v1/models"]
+        );
+        assert_eq!(
+            candidates("https://dashscope.aliyuncs.com/apps/anthropic"),
+            vec![
+                "https://dashscope.aliyuncs.com/apps/anthropic/v1/models",
+                "https://dashscope.aliyuncs.com/v1/models",
+                "https://dashscope.aliyuncs.com/models",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
+            ]
         );
         assert_eq!(
             candidates("https://token-plan-cn.xiaomimimo.com/anthropic"),
