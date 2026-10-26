@@ -6,13 +6,16 @@ public enum SessionInfoLayout {
     public static let minWidth: CGFloat = 260
     public static let maxWidth: CGFloat = 340
     public static let defaultWidth: CGFloat = 280
-    /// Below this centre width the column folds into a button, so the
-    /// conversation keeps a readable width; the saved preference is untouched.
-    public static let autoCollapseBelow: CGFloat = 760
+    /// The drag strip between the conversation and the column.
+    public static let handleWidth: CGFloat = 7
     public static let widthKey = "aeroric.session.infoWidth"
 
-    public static func showsColumn(collapsed: Bool, centreWidth: CGFloat) -> Bool {
-        !collapsed && centreWidth >= autoCollapseBelow
+    /// F2: the column folds into a button unless the conversation keeps
+    /// `minimumConversationWidth` beside it; the saved preference is untouched.
+    public static func showsColumn(collapsed: Bool, centreWidth: CGFloat,
+                                   columnWidth: CGFloat = defaultWidth) -> Bool {
+        !collapsed && centreWidth - clampWidth(columnWidth) - handleWidth
+            >= NativePanelGeometry.mainShell.minimumConversationWidth
     }
 
     public static func clampWidth(_ width: CGFloat) -> CGFloat {

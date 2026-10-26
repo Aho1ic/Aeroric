@@ -18,6 +18,9 @@ final class MainShellGeometryTests: XCTestCase {
         XCTAssertEqual(shell.minimumInspectorWidth, 260)
         XCTAssertEqual(shell.maximumInspectorWidth, 520)
         XCTAssertEqual(shell.minimumCentreWidth, 480)
+        XCTAssertEqual(shell.inspectorAutoCollapseWidth, 1100)
+        XCTAssertEqual(shell.minimumConversationWidth, 600)
+        XCTAssertEqual(shell.readingColumnWidth, 880)
         XCTAssertEqual(shell.minimumWindowWidth, 900)
         XCTAssertEqual(shell.minimumWindowHeight, 600)
         XCTAssertEqual(shell.columnGap, 0)
@@ -31,9 +34,11 @@ final class MainShellGeometryTests: XCTestCase {
         for (width, left, centre, right): (CGFloat, CGFloat, CGFloat, CGFloat) in [
             (1280, 260, 700, 320),
             (1260, 260, 680, 320),
-            (1000, 260, 480, 260),
-            (990, 56, 614, 320),
-            (900, 56, 524, 320),
+            (1100, 260, 520, 320),
+            (1099, 260, 839, 0),
+            (1000, 260, 740, 0),
+            (990, 56, 934, 0),
+            (900, 56, 844, 0),
         ] {
             let budget = NativePanelGeometry.mainShellBudget(totalWidth: width, preferredSidebarWidth: 260)
             XCTAssertEqual(budget.sidebarWidth, left, "width \(width)")
@@ -60,6 +65,37 @@ final class MainShellGeometryTests: XCTestCase {
             totalWidth: 2000, preferredSidebarWidth: 260, preferredInspectorWidth: 900).inspectorWidth, 520)
         XCTAssertEqual(NativePanelGeometry.mainShellBudget(
             totalWidth: 2000, preferredSidebarWidth: 260, preferredInspectorWidth: 100).inspectorWidth, 260)
+    }
+
+    /// F: the widths the user checks on a 13" Air and a 27" display
+    /// (window width minus the 6pt sidebar handle).
+    func testCheckedWindowWidths() {
+        for (window, centre, infoColumn): (CGFloat, CGFloat, Bool) in [
+            (1280, 694, false),
+            (1470, 884, false),
+            (1728, 1142, true),
+            (2560, 1974, true),
+        ] {
+            let budget = NativePanelGeometry.mainShellBudget(
+                totalWidth: window - shell.handleWidth, preferredSidebarWidth: 260)
+            XCTAssertEqual(budget.inspectorWidth, 320, "window \(window)")
+            XCTAssertEqual(budget.workspaceWidth, centre, "window \(window)")
+            XCTAssertEqual(SessionInfoLayout.showsColumn(collapsed: false, centreWidth: centre), infoColumn,
+                           "window \(window): the info column yields before the conversation drops under 600")
+        }
+    }
+
+    func testNarrowWindowAutoCollapsesTheInspectorWithoutChangingPreference() {
+        let narrow = NativePanelGeometry.mainShellBudget(totalWidth: 1080, preferredSidebarWidth: 260)
+        XCTAssertTrue(narrow.inspectorAutoCollapsed)
+        XCTAssertEqual(narrow.inspectorWidth, 0)
+        XCTAssertEqual(narrow.workspaceWidth, 820)
+        let closed = NativePanelGeometry.mainShellBudget(
+            totalWidth: 1080, preferredSidebarWidth: 260, inspectorVisible: false)
+        XCTAssertFalse(closed.inspectorAutoCollapsed, "nothing to collapse when the user closed it")
+        let wide = NativePanelGeometry.mainShellBudget(totalWidth: 1100, preferredSidebarWidth: 260)
+        XCTAssertFalse(wide.inspectorAutoCollapsed)
+        XCTAssertEqual(wide.inspectorWidth, 320, "the column returns on widening")
     }
 
     func testInspectorHidesRatherThanSqueezingTheCentre() {

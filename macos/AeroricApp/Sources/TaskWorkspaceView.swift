@@ -159,6 +159,7 @@ struct TaskWorkspaceView: View {
     @Environment(\.mainShellBudget) private var shellBudget
     @Environment(\.mainShellNavigationEpoch) private var navigationEpoch
     @Environment(\.mainShellInspectorWidth) private var inspectorWidthPreference
+    @Environment(\.mainShellInspectorOverlay) private var inspectorOverlay
     @AppStorage("settings.surfacePreference") private var surfaceRawValue = SurfacePreference.glass.rawValue
     @State private var submissionCheck: String?
     @State private var sqlDraft = "SELECT 1;"
@@ -197,6 +198,12 @@ struct TaskWorkspaceView: View {
         !usesFullWorkspace && (shellBudget?.inspectorWidth ?? 0) > 0
     }
 
+    /// F3: a window too narrow for the column shows the panel over the
+    /// content instead of squeezing the conversation.
+    private var showsAuxiliaryOverlay: Bool {
+        !usesFullWorkspace && !showsAuxiliary && inspectorOverlay?.wrappedValue == true
+    }
+
     /// Overhaul M1: the centre is the opaque reading canvas; the auxiliary
     /// panel sits flush beside it behind a hairline drag strip, with a glass
     /// tab strip over opaque content. Its budgeted width includes the strip.
@@ -209,7 +216,7 @@ struct TaskWorkspaceView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(AeroricColor.canvas)
-            if let shellBudget {
+            if let shellBudget, !showsAuxiliaryOverlay {
                 let gap = NativePanelGeometry.mainShell.handleWidth
                 let panelWidth = max(0, (shellBudget.inspectorWidth > 0
                     ? shellBudget.inspectorWidth : NativePanelGeometry.mainShell.minimumInspectorWidth) - gap)
@@ -230,6 +237,30 @@ struct TaskWorkspaceView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .trailing) {
+            if showsAuxiliaryOverlay { auxiliaryOverlay }
+        }
+    }
+
+    private var auxiliaryOverlay: some View {
+        ZStack(alignment: .trailing) {
+            // A click outside the panel closes it.
+            Color.black.opacity(0.001)
+                .contentShape(Rectangle())
+                .onTapGesture { inspectorOverlay?.wrappedValue = false }
+            auxiliaryPanel
+                .frame(width: NativePanelGeometry.mainShell.defaultInspectorWidth)
+                .frame(maxHeight: .infinity)
+                .background(AeroricColor.layer1)
+                .overlay(alignment: .leading) { HairlineDivider(.vertical) }
+                .shadow(color: .black.opacity(0.28), radius: 18, x: -4)
+            Button("") { inspectorOverlay?.wrappedValue = false }
+                .keyboardShortcut(.cancelAction)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+        .transition(.move(edge: .trailing).combined(with: .opacity))
     }
 
     private func sessionHandlers<Content: View>(_ content: Content) -> some View {
@@ -759,13 +790,12 @@ struct TaskWorkspaceView: View {
             projectID: resourceProjectID, projectPath: resourceProject?.path,
             section: resourceProjectID.map { resourceBook.scene($0).section },
             // Resizing an already-visible inspector must not cancel reads.
-            visible: !usesFullWorkspace && (shellBudget?.inspectorWidth ?? 0) > 0,
+            visible: showsAuxiliary || showsAuxiliaryOverlay,
             configurationEpoch: services.configurationEpoch
         )
     }
     private func loadCurrentResources() async {
-        guard !usesFullWorkspace, let budget = shellBudget, budget.inspectorWidth > 0,
-              let project = resourceProject else { return }
+        guard showsAuxiliary || showsAuxiliaryOverlay, let project = resourceProject else { return }
         let scene = resourceBook.scene(project.id)
         if scene.section == .files, (scene.directoryStates[""] ?? .notLoaded).needsAutomaticLoad {
             await resourceBook.loadDirectory(projectID: project.id, path: "", reader: services.projectResourceReader)

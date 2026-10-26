@@ -87,6 +87,7 @@ struct AeroricCommands: Commands {
     @FocusedValue(\.workspaceSelection) private var workspaceSelection
     @FocusedValue(\.workspaceActivity) private var workspaceActivity
     @FocusedValue(\.sidebarCollapse) private var sidebarCollapse
+    @FocusedValue(\.inspectorToggle) private var inspectorToggle
     @FocusedValue(\.newSessionAction) private var newSessionAction
     @FocusedValue(\.closeFileTabAction) private var closeFileTabAction
 
@@ -147,6 +148,13 @@ struct AeroricCommands: Commands {
             }
             .keyboardShortcut("s", modifiers: [.command, .control])
             .disabled(sidebarCollapse == nil)
+
+            // ⌥⌘I: the "show inspector" chord of Pages, Keynote and Numbers.
+            Button(inspectorToggle?.wrappedValue == true ? "隐藏辅助面板" : "显示辅助面板") {
+                inspectorToggle?.wrappedValue.toggle()
+            }
+            .keyboardShortcut("i", modifiers: [.command, .option])
+            .disabled(inspectorToggle == nil)
         }
     }
 }

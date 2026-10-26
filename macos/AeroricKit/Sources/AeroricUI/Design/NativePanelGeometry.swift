@@ -44,6 +44,16 @@ public enum NativePanelGeometry {
         public let defaultInspectorWidth: CGFloat = 320
         public let minimumInspectorWidth: CGFloat = 260
         public let maximumInspectorWidth: CGFloat = 520
+        /// Below this window width the inspector stops taking a column; its
+        /// toggle opens it as an overlay instead (F1/F3). The stored toggle
+        /// is untouched, so widening the window brings the column back.
+        public let inspectorAutoCollapseWidth: CGFloat = 1100
+        /// The conversation keeps at least this much; the session-info
+        /// column gives way first (F2).
+        public let minimumConversationWidth: CGFloat = 600
+        /// Cap for row lists read left to right (task list, attention
+        /// queue), so a 27" window does not stretch a row past one glance (F4).
+        public let readingColumnWidth: CGFloat = 880
         /// The centre is protected: the inspector shrinks, then hides.
         public let minimumCentreWidth: CGFloat = 480
         public let minimumWindowWidth: CGFloat = 900
@@ -74,6 +84,9 @@ public enum NativePanelGeometry {
         /// True when the rail is shown because the window is narrow, not
         /// because the user collapsed it.
         public let sidebarAutoCollapsed: Bool
+        /// True when the user wants the inspector but the window is too
+        /// narrow for its column (it opens as an overlay instead).
+        public let inspectorAutoCollapsed: Bool
 
         public var contentWidth: CGFloat {
             workspaceWidth + (inspectorWidth > 0 ? gap + inspectorWidth : 0)
@@ -93,7 +106,8 @@ public enum NativePanelGeometry {
             shell.maximumSidebarWidth, max(shell.minimumSidebarWidth, preferredSidebarWidth)
         )
         var inspector: CGFloat = 0
-        if inspectorVisible {
+        let inspectorAuto = inspectorVisible && totalWidth < shell.inspectorAutoCollapseWidth
+        if inspectorVisible, !inspectorAuto {
             let wanted = preferredInspectorWidth ?? shell.defaultInspectorWidth
             let target = min(shell.maximumInspectorWidth, max(shell.minimumInspectorWidth, wanted))
             let fitted = min(target, totalWidth - sidebar - shell.minimumCentreWidth)
@@ -102,7 +116,8 @@ public enum NativePanelGeometry {
         let workspace = max(0, totalWidth - sidebar - inspector)
         return MainShellBudget(
             totalWidth: totalWidth, sidebarWidth: sidebar, workspaceWidth: workspace,
-            inspectorWidth: inspector, gap: shell.columnGap, sidebarAutoCollapsed: auto
+            inspectorWidth: inspector, gap: shell.columnGap, sidebarAutoCollapsed: auto,
+            inspectorAutoCollapsed: inspectorAuto
         )
     }
 

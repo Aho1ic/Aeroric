@@ -15,6 +15,19 @@ public extension EnvironmentValues {
     }
 }
 
+private struct MainShellInspectorOverlayKey: EnvironmentKey {
+    static let defaultValue: Binding<Bool>? = nil
+}
+
+public extension EnvironmentValues {
+    /// Non-nil only while the window is too narrow for the inspector column
+    /// (F3): true shows the auxiliary panel as an overlay.
+    var mainShellInspectorOverlay: Binding<Bool>? {
+        get { self[MainShellInspectorOverlayKey.self] }
+        set { self[MainShellInspectorOverlayKey.self] = newValue }
+    }
+}
+
 /// Drag handle for the auxiliary panel. Dragging left widens the panel.
 /// Clamped to 260–520pt; the budget still protects the centre.
 public struct InspectorResizeHandle: View {

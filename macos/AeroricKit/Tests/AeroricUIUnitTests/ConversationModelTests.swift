@@ -95,7 +95,7 @@ final class ConversationModelTests: XCTestCase {
     func testColumnWidthClamps() {
         XCTAssertEqual(TranscriptGeometry.columnWidth(for: 1000), 680)
         XCTAssertEqual(TranscriptGeometry.columnWidth(for: 1250), 800)
-        XCTAssertEqual(TranscriptGeometry.columnWidth(for: 2000), 920)
+        XCTAssertEqual(TranscriptGeometry.columnWidth(for: 2000), 880)
         XCTAssertEqual(TranscriptGeometry.columnWidth(for: 600), 568, "narrow centre keeps a 16pt gutter")
     }
 

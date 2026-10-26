@@ -244,11 +244,11 @@ public enum TranscriptBuilder {
     }
 }
 
-/// Conversation column: clamp(680, centre × 0.64, 920), never wider than the
+/// Conversation column: clamp(680, centre × 0.64, 880), never wider than the
 /// centre minus a 16pt gutter each side.
 public enum TranscriptGeometry {
     public static let minimum: CGFloat = 680
-    public static let maximum: CGFloat = 920
+    public static let maximum: CGFloat = 880
     public static let ratio: CGFloat = 0.64
     public static let gutter: CGFloat = 16
 

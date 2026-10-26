@@ -41,7 +41,9 @@ public struct LiveSessionView: View {
 
     public var body: some View {
         GeometryReader { outer in
-            let showsColumn = SessionInfoLayout.showsColumn(collapsed: infoCollapsed, centreWidth: outer.size.width)
+            let showsColumn = SessionInfoLayout.showsColumn(
+                collapsed: infoCollapsed, centreWidth: outer.size.width, columnWidth: infoWidth
+            )
             HStack(spacing: 0) {
                 conversation
                 if showsColumn {

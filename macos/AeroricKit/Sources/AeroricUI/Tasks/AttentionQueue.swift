@@ -83,7 +83,8 @@ public struct AttentionListView: View {
                 .listStyle(.inset)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: NativePanelGeometry.mainShell.readingColumnWidth, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity)
         .accessibilityIdentifier("attention.page")
     }
 

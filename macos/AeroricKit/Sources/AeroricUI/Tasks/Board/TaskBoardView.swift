@@ -118,6 +118,8 @@ public struct TaskBoardView: View {
             }
         }
         .listStyle(.inset)
+        .frame(maxWidth: NativePanelGeometry.mainShell.readingColumnWidth)
+        .frame(maxWidth: .infinity)
         .scrollContentBackground(.hidden)
         .accessibilityIdentifier("tasks.list")
     }

@@ -51,6 +51,19 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
     /// `SIDEBAR_COLLAPSED = 56`; `ZCode` `WorkspaceSidebarCollapsedRail`),
     /// because hiding the column loses the navigation entirely.
     @State private var sidebarCollapsed = false
+    /// F3: below `inspectorAutoCollapseWidth` the inspector toggle opens an
+    /// overlay instead of a column. Never stored; widening the window
+    /// closes it and the stored column toggle takes over again.
+    @State private var inspectorOverlay = false
+    @State private var inspectorNarrow = false
+
+    /// The column toggle on a wide window, the overlay on a narrow one.
+    private var inspectorToggle: Binding<Bool> {
+        Binding(
+            get: { inspectorNarrow ? inspectorOverlay : inspectorVisible },
+            set: { if inspectorNarrow { inspectorOverlay = $0 } else { inspectorVisible = $0 } }
+        )
+    }
 
     public init(
         state: State,
@@ -101,6 +114,12 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
             .environment(\.mainShellBudget, budget)
             .environment(\.mainShellNavigationEpoch, navigationEpoch)
             .environment(\.mainShellInspectorWidth, $inspectorWidth)
+            .environment(\.mainShellInspectorOverlay, inspectorNarrow ? $inspectorOverlay : nil)
+            .onChange(of: geometry.size.width < NativePanelGeometry.mainShell.inspectorAutoCollapseWidth,
+                      initial: true) { _, narrow in
+                inspectorNarrow = narrow
+                if !narrow { inspectorOverlay = false }
+            }
         }
         .toolbar {
             ToolbarItem(placement: .navigation) {
@@ -109,7 +128,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
             }
             ToolbarItemGroup(placement: .primaryAction) {
                 moreToolsMenu
-                Toggle(isOn: $inspectorVisible) { Image(systemName: "sidebar.right") }
+                Toggle(isOn: inspectorToggle) { Image(systemName: "sidebar.right") }
                     .toggleStyle(.button)
                     .help("辅助面板（详情 / 文件 / 改动 / Git 日志）")
                     .accessibilityLabel("辅助面板")
@@ -147,6 +166,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
         .focusedSceneValue(\.workspaceSelection, navigationSelection)
         .focusedValue(\.workspaceActivity, true)
         .focusedValue(\.sidebarCollapse, $sidebarCollapsed)
+        .focusedValue(\.inspectorToggle, inspectorToggle)
         // Fill only the initial destination; never override a user target.
         .onAppear {
             if selection == nil {
@@ -331,6 +351,10 @@ public struct SidebarCollapseKey: FocusedValueKey {
     public typealias Value = Binding<Bool>
 }
 
+public struct InspectorToggleKey: FocusedValueKey {
+    public typealias Value = Binding<Bool>
+}
+
 public struct NewSessionActionKey: FocusedValueKey {
     public typealias Value = () -> Void
 }
@@ -357,6 +381,11 @@ public extension FocusedValues {
     var sidebarCollapse: Binding<Bool>? {
         get { self[SidebarCollapseKey.self] }
         set { self[SidebarCollapseKey.self] = newValue }
+    }
+
+    var inspectorToggle: Binding<Bool>? {
+        get { self[InspectorToggleKey.self] }
+        set { self[InspectorToggleKey.self] = newValue }
     }
 
     var workspaceSelection: Binding<String?>? {
