@@ -66,15 +66,15 @@ struct PickerMenuList: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: AeroricSpace.xxs) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(menu.sections) { section in
                     if let title = section.title, !section.options.isEmpty {
                         Text(title)
                             .font(AeroricType.sectionLabel())
                             .foregroundStyle(AeroricColor.textTertiary)
-                            .padding(.horizontal, AeroricSpace.l)
-                            .padding(.top, AeroricSpace.m)
-                            .padding(.bottom, AeroricSpace.xxs)
+                            .padding(.horizontal, AeroricSpace.m)
+                            .padding(.top, AeroricSpace.s)
+                            .padding(.bottom, 2)
                     }
                     ForEach(section.options) { option in row(option) }
                 }
@@ -86,9 +86,9 @@ struct PickerMenuList: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(AeroricSpace.s)
+            .padding(AeroricSpace.xs)
         }
-        .frame(width: 300)
+        .frame(width: 280)
         .frame(maxHeight: 360)
         .fixedSize(horizontal: false, vertical: true)
         .focusable()
@@ -117,21 +117,22 @@ struct PickerMenuList: View {
     }
 
     private func row(_ option: PickerOption) -> some View {
+        // Flatter rows (2026-10-26 D): 24pt, or 36pt with a description line.
         HoverCapsuleRow(selected: highlighted == option.id && option.isEnabled,
-                        height: option.detail == nil && option.disabledReason == nil ? 30 : 44,
-                        horizontalPadding: AeroricSpace.l) {
+                        height: option.detail == nil && option.disabledReason == nil ? 24 : 36,
+                        horizontalPadding: AeroricSpace.m) {
             onSelect(option.id)
         } label: {
-            HStack(spacing: AeroricSpace.m) {
+            HStack(spacing: AeroricSpace.s) {
                 if let symbol = option.systemImage {
                     Image(systemName: symbol)
-                        .font(.system(size: 13))
+                        .font(.system(size: 12))
                         .foregroundStyle(AeroricColor.textSecondary)
-                        .frame(width: 18)
+                        .frame(width: 16)
                 }
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 0) {
                     Text(option.title)
-                        .font(.system(size: AeroricType.body, weight: .medium))
+                        .font(.system(size: AeroricType.secondary, weight: .medium))
                         .foregroundStyle(AeroricColor.text)
                         .lineLimit(1)
                     if let detail = option.disabledReason ?? option.detail {

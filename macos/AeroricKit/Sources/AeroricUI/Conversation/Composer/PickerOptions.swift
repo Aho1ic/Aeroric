@@ -63,8 +63,27 @@ public enum ComposerPickerOptions {
     /// Configurations grouped by harness, in the harness picker's order.
     /// Blocked configurations stay visible with their first reason.
     public static func configurations(_ configurations: [SessionConfiguration],
-                                      draft: NewSessionDraft) -> PickerMenu {
+                                      draft: NewSessionDraft, harness: String? = nil) -> PickerMenu {
         let selected = selectedConfiguration(configurations, draft: draft)
+        if let harness {
+            // D: the harness slider already chose the family; split its
+            // entries into the CLI's own login and gateway configurations.
+            let rows = configurations.filter { $0.harness == harness }
+            func option(_ configuration: SessionConfiguration, _ detail: String) -> PickerOption {
+                PickerOption(id: "\(configuration.id)@\(configuration.version)", title: configuration.title,
+                             detail: detail, systemImage: AgentGlyph.symbol(for: configuration.agent),
+                             selected: configuration == selected, disabledReason: configuration.blockedReasons.first)
+            }
+            let builtIn = rows.filter { !NewSessionLayout.isAgentConfig($0) }.map { option($0, "使用本机 CLI 自己的登录") }
+            let configs = rows.filter(NewSessionLayout.isAgentConfig).map { option($0, "经本机网关") }
+            return PickerMenu(
+                sections: [
+                    PickerSection(id: "builtin", title: "本机登录", options: builtIn),
+                    PickerSection(id: "configs", title: "Agent 配置", options: configs),
+                ].filter { !$0.options.isEmpty },
+                note: rows.isEmpty ? "\(AgentGlyph.displayName(for: harness)) 还没有可用配置：安装并登录它，或在侧栏“Agent 配置”里新建。" : nil
+            )
+        }
         let known = NativeHarnessPicker.harnesses.map(\.id)
         let harnesses = known + Set(configurations.map(\.harness)).subtracting(known).sorted()
         let sections = harnesses.compactMap { harness -> PickerSection? in

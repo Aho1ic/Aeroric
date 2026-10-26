@@ -1,4 +1,5 @@
 import AeroricClient
+import AppKit
 import AeroricProtocol
 import AeroricUI
 import Foundation
@@ -505,6 +506,59 @@ final class AppServices {
     // MARK: - P5-04 会话/审批（SessionsClient 接线）
 
     /// P5-04：会话/审批类型化客户端（连接附着后创建）。
+    // MARK: - D: branch row above the new-session input
+
+    /// Per project: its local branches, or nil when it is not a git repository.
+    var branchLists: [String: NewSessionHome.BranchList] = [:]
+
+    func loadBranches(projectID: String) async {
+        guard let reader = projectResourceReader,
+              let project = taskStore.projects.first(where: { $0.id == projectID }) else { return }
+        if let branches = try? await reader.branches(projectPath: project.path) {
+            branchLists[projectID] = .init(current: branches.first(where: \.current)?.name,
+                                           names: branches.map(\.name))
+        } else {
+            branchLists[projectID] = nil
+        }
+    }
+
+    /// Q10-a: switch only over a clean working tree, and only after the user
+    /// confirms; the checkout runs in the project folder itself.
+    func switchBranch(projectID: String, to branch: String) async {
+        guard let reader = projectResourceReader, let connection = attachedConnection,
+              let project = taskStore.projects.first(where: { $0.id == projectID }) else { return }
+        let changed: Int
+        do {
+            changed = try await reader.changes(projectPath: project.path).count
+        } catch {
+            Self.alert("读不到工作区状态，没有切换分支", error.localizedDescription)
+            return
+        }
+        if case let .blocked(reason) = BranchSwitch.decision(changedFiles: changed) {
+            Self.alert("不能切换分支", reason)
+            return
+        }
+        let confirm = NSAlert()
+        confirm.messageText = "在“\(project.name)”中切换到 \(branch)？"
+        confirm.informativeText = "会在项目目录 \(project.path) 执行 git checkout \(branch)。"
+        confirm.addButton(withTitle: "切换")
+        confirm.addButton(withTitle: "取消")
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try await GitClient(connection: connection).checkoutBranch(projectPath: project.path, branch: branch)
+        } catch {
+            Self.alert("切换分支失败", error.localizedDescription)
+        }
+        await loadBranches(projectID: projectID)
+    }
+
+    private static func alert(_ title: String, _ detail: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.runModal()
+    }
+
     /// G: `agentConnections.*`, while attached.
     var agentConnectionsClient: AgentConnectionsClient? {
         guard let connection = attachedConnection else { return nil }

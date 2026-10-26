@@ -279,6 +279,7 @@ struct AppearanceSettingsPane: View {
 
 struct AgentsSettingsPane: View {
     var openAgentConfig: (@MainActor () -> Void)?
+    @AppStorage(NewSessionLayout.defaultHarnessKey) private var defaultHarness = "codex"
 
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.xl) {
@@ -287,6 +288,13 @@ struct AgentsSettingsPane: View {
                     SettingsRow(harness.title, detail: "协议族：\(harness.id)") {
                         AgentGlyph(agent: harness.id, size: 18)
                     }
+                }
+            }
+            SettingsCard("新会话") {
+                SettingsRow("默认 Harness", detail: "新建会话时右上角滑块默认选中的一项；它不可用时选第一个可用的。") {
+                    CapsuleSlider(selection: $defaultHarness, groupTitle: "默认 Harness", identifier: "settings.agents.default-harness",
+                                  segments: NewSessionLayout.harnessOrder.map { .init(value: $0, title: AgentConfigText.harnessTitle($0)) })
+                        .fixedSize()
                 }
             }
             SettingsCard {

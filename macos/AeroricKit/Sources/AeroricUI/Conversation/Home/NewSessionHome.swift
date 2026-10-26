@@ -14,6 +14,17 @@ public struct NewSessionHome: View {
     private let onOpenProjectDraft: (String) -> Void
     private let onSubmit: () -> Void
     private let onCheckSubmission: () -> Void
+    /// D: the project's branches (nil when it is not a git repository).
+    private let branches: BranchList?
+    private let onSwitchBranch: (String) -> Void
+    /// Settings → Agents → 新会话默认 Harness.
+    private let preferredHarness: String
+
+    public struct BranchList: Equatable, Sendable {
+        public var current: String?
+        public var names: [String]
+        public init(current: String?, names: [String]) { self.current = current; self.names = names }
+    }
 
     @State private var scenario: Scenario = .build
     @State private var pendingRecipe: ScenarioRecipe?
@@ -26,7 +37,9 @@ public struct NewSessionHome: View {
     public init(draft: Binding<NewSessionDraft>, projectID: String?, projects: [TaskStore.ProjectEntry],
                 configurations: [SessionConfiguration], blockingReasons: [String],
                 onOpenProjectDraft: @escaping (String) -> Void,
-                onSubmit: @escaping () -> Void, onCheckSubmission: @escaping () -> Void) {
+                onSubmit: @escaping () -> Void, onCheckSubmission: @escaping () -> Void,
+                branches: BranchList? = nil, onSwitchBranch: @escaping (String) -> Void = { _ in },
+                preferredHarness: String = "codex") {
         _draft = draft
         self.projectID = projectID
         self.projects = projects
@@ -35,6 +48,35 @@ public struct NewSessionHome: View {
         self.onOpenProjectDraft = onOpenProjectDraft
         self.onSubmit = onSubmit
         self.onCheckSubmission = onCheckSubmission
+        self.branches = branches
+        self.onSwitchBranch = onSwitchBranch
+        self.preferredHarness = preferredHarness
+    }
+
+    private var availability: [String: Bool] { NewSessionLayout.availability(configurations) }
+
+    /// The slider's harness: the draft's when it has one in the slider, else the default.
+    private var harness: String {
+        let chosen = draft.selectedHarness
+        if NewSessionLayout.harnessOrder.contains(chosen), draft.configurationID != nil || availability[chosen] == true {
+            return chosen
+        }
+        return NewSessionLayout.defaultHarness(preferred: preferredHarness, availability: availability)
+    }
+
+    private func selectHarness(_ value: String) {
+        guard draft.isEditable else { return }
+        draft.selectHarness(value)
+        if let first = NewSessionLayout.firstConfiguration(for: value, in: configurations) {
+            draft.apply(first)
+        }
+    }
+
+    /// A fresh draft gets the default harness and its first usable entry; a
+    /// choice the user made is never replaced.
+    private func adoptDefaults() {
+        guard draft.isEditable, draft.configurationID == nil, !configurations.isEmpty else { return }
+        selectHarness(NewSessionLayout.defaultHarness(preferred: preferredHarness, availability: availability))
     }
 
     private var project: TaskStore.ProjectEntry? { projects.first { $0.id == projectID } }
@@ -43,41 +85,48 @@ public struct NewSessionHome: View {
     }
 
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: AeroricSpace.s) {
-                    TypewriterText(Self.heading, size: AeroricType.hero)
-                        .accessibilityIdentifier("new-session.title")
-                    Text(project.map { "在 \($0.name) 中开始新会话" } ?? "先在下方选择一个项目")
-                        .font(.system(size: AeroricType.body))
-                        .foregroundStyle(AeroricColor.textSecondary)
-                }
-                .padding(.bottom, AeroricSpace.xxxl)
+        GeometryReader { viewport in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // D: heading + the row above the input + the input sit in
+                    // the middle of the window, a little below centre.
+                    VStack(alignment: .leading, spacing: 0) {
+                        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+                            TypewriterText(Self.heading, size: AeroricType.hero)
+                                .accessibilityIdentifier("new-session.title")
+                            Text(project.map { "在 \($0.name) 中开始新会话" } ?? "先在下方选择一个项目")
+                                .font(.system(size: AeroricType.body))
+                                .foregroundStyle(AeroricColor.textSecondary)
+                        }
+                        .padding(.bottom, AeroricSpace.xxl)
 
-                composer
-                status.padding(.top, AeroricSpace.m)
+                        aboveComposer.padding(.bottom, AeroricSpace.s)
+                        composer
+                        status.padding(.top, AeroricSpace.m)
+                    }
+                    .frame(minHeight: viewport.size.height * 0.85, alignment: .center)
 
-                CapsuleSlider(selection: $scenario, groupTitle: "场景", size: .large,
-                              identifier: "new-session.scenario",
-                              segments: Scenario.allCases.map { .init(value: $0, title: $0.title, systemImage: $0.symbol) })
-                .fixedSize()
-                .padding(.top, AeroricSpace.huge)
-                .padding(.bottom, AeroricSpace.l)
+                    CapsuleSlider(selection: $scenario, groupTitle: "场景", size: .large,
+                                  identifier: "new-session.scenario",
+                                  segments: Scenario.allCases.map { .init(value: $0, title: $0.title, systemImage: $0.symbol) })
+                    .fixedSize()
+                    .padding(.bottom, AeroricSpace.l)
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: AeroricSpace.m)],
-                          spacing: AeroricSpace.m) {
-                    ForEach(scenario.recipes) { recipe in
-                        RecipeCard(recipe: recipe) { choose(recipe) }
-                            .disabled(!draft.isEditable)
+                    FlowLayout(spacing: AeroricSpace.s) {
+                        ForEach(scenario.recipes) { recipe in
+                            RecipeChip(recipe: recipe) { choose(recipe) }
+                                .disabled(!draft.isEditable)
+                        }
                     }
                 }
+                .frame(maxWidth: Self.columnWidth)
+                .padding(.horizontal, AeroricSpace.huge)
+                .padding(.bottom, AeroricSpace.huge)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: Self.columnWidth)
-            .padding(.horizontal, AeroricSpace.huge)
-            .padding(.top, 72)
-            .padding(.bottom, AeroricSpace.huge)
-            .frame(maxWidth: .infinity)
         }
+        .onAppear(perform: adoptDefaults)
+        .onChange(of: configurations) { _, _ in adoptDefaults() }
         .background(AeroricColor.canvas)
         .foregroundStyle(AeroricColor.text)
         .confirmationDialog("输入框里已有内容", isPresented: Binding(
@@ -107,11 +156,25 @@ public struct NewSessionHome: View {
             identifierPrefix: "new-session", focusRequest: focusRequest, onSend: onSubmit
         ) {
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: AeroricSpace.xxs) { addMenu; workspacePicker; configurationPicker; permissionPicker; modelPicker; effortPicker }
-                HStack(spacing: AeroricSpace.xxs) { addMenu; workspacePicker; configurationPicker; permissionPicker; modelPicker }
+                HStack(spacing: AeroricSpace.xxs) { addMenu; configurationPicker; modelPicker; permissionPicker; effortPicker }
+                HStack(spacing: AeroricSpace.xxs) { addMenu; configurationPicker; modelPicker; permissionPicker }
                 HStack(spacing: AeroricSpace.xxs) { addMenu; configurationPicker; modelPicker }
             }
             .disabled(!draft.isEditable)
+        }
+    }
+
+    /// D: project and branch on the left, the harness slider on the right.
+    private var aboveComposer: some View {
+        HStack(spacing: AeroricSpace.xs) {
+            workspacePicker
+            if let branches {
+                BranchPicker(current: branches.current, branches: branches.names, onSelect: onSwitchBranch)
+                    .disabled(!draft.isEditable)
+            }
+            Spacer(minLength: AeroricSpace.l)
+            HarnessSlider(selection: harness, availability: availability, onSelect: selectHarness)
+                .disabled(!draft.isEditable)
         }
     }
 
@@ -157,7 +220,7 @@ public struct NewSessionHome: View {
 
     private var configurationPicker: some View {
         ComposerPicker(title: selected?.title ?? "Agent", systemImage: AgentGlyph.symbol(for: selected?.agent),
-                       menu: ComposerPickerOptions.configurations(configurations, draft: draft),
+                       menu: ComposerPickerOptions.configurations(configurations, draft: draft, harness: harness),
                        identifier: "new-session.configuration") { id in
             guard let configuration = configurations.first(where: { "\($0.id)@\($0.version)" == id }) else { return }
             draft.selectHarness(configuration.harness)
@@ -234,45 +297,5 @@ public struct NewSessionHome: View {
         draft.task.prompt = ScenarioCatalog.merged(draft.task.prompt, with: recipe, as: insertion)
         pendingRecipe = nil
         focusRequest += 1
-    }
-}
-
-/// Recipe card: icon, name, one-line description. Click only fills the input.
-private struct RecipeCard: View {
-    let recipe: ScenarioRecipe
-    let action: () -> Void
-    @State private var hovered = false
-    @Environment(\.isEnabled) private var isEnabled
-
-    var body: some View {
-        let shape = AeroricRadius.shape(AeroricRadius.l)
-        Button(action: action) {
-            HStack(alignment: .top, spacing: AeroricSpace.l) {
-                Image(systemName: recipe.symbol)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(AeroricColor.textSecondary)
-                    .frame(width: 30, height: 30)
-                    .background(AeroricColor.layer2, in: AeroricRadius.shape(AeroricRadius.s))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(recipe.title)
-                        .font(.system(size: AeroricType.body, weight: .semibold))
-                        .foregroundStyle(AeroricColor.text)
-                    Text(recipe.detail)
-                        .font(.system(size: AeroricType.secondary))
-                        .foregroundStyle(AeroricColor.textTertiary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(AeroricSpace.l)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(hovered && isEnabled ? AeroricColor.hover : AeroricColor.layer1, in: shape)
-            .overlay { shape.strokeBorder(AeroricColor.separator1, lineWidth: 1) }
-            .contentShape(shape)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
-        .help("填入模板，不会自动发送")
-        .accessibilityIdentifier("new-session.recipe.\(recipe.id)")
     }
 }

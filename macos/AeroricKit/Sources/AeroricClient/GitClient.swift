@@ -42,6 +42,14 @@ public struct GitClient: Sendable {
         return try Self.decodeBranches(frame.result)
     }
 
+    /// D: switch the project's working copy to `branch` (`git checkout`).
+    /// Callers check the working tree is clean and confirm with the user first.
+    public func checkoutBranch(projectPath: String, branch: String) async throws {
+        _ = try await connection.request("git.git_checkout_branch", params: .object([
+            "projectPath": .string(projectPath), "branchName": .string(branch),
+        ]))
+    }
+
     public func log(projectPath: String, limit: Int = 100) async throws -> [Commit] {
         let frame = try await connection.request("git.git_log", params: .object([
             "projectPath": .string(projectPath), "limit": .number(String(limit)),

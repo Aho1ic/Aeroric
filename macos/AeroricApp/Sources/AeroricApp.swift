@@ -362,6 +362,7 @@ struct AeroricNativeApp: App {
                 switch AeroricDeepLink.target(url) {
                 case let .task(id)?: services.requestedSelection = SessionNavigation.task(id)
                 case .attention?: services.requestedSelection = WorkspaceSection.attention.sidebarID
+                case .newSession?: services.requestedSelection = SessionNavigation.globalDraft
                 case let .section(name)?:
                     if let section = WorkspaceSection(rawValue: name) { services.requestedSelection = section.sidebarID }
                 case nil: break

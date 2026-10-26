@@ -10,6 +10,7 @@ final class AeroricDeepLinkTests: XCTestCase {
         XCTAssertEqual(AeroricDeepLink.target(URL(string: "aeroric://attention")!), .attention)
         XCTAssertEqual(AeroricDeepLink.target(URL(string: "aeroric://section/agentConfigs")!), .section("agentConfigs"))
         XCTAssertNil(AeroricDeepLink.target(URL(string: "aeroric://section/a-b")!))
+        XCTAssertEqual(AeroricDeepLink.target(URL(string: "aeroric://new")!), .newSession)
     }
 
     func testUnknownOrUnsafeLinksAreIgnored() {

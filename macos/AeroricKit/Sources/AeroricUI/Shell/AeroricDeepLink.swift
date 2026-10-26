@@ -9,6 +9,8 @@ public enum AeroricDeepLink {
         /// A sidebar surface by its raw name, e.g. `agentConfigs` (the App
         /// decides whether it exists).
         case section(String)
+        /// The new-session page.
+        case newSession
     }
 
     public static let scheme = "aeroric"
@@ -19,6 +21,8 @@ public enum AeroricDeepLink {
         switch host {
         case "attention":
             return .attention
+        case "new":
+            return .newSession
         case "section":
             let name = url.pathComponents.filter { $0 != "/" }.first ?? ""
             guard !name.isEmpty, name.count <= 64, name.unicodeScalars.allSatisfy(CharacterSet.alphanumerics.contains) else {
@@ -40,6 +44,7 @@ public enum AeroricDeepLink {
         case let .task(id): URL(string: "\(scheme)://task/\(id)")!
         case .attention: URL(string: "\(scheme)://attention")!
         case let .section(name): URL(string: "\(scheme)://section/\(name)")!
+        case .newSession: URL(string: "\(scheme)://new")!
         }
     }
 }

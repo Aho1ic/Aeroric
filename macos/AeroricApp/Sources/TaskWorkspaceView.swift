@@ -171,6 +171,7 @@ struct TaskWorkspaceView: View {
         Double(NativePanelGeometry.mainShell.terminalInitialFraction)
     /// Q17: codeg auxiliary panel tabs.
     @State private var auxiliaryTab: AuxiliaryTab = .details
+    @AppStorage(NewSessionLayout.defaultHarnessKey) private var defaultHarness = "codex"
     enum AuxiliaryTab: Hashable { case details, files, changes, history }
 
     /// Which surface the selected navigation row names. A project row or an
@@ -816,10 +817,19 @@ struct TaskWorkspaceView: View {
             blockingReasons: reasons,
             onOpenProjectDraft: { selection = SessionNavigation.draft(projectID: $0) },
             onSubmit: { submit(scope) },
-            onCheckSubmission: { checkSubmission(scope) }
+            onCheckSubmission: { checkSubmission(scope) },
+            branches: scope.projectID.flatMap { services.branchLists[$0] },
+            onSwitchBranch: { branch in
+                guard let projectID = scope.projectID else { return }
+                Task { await services.switchBranch(projectID: projectID, to: branch) }
+            },
+            preferredHarness: defaultHarness
         )
         .task(id: [scope.projectID ?? "", services.configurationEpoch.uuidString]) {
-            if let projectID = scope.projectID { await services.loadSessionConfigurations(projectID: projectID) }
+            if let projectID = scope.projectID {
+                await services.loadSessionConfigurations(projectID: projectID)
+                await services.loadBranches(projectID: projectID)
+            }
         }
     }
 
