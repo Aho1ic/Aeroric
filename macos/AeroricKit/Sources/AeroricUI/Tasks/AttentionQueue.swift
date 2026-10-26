@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// A19: "需要我处理" — the tasks waiting on the user, plus the ones that
-/// failed or were interrupted recently. Built from the task mirror only.
+/// failed or were interrupted recently, or whose latest auto-check failed.
+/// Built from the task mirror plus the host's list of failed checks.
 public enum AttentionQueue {
     public enum Reason: Equatable, Sendable {
         /// An approval or question waits for an answer (`input_required`).
@@ -9,45 +10,68 @@ public enum AttentionQueue {
         case failed
         /// Stopped without finishing (e.g. the host restarted under it).
         case interrupted
+        /// The latest auto-check run after a turn failed (A05).
+        case checksFailed
 
         public var text: String {
             switch self {
             case .waitingOnYou: "等你回答"
             case .failed: "失败了"
             case .interrupted: "被中断"
+            case .checksFailed: "检查没通过"
             }
+        }
+    }
+
+    /// A task's latest failed check run, as the host reports it.
+    public struct CheckFailure: Equatable, Sendable {
+        public var summary: String
+        public var atMs: UInt64
+        public init(summary: String, atMs: UInt64) {
+            self.summary = summary
+            self.atMs = atMs
         }
     }
 
     public struct Item: Identifiable, Equatable, Sendable {
         public let task: TaskStore.TaskEntry
         public let reason: Reason
+        /// The failed check's summary, also on a row listed for another reason.
+        public var detail: String?
+        /// When the row's reason happened; the queue sorts by it.
+        public var atMs: UInt64
         public var id: String { task.id }
     }
 
     /// Failed and interrupted tasks stay listed this long, so old ones do not pile up.
     public static let recentWindowMs: UInt64 = 24 * 60 * 60 * 1000
 
-    /// Waiting first (they block an agent), then the newest.
-    public static func items(_ tasks: [TaskStore.TaskEntry], nowMs: UInt64) -> [Item] {
+    /// Waiting first (they block an agent), then the newest. A task is listed
+    /// once: its own status wins over a failed check, which then shows as detail.
+    public static func items(_ tasks: [TaskStore.TaskEntry], checkFailures: [String: CheckFailure] = [:],
+                             nowMs: UInt64) -> [Item] {
         tasks.compactMap { task -> Item? in
             guard !task.archived else { return nil }
+            let updated = task.updatedAtMs ?? task.createdAtMs ?? 0
+            let check = checkFailures[task.id].flatMap { nowMs <= $0.atMs + recentWindowMs ? $0 : nil }
             switch task.status {
             case "input_required":
-                return Item(task: task, reason: .waitingOnYou)
-            case "failed", "interrupted":
-                guard let updated = task.updatedAtMs ?? task.createdAtMs,
-                      nowMs <= updated + recentWindowMs else { return nil }
-                return Item(task: task, reason: task.status == "failed" ? .failed : .interrupted)
+                return Item(task: task, reason: .waitingOnYou, detail: check?.summary, atMs: updated)
+            // A `where` binds only the pattern before it, so both share one guard.
+            case "failed" where nowMs <= updated + recentWindowMs,
+                 "interrupted" where nowMs <= updated + recentWindowMs:
+                return Item(task: task, reason: task.status == "failed" ? .failed : .interrupted,
+                            detail: check?.summary, atMs: updated)
             default:
-                return nil
+                guard let check else { return nil }
+                return Item(task: task, reason: .checksFailed, detail: check.summary, atMs: check.atMs)
             }
         }
         .sorted { lhs, rhs in
             let l = lhs.reason == .waitingOnYou ? 0 : 1
             let r = rhs.reason == .waitingOnYou ? 0 : 1
             if l != r { return l < r }
-            return (lhs.task.updatedAtMs ?? 0) > (rhs.task.updatedAtMs ?? 0)
+            return lhs.atMs > rhs.atMs
         }
     }
 }
@@ -72,7 +96,7 @@ public struct AttentionListView: View {
                 .padding(AeroricSpace.xl)
             if items.isEmpty {
                 ContentUnavailableView("没有需要你处理的事", systemImage: "checkmark.circle",
-                                       description: Text("等你回答的审批与问题、最近 24 小时失败或被中断的任务会出现在这里。"))
+                                       description: Text("等你回答的审批与问题，以及最近 24 小时失败、被中断或检查没通过的任务会出现在这里。"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(items) { item in
@@ -94,13 +118,14 @@ public struct AttentionListView: View {
             AgentGlyph(agent: item.task.agent, size: 14)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.task.title).lineLimit(1)
-                Text([item.reason.text, projectName(item.task.projectID)].compactMap { $0 }.joined(separator: " · "))
+                Text([item.reason.text, item.detail, projectName(item.task.projectID)].compactMap { $0 }
+                        .joined(separator: " · "))
                     .font(.system(size: AeroricType.caption))
                     .foregroundStyle(item.reason == .waitingOnYou ? AeroricColor.warning : AeroricColor.textSecondary)
             }
             Spacer()
-            if let updated = item.task.updatedAtMs {
-                Text(RelativeTime.short(Date(timeIntervalSince1970: Double(updated) / 1000)))
+            if item.atMs > 0 {
+                Text(RelativeTime.short(Date(timeIntervalSince1970: Double(item.atMs) / 1000)))
                     .font(.system(size: AeroricType.caption))
                     .foregroundStyle(AeroricColor.textTertiary)
             }

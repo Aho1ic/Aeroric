@@ -560,7 +560,7 @@ struct TaskWorkspaceView: View {
                     .accessibilityHidden(previewActive)
             } else if activeSection == .attention {
                 AttentionListView(
-                    items: AttentionQueue.items(services.taskStore.tasks,
+                    items: AttentionQueue.items(services.taskStore.tasks, checkFailures: services.checkFailures,
                                                 nowMs: UInt64(Date().timeIntervalSince1970 * 1000)),
                     projectName: { id in services.taskStore.projects.first { $0.id == id }?.name },
                     onOpen: { selection = SessionNavigation.task($0) }

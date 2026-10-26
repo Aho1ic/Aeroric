@@ -140,10 +140,18 @@ extension AppServices {
                 if tick % 5 == 0 { await self?.keepAwakeStore.refresh() }
                 // R8: which running tasks the gateway answers with a fallback model.
                 if tick % 10 == 0 { await self?.refreshDowngrades() }
+                // A05 → A19: failed auto-checks join the attention queue.
+                if tick % 5 == 0 { await self?.refreshCheckFailures() }
                 tick += 1
                 try? await Task.sleep(for: .seconds(1))
             }
         }
+    }
+
+    func refreshCheckFailures() async {
+        guard let client = sessionsClient, let list = try? await client.autoCheckFailures() else { return }
+        let next = list.mapValues { AttentionQueue.CheckFailure(summary: $0.summary, atMs: $0.atMs) }
+        if next != checkFailures { checkFailures = next }
     }
 
     func refreshDowngrades() async {

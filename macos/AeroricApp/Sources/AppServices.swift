@@ -87,6 +87,8 @@ final class AppServices {
     var approvalFocus: [String: String] = [:]
     /// R8: task id → the fallback model the gateway last answered it with.
     var downgrades: [String: AgentConnectionsClient.Downgrade] = [:]
+    /// A05 → A19: task id → its latest auto-check run, when that run failed.
+    var checkFailures: [String: AttentionQueue.CheckFailure] = [:]
     @ObservationIgnored var statusPumpTask: Task<Void, Never>?
     @ObservationIgnored var statusCursor: UInt64?
     @ObservationIgnored var notificationGate = ApprovalNotificationGate()
@@ -904,7 +906,8 @@ extension AppServices: WorkspaceStateProviding {
 
     /// A19 badge: how many tasks need the user; nil renders no zero.
     var attentionCount: Int? {
-        let count = AttentionQueue.items(taskStore.tasks, nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
+        let count = AttentionQueue.items(taskStore.tasks, checkFailures: checkFailures,
+                                         nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
         return count > 0 ? count : nil
     }
 

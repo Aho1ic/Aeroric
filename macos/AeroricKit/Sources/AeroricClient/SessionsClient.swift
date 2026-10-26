@@ -173,6 +173,22 @@ extension SessionsClient {
         ]))
     }
 
+    /// Tasks whose latest auto-check run failed (`session.autoCheck.failures`):
+    /// task id → (summary, finished at ms).
+    public func autoCheckFailures() async throws -> [String: (summary: String, atMs: UInt64)] {
+        let frame = try await connection.request("session.autoCheck.failures", params: .object([:]))
+        return Self.decodeAutoCheckFailures(frame.result)
+    }
+
+    public static func decodeAutoCheckFailures(_ value: JSONValue) -> [String: (summary: String, atMs: UInt64)] {
+        var result: [String: (summary: String, atMs: UInt64)] = [:]
+        for row in value["failures"]?.arrayValue ?? [] {
+            guard let task = row["taskId"]?.stringValue, let summary = row["summary"]?.stringValue else { continue }
+            result[task] = (summary, row["atMs"].flatMap { UInt64($0.numberText ?? "") } ?? 0)
+        }
+        return result
+    }
+
     public static func decodeAutoCheck(_ value: JSONValue) throws -> (tests: Bool, diagnostics: Bool) {
         guard let tests = value["tests"]?.boolValue, let diagnostics = value["diagnostics"]?.boolValue else {
             throw MalformedReply.malformedReply("session.autoCheck.get needs tests and diagnostics")
