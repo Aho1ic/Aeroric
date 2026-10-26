@@ -83,7 +83,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                     phase: state.phaseSnapshot, phaseText: state.phaseText,
                     onNewProjectTask: { navigationSelection.wrappedValue = SessionNavigation.draft(projectID: $0) },
                     onMoveSelection: moveSidebarSelection,
-                    onSearch: { palettePresented = true },
+                    onOpenFolder: { onCommand(PaletteCommand(id: "project.open", title: "打开项目…")) },
                     onOpenSettings: { onCommand(PaletteCommand(id: "settings.show", title: "设置…")) },
                     onAddProject: { state.addProject(path: $0) }
                 )
@@ -107,9 +107,6 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                 NativeIconButton(systemImage: "sidebar.left", label: "切换侧栏",
                                  identifier: "workspace.toggle-sidebar") { sidebarCollapsed.toggle() }
             }
-            ToolbarItem(placement: .navigation) {
-                breadcrumb
-            }
             ToolbarItemGroup(placement: .primaryAction) {
                 moreToolsMenu
                 Toggle(isOn: $inspectorVisible) { Image(systemName: "sidebar.right") }
@@ -117,12 +114,13 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                     .help("辅助面板（详情 / 文件 / 改动 / Git 日志）")
                     .accessibilityLabel("辅助面板")
                     .accessibilityIdentifier("workspace.toggle-inspector")
-                NativeIconButton(systemImage: "command", label: "命令面板 ⌘K",
-                                 identifier: "workspace.command-palette") { palettePresented = true }
+                NativeIconButton(systemImage: "magnifyingglass", label: "搜索与命令 ⌘K",
+                                 identifier: "workspace.search") { palettePresented = true }
                 NativeIconButton(systemImage: "square.and.pencil", label: "新建会话 ⌘N",
                                  identifier: "workspace.new-session") { openDraft() }
             }
         }
+        .background(alignment: .topLeading) { selectionProbe }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             StatusBar(
                 phase: state.phaseSnapshot,
@@ -179,34 +177,17 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
         else { onCommand(command) }
     }
 
-    /// "项目 / 会话" crumb after the traffic lights. The current item title
-    /// keeps the `detail.selection` identifier the launch tests read.
-    private var breadcrumb: some View {
-        let current = SidebarOrdering.item(id: selection, in: state.sidebarItems)
-        let project = state.sidebarItems.first {
-            $0.group == .projects && $0.id != selection
-                && $0.children?.contains { $0.id == selection } == true
-        }
-        let title = current?.title ?? "Aeroric"
-        return HStack(spacing: 6) {
-            if let project {
-                Text(project.title)
-                    .foregroundStyle(AeroricColor.textSecondary)
-                    .lineLimit(1)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(AeroricColor.textTertiary)
-                    .accessibilityHidden(true)
-            }
-            Text(title)
-                .fontWeight(.medium)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .accessibilityValue(title)
-                .accessibilityIdentifier("detail.selection")
-        }
-        .font(Font.system(size: AeroricType.body))
-        .frame(maxWidth: 360, alignment: .leading)
+    /// The current item's title, read by the launch tests through
+    /// `detail.selection`. The visible crumb was removed (2026-10-26 UI
+    /// review); this zero-size element keeps the accessibility contract.
+    private var selectionProbe: some View {
+        let title = SidebarOrdering.item(id: selection, in: state.sidebarItems)?.title ?? "Aeroric"
+        return Color.clear
+            .frame(width: 1, height: 1)
+            .accessibilityElement()
+            .accessibilityLabel(title)
+            .accessibilityValue(title)
+            .accessibilityIdentifier("detail.selection")
     }
 
     /// The 11 tool and system surfaces (Git, 数据库, IDE …): one toolbar menu

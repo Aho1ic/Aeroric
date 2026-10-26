@@ -18,7 +18,7 @@ public struct ProjectSidebar: View {
     private let phaseText: String?
     private let onNewProjectTask: (String) -> Void
     private let onMoveSelection: (MoveCommandDirection) -> Void
-    private let onSearch: () -> Void
+    private let onOpenFolder: () -> Void
     private let onOpenSettings: () -> Void
     private let onAddProject: (String) -> Void
     /// Window-local status filter. Presentation only; never a host query.
@@ -36,7 +36,7 @@ public struct ProjectSidebar: View {
         phaseText: String? = nil,
         onNewProjectTask: @escaping (String) -> Void = { _ in },
         onMoveSelection: @escaping (MoveCommandDirection) -> Void = { _ in },
-        onSearch: @escaping () -> Void = {},
+        onOpenFolder: @escaping () -> Void = {},
         onOpenSettings: @escaping () -> Void = {},
         onAddProject: @escaping (String) -> Void = { _ in }
     ) {
@@ -49,7 +49,7 @@ public struct ProjectSidebar: View {
         self.phaseText = phaseText
         self.onNewProjectTask = onNewProjectTask
         self.onMoveSelection = onMoveSelection
-        self.onSearch = onSearch
+        self.onOpenFolder = onOpenFolder
         self.onOpenSettings = onOpenSettings
         self.onAddProject = onAddProject
     }
@@ -125,11 +125,6 @@ public struct ProjectSidebar: View {
             }
             .help("新会话（⌘N）")
             .accessibilityIdentifier("sidebar.new-session")
-            HoverCapsuleRow(selected: false, height: shell.navigationRowHeight, action: onSearch) {
-                NavigationLabel(systemImage: "magnifyingglass", title: "搜索") { KeyChip("⌘K") }
-            }
-            .help("搜索与命令（⌘K）")
-            .accessibilityIdentifier("sidebar.search")
             HoverCapsuleRow(selected: false, height: shell.navigationRowHeight, action: {}) {
                 NavigationLabel(systemImage: "bolt", title: "自动化") { ComingSoonBadge() }
                     .opacity(0.55)
@@ -155,7 +150,12 @@ public struct ProjectSidebar: View {
     }
 
     private var projectsHeader: some View {
-        SectionHeader("项目") { filterMenu }
+        SectionHeader("项目") {
+            HStack(spacing: 2) {
+                openFolderButton
+                filterMenu
+            }
+        }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("sidebar.group.projects")
     }
@@ -228,6 +228,18 @@ public struct ProjectSidebar: View {
         }
     }
 
+    /// Folder picker → open (or re-open) as a project and select it.
+    private var openFolderButton: some View {
+        Button(action: onOpenFolder) {
+            Image(systemName: "folder.badge.plus")
+                .foregroundStyle(AeroricColor.textTertiary)
+        }
+        .buttonStyle(.borderless)
+        .help("打开文件夹为项目…")
+        .accessibilityLabel("打开文件夹为项目")
+        .accessibilityIdentifier("sidebar.open-folder")
+    }
+
     private var filterMenu: some View {
         Menu {
             Picker("筛选会话", selection: $filter) {
@@ -276,7 +288,6 @@ public struct ProjectSidebar: View {
                 railButton("square.and.pencil", "新会话", "sidebar.new-session") {
                     selection = SessionNavigation.globalDraft
                 }
-                railButton("magnifyingglass", "搜索（⌘K）", "sidebar.search", action: onSearch)
             }
             .padding(.top, AeroricSpace.s)
             ScrollView {

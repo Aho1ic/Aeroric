@@ -36,7 +36,9 @@ enum WorkspaceActions {
         Task { @MainActor in
             do {
                 let entry = try await services.authorizeAndOpenProject(url: url)
-                selection?.wrappedValue = entry.id
+                // Without a window binding (palette, sidebar button) the
+                // focused window picks the request up.
+                if let selection { selection.wrappedValue = entry.id } else { services.requestedSelection = entry.id }
             } catch {
                 presentOpenProjectFailure(error)
             }
