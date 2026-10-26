@@ -13,10 +13,14 @@ public struct LiveSessionFacts: Equatable, Sendable {
     /// Models and efforts the Agent's configurations declare (picker options).
     public var models: [String]
     public var efforts: [String]
+    /// R8: set while the gateway answers this task with a fallback model.
+    public var downgradeBadge: String?
+    public var downgradeHelp: String?
 
     public init(agent: String?, configurationTitle: String? = nil, workingDirectory: String? = nil,
                 branch: String? = nil, startedAt: Date? = nil, additions: UInt64? = nil, deletions: UInt64? = nil,
-                models: [String] = [], efforts: [String] = []) {
+                models: [String] = [], efforts: [String] = [],
+                downgradeBadge: String? = nil, downgradeHelp: String? = nil) {
         self.agent = agent
         self.configurationTitle = configurationTitle
         self.workingDirectory = workingDirectory
@@ -26,6 +30,8 @@ public struct LiveSessionFacts: Equatable, Sendable {
         self.deletions = deletions
         self.models = models
         self.efforts = efforts
+        self.downgradeBadge = downgradeBadge
+        self.downgradeHelp = downgradeHelp
     }
 
     /// N4 D9: lines, not files — the record only knows lines.

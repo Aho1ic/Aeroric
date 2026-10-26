@@ -85,6 +85,8 @@ final class AppServices {
     var requestedNewSessionLike: String?
     /// Approval card to scroll to, per task (a clicked notification).
     var approvalFocus: [String: String] = [:]
+    /// R8: task id → the fallback model the gateway last answered it with.
+    var downgrades: [String: AgentConnectionsClient.Downgrade] = [:]
     @ObservationIgnored var statusPumpTask: Task<Void, Never>?
     @ObservationIgnored var statusCursor: UInt64?
     @ObservationIgnored var notificationGate = ApprovalNotificationGate()

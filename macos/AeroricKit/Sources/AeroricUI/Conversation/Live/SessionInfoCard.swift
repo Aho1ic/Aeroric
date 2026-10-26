@@ -107,6 +107,7 @@ struct SessionInfoCard: View {
         return section("会话") {
             row("Agent", [AgentGlyph.displayName(for: facts.agent), facts.configurationTitle].compactMap { $0 }.joined(separator: " · "))
             row("模型", config?.model ?? state?.model ?? "—")
+            if let help = facts.downgradeHelp { row("降级", help) }
             row("权限", (config?.permission ?? state?.permission).map(ComposerPickerOptions.permissionTitle) ?? "—")
             if let effort = config?.effort ?? state?.effort { row("推理强度", ComposerPickerOptions.effortTitle(effort)) }
             row("工作目录", facts.workingDirectory.map(ComposerPickerOptions.abbreviatedPath) ?? "—")

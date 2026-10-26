@@ -1,4 +1,5 @@
 import AeroricClient
+import AeroricProtocol
 @testable import AeroricUI
 import XCTest
 
@@ -133,5 +134,41 @@ final class AgentConfigStoreTests: XCTestCase {
         await store.saveConfig()
         XCTAssertEqual(backend.document.configs.first?.target, .init(kind: "connection", connectionId: "c1"))
         XCTAssertFalse(store.configDirty)
+    }
+
+    // MARK: - R8 fallback models
+
+    func testFallbackChoicesSkipTheDefaultAndChosenModels() throws {
+        var a = AgentConnectionsClient.Connection(id: "a", label: "甲")
+        a.models = ["main", "b1", "b2"].map { AgentConnectionsClient.ModelEntry(upstreamId: $0) }
+        var document = AgentConnectionsClient.Document()
+        document.connections = [a]
+        var config = AgentConnectionsClient.AgentConfig(id: "c", label: "c", harness: "claude", target: .init(kind: "route"))
+        config.defaultModel = "main"
+        config.fallbacks = ["b2"]
+        XCTAssertEqual(AgentConfigText.fallbackChoices(for: config, in: document), ["b1"])
+        XCTAssertTrue(AgentConfigText.supportsFallback("codex"))
+        XCTAssertFalse(AgentConfigText.supportsFallback("omp"))
+
+        config.fallbacks = []
+        XCTAssertNil(config.fallbackModels, "an empty list is omitted on the wire")
+        let wire = try AgentConnectionsClient.encode(config)
+        XCTAssertNil(wire["fallback_models"])
+        config.fallbacks = ["b1"]
+        XCTAssertEqual(try AgentConnectionsClient.encode(config)["fallback_models"], .array([.string("b1")]))
+    }
+
+    func testFallbacksReorderWithinBounds() {
+        XCTAssertEqual(AgentConfigText.moving(["a", "b", "c"], at: 2, by: -1), ["a", "c", "b"])
+        XCTAssertEqual(AgentConfigText.moving(["a", "b", "c"], at: 0, by: -1), ["a", "b", "c"])
+        XCTAssertEqual(AgentConfigText.moving(["a", "b", "c"], at: 1, by: 5), ["a", "c", "b"])
+    }
+
+    func testTheDowngradeBadgeNamesBothModelsAndTheReason() {
+        let downgrade = AgentConnectionsClient.Downgrade(taskId: "t", requested: "sonnet", served: "deepseek-chat",
+                                                         reason: "RateLimited", sinceEpochS: 1)
+        XCTAssertEqual(AgentConfigText.downgradeBadge(downgrade), "降级 · deepseek-chat")
+        XCTAssertEqual(AgentConfigText.downgradeHelp(downgrade),
+                       "主模型 sonnet 不可用（限流），本轮由 deepseek-chat 应答；主模型恢复后自动切回。")
     }
 }

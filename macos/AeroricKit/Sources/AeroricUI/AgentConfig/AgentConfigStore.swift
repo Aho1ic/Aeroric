@@ -133,6 +133,38 @@ public enum AgentConfigText {
         return Array(Set(names)).filter { !$0.isEmpty }.sorted()
     }
 
+    /// R8-Q4: more usually means the configuration needs rethinking.
+    public static let maxFallbacks = 3
+
+    /// R8: only harnesses that go through the gateway can fall back (Q32).
+    public static func supportsFallback(_ harness: String) -> Bool {
+        harness == "claude" || harness == "codex"
+    }
+
+    /// Models that can still be added as fallbacks: not the default, not chosen.
+    public static func fallbackChoices(for config: ACC.AgentConfig, in document: ACC.Document) -> [String] {
+        modelNames(for: config, in: document).filter { $0 != config.defaultModel && !config.fallbacks.contains($0) }
+    }
+
+    /// `list` with the entry at `index` moved by `offset` (clamped to the ends).
+    public static func moving(_ list: [String], at index: Int, by offset: Int) -> [String] {
+        guard list.indices.contains(index) else { return list }
+        var list = list
+        let item = list.remove(at: index)
+        list.insert(item, at: min(max(index + offset, 0), list.count))
+        return list
+    }
+
+    /// R8: the session page's downgrade badge and its explanation.
+    public static func downgradeBadge(_ downgrade: ACC.Downgrade) -> String {
+        "降级 · \(downgrade.served)"
+    }
+
+    public static func downgradeHelp(_ downgrade: ACC.Downgrade) -> String {
+        let why = downgrade.reason.map { "（\(reasonTitle($0))）" } ?? ""
+        return "主模型 \(downgrade.requested) 不可用\(why)，本轮由 \(downgrade.served) 应答；主模型恢复后自动切回。"
+    }
+
     public static func newID(_ prefix: String) -> String {
         "\(prefix)-\(UUID().uuidString.prefix(8).lowercased())"
     }

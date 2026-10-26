@@ -63,12 +63,28 @@ public struct LiveSessionView: View {
             .overlay(alignment: .topTrailing) {
                 if !showsColumn { foldedInfo }
             }
+            .overlay(alignment: .topLeading) { downgradeBadge }
         }
         .onChange(of: infoCollapsed) { _, value in UserDefaults.standard.set(value, forKey: Self.infoCollapsedKey) }
         .task(id: store.taskID) { await store.run() }
         .modifier(SessionDialogs(store: store, confirmEnd: $confirmEnd, confirmFullAccess: $confirmFullAccess,
                                  configure: { configure(permission: $0) }))
         .accessibilityIdentifier("session.live.view")
+    }
+
+    /// R8: the gateway is answering with a fallback model.
+    @ViewBuilder private var downgradeBadge: some View {
+        if let badge = facts.downgradeBadge {
+            Label(badge, systemImage: "arrow.down.circle")
+                .font(.system(size: AeroricType.caption, weight: .semibold))
+                .foregroundStyle(AeroricColor.warning)
+                .padding(.horizontal, AeroricSpace.m)
+                .padding(.vertical, 3)
+                .background(AeroricColor.warning.opacity(0.14), in: Capsule(style: .continuous))
+                .help(facts.downgradeHelp ?? badge)
+                .padding(AeroricSpace.m)
+                .accessibilityIdentifier("session.downgrade")
+        }
     }
 
     /// Info folded into a button (by the user, or because the window is narrow).

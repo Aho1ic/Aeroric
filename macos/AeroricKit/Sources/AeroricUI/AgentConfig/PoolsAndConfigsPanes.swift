@@ -238,6 +238,9 @@ struct ConfigsPane: View {
                 .labelsHidden().frame(width: 240)
             }
         }
+        if AgentConfigText.supportsFallback(draft.wrappedValue.harness) {
+            fallbackCard
+        }
         if let candidates = store.candidates, !store.configDirty {
             SettingsCard("能用的渠道\(candidates.model.isEmpty ? "" : "（\(candidates.model)）")") {
                 if candidates.channels.isEmpty {
@@ -265,5 +268,50 @@ struct ConfigsPane: View {
             onRevert: { Task { await store.selectConfig(store.selectedConfig) } },
             onDelete: { Task { await store.deleteConfig() } }
         )
+    }
+
+    /// R8: ordered fallback models, tried once the default has no ready channel.
+    @ViewBuilder private var fallbackCard: some View {
+        let list = draft.wrappedValue.fallbacks
+        let choices = AgentConfigText.fallbackChoices(for: draft.wrappedValue, in: store.document)
+        SettingsCard("备用模型") {
+            Text("主模型所有通道都失败或冷却时，按顺序改用这些模型；主模型恢复后自动切回。")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+            ForEach(Array(list.enumerated()), id: \.element) { index, name in
+                HStack(spacing: AeroricSpace.s) {
+                    Text("\(index + 1).").foregroundStyle(AeroricColor.textTertiary).monospacedDigit()
+                    Text(name)
+                    Spacer()
+                    NativeIconButton(systemImage: "chevron.up", label: "上移",
+                                     identifier: "agentConfig.fallback.up.\(index)") { move(index, by: -1) }
+                        .disabled(index == 0)
+                    NativeIconButton(systemImage: "chevron.down", label: "下移",
+                                     identifier: "agentConfig.fallback.down.\(index)") { move(index, by: 1) }
+                        .disabled(index == list.count - 1)
+                    NativeIconButton(systemImage: "minus.circle", label: "移除",
+                                     identifier: "agentConfig.fallback.remove.\(index)") {
+                        store.configDraft?.fallbacks.remove(at: index)
+                    }
+                }
+                .font(.system(size: AeroricType.secondary))
+            }
+            Menu {
+                ForEach(choices, id: \.self) { name in
+                    Button(name) { store.configDraft?.fallbacks.append(name) }
+                }
+            } label: {
+                Label("添加备用模型", systemImage: "plus")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(choices.isEmpty || list.count >= AgentConfigText.maxFallbacks)
+            .accessibilityIdentifier("agentConfig.fallback.add")
+        }
+    }
+
+    private func move(_ index: Int, by offset: Int) {
+        guard let current = store.configDraft?.fallbacks else { return }
+        store.configDraft?.fallbacks = AgentConfigText.moving(current, at: index, by: offset)
     }
 }

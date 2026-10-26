@@ -132,8 +132,16 @@ public struct AgentConnectionsClient: Sendable {
         public var target: ConfigTarget
         public var defaultModel: String = ""
         public var defaultReasoning: String = ""
+        /// R8: absent on the wire when empty, so optional here.
+        public var fallbackModels: [String]?
         public init(id: String, label: String, harness: String, target: ConfigTarget) {
             self.id = id; self.label = label; self.harness = harness; self.target = target
+        }
+
+        /// Mapped names tried in order when the default model has no ready channel.
+        public var fallbacks: [String] {
+            get { fallbackModels ?? [] }
+            set { fallbackModels = newValue.isEmpty ? nil : newValue }
         }
     }
 
@@ -164,6 +172,20 @@ public struct AgentConnectionsClient: Sendable {
         public var reason: String
         public init(connectionId: String, model: String?, untilEpochS: UInt64, reason: String) {
             self.connectionId = connectionId; self.model = model; self.untilEpochS = untilEpochS; self.reason = reason
+        }
+    }
+
+    /// R8: a task whose last answer came from a fallback model.
+    public struct Downgrade: Codable, Equatable, Sendable, Hashable {
+        public var taskId: String
+        public var requested: String
+        public var served: String
+        /// Why the requested model last failed (`RateLimited` | …), if known.
+        public var reason: String?
+        public var sinceEpochS: UInt64
+        public init(taskId: String, requested: String, served: String, reason: String?, sinceEpochS: UInt64) {
+            self.taskId = taskId; self.requested = requested; self.served = served
+            self.reason = reason; self.sinceEpochS = sinceEpochS
         }
     }
 
@@ -289,6 +311,12 @@ public struct AgentConnectionsClient: Sendable {
     public func status() async throws -> [Cooldown] {
         let reply = try await connection.request("agentConnections.status", params: .object([:])).result
         return try Self.decode([Cooldown].self, reply["cooldowns"] ?? .array([]), snake: false)
+    }
+
+    /// R8: tasks currently answered by a fallback model.
+    public func downgrades() async throws -> [Downgrade] {
+        let reply = try await connection.request("agentConnections.status", params: .object([:])).result
+        return try Self.decode([Downgrade].self, reply["downgrades"] ?? .array([]), snake: false)
     }
 
     public func officialStatus() async throws -> OfficialStatus {

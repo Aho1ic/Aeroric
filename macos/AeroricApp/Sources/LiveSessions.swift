@@ -119,7 +119,9 @@ extension AppServices {
             agent: task.agent, configurationTitle: configurations.first?.title,
             workingDirectory: task.worktreePath ?? projectPath, branch: task.worktreeBranch,
             startedAt: task.createdAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) },
-            additions: task.additions, deletions: task.deletions, models: models, efforts: efforts
+            additions: task.additions, deletions: task.deletions, models: models, efforts: efforts,
+            downgradeBadge: downgrades[task.id].map(AgentConfigText.downgradeBadge),
+            downgradeHelp: downgrades[task.id].map(AgentConfigText.downgradeHelp)
         )
     }
 
@@ -136,10 +138,23 @@ extension AppServices {
                 await self?.pumpStatusOnce()
                 // A14: the keep-awake indicator changes on the host's 2s watch; 5s is enough.
                 if tick % 5 == 0 { await self?.keepAwakeStore.refresh() }
+                // R8: which running tasks the gateway answers with a fallback model.
+                if tick % 10 == 0 { await self?.refreshDowngrades() }
                 tick += 1
                 try? await Task.sleep(for: .seconds(1))
             }
         }
+    }
+
+    func refreshDowngrades() async {
+        guard taskStore.tasks.contains(where: { $0.status == "running" }),
+              let client = agentConnectionsClient,
+              let list = try? await client.downgrades() else {
+            if !downgrades.isEmpty, !taskStore.tasks.contains(where: { $0.status == "running" }) { downgrades = [:] }
+            return
+        }
+        let next = Dictionary(list.map { ($0.taskId, $0) }, uniquingKeysWith: { _, last in last })
+        if next != downgrades { downgrades = next }
     }
 
     func pumpStatusOnce() async {
