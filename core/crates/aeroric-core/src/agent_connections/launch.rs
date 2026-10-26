@@ -171,6 +171,7 @@ mod tests {
             target: ConfigTarget::Route { pool_id: None },
             default_model: String::new(),
             default_reasoning: String::new(),
+            fallback_models: Vec::new(),
         }
     }
 

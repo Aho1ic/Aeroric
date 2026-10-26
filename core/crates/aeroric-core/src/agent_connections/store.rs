@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use crate::context::{SecretKey, SecretStore};
 
-use super::model::{ConfigTarget, ConnectionsDocument, DOCUMENT_VERSION};
+use super::model::{
+    AgentConfig, ConfigTarget, ConnectionsDocument, DOCUMENT_VERSION, MAX_FALLBACK_MODELS,
+};
 
 pub fn document_path(data_dir: &Path) -> PathBuf {
     data_dir.join("agent-connections.json")
@@ -79,6 +81,28 @@ pub fn validate(doc: &ConnectionsDocument) -> Result<(), String> {
         if !ok {
             return Err(format!(
                 "config `{}` targets something that does not exist",
+                cfg.id
+            ));
+        }
+        validate_fallbacks(cfg)?;
+    }
+    Ok(())
+}
+
+/// R8: at most three, no blanks, no repeats, never the default model itself.
+fn validate_fallbacks(cfg: &AgentConfig) -> Result<(), String> {
+    if cfg.fallback_models.len() > MAX_FALLBACK_MODELS {
+        return Err(format!(
+            "config `{}` lists more than {MAX_FALLBACK_MODELS} fallback models",
+            cfg.id
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for name in &cfg.fallback_models {
+        let name = name.trim();
+        if name.is_empty() || name == cfg.default_model.trim() || !seen.insert(name) {
+            return Err(format!(
+                "config `{}` has an empty, repeated or default fallback model `{name}`",
                 cfg.id
             ));
         }

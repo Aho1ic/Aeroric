@@ -294,6 +294,42 @@ async fn candidates_group_channels_by_mapped_name() {
 }
 
 #[tokio::test]
+async fn fallback_models_are_checked_when_a_config_is_saved() {
+    let rig = Rig::start("fallback").await;
+    rig.call(
+        "agentConnections.putConnection",
+        json!({ "connection": connection("a", "messages", "ds-flash"), "credential": "k" }),
+    )
+    .await
+    .expect("put");
+    let config = |fallbacks: serde_json::Value| {
+        json!({ "config": {
+            "id": "cfg", "label": "cfg", "harness": "claude",
+            "target": { "kind": "route" }, "default_model": "main",
+            "fallback_models": fallbacks
+        } })
+    };
+    for bad in [
+        json!(["main"]),
+        json!(["x", "x"]),
+        json!([" "]),
+        json!(["a", "b", "c", "d"]),
+    ] {
+        let refused = rig
+            .call("agentConnections.putConfig", config(bad.clone()))
+            .await;
+        assert!(refused.is_err(), "{bad} should be refused");
+    }
+    rig.call(
+        "agentConnections.putConfig",
+        config(json!(["backup-1", "backup-2"])),
+    )
+    .await
+    .expect("config");
+    assert!(rig.document().contains("backup-2"));
+}
+
+#[tokio::test]
 async fn fetch_without_credential_fails_and_keeps_the_catalog() {
     let rig = Rig::start("fetch").await;
     rig.call(
@@ -373,6 +409,7 @@ async fn status_and_official_logins_are_reported_without_secrets() {
         .await
         .expect("status");
     assert!(status["cooldowns"].is_array());
+    assert!(status["downgrades"].is_array());
     let official = rig
         .call("agentConnections.officialStatus", json!({}))
         .await

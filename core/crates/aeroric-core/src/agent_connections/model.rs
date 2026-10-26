@@ -272,7 +272,15 @@ pub struct AgentConfig {
     /// Default reasoning tier label (matches a `ReasoningTier::label`).
     #[serde(default)]
     pub default_reasoning: String,
+    /// R8: mapped names tried in order once every channel of the requested
+    /// model has failed or is cooling down. The requested model always goes
+    /// first, so recovery needs no state.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_models: Vec<String>,
 }
+
+/// R8-Q4: more than this usually means the configuration needs rethinking.
+pub const MAX_FALLBACK_MODELS: usize = 3;
 
 /// The whole persisted document.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]

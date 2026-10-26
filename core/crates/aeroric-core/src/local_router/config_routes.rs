@@ -8,7 +8,8 @@
 //!   every pool and config (Q31, R3), each remembering why it was set (R5);
 //! - sticky sessions, keyed by task id (CPA session affinity), moved only after
 //!   quota/auth-class errors (R4);
-//! - usage counters for least-used / round-robin strategies.
+//! - usage counters for least-used / round-robin strategies;
+//! - per-task downgrades (R8): which fallback model last answered and why.
 //!
 //! Translation the router cannot do yet is excluded with a reason rather than
 //! sent and left to fail upstream: today only Responses → Chat Completions is
@@ -20,7 +21,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::agent_connections::model::{
-    ConfigTarget, ConnectionsDocument, PoolStrategy, WireProtocol,
+    ConfigTarget, ConnectionsDocument, PoolStrategy, ReasoningTier, WireProtocol,
 };
 use crate::agent_connections::routing::{
     self, Candidate, Cooldowns, FailureClass, Reach, UsageCounters,
@@ -54,6 +55,69 @@ struct State {
     /// Connections whose 429s do not rest them (R9).
     no_rest_on_limit: HashSet<String>,
     usage: UsageCounters,
+    /// task id → why its requested model last failed (R8 downgrade reason).
+    primary_failure: HashMap<String, FailureClass>,
+    /// task id → the fallback that last answered; cleared when the requested
+    /// model answers again.
+    downgrades: HashMap<String, (Fallback, Option<FailureClass>, u64)>,
+}
+
+/// R8: a target that serves a fallback model instead of the requested one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fallback {
+    /// Mapped name the request asked for.
+    pub requested: String,
+    /// Mapped name this target serves.
+    pub served: String,
+    pub effort: EffortMap,
+}
+
+/// R8-Q2: how a reasoning value of the requested model translates to the
+/// fallback model: same tier label, else dropped so an unknown value is not
+/// refused upstream. A fallback without declared tiers keeps the value.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EffortMap {
+    /// (requested value or label, lowercased) → fallback value.
+    table: Vec<(String, String)>,
+    /// Values the fallback model accepts as they are, lowercased.
+    accepted: Vec<String>,
+    keep_unknown: bool,
+}
+
+impl EffortMap {
+    pub fn new(requested: &[ReasoningTier], fallback: &[ReasoningTier]) -> Self {
+        let mut table = Vec::new();
+        for tier in requested {
+            if let Some(to) = fallback
+                .iter()
+                .find(|f| f.label.trim().eq_ignore_ascii_case(tier.label.trim()))
+            {
+                for from in [&tier.value, &tier.label] {
+                    table.push((from.trim().to_ascii_lowercase(), to.value.clone()));
+                }
+            }
+        }
+        Self {
+            table,
+            accepted: fallback
+                .iter()
+                .map(|f| f.value.trim().to_ascii_lowercase())
+                .collect(),
+            keep_unknown: fallback.is_empty(),
+        }
+    }
+
+    /// The value to send to the fallback model, or `None` to drop the field.
+    pub fn rewrite(&self, value: &str) -> Option<String> {
+        let key = value.trim().to_ascii_lowercase();
+        if self.keep_unknown || self.accepted.contains(&key) {
+            return Some(value.to_string());
+        }
+        self.table
+            .iter()
+            .find(|(from, _)| *from == key)
+            .map(|(_, to)| to.clone())
+    }
 }
 
 /// Slow starts inside this window count towards a model cooldown (R3).
@@ -143,25 +207,47 @@ pub fn resolve(
             "request names no model and the configuration has no default".into(),
         );
     }
-    let (found, excluded) = routing::candidates(doc, config, model);
-    let mut reasons: Vec<String> = excluded
-        .iter()
-        .map(|(id, reason)| format!("{id}: {reason:?}"))
-        .collect();
-    let usable: Vec<Candidate> = found
-        .into_iter()
-        .filter(|c| {
-            let ok = reach_supported(c.reach);
-            if !ok {
-                reasons.push(format!(
-                    "{}: protocol translation not available yet",
-                    c.connection_id
-                ));
+    // R8: the requested model first, then the configuration's fallbacks.
+    let mut chain: Vec<&str> = vec![model];
+    for name in &config.fallback_models {
+        let name = name.trim();
+        if !name.is_empty() && !chain.contains(&name) {
+            chain.push(name);
+        }
+    }
+    let mut reasons: Vec<String> = Vec::new();
+    let mut lists: Vec<Vec<Candidate>> = Vec::new();
+    for (index, name) in chain.iter().enumerate() {
+        let (found, excluded) = routing::candidates(doc, config, name);
+        let label = |id: &str| {
+            if index == 0 {
+                id.to_string()
+            } else {
+                format!("{id} (fallback `{name}`)")
             }
-            ok
-        })
-        .collect();
-    if usable.is_empty() {
+        };
+        reasons.extend(
+            excluded
+                .iter()
+                .map(|(id, reason)| format!("{}: {reason:?}", label(id))),
+        );
+        lists.push(
+            found
+                .into_iter()
+                .filter(|c| {
+                    let ok = reach_supported(c.reach);
+                    if !ok {
+                        reasons.push(format!(
+                            "{}: protocol translation not available yet",
+                            label(&c.connection_id)
+                        ));
+                    }
+                    ok
+                })
+                .collect(),
+        );
+    }
+    if lists.iter().all(Vec::is_empty) {
         return Resolution::Unavailable(format!(
             "no channel can serve `{model}`: {}",
             if reasons.is_empty() {
@@ -174,7 +260,7 @@ pub fn resolve(
 
     let (strategy, sticky_ttl, route_key) = strategy_and_ttl(doc, &config.target);
     let now = now_epoch_s();
-    let ordered = with_state(|state| {
+    let ordered: Vec<(Candidate, usize)> = with_state(|state| {
         state.sticky_ttl.insert(grant.task_id.clone(), sticky_ttl);
         for connection in &doc.connections {
             if connection.rest_on_limit {
@@ -190,19 +276,45 @@ pub fn resolve(
                 .filter(|(_, until)| *until > now)
                 .map(|(id, _)| id.clone())
         });
-        routing::order(
-            usable,
-            strategy,
-            &route_key,
-            sticky.as_deref(),
-            &state.cooldowns,
-            &mut state.usage,
-            now,
-        )
+        // Every model's ready channels before any cooling one: a fallback is
+        // used only once the requested model has nothing ready (R8-Q1), and a
+        // cooling channel stays a last resort, soonest-ending first.
+        let mut ready = Vec::new();
+        let mut waiting = Vec::new();
+        for (index, list) in lists.into_iter().enumerate() {
+            if list.is_empty() {
+                continue;
+            }
+            let key = if index == 0 {
+                route_key.clone()
+            } else {
+                format!("{route_key}#{}", chain[index])
+            };
+            // Stickiness belongs to the requested model only.
+            let pin = if index == 0 { sticky.as_deref() } else { None };
+            let list = routing::order(
+                list,
+                strategy,
+                &key,
+                pin,
+                &state.cooldowns,
+                &mut state.usage,
+                now,
+            );
+            for candidate in list {
+                if routing::cooling_until(&state.cooldowns, &candidate) > now {
+                    waiting.push((candidate, index));
+                } else {
+                    ready.push((candidate, index));
+                }
+            }
+        }
+        waiting.sort_by_key(|(c, _)| routing::cooling_until(&state.cooldowns, c));
+        ready.into_iter().chain(waiting).collect()
     });
 
     let mut targets = Vec::new();
-    for candidate in ordered {
+    for (candidate, index) in ordered {
         let Some(connection) = doc
             .connections
             .iter()
@@ -232,7 +344,21 @@ pub fn resolve(
             false,
             bridge,
         ) {
-            Ok(target) => targets.push(target.with_upstream_protocol(speaks)),
+            Ok(target) => {
+                let target = target.with_upstream_protocol(speaks);
+                targets.push(if index == 0 {
+                    target
+                } else {
+                    target.with_fallback(Fallback {
+                        requested: model.to_string(),
+                        served: chain[index].to_string(),
+                        effort: EffortMap::new(
+                            &declared_tiers(doc, model),
+                            &model_tiers(connection, &candidate.upstream_model),
+                        ),
+                    })
+                })
+            }
             Err(e) => reasons.push(format!("{}: {}", connection.id, e.message)),
         }
     }
@@ -241,6 +367,35 @@ pub fn resolve(
     } else {
         Resolution::Targets(targets)
     }
+}
+
+/// Reasoning tiers the requested model declares anywhere in the config's reach.
+fn declared_tiers(doc: &ConnectionsDocument, model: &str) -> Vec<ReasoningTier> {
+    let mut tiers: Vec<ReasoningTier> = Vec::new();
+    for connection in doc.connections.iter().filter(|c| c.enabled) {
+        for entry in connection.routable_models() {
+            if entry.routing_name() == model {
+                for tier in &entry.reasoning_tiers {
+                    if !tiers.contains(tier) {
+                        tiers.push(tier.clone());
+                    }
+                }
+            }
+        }
+    }
+    tiers
+}
+
+fn model_tiers(
+    connection: &crate::agent_connections::model::Connection,
+    upstream_model: &str,
+) -> Vec<ReasoningTier> {
+    connection
+        .models
+        .iter()
+        .find(|m| m.upstream_id.trim() == upstream_model)
+        .map(|m| m.reasoning_tiers.clone())
+        .unwrap_or_default()
 }
 
 /// Load the document and resolve in one call (the router's entry point).
@@ -265,12 +420,31 @@ fn connection_of(target_id: &str) -> Option<&str> {
 /// it expired, it already pointed here, or the failure before allowed a rebind
 /// (R4) — a transient error elsewhere must not drag the session (and its prompt
 /// cache) to whichever member happened to answer.
-pub fn record_success(task_id: &str, target_id: &str) {
+pub fn record_success(task_id: &str, target_id: &str, fallback: Option<&Fallback>) {
     let Some(connection) = connection_of(target_id) else {
         return;
     };
     let now = now_epoch_s();
     with_state(|state| {
+        // R8: a fallback answer marks the task downgraded; the requested model
+        // answering again clears it.
+        match fallback {
+            Some(fallback) => {
+                let reason = state.primary_failure.get(task_id).copied();
+                let since = state
+                    .downgrades
+                    .get(task_id)
+                    .filter(|(f, _, _)| f.served == fallback.served)
+                    .map_or(now, |(_, _, since)| *since);
+                state
+                    .downgrades
+                    .insert(task_id.to_string(), (fallback.clone(), reason, since));
+            }
+            None => {
+                state.downgrades.remove(task_id);
+                state.primary_failure.remove(task_id);
+            }
+        }
         state.streaks.remove(connection);
         state.cooldowns.remove(connection);
         state.reasons.remove(connection);
@@ -279,6 +453,10 @@ pub fn record_success(task_id: &str, target_id: &str) {
             .requests
             .entry(connection.to_string())
             .or_insert(0) += 1;
+        // A fallback never moves the requested model's stickiness.
+        if fallback.is_some() {
+            return;
+        }
         let rebind = state.rebind.remove(task_id);
         let Some(Some(ttl)) = state.sticky_ttl.get(task_id).copied() else {
             return;
@@ -305,6 +483,7 @@ pub fn record_failure(
     upstream_model: &str,
     class: FailureClass,
     retry_after_s: Option<u64>,
+    fallback: bool,
 ) -> bool {
     if !class.should_failover() {
         return false;
@@ -314,6 +493,9 @@ pub fn record_failure(
     };
     let now = now_epoch_s();
     with_state(|state| {
+        if !fallback {
+            state.primary_failure.insert(task_id.to_string(), class);
+        }
         if class.allows_rebind() {
             state.rebind.insert(task_id.to_string());
         }
@@ -390,7 +572,45 @@ pub fn forget_task(task_id: &str) {
         state.sticky.remove(task_id);
         state.sticky_ttl.remove(task_id);
         state.rebind.remove(task_id);
+        state.primary_failure.remove(task_id);
+        state.downgrades.remove(task_id);
     });
+}
+
+/// One task currently answered by a fallback model (R8), for the session page.
+#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DowngradeEntry {
+    pub task_id: String,
+    pub requested: String,
+    pub served: String,
+    /// Why the requested model last failed (`FailureClass` name), if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub since_epoch_s: u64,
+}
+
+/// Tasks whose last answer came from a fallback model, oldest first.
+pub fn downgrade_report() -> Vec<DowngradeEntry> {
+    let mut entries: Vec<DowngradeEntry> = with_state(|state| {
+        state
+            .downgrades
+            .iter()
+            .map(|(task, (fallback, reason, since))| DowngradeEntry {
+                task_id: task.clone(),
+                requested: fallback.requested.clone(),
+                served: fallback.served.clone(),
+                reason: reason.map(|class| format!("{class:?}")),
+                since_epoch_s: *since,
+            })
+            .collect()
+    });
+    entries.sort_by(|a, b| {
+        a.since_epoch_s
+            .cmp(&b.since_epoch_s)
+            .then(a.task_id.cmp(&b.task_id))
+    });
+    entries
 }
 
 /// One live cooldown, for the pool page (G): which connection (and model),
@@ -500,6 +720,7 @@ mod tests {
                 target: ConfigTarget::Route { pool_id: None },
                 default_model: "deepseek-v4.1-flash".into(),
                 default_reasoning: String::new(),
+                fallback_models: Vec::new(),
             }],
         }
     }
@@ -516,6 +737,120 @@ mod tests {
             Resolution::Targets(t) => t.iter().map(|t| t.id().to_string()).collect(),
             Resolution::Unavailable(reason) => panic!("unavailable: {reason}"),
         }
+    }
+
+    /// R8: `fb-*` primary channels plus one backup connection serving `backup`.
+    fn fallback_doc(prefix: &str) -> ConnectionsDocument {
+        let mut doc = doc_with(Harness::Claude, prefix);
+        let mut backup = connection(&format!("{prefix}-k"), WireProtocol::Messages, "bk-1");
+        backup.models[0].mapped_name = "backup".into();
+        backup.models[0].reasoning_tiers = vec![ReasoningTier {
+            label: "高".into(),
+            value: "max".into(),
+        }];
+        doc.connections.push(backup);
+        for connection in doc.connections.iter_mut().take(3) {
+            connection.models[0].reasoning_tiers = vec![ReasoningTier {
+                label: "高".into(),
+                value: "high".into(),
+            }];
+        }
+        doc.configs[0].fallback_models = vec!["backup".into()];
+        doc
+    }
+
+    fn targets(resolution: Resolution) -> Vec<UpstreamTarget> {
+        match resolution {
+            Resolution::Targets(t) => t,
+            Resolution::Unavailable(reason) => panic!("unavailable: {reason}"),
+        }
+    }
+
+    #[test]
+    fn fallbacks_queue_after_every_ready_channel_of_the_requested_model() {
+        let doc = fallback_doc("fb1");
+        let list = targets(resolve(
+            &doc,
+            &grant("fb1-t"),
+            "",
+            &MemorySecrets::default(),
+        ));
+        assert_eq!(list.len(), 4);
+        assert!(list[..3].iter().all(|t| t.fallback().is_none()));
+        let last = list.last().unwrap();
+        assert_eq!(last.id(), "conn:fb1-k");
+        let fallback = last.fallback().expect("marked as fallback");
+        assert_eq!(fallback.requested, "deepseek-v4.1-flash");
+        assert_eq!(fallback.served, "backup");
+        assert_eq!(fallback.effort.rewrite("high").as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn a_cooling_requested_model_downgrades_and_recovers() {
+        let doc = fallback_doc("fb2");
+        let task = "fb2-t";
+        for id in ["fb2-a", "fb2-b", "fb2-m"] {
+            assert!(record_failure(
+                task,
+                &format!("{TARGET_PREFIX}{id}"),
+                "ds",
+                FailureClass::RateLimited,
+                Some(600),
+                false,
+            ));
+        }
+        let list = targets(resolve(&doc, &grant(task), "", &MemorySecrets::default()));
+        assert_eq!(
+            list[0].id(),
+            "conn:fb2-k",
+            "the ready fallback beats cooling channels"
+        );
+        assert!(list[1..].iter().all(|t| t.fallback().is_none()));
+
+        record_success(task, list[0].id(), list[0].fallback());
+        let report = downgrade_report();
+        let entry = report
+            .iter()
+            .find(|e| e.task_id == task)
+            .expect("downgraded");
+        assert_eq!(entry.served, "backup");
+        assert_eq!(entry.reason.as_deref(), Some("RateLimited"));
+
+        // The requested model answers again: the mark goes away.
+        record_success(task, "conn:fb2-a", None);
+        assert!(downgrade_report().iter().all(|e| e.task_id != task));
+    }
+
+    #[test]
+    fn a_fallback_answer_does_not_move_stickiness() {
+        let doc = fallback_doc("fb3");
+        let task = "fb3-t";
+        let list = targets(resolve(&doc, &grant(task), "", &MemorySecrets::default()));
+        record_success(task, "conn:fb3-m", None);
+        let backup = list.iter().find(|t| t.fallback().is_some()).unwrap();
+        record_success(task, backup.id(), backup.fallback());
+        let sticky = with_state(|state| state.sticky.get(task).map(|(id, _)| id.clone()));
+        assert_eq!(sticky.as_deref(), Some("fb3-m"));
+        forget_task(task);
+        assert!(downgrade_report().iter().all(|e| e.task_id != task));
+    }
+
+    #[test]
+    fn reasoning_tiers_carry_over_by_label_or_are_dropped() {
+        let tier = |label: &str, value: &str| ReasoningTier {
+            label: label.into(),
+            value: value.into(),
+        };
+        let map = EffortMap::new(
+            &[tier("高", "high"), tier("低", "low")],
+            &[tier("高", "max")],
+        );
+        assert_eq!(map.rewrite("high").as_deref(), Some("max"));
+        assert_eq!(map.rewrite("高").as_deref(), Some("max"));
+        assert_eq!(map.rewrite("MAX").as_deref(), Some("MAX"), "already valid");
+        assert_eq!(map.rewrite("low"), None, "no matching label: drop");
+        let undeclared = EffortMap::new(&[tier("高", "high")], &[]);
+        assert_eq!(undeclared.rewrite("high").as_deref(), Some("high"));
     }
 
     #[test]
@@ -549,7 +884,8 @@ mod tests {
                 "conn:cool-a",
                 "ds-a",
                 FailureClass::from_status(422),
-                None
+                None,
+                false
             ),
             "422 never fails over"
         );
@@ -558,7 +894,8 @@ mod tests {
             "conn:cool-a",
             "ds-a",
             FailureClass::from_status(503),
-            None
+            None,
+            false
         ));
         let got = ids(resolve(&cooled, &grant("cr-t3"), "", &secrets));
         assert_eq!(
@@ -566,7 +903,7 @@ mod tests {
             Some("conn:cool-a"),
             "cooling goes last"
         );
-        record_success("cr-t3", "conn:cool-a");
+        record_success("cr-t3", "conn:cool-a", None);
         let got = ids(resolve(&cooled, &grant("cr-t3"), "", &secrets));
         assert_eq!(
             got.first().map(String::as_str),
@@ -584,7 +921,8 @@ mod tests {
             "conn:nf-a",
             "ds-gone",
             FailureClass::NotFound,
-            None
+            None,
+            false
         ));
         let table = cooldowns();
         assert!(!table.contains_key("nf-a"), "the connection stays usable");
@@ -596,6 +934,7 @@ mod tests {
             "ds-x",
             FailureClass::RateLimited,
             Some(120),
+            false,
         );
         connection_changed("nf-a");
         let table = cooldowns();
@@ -611,6 +950,7 @@ mod tests {
             "ds-gone",
             FailureClass::NotFound,
             None,
+            false,
         );
         let entry = cooldown_report()
             .into_iter()
@@ -629,7 +969,8 @@ mod tests {
             "conn:slow-a",
             "ds-a",
             FailureClass::FirstByteTimeout,
-            None
+            None,
+            false
         ));
         assert!(
             !cooldowns().contains_key(&key),
@@ -641,6 +982,7 @@ mod tests {
             "ds-a",
             FailureClass::FirstByteTimeout,
             None,
+            false,
         );
         let until = cooldowns()[&key];
         assert!(until >= now_epoch_s() + 59 && until <= now_epoch_s() + 61);
@@ -652,10 +994,17 @@ mod tests {
         let doc = doc_with(Harness::Codex, "stk");
         let task = "cr-t7";
         let _ = resolve(&doc, &grant(task), "", &secrets);
-        record_success(task, "conn:stk-a");
+        record_success(task, "conn:stk-a", None);
         // A transient failure answered elsewhere must not move the session.
-        record_failure(task, "conn:stk-a", "ds-a", FailureClass::ServerError, None);
-        record_success(task, "conn:stk-b");
+        record_failure(
+            task,
+            "conn:stk-a",
+            "ds-a",
+            FailureClass::ServerError,
+            None,
+            false,
+        );
+        record_success(task, "conn:stk-b", None);
         with_state(|s| assert_eq!(s.sticky[task].0, "stk-a"));
         // A rate limit does.
         record_failure(
@@ -664,8 +1013,9 @@ mod tests {
             "ds-a",
             FailureClass::RateLimited,
             Some(30),
+            false,
         );
-        record_success(task, "conn:stk-b");
+        record_success(task, "conn:stk-b", None);
         with_state(|s| assert_eq!(s.sticky[task].0, "stk-b"));
         forget_task(task);
     }
@@ -681,7 +1031,8 @@ mod tests {
             "conn:relay-a",
             "ds-a",
             FailureClass::RateLimited,
-            Some(60)
+            Some(60),
+            false
         ));
         assert!(!cooldowns().contains_key("relay-a"));
         forget_task("cr-t8");

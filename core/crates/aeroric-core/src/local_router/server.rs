@@ -283,7 +283,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                         &failure.summary,
                     )
                     .await;
-                note_failure(config_task.as_deref(), &failure);
+                note_failure(config_task.as_deref(), &target, &failure);
                 last_failure = Some(failure);
             }
             AttemptResult::Return(mut upstream) => {
@@ -315,7 +315,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                         target_id: target.id().to_string(),
                         used_half_open_permit: permit.used_half_open_permit,
                     });
-                    if note_success(&route, config_task.as_deref(), target.id()) {
+                    if note_success(&route, config_task.as_deref(), &target) {
                         mark_active_target(&context, route.agent, target.id()).await;
                     }
                     return upstream.into_response(route.agent);
@@ -329,7 +329,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                             permit.used_half_open_permit,
                         )
                         .await;
-                    if note_success(&route, config_task.as_deref(), target.id()) {
+                    if note_success(&route, config_task.as_deref(), &target) {
                         mark_active_target(&context, route.agent, target.id()).await;
                     }
                 }
@@ -377,7 +377,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                             &failure.summary,
                         )
                         .await;
-                    note_failure(config_task.as_deref(), &failure);
+                    note_failure(config_task.as_deref(), &target, &failure);
                     last_failure = Some(failure);
                 }
                 AttemptResult::Return(mut upstream) => {
@@ -399,7 +399,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                                 target_id: target.id().to_string(),
                                 used_half_open_permit: false,
                             });
-                            if note_success(&route, config_task.as_deref(), target.id()) {
+                            if note_success(&route, config_task.as_deref(), &target) {
                                 mark_active_target(&context, route.agent, target.id()).await;
                             }
                             return upstream.into_response(route.agent);
@@ -408,7 +408,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                             .circuit_breakers
                             .record_success(route.agent, target.id(), circuit_config.clone(), false)
                             .await;
-                        if note_success(&route, config_task.as_deref(), target.id()) {
+                        if note_success(&route, config_task.as_deref(), &target) {
                             mark_active_target(&context, route.agent, target.id()).await;
                         }
                     }
@@ -500,10 +500,10 @@ async fn resolve_config_targets(
 /// cooldown/sticky table (4b) and never touch the legacy active target, which
 /// would otherwise be overwritten with a `conn:` id. Returns whether the caller
 /// should still mark the legacy active target.
-fn note_success(route: &SelectedRoute, config_task: Option<&str>, target_id: &str) -> bool {
+fn note_success(route: &SelectedRoute, config_task: Option<&str>, target: &UpstreamTarget) -> bool {
     match config_task {
         Some(task_id) => {
-            super::config_routes::record_success(task_id, target_id);
+            super::config_routes::record_success(task_id, target.id(), target.fallback());
             false
         }
         None => route.target_id.is_none(),
@@ -512,7 +512,7 @@ fn note_success(route: &SelectedRoute, config_task: Option<&str>, target_id: &st
 
 /// After a failed attempt on a config-pinned task: cool the channel down (Q31,
 /// shared across pools and configs). Legacy targets keep only the circuit breaker.
-fn note_failure(config_task: Option<&str>, failure: &AttemptFailure) {
+fn note_failure(config_task: Option<&str>, target: &UpstreamTarget, failure: &AttemptFailure) {
     if let Some(task_id) = config_task {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -535,6 +535,7 @@ fn note_failure(config_task: Option<&str>, failure: &AttemptFailure) {
             &failure.outbound_model,
             class,
             retry_after,
+            target.fallback().is_some(),
         );
     }
 }

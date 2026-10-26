@@ -48,6 +48,9 @@ pub fn prepare_request(
         outbound_model = strip_one_m_suffix(&outbound_model).to_string();
         value["model"] = Value::String(outbound_model.clone());
     }
+    if let Some(fallback) = target.fallback() {
+        rewrite_effort(&mut value, &fallback.effort);
+    }
 
     let bytes = serde_json::to_vec(&value).unwrap_or_else(|_| body.to_vec());
     PreparedRequest {
@@ -56,6 +59,38 @@ pub fn prepare_request(
         request_model,
         outbound_model,
         one_m_context,
+    }
+}
+
+/// R8-Q2: carry the reasoning tier over to a fallback model by label, or drop
+/// it. Covers the three spellings the harnesses send: Responses
+/// `reasoning.effort`, Chat `reasoning_effort`, Messages `output_config.effort`.
+fn rewrite_effort(value: &mut Value, effort: &super::config_routes::EffortMap) {
+    for (parent, field) in [
+        (Some("reasoning"), "effort"),
+        (None, "reasoning_effort"),
+        (Some("output_config"), "effort"),
+    ] {
+        let object = match parent {
+            Some(key) => value.get_mut(key).and_then(Value::as_object_mut),
+            None => value.as_object_mut(),
+        };
+        let Some(object) = object else { continue };
+        let Some(current) = object
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        match effort.rewrite(&current) {
+            Some(next) => {
+                object.insert(field.to_string(), Value::String(next));
+            }
+            None => {
+                object.remove(field);
+            }
+        }
     }
 }
 

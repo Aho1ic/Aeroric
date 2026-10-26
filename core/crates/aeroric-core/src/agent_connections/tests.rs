@@ -44,6 +44,7 @@ fn route_config(harness: Harness, pool_id: Option<&str>) -> AgentConfig {
         },
         default_model: "deepseek-v4.1-flash".into(),
         default_reasoning: String::new(),
+        fallback_models: Vec::new(),
     }
 }
 

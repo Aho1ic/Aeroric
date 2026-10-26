@@ -1,7 +1,7 @@
+mod bridge_common;
 mod cache_injector;
 mod chat_bridge;
 mod circuit_breaker;
-mod bridge_common;
 pub mod config_routes;
 mod inline_tool_calls;
 mod messages_bridge;
@@ -74,6 +74,9 @@ pub struct UpstreamTarget {
     /// The protocol this upstream speaks when it differs from the harness (4d).
     /// `None` keeps the legacy behaviour: `enable_chat_completions_proxy` decides.
     upstream_protocol: Option<crate::agent_connections::model::WireProtocol>,
+    /// R8: set when this target serves a fallback model instead of the
+    /// requested one (config routing only).
+    fallback: Option<config_routes::Fallback>,
 }
 
 impl UpstreamTarget {
@@ -137,6 +140,7 @@ impl UpstreamTarget {
             enable_1m_context,
             enable_chat_completions_proxy,
             upstream_protocol: None,
+            fallback: None,
         })
     }
 
@@ -186,6 +190,16 @@ impl UpstreamTarget {
 
     pub fn upstream_protocol(&self) -> Option<crate::agent_connections::model::WireProtocol> {
         self.upstream_protocol
+    }
+
+    /// Mark this target as serving a fallback model (R8).
+    pub fn with_fallback(mut self, fallback: config_routes::Fallback) -> Self {
+        self.fallback = Some(fallback);
+        self
+    }
+
+    pub fn fallback(&self) -> Option<&config_routes::Fallback> {
+        self.fallback.as_ref()
     }
 }
 
