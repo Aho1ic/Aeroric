@@ -12,6 +12,9 @@ public struct LiveSessionView: View {
     let focusApproval: String?
     @State private var draft = ""
     @State private var infoCollapsed: Bool
+    @AppStorage(SessionInfoLayout.widthKey) private var infoWidth = Double(SessionInfoLayout.defaultWidth)
+    @State private var dragStartWidth: Double?
+    @State private var infoPopover = false
     @State private var confirmEnd = false
     @State private var confirmFullAccess = false
     @State private var modelPickerRequest = 0
@@ -37,6 +40,72 @@ public struct LiveSessionView: View {
     private var codex: Bool { store.family == "codex" }
 
     public var body: some View {
+        GeometryReader { outer in
+            let showsColumn = SessionInfoLayout.showsColumn(collapsed: infoCollapsed, centreWidth: outer.size.width)
+            HStack(spacing: 0) {
+                conversation
+                if showsColumn {
+                    infoResizeHandle
+                    VStack(spacing: 0) {
+                        HStack { Spacer(); moreMenu }
+                            .padding(.horizontal, AeroricSpace.m)
+                            .padding(.top, AeroricSpace.m)
+                        SessionInfoCard(state: store.state, model: store.model, facts: facts,
+                                        collapsed: $infoCollapsed, asColumn: true)
+                    }
+                    .frame(width: SessionInfoLayout.clampWidth(infoWidth))
+                    .frame(maxHeight: .infinity)
+                    .background(AeroricColor.layer1)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if !showsColumn { foldedInfo }
+            }
+        }
+        .onChange(of: infoCollapsed) { _, value in UserDefaults.standard.set(value, forKey: Self.infoCollapsedKey) }
+        .task(id: store.taskID) { await store.run() }
+        .modifier(SessionDialogs(store: store, confirmEnd: $confirmEnd, confirmFullAccess: $confirmFullAccess,
+                                 configure: { configure(permission: $0) }))
+        .accessibilityIdentifier("session.live.view")
+    }
+
+    /// Info folded into a button (by the user, or because the window is narrow).
+    private var foldedInfo: some View {
+        HStack(alignment: .top, spacing: AeroricSpace.s) {
+            Button {
+                if infoCollapsed { infoCollapsed = false } else { infoPopover = true }
+            } label: {
+                Label("会话信息", systemImage: "info.circle").font(.system(size: AeroricType.secondary, weight: .medium))
+            }
+            .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+            .popover(isPresented: $infoPopover, arrowEdge: .bottom) {
+                SessionInfoCard(state: store.state, model: store.model, facts: facts, collapsed: .constant(false))
+            }
+            .accessibilityIdentifier("session.info.open")
+            moreMenu
+        }
+        .padding(AeroricSpace.m)
+    }
+
+    /// Drag the column's left edge; 260–340 points, remembered.
+    private var infoResizeHandle: some View {
+        Rectangle()
+            .fill(AeroricColor.separator1)
+            .frame(width: 1)
+            .padding(.horizontal, 3)
+            .contentShape(Rectangle())
+            .onHover { inside in if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
+            .gesture(DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    let start = dragStartWidth ?? infoWidth
+                    dragStartWidth = start
+                    infoWidth = Double(SessionInfoLayout.clampWidth(CGFloat(start) - value.translation.width))
+                }
+                .onEnded { _ in dragStartWidth = nil })
+            .accessibilityLabel("调整会话信息宽度")
+    }
+
+    private var conversation: some View {
         GeometryReader { proxy in
             let column = TranscriptGeometry.columnWidth(for: proxy.size.width)
             ScrollViewReader { scroller in
@@ -76,33 +145,6 @@ public struct LiveSessionView: View {
             }
         }
         .background(AeroricColor.canvas)
-        .overlay(alignment: .topTrailing) {
-            HStack(alignment: .top, spacing: AeroricSpace.s) {
-                SessionInfoCard(state: store.state, model: store.model, facts: facts, collapsed: $infoCollapsed)
-                moreMenu
-            }
-            .padding(AeroricSpace.m)
-        }
-        .onChange(of: infoCollapsed) { _, value in UserDefaults.standard.set(value, forKey: Self.infoCollapsedKey) }
-        .task(id: store.taskID) { await store.run() }
-        .alert("结束这个会话？", isPresented: $confirmEnd) {
-            Button("结束会话", role: .destructive) { Task { await store.endSession() } }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("会停止当前的一轮并释放 Agent 进程。任务和会话记录都会保留，之后发消息会接着这个会话继续。")
-        }
-        .alert("切换到完全访问？", isPresented: $confirmFullAccess) {
-            Button("切换", role: .destructive) { configure(permission: .fullAccess) }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("下一轮起 Agent 执行命令和改文件都不再询问你。")
-        }
-        .alert("操作失败", isPresented: Binding(get: { store.errorText != nil }, set: { if !$0 { store.errorText = nil } })) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text(store.errorText ?? "")
-        }
-        .accessibilityIdentifier("session.live.view")
     }
 
     // MARK: - Rows
@@ -331,6 +373,35 @@ public struct LiveSessionView: View {
     private func scroll(_ scroller: ScrollViewProxy, to id: String) {
         withAnimation(AeroricMotion.animation(AeroricMotion.standard, reduceMotion: reduceMotion)) {
             scroller.scrollTo(id, anchor: id == Self.bottomID ? .bottom : .center)
+        }
+    }
+}
+
+/// The session page's confirmations and error alert, kept out of `body`.
+private struct SessionDialogs: ViewModifier {
+    let store: LiveSessionStore
+    @Binding var confirmEnd: Bool
+    @Binding var confirmFullAccess: Bool
+    let configure: (LivePermission) -> Void
+
+    func body(content: Content) -> some View {
+        content
+        .alert("结束这个会话？", isPresented: $confirmEnd) {
+            Button("结束会话", role: .destructive) { Task { await store.endSession() } }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("会停止当前的一轮并释放 Agent 进程。任务和会话记录都会保留，之后发消息会接着这个会话继续。")
+        }
+        .alert("切换到完全访问？", isPresented: $confirmFullAccess) {
+            Button("切换", role: .destructive) { configure(.fullAccess) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("下一轮起 Agent 执行命令和改文件都不再询问你。")
+        }
+        .alert("操作失败", isPresented: Binding(get: { store.errorText != nil }, set: { if !$0 { store.errorText = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(store.errorText ?? "")
         }
     }
 }

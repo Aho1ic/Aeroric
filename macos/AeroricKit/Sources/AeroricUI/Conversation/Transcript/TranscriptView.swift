@@ -96,15 +96,20 @@ struct TranscriptView<Footer: View>: View {
     }
 }
 
-/// User bubble (userBubble fill, radius 16, ≤ 85% of the column) or
-/// unboxed assistant prose.
+/// User bubble (userBubble fill, radius 16, ≤ 70% of the column, against the
+/// column's right edge) or unboxed assistant prose.
 struct MessageBubble: View {
     let role: String
     let content: [SessionContent]
     let columnWidth: CGFloat
 
-    static let userWidthRatio: CGFloat = 0.85
+    static let userWidthRatio: CGFloat = 0.70
     private var isUser: Bool { role == "user" }
+
+    /// Where a message sits in its column. The user's bubble is trailing both
+    /// inside its 70% box and in the column; aligning it leading inside the
+    /// box left short messages near the middle (2026-10-26 E).
+    static func alignment(role: String) -> Alignment { role == "user" ? .trailing : .leading }
 
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
@@ -119,9 +124,9 @@ struct MessageBubble: View {
             if isUser { AeroricRadius.shape(AeroricRadius.l).fill(AeroricColor.userBubble) }
         }
         .frame(maxWidth: isUser ? columnWidth * Self.userWidthRatio : .infinity,
-               alignment: .leading)
+               alignment: Self.alignment(role: role))
         .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+        .frame(maxWidth: .infinity, alignment: Self.alignment(role: role))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(isUser ? "用户" : "Agent")
     }

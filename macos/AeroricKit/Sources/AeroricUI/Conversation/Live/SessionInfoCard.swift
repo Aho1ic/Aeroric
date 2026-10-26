@@ -1,12 +1,34 @@
 import SwiftUI
 import AeroricProtocol
 
-/// Floating, collapsible "会话信息" card beside the conversation (Q27).
+/// Where the session-info column goes and how wide it is (2026-10-26 E).
+public enum SessionInfoLayout {
+    public static let minWidth: CGFloat = 260
+    public static let maxWidth: CGFloat = 340
+    public static let defaultWidth: CGFloat = 280
+    /// Below this centre width the column folds into a button, so the
+    /// conversation keeps a readable width; the saved preference is untouched.
+    public static let autoCollapseBelow: CGFloat = 760
+    public static let widthKey = "aeroric.session.infoWidth"
+
+    public static func showsColumn(collapsed: Bool, centreWidth: CGFloat) -> Bool {
+        !collapsed && centreWidth >= autoCollapseBelow
+    }
+
+    public static func clampWidth(_ width: CGFloat) -> CGFloat {
+        min(max(width, minWidth), maxWidth)
+    }
+}
+
+/// The collapsible "会话信息" (Q27): a column beside the conversation, or a
+/// floating card when shown from the folded button.
 struct SessionInfoCard: View {
     let state: LiveSessionState?
     let model: LiveSessionModel?
     let facts: LiveSessionFacts
     @Binding var collapsed: Bool
+    /// A full-height column next to the conversation instead of a floating card.
+    var asColumn = false
 
     private static let dateFormat: Date.FormatStyle = .dateTime.month().day().hour().minute()
 
@@ -26,7 +48,7 @@ struct SessionInfoCard: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("session.info.toggle")
-            if !collapsed {
+            if !collapsed || asColumn {
                 ScrollView {
                     VStack(alignment: .leading, spacing: AeroricSpace.m) {
                         planSection
@@ -34,13 +56,12 @@ struct SessionInfoCard: View {
                         details
                     }
                 }
-                .frame(maxHeight: 420)
+                .frame(maxHeight: asColumn ? .infinity : 420)
             }
         }
         .padding(AeroricSpace.l)
-        .frame(width: 260, alignment: .leading)
-        .glassSurface(.floatingCard, in: shape)
-        .aeroricElevation(.floating, in: shape)
+        .frame(maxWidth: asColumn ? .infinity : 260, maxHeight: asColumn ? .infinity : nil, alignment: .topLeading)
+        .modifier(FloatingCardChrome(enabled: !asColumn, shape: shape))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("session.info")
     }
@@ -116,5 +137,19 @@ struct SessionInfoCard: View {
             }
         }
         .font(.system(size: AeroricType.caption))
+    }
+}
+
+/// Glass and shadow only for the floating card; the column sits flat.
+private struct FloatingCardChrome<S: InsettableShape>: ViewModifier {
+    let enabled: Bool
+    let shape: S
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.glassSurface(.floatingCard, in: shape).aeroricElevation(.floating, in: shape)
+        } else {
+            content
+        }
     }
 }
