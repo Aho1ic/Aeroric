@@ -313,6 +313,12 @@ public struct AgentConnectionsClient: Sendable {
         return try Self.decode([Cooldown].self, reply["cooldowns"] ?? .array([]), snake: false)
     }
 
+    /// R7: connections that refused replayed thinking; the gateway strips it for them.
+    public func reasoningStripped() async throws -> [String] {
+        let reply = try await connection.request("agentConnections.status", params: .object([:])).result
+        return (reply["reasoningStripped"]?.arrayValue ?? []).compactMap(\.stringValue)
+    }
+
     /// R8: tasks currently answered by a fallback model.
     public func downgrades() async throws -> [Downgrade] {
         let reply = try await connection.request("agentConnections.status", params: .object([:])).result

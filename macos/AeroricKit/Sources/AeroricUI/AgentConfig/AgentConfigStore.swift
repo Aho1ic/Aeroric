@@ -20,6 +20,12 @@ public protocol AgentConfigBackend {
     func status() async throws -> [ACC.Cooldown]
     func officialStatus() async throws -> ACC.OfficialStatus
     func testConnection(connectionId: String, model: String) async throws -> ACC.Probe
+    /// R7: connections the gateway strips replayed thinking for.
+    func reasoningStripped() async throws -> [String]
+}
+
+public extension AgentConfigBackend {
+    func reasoningStripped() async throws -> [String] { [] }
 }
 
 /// Pure pieces of the page, kept apart so they can be tested.
@@ -133,6 +139,10 @@ public enum AgentConfigText {
         return Array(Set(names)).filter { !$0.isEmpty }.sorted()
     }
 
+    /// R7-Q3: why a model may seem to forget its earlier train of thought here.
+    public static let reasoningStrippedNote =
+        "这个连接拒收过回放的思考内容，之后自动去掉。编辑连接后会重新尝试。"
+
     /// R8-Q4: more usually means the configuration needs rethinking.
     public static let maxFallbacks = 3
 
@@ -182,6 +192,8 @@ public final class AgentConfigStore {
     public var tab: Tab = .connections
     public private(set) var snapshot: ACC.Snapshot?
     public private(set) var cooldowns: [ACC.Cooldown] = []
+    /// R7: connections that refused replayed thinking (in the gateway's memory).
+    public private(set) var reasoningStripped: Set<String> = []
     public private(set) var official: ACC.OfficialStatus?
     public private(set) var busy = false
     public var errorText: String?
@@ -212,11 +224,13 @@ public final class AgentConfigStore {
         await run("读取 Agent 配置失败") { [self] in
             apply(try await backend.load())
             cooldowns = (try? await backend.status()) ?? []
+            reasoningStripped = Set((try? await backend.reasoningStripped()) ?? [])
         }
     }
 
     public func refreshStatus() async {
         if let latest = try? await backend.status() { cooldowns = latest }
+        if let latest = try? await backend.reasoningStripped() { reasoningStripped = Set(latest) }
     }
 
     public func detectOfficial() async {

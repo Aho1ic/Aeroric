@@ -29,6 +29,7 @@ struct HostAgentConfigBackend: AgentConfigBackend {
         try await client().candidates(configId: configId, model: model)
     }
     func status() async throws -> [ACC.Cooldown] { try await client().status() }
+    func reasoningStripped() async throws -> [String] { try await client().reasoningStripped() }
     func officialStatus() async throws -> ACC.OfficialStatus { try await client().officialStatus() }
     func testConnection(connectionId: String, model: String) async throws -> ACC.Probe {
         try await client().testConnection(connectionId: connectionId, model: model)

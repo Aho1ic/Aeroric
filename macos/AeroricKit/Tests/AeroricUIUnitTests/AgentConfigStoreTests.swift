@@ -9,6 +9,8 @@ private final class FakeBackend: AgentConfigBackend {
     var credentials: [String: String] = [:]
     var savedCredential: String??
     var fetchCount = 0
+    var stripped: [String] = []
+    func reasoningStripped() async throws -> [String] { stripped }
 
     private func snap() -> ACC.Snapshot { .init(document: document, credentials: credentials) }
 
@@ -170,5 +172,18 @@ final class AgentConfigStoreTests: XCTestCase {
         XCTAssertEqual(AgentConfigText.downgradeBadge(downgrade), "降级 · deepseek-chat")
         XCTAssertEqual(AgentConfigText.downgradeHelp(downgrade),
                        "主模型 sonnet 不可用（限流），本轮由 deepseek-chat 应答；主模型恢复后自动切回。")
+    }
+
+    // MARK: - R7
+
+    func testTheStoreKnowsWhichConnectionsGetReasoningStripped() async {
+        let backend = FakeBackend()
+        backend.stripped = ["a"]
+        let store = AgentConfigStore(backend: backend)
+        await store.refresh()
+        XCTAssertEqual(store.reasoningStripped, ["a"])
+        backend.stripped = []
+        await store.refreshStatus()
+        XCTAssertTrue(store.reasoningStripped.isEmpty)
     }
 }

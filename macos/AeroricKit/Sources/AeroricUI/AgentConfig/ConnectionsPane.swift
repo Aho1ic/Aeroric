@@ -132,6 +132,12 @@ struct ConnectionsPane: View {
                 Toggle("", isOn: draft.restOnLimit).labelsHidden().toggleStyle(.switch)
             }
             SettingsRow("启用") { Toggle("", isOn: draft.enabled).labelsHidden().toggleStyle(.switch) }
+            if let id = store.selectedConnection, store.reasoningStripped.contains(id) {
+                Text(AgentConfigText.reasoningStrippedNote)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .accessibilityIdentifier("agent-config.reasoning-stripped")
+            }
         }
         modelsCard
         if store.selectedConnection != nil { testCard }
