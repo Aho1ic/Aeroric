@@ -57,15 +57,12 @@ public struct NewSessionHome: View {
                 composer
                 status.padding(.top, AeroricSpace.m)
 
-                Picker("场景", selection: $scenario) {
-                    ForEach(Scenario.allCases) { Label($0.title, systemImage: $0.symbol).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                CapsuleSlider(selection: $scenario, groupTitle: "场景", size: .large,
+                              identifier: "new-session.scenario",
+                              segments: Scenario.allCases.map { .init(value: $0, title: $0.title, systemImage: $0.symbol) })
                 .fixedSize()
                 .padding(.top, AeroricSpace.huge)
                 .padding(.bottom, AeroricSpace.l)
-                .accessibilityIdentifier("new-session.scenario")
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: AeroricSpace.m)],
                           spacing: AeroricSpace.m) {

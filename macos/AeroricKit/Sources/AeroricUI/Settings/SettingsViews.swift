@@ -235,23 +235,17 @@ struct AppearanceSettingsPane: View {
         VStack(alignment: .leading, spacing: AeroricSpace.xl) {
             SettingsCard("主题") {
                 SettingsRow("外观", detail: "浅色、深色，或跟随系统设置。") {
-                    Picker("外观", selection: $themeRaw) {
-                        ForEach(AppTheme.allCases) { Text($0.title).tag($0.rawValue) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    CapsuleSlider(selection: $themeRaw, groupTitle: "外观", identifier: "settings.appearance.theme",
+                                  segments: AppTheme.allCases.map { .init(value: $0.rawValue, title: $0.title) })
                     .fixedSize()
-                    .accessibilityIdentifier("settings.appearance.theme")
                 }
                 SettingsRow("材质", detail: "玻璃：侧栏、工具栏和浮层使用系统玻璃效果。经典：全部不透明。系统“降低透明度”开启时总是不透明。") {
-                    Picker("材质", selection: $surfaceRaw) {
-                        Text("玻璃").tag(SurfacePreference.glass.rawValue)
-                        Text("经典").tag(SurfacePreference.classic.rawValue)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    CapsuleSlider(selection: $surfaceRaw, groupTitle: "材质", identifier: "settings.appearance.surface",
+                                  segments: [
+                                      .init(value: SurfacePreference.glass.rawValue, title: "玻璃"),
+                                      .init(value: SurfacePreference.classic.rawValue, title: "经典"),
+                                  ])
                     .fixedSize()
-                    .accessibilityIdentifier("settings.appearance.surface")
                 }
             }
             SettingsCard("字号") {
@@ -275,13 +269,10 @@ struct AppearanceSettingsPane: View {
 
     private func sizeRow(_ kind: AeroricTypeScale.Kind, title: String, detail: String) -> some View {
         SettingsRow(title, detail: "\(detail) · 当前 \(Int(kind.size(scale.step(for: kind)))) pt") {
-            Picker(title, selection: Binding(get: { scale.step(for: kind) }, set: { scale.set($0, for: kind) })) {
-                ForEach(AeroricTypeScale.Step.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            CapsuleSlider(selection: Binding(get: { scale.step(for: kind) }, set: { scale.set($0, for: kind) }),
+                          groupTitle: title, identifier: "settings.appearance.size.\(kind.rawValue)",
+                          segments: AeroricTypeScale.Step.allCases.map { .init(value: $0, title: $0.title) })
             .fixedSize()
-            .accessibilityIdentifier("settings.appearance.size.\(kind.rawValue)")
         }
     }
 }

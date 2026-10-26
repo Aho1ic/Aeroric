@@ -80,14 +80,11 @@ public struct TaskBoardView: View {
             .frame(width: 260, height: 28)
             .background(AeroricColor.layer1, in: Capsule(style: .continuous))
             .overlay { Capsule(style: .continuous).strokeBorder(AeroricColor.separator1, lineWidth: 1) }
-            Picker("视图", selection: $modeRawValue) {
-                Label("看板", systemImage: "rectangle.split.3x1").tag(Mode.board.rawValue)
-                Label("列表", systemImage: "list.bullet").tag(Mode.list.rawValue)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            CapsuleSlider(selection: $modeRawValue, groupTitle: "视图", identifier: "tasks.view-mode", segments: [
+                .init(value: Mode.board.rawValue, title: "看板", systemImage: "rectangle.split.3x1"),
+                .init(value: Mode.list.rawValue, title: "列表", systemImage: "list.bullet"),
+            ])
             .fixedSize()
-            .accessibilityIdentifier("tasks.view-mode")
             Spacer()
             Button(action: onOpenDraft) {
                 Label("新会话", systemImage: "square.and.pencil")

@@ -34,11 +34,12 @@ public struct GitPanel: View {
             .padding(8)
             .disabled(onAction == nil || store.changesReadState != .loaded)
             .help(onAction == nil ? "本页尚未接通 Git 操作" : "Git 操作")
-            NativeSegmentedPicker(selection: $tab, groupTitle: "Git 内容", segments: [
-                .init(value: "changes", title: "更改"),
-                .init(value: "history", title: "历史"),
-                .init(value: "stash", title: "贮藏"),
+            CapsuleSlider(selection: $tab, groupTitle: "Git 内容", segments: [
+                .init(value: "changes", title: "更改", systemImage: "plusminus"),
+                .init(value: "history", title: "历史", systemImage: "clock.arrow.circlepath"),
+                .init(value: "stash", title: "贮藏", systemImage: "tray.and.arrow.down"),
             ])
+            .fixedSize()
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
             Group {

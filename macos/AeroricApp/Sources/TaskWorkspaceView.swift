@@ -354,11 +354,15 @@ struct TaskWorkspaceView: View {
     private var auxiliaryPanel: some View {
         VStack(spacing: 0) {
             // v3: icon tabs across the top (codeg aux panel header).
-            HStack(spacing: 2) {
-                auxiliaryTabButton(.details, title: "详情", systemImage: "info.circle")
-                auxiliaryTabButton(.files, title: "文件", systemImage: "folder")
-                auxiliaryTabButton(.changes, title: "改动", systemImage: "plusminus")
-                auxiliaryTabButton(.history, title: "Git 日志", systemImage: "clock.arrow.circlepath")
+            HStack(spacing: 0) {
+                CapsuleSlider(selection: $auxiliaryTab, groupTitle: "辅助面板", mode: .iconsWithSelectedTitle,
+                              identifier: "auxiliary.tab-slider", segments: [
+                    .init(value: .details, title: "详情", systemImage: "info.circle"),
+                    .init(value: .files, title: "文件", systemImage: "folder"),
+                    .init(value: .changes, title: "改动", systemImage: "plusminus"),
+                    .init(value: .history, title: "Git 日志", systemImage: "clock.arrow.circlepath"),
+                ])
+                .fixedSize()
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 8)
@@ -384,30 +388,6 @@ struct TaskWorkspaceView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    /// One icon tab: capsule highlight on hover / selection, title as
-    /// tooltip and accessibility label.
-    private func auxiliaryTabButton(_ tab: AuxiliaryTab, title: String, systemImage: String) -> some View {
-        let selected = auxiliaryTab == tab
-        return HoverCapsuleRow(selected: selected, height: 28, horizontalPadding: AeroricSpace.m) {
-            auxiliaryTab = tab
-        } label: {
-            HStack(spacing: AeroricSpace.xs) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 12, weight: selected ? .semibold : .regular))
-                if selected {
-                    Text(title).font(.system(size: AeroricType.secondary, weight: .medium)).lineLimit(1)
-                }
-            }
-            .foregroundStyle(selected ? AeroricColor.text : AeroricColor.textSecondary)
-            .fixedSize()
-        }
-        .fixedSize()
-        .help(title)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier("auxiliary.tab.\(title)")
     }
 
     /// Files and Changes share the existing per-project resource book; the

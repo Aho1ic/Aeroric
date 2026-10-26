@@ -33,16 +33,12 @@ public struct UsageDashboard: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Picker("区间", selection: Binding(
+                CapsuleSlider(selection: Binding(
                     get: { store.range },
                     set: { range in Task { await store.select(range: range) } }
-                )) {
-                    ForEach(MaintenanceStore.Range.allCases) { range in
-                        Text(range.label).tag(range)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("usage.range")
+                ), groupTitle: "区间", identifier: "usage.range",
+                   segments: MaintenanceStore.Range.allCases.map { .init(value: $0, title: $0.label) })
+                .fixedSize()
 
                 Picker("代理", selection: Binding(
                     get: { store.agentFilter },
