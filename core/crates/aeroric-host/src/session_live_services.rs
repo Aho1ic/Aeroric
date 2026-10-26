@@ -91,12 +91,18 @@ pub fn register_session_live_services(
     }
     set.register(AUTO_CHECK_GET_METHOD, blocking(&live, auto_check_get));
     set.register(AUTO_CHECK_SET_METHOD, blocking(&live, auto_check_set));
+    set.register(
+        AUTO_CHECK_FAILURES_METHOD,
+        blocking(&live, auto_check_failures),
+    );
 }
 
 /// A05: which checks the task's project runs after a turn; keyed by task so
 /// the client never needs the project id.
 pub const AUTO_CHECK_GET_METHOD: &str = "session.autoCheck.get";
 pub const AUTO_CHECK_SET_METHOD: &str = "session.autoCheck.set";
+/// Tasks whose latest check run failed, for the "需要我处理" queue.
+pub const AUTO_CHECK_FAILURES_METHOD: &str = "session.autoCheck.failures";
 
 /// Read on every turn end, so a toggle applies from the next turn on.
 struct SettingsAutoChecks(Arc<CoreContext>);
@@ -151,6 +157,13 @@ fn auto_check_get(live: &Live, request: &Request) -> Frame {
         ),
         Err(frame) => *frame,
     }
+}
+
+fn auto_check_failures(live: &Live, request: &Request) -> Frame {
+    ok(
+        request,
+        json!({ "failures": live.executor.check_failures() }),
+    )
 }
 
 fn auto_check_set(live: &Live, request: &Request) -> Frame {

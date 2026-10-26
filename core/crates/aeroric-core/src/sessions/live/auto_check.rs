@@ -6,6 +6,9 @@
 //! time on their own thread; a new turn cancels the running check. Every
 //! command gets its own process group so cancel / timeout can kill the whole
 //! tree (`terminate_process_tree` signals that group only).
+//!
+//! The checker also remembers each task's latest failed run, so the host can
+//! list them for the "需要我处理" queue without reading every session's log.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -310,6 +313,78 @@ struct Running {
     cancel: Arc<AtomicBool>,
 }
 
+/// A task whose latest check run failed, for the attention queue.
+#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckFailure {
+    pub task_id: String,
+    pub turn_id: String,
+    /// e.g. `测试 3 项失败，诊断 2 个错误`.
+    pub summary: String,
+    pub at_ms: u64,
+}
+
+/// One line for a failed run: failing tests, diagnostic errors, and checks
+/// that did not finish (error / timeout) told apart.
+pub fn failure_summary(items: &[AutoCheckItem]) -> String {
+    let count = |kind: &str| -> Option<usize> {
+        let failed: Vec<&AutoCheckItem> = items
+            .iter()
+            .filter(|i| i.kind == kind && i.state == "failed")
+            .collect();
+        (!failed.is_empty()).then(|| failed.iter().map(|i| i.failures.len().max(1)).sum())
+    };
+    let mut parts = Vec::new();
+    if let Some(n) = count("tests") {
+        parts.push(format!("测试 {n} 项失败"));
+    }
+    if let Some(n) = count("diagnostics") {
+        parts.push(format!("诊断 {n} 个错误"));
+    }
+    if items
+        .iter()
+        .any(|i| i.state == "error" || i.state == "timedOut")
+    {
+        parts.push("检查没跑完".to_string());
+    }
+    if parts.is_empty() {
+        "检查没通过".to_string()
+    } else {
+        parts.join("，")
+    }
+}
+
+/// Keep `failures` in step with one `autoCheck` update: a failed run is
+/// remembered, anything else (running, passed, cancelled, skipped) clears it.
+fn remember(
+    failures: &mut HashMap<String, CheckFailure>,
+    task_id: &str,
+    kind: &SessionUpdateKind,
+    at_ms: u64,
+) {
+    let SessionUpdateKind::AutoCheck {
+        turn_id,
+        state,
+        items,
+    } = kind
+    else {
+        return;
+    };
+    if state == "failed" {
+        failures.insert(
+            task_id.to_string(),
+            CheckFailure {
+                task_id: task_id.to_string(),
+                turn_id: turn_id.clone(),
+                summary: failure_summary(items),
+                at_ms,
+            },
+        );
+    } else {
+        failures.remove(task_id);
+    }
+}
+
 /// Starts and cancels checks per task; results go to the session's log.
 pub struct AutoChecker {
     inner: Arc<dyn LiveStatusSink>,
@@ -319,6 +394,8 @@ pub struct AutoChecker {
     timeout: Duration,
     running: Mutex<HashMap<String, Running>>,
     next: AtomicU64,
+    /// task → its latest run, when that run failed.
+    failures: Mutex<HashMap<String, CheckFailure>>,
 }
 
 impl AutoChecker {
@@ -336,6 +413,7 @@ impl AutoChecker {
             timeout,
             running: Mutex::default(),
             next: AtomicU64::new(1),
+            failures: Mutex::default(),
         })
     }
 
@@ -344,8 +422,10 @@ impl AutoChecker {
     }
 
     fn push(&self, task_id: &str, kind: SessionUpdateKind) {
+        let now = now_ms();
+        remember(&mut self.failures.lock(), task_id, &kind, now);
         if let Some(log) = self.registry.log(task_id) {
-            let update = log.push(kind, now_ms());
+            let update = log.push(kind, now);
             self.inner.update(&update);
         }
     }
@@ -355,6 +435,15 @@ impl AutoChecker {
         if let Some(running) = self.running.lock().remove(task_id) {
             running.cancel.store(true, Ordering::SeqCst);
         }
+        // The new turn may fix what failed; its own check decides again.
+        self.failures.lock().remove(task_id);
+    }
+
+    /// Tasks whose latest check run failed, oldest first.
+    pub fn failures(&self) -> Vec<CheckFailure> {
+        let mut list: Vec<CheckFailure> = self.failures.lock().values().cloned().collect();
+        list.sort_by(|a, b| a.at_ms.cmp(&b.at_ms).then(a.task_id.cmp(&b.task_id)));
+        list
     }
 
     /// `turn_id` changed files and ended normally; returns whether a run

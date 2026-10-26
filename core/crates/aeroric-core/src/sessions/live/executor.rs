@@ -121,6 +121,11 @@ impl StructuredExecutor {
         self.turn_changes.checks.set_policy(policy);
     }
 
+    /// Tasks whose latest check run failed (the attention queue).
+    pub fn check_failures(&self) -> Vec<super::auto_check::CheckFailure> {
+        self.turn_changes.checks.failures()
+    }
+
     pub fn registry(&self) -> &Arc<DriverRegistry> {
         &self.registry
     }

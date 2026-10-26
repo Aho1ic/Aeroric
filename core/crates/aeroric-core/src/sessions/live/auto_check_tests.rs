@@ -215,3 +215,68 @@ fn the_overall_state_is_the_worst_item() {
     assert_eq!(overall(&[item("passed"), item("timedOut")]), "failed");
     assert_eq!(overall(&[item("failed"), item("cancelled")]), "cancelled");
 }
+
+fn checked(kind: &str, state: &str, failures: usize) -> AutoCheckItem {
+    AutoCheckItem {
+        kind: kind.into(),
+        profile: "p".into(),
+        label: "P".into(),
+        state: state.into(),
+        summary: String::new(),
+        failures: (0..failures).map(|i| format!("case {i}")).collect(),
+        output_tail: String::new(),
+    }
+}
+
+#[test]
+fn a_failed_run_is_summarised_by_kind() {
+    assert_eq!(
+        failure_summary(&[
+            checked("diagnostics", "failed", 2),
+            checked("tests", "failed", 3)
+        ]),
+        "测试 3 项失败，诊断 2 个错误"
+    );
+    assert_eq!(
+        failure_summary(&[checked("tests", "failed", 0)]),
+        "测试 1 项失败",
+        "a failing suite without parsed cases still counts"
+    );
+    assert_eq!(
+        failure_summary(&[
+            checked("diagnostics", "passed", 0),
+            checked("tests", "timedOut", 0)
+        ]),
+        "检查没跑完"
+    );
+}
+
+#[test]
+fn only_the_latest_failed_run_is_remembered() {
+    let mut failures = HashMap::new();
+    let update = |state: &str, items: Vec<AutoCheckItem>| SessionUpdateKind::AutoCheck {
+        turn_id: "t1".into(),
+        state: state.into(),
+        items,
+    };
+    remember(&mut failures, "task", &update("running", vec![]), 1);
+    assert!(failures.is_empty());
+    remember(
+        &mut failures,
+        "task",
+        &update("failed", vec![checked("tests", "failed", 2)]),
+        2,
+    );
+    assert_eq!(failures["task"].summary, "测试 2 项失败");
+    assert_eq!(failures["task"].at_ms, 2);
+    remember(&mut failures, "task", &update("passed", vec![]), 3);
+    assert!(failures.is_empty(), "a passing run clears it");
+    remember(
+        &mut failures,
+        "task",
+        &update("failed", vec![checked("tests", "error", 0)]),
+        4,
+    );
+    remember(&mut failures, "task", &update("cancelled", vec![]), 5);
+    assert!(failures.is_empty(), "so does a cancelled one");
+}

@@ -918,4 +918,11 @@ async fn auto_checks_are_toggled_per_project_through_a_task() {
             .unwrap_err()["code"],
         "NOT_FOUND"
     );
+    // Nothing has run, so nothing failed.
+    assert_eq!(
+        host.call("session.autoCheck.failures", json!({}))
+            .await
+            .unwrap(),
+        json!({"failures": []})
+    );
 }
