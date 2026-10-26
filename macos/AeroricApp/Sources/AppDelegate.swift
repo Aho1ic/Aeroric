@@ -22,6 +22,7 @@ import AeroricUI
 ///   the shared scratch for every launch after it).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var services: AppServices?
+    private var menuBar: MenuBarController?
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
@@ -30,6 +31,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Light / dark / system from Settings → 外观 (M3), before any window shows.
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppTheme.applyStored()
+        if let services {
+            let menuBar = MenuBarController(services: services)
+            menuBar.start()
+            self.menuBar = menuBar
+        }
     }
 
     /// Default reopen handling (P4-01 policy): returning true lets SwiftUI's
