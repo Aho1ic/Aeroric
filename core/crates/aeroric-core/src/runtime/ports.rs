@@ -5,7 +5,7 @@
 //! 各自的第一个真实消费者到位时才定义(`ProcessSpawner` 随 `subprocess.rs` 迁入与
 //! `TaskRegistry` 接管进程句柄,`PlatformServices` 随宿主 `platform_adapter.rs`);
 //! 先写一个没人调用的 trait,正是 grill 门禁点名的"只检查 trait 名称"。
-//! 每一步的落点与理由见 MIGRATION_PLAN.md 的接线补记与 `docs/native/extraction/runtime-ports.md`。
+//! 每一步的落点与理由见 MIGRATION_PLAN.md 的接线补记与 `e3836e62:docs/native/extraction/runtime-ports.md`。
 
 use std::path::Path;
 use std::sync::Arc;

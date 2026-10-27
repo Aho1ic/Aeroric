@@ -25,7 +25,7 @@
 //! ## 恢复不许静默覆盖
 //!
 //! 清单里每个文件都带备份当时的 sha256。恢复前逐个比对目标现状:对不上就是**备份之后
-//! 有新写入**,此时拒绝并指名(pol. `docs/native/rollback.md` 的"never restore a stale
+//! 有新写入**,此时拒绝并指名(pol. `e3836e62:docs/native/rollback.md` 的"never restore a stale
 //! full-memory snapshot over newer writes"),除非调用方显式 `discard_newer`。
 //! 这条是"恢复"与"回滚"的分界线,不能靠使用者记得。
 

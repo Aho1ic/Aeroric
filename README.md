@@ -18,12 +18,13 @@ Native macOS workspace for AI coding agents, with an iOS companion for remote co
 > only the native SwiftUI clients and the Rust core remain.
 >
 > **Test policy (2026-10-19):** real-window UI tests are paused and test VMs are retired.
-> See [docs/native/ui-testing-policy.md](docs/native/ui-testing-policy.md).
+> See [the UI automation pause note](.agents/notes/implemented/process/2026-10-19-ui-automation-pause.md).
 
 ## What it is
 
 Aeroric runs Claude Code, Codex, oh-my-pi (omp), DeepSeek Harness and custom agents
-in real PTYs on your Mac, showing each agent's own TUI unmodified. It adds task
+on your Mac through their structured protocols (Claude stream-json, `codex app-server`,
+`omp --mode rpc`), with live messages, tool calls and inline approvals. It adds task
 tracking, Git and file views, managed agent homes, account/model configuration,
 and an iOS companion that observes tasks, answers approvals and receives push
 notifications. All execution stays on the Mac.
@@ -40,7 +41,9 @@ remote-protocol/ Relay control-plane protocol
 remote-push/     APNs sender
 remote-relay/    Self-hostable relay
 scripts/native/  Build, signing, gate runner and UI-test tooling (Node, no npm deps)
-docs/native/     ADRs, migration plan artefacts, feature candidates and current designs
+docs/            Architecture, subsystem docs, cookbook and backlog (start at docs/architecture.md)
+  native/        Machine-read inventories used by gates and generators
+.agents/notes/   Decision notes (why things are the way they are)
 ```
 
 `core` depends on the external [dbx](https://github.com/t8y2/dbx) checkout at `../dbx`,
@@ -55,7 +58,7 @@ pnpm native:doctor                 # check toolchain
 pnpm native:build                  # build and locally sign AeroricNative.app
 pnpm native:check <module>         # run a gate module from scripts/native/checks.json
 
-cargo test --manifest-path core/Cargo.toml
+cargo test --manifest-path core/Cargo.toml --workspace
 swift test --package-path macos/AeroricKit
 swift test --package-path ios/AeroricCompanionKit
 ```
@@ -65,7 +68,7 @@ swift test --package-path ios/AeroricCompanionKit
 - macOS: Developer ID signing and notarization, distributed outside the Mac App Store.
 - iOS: App Store, as a remote-control companion for the user's own paired Mac.
 
-See `docs/native/adr/039-distribution-pivot-macos-ios.md`.
+See [docs/cookbook/release-and-signing.md](docs/cookbook/release-and-signing.md).
 
 ## License
 

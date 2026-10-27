@@ -1,7 +1,7 @@
 //! P3-04 首片金样测试：Claude/Codex 转录解析 + 旧客户端 serde 形状 + 损坏反例。
 //!
 //! fixture 来源：`~/.aeroric/agent-homes/**` 真实语料（claude 最小/中位、codex 最小/中位），
-//! 按 `docs/native/extraction/sessions-corpus.md` §三 的脱敏变换表生成（补记二百四十一）：
+//! 按 `e3836e62:docs/native/extraction/sessions-corpus.md` §三 的脱敏变换表生成（补记二百四十一）：
 //! 自由文本按**原字节长度**替换，`cwd`/`gitBranch`/`sessionId`/时间戳换固定常量，
 //! 非 ASCII 与路径形态键值全部清零；入库前后都跑了 corpus §三 的零命中清单。
 //! 测试**不得**读本机 `~/.aeroric`（`core-discovers-no-real-home` 守着）。

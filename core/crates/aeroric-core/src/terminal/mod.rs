@@ -5,7 +5,7 @@
 //! 它的增量解码投影。流身份 = `(task_id, generation)`;缓冲有界,落后太多的
 //! 订阅者得到显式 Gap 而不是"屏幕完全恢复"的谎话。
 //!
-//! 迁移对照与切片顺序见 `docs/native/extraction/terminal-stream.md`。
+//! 迁移对照与切片顺序见 `e3836e62:docs/native/extraction/terminal-stream.md`。
 
 pub mod executor;
 pub mod exit;

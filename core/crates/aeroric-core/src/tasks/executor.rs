@@ -21,7 +21,7 @@ pub enum CancelTarget {
 }
 
 /// The three per-window facts a DSH launch asks about and no other family does (§12 of
-/// `docs/native/reviews/tauri-adapter.md`): the webui instance to open against, how the prompt
+/// `e3836e62:docs/native/reviews/tauri-adapter.md`): the webui instance to open against, how the prompt
 /// should be applied, and the viewer's time zone for rendering.
 ///
 /// All three are `Option` because the kernel this ends up calling — `run_dsh_task_core` — takes

@@ -3,7 +3,7 @@ import SwiftUI
 // Shared panel geometry for the native redesign (stage 01).
 //
 // Numbers only — no view code, no new design system. The shape values are
-// the approved stage-01 scope (`docs/native/frontend-redesign-stage-01.md`
+// the approved stage-01 scope (`e3836e62:docs/native/frontend-redesign-stage-01.md`
 // §2 + review-round-07): an 18pt continuous panel radius, an 8pt inset and
 // an 8pt gap between panels, on the existing 4pt token scale. Radii come
 // from `AeroricRadius`, spacing from `AeroricSpace`; nothing here redefines either.

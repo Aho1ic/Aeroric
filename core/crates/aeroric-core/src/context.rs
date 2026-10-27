@@ -48,7 +48,7 @@ pub trait SettingsSource: Send + Sync {
 }
 
 /// The host-side primitive behind `Persist::ViaHost` (§12 蓝图 of
-/// `docs/native/reviews/tauri-adapter.md`): on a platform that has NOT been handed the
+/// `e3836e62:docs/native/reviews/tauri-adapter.md`): on a platform that has NOT been handed the
 /// writer role (ADR-021), core still decides the task table — somebody else stores the
 /// bytes. That somebody is this trait, implemented by the adapter over
 /// `write_task_records_raw`, i.e. byte-faithful JSON with no typed struct in between

@@ -94,7 +94,7 @@ pub enum ProjectCmd {
 ///
 /// **默认只接受 `--data-dir` 指到哪就备到哪**:所有命令都读顶层 `--data-dir`,
 /// 没有第二个"真实目录"的缺省。真实 `~/.aeroric` 的停写与备份是一次不可自动回退的
-/// 操作(`docs/native/rollback.md`),所以本命令族不提供任何"自动找家目录"的捷径。
+/// 操作(`e3836e62:docs/native/rollback.md`),所以本命令族不提供任何"自动找家目录"的捷径。
 #[derive(Subcommand, Debug)]
 pub enum BackupCmd {
     /// 建一份备份（含清单）。目标目录必须不存在或为空。

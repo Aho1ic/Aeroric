@@ -73,7 +73,7 @@ function refused(result, f) {
   assert.match(result.stderr, /PAUSED/);
   assert.match(result.stderr, /NOT EXECUTED \/ NOT PASSED/);
   assert.match(result.stderr, /VM provisioning FORBIDDEN/);
-  assert.match(result.stderr, /docs\/native\/ui-testing-policy\.md/);
+  assert.match(result.stderr, /2026-10-19-ui-automation-pause\.md/);
   assert.equal(result.stderr.includes(trapToken), false);
   for (const secret of [f.root, f.home, "private-policy-fixture-value"]) {
     assert.equal(result.stderr.includes(secret), false);

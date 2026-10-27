@@ -2,14 +2,14 @@
 import Foundation
 
 // Task-evolution review sample — value types (Q26; execution package
-// `docs/native/task-evolution-review-stage-01.md` §3).
+// `e3836e62:docs/native/task-evolution-review-stage-01.md` §3).
 //
 // These are SAMPLE types for an offline, in-memory review window. They are not
 // a production protocol: nothing here is exported to `AeroricProtocol` or the
 // Rust core, no wire enum is added, and no field is persisted. The real
 // task-evolution contract (phase boundaries, trusted completion events,
 // evidence sufficiency, governance IPC) is still undecided — see
-// `docs/native/task-evolution-design-checkpoint-01.md` §8 — so every name
+// `e3836e62:docs/native/task-evolution-design-checkpoint-01.md` §8 — so every name
 // carries `EvolutionReview`/`Review` and every fixture is explicitly fictional.
 //
 // The whole file is compiled out of ReleaseLocal.

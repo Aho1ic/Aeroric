@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 
 // Isolated task-evolution review window (Q26; execution package
-// `docs/native/task-evolution-review-stage-01.md`).
+// `e3836e62:docs/native/task-evolution-review-stage-01.md`).
 //
 // This is a review surface, not product UI and not the production workspace.
 // It reuses the shared design components (`NativePanelFoundation`,

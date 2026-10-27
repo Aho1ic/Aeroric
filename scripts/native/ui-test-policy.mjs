@@ -15,7 +15,7 @@ const expectedPolicy = Object.freeze({
 function denied(reason) {
   const error = new Error(
     `PAUSED: real UI tests NOT EXECUTED / NOT PASSED; VM provisioning FORBIDDEN. ${reason} ` +
-    "See docs/native/ui-testing-policy.md.",
+    "See .agents/notes/implemented/process/2026-10-19-ui-automation-pause.md.",
   );
   error.code = "ERR_AERORIC_UI_TEST_POLICY";
   error.exitCode = UI_TEST_POLICY_EXIT_CODE;

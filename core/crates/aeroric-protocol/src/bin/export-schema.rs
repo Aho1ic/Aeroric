@@ -813,16 +813,25 @@ fn methods_schema(methods: &[Value], aliases: &[Value]) -> Value {
     })
 }
 
+/// A migration task id: `P<phase>-<n>` or `AP<phase>-<n>`.
+fn is_task_id(task: &str) -> bool {
+    let rest = task.strip_prefix("AP").or_else(|| task.strip_prefix('P'));
+    let Some((phase, n)) = rest.and_then(|rest| rest.split_once('-')) else {
+        return false;
+    };
+    let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    digits(phase) && digits(n)
+}
+
 /// ADR-007: the v1 topic plane. Every legacy channel must be covered exactly once,
 /// every `mapped` row must say where its name comes from, and every `pending` row
-/// must name a task that exists in the plan — otherwise "we will decide later" is
-/// indistinguishable from "we forgot", which is how the 38 channels would drift.
+/// must name a migration task id (`P3-05`, `AP7-1`) — otherwise "we will decide
+/// later" is indistinguishable from "we forgot", which is how the 38 channels would
+/// drift. See .agents/notes/implemented/architecture/2026-09-22-event-topic-namespace.md.
 fn event_topics(table: &Value, map: &Value) -> Result<Vec<Value>, String> {
     let rows = table["topics"]
         .as_array()
         .ok_or("event-topics.json has no `topics` array")?;
-    let plan = std::fs::read_to_string(repo_root().join("MIGRATION_PLAN.md"))
-        .map_err(|e| format!("cannot read MIGRATION_PLAN.md: {e}"))?;
     let mut seen_channels: BTreeMap<&str, usize> = BTreeMap::new();
     let mut seen_topics: BTreeSet<&str> = BTreeSet::new();
     let dotted = |text: &str| {
@@ -850,7 +859,7 @@ fn event_topics(table: &Value, map: &Value) -> Result<Vec<Value>, String> {
                 ));
             }
         } else if let Some(task) = status.strip_prefix("pending: ") {
-            if !plan.contains(&format!("### Task {task} ")) {
+            if !is_task_id(task) {
                 return Err(format!(
                     "topic {topic:?} is pending on {task}, which is not a Task"
                 ));

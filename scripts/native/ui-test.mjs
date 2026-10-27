@@ -158,7 +158,7 @@ const TESTS = [
   // Stage 01: DEBUG-only native review fixture; same isolation/warmup runner.
   "AeroricNativeUITests/NativeVisualFoundationUITests/testReviewControlsAreAccessibleAndIsolated",
   "AeroricNativeUITests/NativeVisualFoundationUITests/testReviewAppearanceAndGeometryEvidence",
-  // Q26 task-evolution review sample (docs/native/task-evolution-review-stage-01.md):
+  // Q26 task-evolution review sample (e3836e62:docs/native/task-evolution-review-stage-01.md):
   // DEBUG-only, explicitly enabled, offline in-memory sample. Registered per
   // method because the runner's file guard cannot see a method that is missing
   // from this list.

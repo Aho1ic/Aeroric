@@ -13,7 +13,7 @@
 //! 在宿主仍持有那 14 张表的今天,在 core 里先立一个平行的 `TaskRegistry` 就是把
 //! 双真相源造出来。`manager.rs` 现在只放与表无关的 [`WatcherSupervisor`];
 //! `TaskRegistry` 与它的 move 同刀落地。迁移清单与可移植性判定见
-//! `docs/native/extraction/runtime-ports.md`。
+//! `e3836e62:docs/native/extraction/runtime-ports.md`。
 
 pub mod events;
 pub mod kill;

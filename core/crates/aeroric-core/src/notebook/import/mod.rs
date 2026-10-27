@@ -1,7 +1,7 @@
 //! 从第三方笔记应用导入到随手记。
 //!
 //! 移植自 Markio `src-tauri/src/import/`,但**报告与落点两层重写**,理由见
-//! `docs/notebook-markio-integration-plan.md` 的「P9.0 开工前的事实核对」:
+//! 已丢失的 notebook-markio 集成计划中「P9.0 开工前的事实核对」:
 //!
 //! - 报告([`report`]):Markio 那份是两个计数 + 封顶 50 条的自由文本,过不了这一节
 //!   自己的准入条件(四类逐项列出)。这里是「状态 + 问题清单」两层。

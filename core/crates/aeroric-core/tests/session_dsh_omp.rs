@@ -1,7 +1,7 @@
 //! P3-04 第三片金样：dsh／omp 方言的读侧与解析（含多帧 zstd 串接）。
 //!
 //! 期望值来自 2026-09-29 迁移时对宿主原实现同输入的真实读数（逐字搬运 ⇒ 两侧同源），
-//! 结构照 `docs/native/extraction/sessions-corpus.md` §一 的方言表：
+//! 结构照 `e3836e62:docs/native/extraction/sessions-corpus.md` §一 的方言表：
 //! dsh 是斜杠式 `type`（`user/message`、`assistant/chunk`、`command/done`…），
 //! omp 是 `{type:"message", message:{role…}, id}` 的 append-only entry 树。
 

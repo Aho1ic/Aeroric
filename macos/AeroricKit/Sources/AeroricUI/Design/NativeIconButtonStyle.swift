@@ -59,7 +59,7 @@ public struct NativeIconButtonStyle: PrimitiveButtonStyle {
 ///
 /// The identifier is required on purpose — the AX rule for this codebase is
 /// that identifiers live on leaves and name something a person can read
-/// (`docs/native/frontend-redesign-prompt.md` §2.6), and a button is a leaf.
+/// (`e3836e62:docs/native/frontend-redesign-prompt.md` §2.6), and a button is a leaf.
 public struct NativeIconButton: View {
     private let systemImage: String
     private let label: LocalizedStringKey

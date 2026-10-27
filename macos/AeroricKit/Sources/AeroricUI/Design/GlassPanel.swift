@@ -7,7 +7,7 @@ import SwiftUI
 // ADR-001 §4). The system "reduce transparency" accessibility setting
 // always wins over the user's preference: readability beats ambience.
 //
-// Stage-01 change (docs/native/frontend-redesign-stage-01.md §3): the panel
+// Stage-01 change (e3836e62:docs/native/frontend-redesign-stage-01.md §3): the panel
 // no longer wraps itself in `glassEffect`. Liquid Glass is for interactive
 // controls and navigation chrome, not for a whole content panel — the panel
 // uses a real SwiftUI `Material` (ADR-001 §3 "content panel" row) and keeps

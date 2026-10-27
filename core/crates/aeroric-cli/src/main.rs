@@ -528,7 +528,7 @@ async fn events(data_dir: &Path, after: &str) -> i32 {
 // ── backup：数据目录的一致性备份 / 校验 / 恢复（AP8 Action 1） ──────────
 
 /// 备份是**离线**动作,不连 host:连上 host 意味着那个 host 持有写租约、正在写这个
-/// 目录,而"停写后再备份"的纪律(`docs/native/rollback.md` 规则 2)要求备份前先确认
+/// 目录,而"停写后再备份"的纪律(`e3836e62:docs/native/rollback.md` 规则 2)要求备份前先确认
 /// 没有写者。这里不替调用方做那个判断,只是不去制造相反的事实。
 async fn backup(data_dir: &Path, command: BackupCmd) -> i32 {
     match command {

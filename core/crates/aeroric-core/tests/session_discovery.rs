@@ -1,6 +1,6 @@
 //! P3-04 第二片金样：四族发现路径层（Claude／Codex roots ＋ DSH／OMP 编码与根）。
 //!
-//! 判据全部来自 `docs/native/extraction/sessions-corpus.md` §一/§二 的当日普查
+//! 判据全部来自 `e3836e62:docs/native/extraction/sessions-corpus.md` §一/§二 的当日普查
 //! 与 `sessions.md` 手写约束 2/5/8：
 //! - 编码表按上游规则逐字符钉死（含 UTF-16 `~XXXX`，corpus 实测 同=`~540C`、步=`~6B65`）；
 //! - **家族不能从目录名推断**（21 个不以 `_codex` 结尾的档案放着 221 份 rollout）——

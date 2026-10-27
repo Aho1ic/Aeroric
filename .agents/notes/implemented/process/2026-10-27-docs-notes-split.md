@@ -11,9 +11,38 @@ Status: implemented
 - **`AGENTS.md`（根）**：开工必读的硬规则，每条一两行并链到详情。`CLAUDE.md` 只指向 `AGENTS.md` 并给常用命令。
 - **`docs/`**：只写当前系统的事实。`docs/architecture.md` 是全景；`docs/subsystems/` 每个子系统一篇；`docs/cookbook/` 放构建、验证、发布等操作手册；`docs/backlog.md` 是产品候选库；`docs/native/` 只放门禁与生成器读取的机读工件（`command-map.json`、`feature-matrix.json`、`event-topics.json`、`acceptance-matrix.json`、`digest/` 及被脚本引用的两三篇说明）。正文不写"以前/现在/不再"等变迁叙事。
 - **`.agents/notes/`**：决策与取舍，遵循 `.agents/skills/write-notes-like-deepseek/SKILL.md`，路径 `{proposed,implemented,rejected,archived}/{class}/yyyy-mm-dd-topic.md`，不建 `INDEX.md`。原 ADR 中仍有效的决定按主题合并改写为 implemented 笔记；只服务于已删除的 Tauri/React 客户端的决定（例如按平台分批移交写者角色）不再保留。
-- 过程稿（评审、检查点、交接、调研底稿、迁移计划、术语表）直接删除，留在 git 历史里：提交 `e3836e62` 是删除前的最后快照。
+- 过程稿（评审、检查点、交接、迁移计划、术语表）直接删除，留在 git 历史里：提交 `e3836e62` 是删除前的最后快照。`docs/research/` 的调研底稿与 `docs/archive/` 中的一半文件曾被 `.gitignore` 排除、从未入库，整理时被误删且无法恢复；`.gitignore` 因此改为 `docs/` 全部入库，删除前必须先确认目标已入库。
+- `docs/backlog.md` 是产品候选库，不得删除或覆盖。
 - `export-schema` 对 `event-topics.json` 中 `pending: <task>` 行的校验从"迁移计划里存在该 Task 标题"改为"任务 id 格式合法"，生成的契约字节不变。
 - 校验：`pnpm verify-notes` 依次跑笔记树、格式与归档封印三个脚本（Node 24 直接执行 `.ts`，无 npm 依赖）。
+
+### 旧编号对照
+
+代码注释里的 `ADR-0xx` 与 `MIGRATION_PLAN §…` 保留原样。ADR 原文用 `git show e3836e62:docs/native/adr/<文件>` 查看，迁移计划用 `git show e3836e62:MIGRATION_PLAN.md`；现行决定在下表的笔记里（路径相对 `.agents/notes/implemented/`）。
+
+| ADR | 笔记 |
+|---|---|
+| 001 | `architecture/2026-09-21-native-boundary-and-single-writer.md` |
+| 002、003、005、006 | `architecture/2026-09-22-rpc-method-surface.md` |
+| 004 | `testing/2026-09-21-gate-floors-and-positive-controls.md` |
+| 007 | `architecture/2026-09-22-event-topic-namespace.md` |
+| 008 | `architecture/2026-09-22-error-detail-allowlist.md` |
+| 009 | `architecture/2026-09-22-protocol-version-boundary.md` |
+| 010、011、027 | `architecture/2026-09-22-data-dir-writer-eligibility.md` |
+| 012、014、015 | `architecture/2026-09-22-content-fingerprint-write-cover.md` |
+| 013、024 | `architecture/2026-09-22-project-identity.md` |
+| 016、017、020、025、030、032 | `architecture/2026-09-22-task-run-generations.md` |
+| 018、019、022、026、037 | `architecture/2026-09-23-task-writes-are-intents.md` |
+| 021 | 无（按平台分批移交写者，随 Windows/Linux 客户端退场失效） |
+| 023、033、034、035、036 | `architecture/2026-09-24-core-is-task-event-authority.md` |
+| 028、029 | `architecture/2026-09-23-agent-families.md` |
+| 031 | `architecture/2026-09-24-session-path-claim.md` |
+| 038 | `architecture/2026-10-02-terminal-replay-and-lease.md` |
+| 039 | `process/2026-10-12-apple-only-distribution.md` |
+| 040 | `architecture/2026-10-13-push-plane.md` |
+| 041 | `bug-fix/2026-10-13-kill-target-signals-by-pid.md` |
+| 042 | `feature/2026-10-23-grouped-sidebar-navigation.md` |
+| 043 | `architecture/2026-10-25-structured-agent-protocols.md` |
 
 ## Alternatives considered
 
