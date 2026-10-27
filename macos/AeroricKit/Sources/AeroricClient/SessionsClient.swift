@@ -143,6 +143,19 @@ extension SessionsClient {
         )
     }
 
+    public func answer(taskId: String, questionId: String, value: String?, confirmed: Bool?, cancelled: Bool) async throws {
+        _ = try await connection.request(
+            LiveSessionContract.answerMethod,
+            params: LiveSessionRequest.answer(taskId: taskId, questionId: questionId, value: value,
+                                              confirmed: confirmed, cancelled: cancelled)
+        )
+    }
+
+    public func revokeGrant(taskId: String, subject: String) async throws {
+        _ = try await connection.request(LiveSessionContract.revokeGrantMethod,
+                                         params: LiveSessionRequest.revokeGrant(taskId: taskId, subject: subject))
+    }
+
     public func configure(taskId: String, model: String? = nil, permission: LivePermission? = nil,
                           effort: String? = nil) async throws {
         _ = try await connection.request(

@@ -7,6 +7,8 @@ struct LiveApprovalCard: View {
     let request: LivePendingPermission
     let phase: LiveApprovalMachine.Phase
     let enabled: Bool
+    /// e.g. "omp · bash", shown at the top right.
+    var agentLabel: String? = nil
     let onDecide: (LiveDecision) -> Void
     let onBeginDeny: () -> Void
     let onReason: (String) -> Void
@@ -17,8 +19,8 @@ struct LiveApprovalCard: View {
         case "command": "需要你批准运行命令"
         case "fileChange": "需要你批准修改文件"
         case "permissions": "需要你批准额外权限"
-        case "Bash": "需要你批准运行命令"
-        case "Edit", "MultiEdit", "Write", "NotebookEdit": "需要你批准修改文件"
+        case "Bash", "bash", "eval": "需要你批准运行命令"
+        case "Edit", "MultiEdit", "Write", "NotebookEdit", "edit", "write", "ast_edit", "apply_patch": "需要你批准修改文件"
         default: "需要你批准：\(request.kind)"
         }
     }
@@ -35,6 +37,10 @@ struct LiveApprovalCard: View {
                 HStack(spacing: AeroricSpace.m) {
                     Image(systemName: "exclamationmark.shield.fill").foregroundStyle(AeroricColor.warning)
                     Text(title).font(.system(size: AeroricType.body, weight: .semibold))
+                    if let agentLabel {
+                        Spacer()
+                        Text(agentLabel).font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)
+                    }
                 }
                 Text(request.summary)
                     .font(AeroricType.mono(AeroricType.code))

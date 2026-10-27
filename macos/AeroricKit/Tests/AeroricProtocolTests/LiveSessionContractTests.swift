@@ -18,10 +18,10 @@ final class LiveSessionContractTests: XCTestCase {
 
     func testEveryUpdateKindInTheFixtureDecodesAsKnown() throws {
         let batch = try LiveUpdatesBatch.decode(try fixture()["updates"] ?? .null)
-        XCTAssertEqual(batch.updates.count, 18)
-        XCTAssertEqual(batch.latestSeq, 18)
+        XCTAssertEqual(batch.updates.count, 22)
+        XCTAssertEqual(batch.latestSeq, 22)
         XCTAssertNil(batch.gapOldestAvailable)
-        XCTAssertEqual(batch.updates.map(\.seq), Array(1...18))
+        XCTAssertEqual(batch.updates.map(\.seq), Array(1...22))
         XCTAssertEqual(batch.updates[0], LiveSessionUpdate(taskId: "task-1", seq: 1, atMs: 1_761_350_400_000,
                                                            kind: .turnStarted(turnId: "u1")))
         let kinds = batch.updates.map(\.kind)
@@ -34,6 +34,12 @@ final class LiveSessionContractTests: XCTestCase {
                                             LivePlanEntry(text: "改代码", status: "inProgress")])))
         XCTAssertTrue(kinds.contains(.usage(contextUsed: 1200, contextLimit: 200_000, inputTokens: 1500, outputTokens: 300)))
         XCTAssertTrue(kinds.contains(.unknown(kind: "item/futureThing", payload: .object(["x": .number("1")]))))
+        XCTAssertTrue(kinds.contains(.subagent(id: "s1", title: "检索", status: "running", detail: "读取 src/main.rs")))
+        XCTAssertTrue(kinds.contains(.autoApproved(id: "8", toolCallId: "c2", kind: "bash", summary: "npm run lint", subject: "bash")))
+        XCTAssertTrue(kinds.contains(.question(LivePendingQuestion(id: "q1", style: "select", title: "用哪个测试框架？",
+                                                                  options: ["vitest", "jest"], timeoutMs: 30_000))))
+        XCTAssertTrue(kinds.contains(.questionResolved(id: "q1", outcome: "answered")))
+        XCTAssertTrue(kinds.contains(.notice(level: "info", message: "上下文已自动压缩")))
         XCTAssertTrue(kinds.contains(.turnChanges(turnId: "u1", files: [
             LiveFileChange(path: "src/calc.py", additions: 3, deletions: 1),
             LiveFileChange(path: "docs/diagram.png", additions: nil, deletions: nil),
@@ -102,6 +108,10 @@ final class LiveSessionContractTests: XCTestCase {
         XCTAssertEqual(LiveSessionRequest.close(taskId: "task-1"), requests[LiveSessionContract.closeMethod])
         XCTAssertEqual(LiveSessionRequest.state(taskId: "task-1"), requests[LiveSessionContract.stateMethod])
         XCTAssertEqual(LiveSessionRequest.updates(taskId: "task-1", after: 12, limit: 500), requests[LiveSessionContract.updatesMethod])
-        XCTAssertEqual(requests.objectValue?.count, 8)
+        XCTAssertEqual(LiveSessionRequest.answer(taskId: "task-1", questionId: "q1", value: "vitest"),
+                       requests[LiveSessionContract.answerMethod])
+        XCTAssertEqual(LiveSessionRequest.revokeGrant(taskId: "task-1", subject: "bash"),
+                       requests[LiveSessionContract.revokeGrantMethod])
+        XCTAssertEqual(requests.objectValue?.count, 10)
     }
 }

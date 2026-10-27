@@ -91,10 +91,15 @@ struct SessionInfoCard: View {
         if let subagents = model?.subagents, !subagents.isEmpty {
             section("子 Agent") {
                 ForEach(subagents, id: \.id) { agent in
-                    HStack {
-                        Text(agent.title).lineLimit(1)
-                        Spacer()
-                        Text(agent.status).foregroundStyle(AeroricColor.textTertiary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(agent.title).lineLimit(1)
+                            Spacer()
+                            Text(agent.status).foregroundStyle(AeroricColor.textTertiary)
+                        }
+                        if let detail = agent.detail, agent.status == "running" {
+                            Text(detail).lineLimit(1).truncationMode(.middle).foregroundStyle(AeroricColor.textSecondary)
+                        }
                     }
                     .font(.system(size: AeroricType.caption))
                 }

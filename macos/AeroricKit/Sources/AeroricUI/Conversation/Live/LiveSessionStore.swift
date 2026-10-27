@@ -12,6 +12,9 @@ public protocol LiveSessionActions {
     func prompt(taskID: String, text: String) async throws
     func interrupt(taskID: String) async throws
     func respond(taskID: String, requestID: String, decision: LiveDecision, reason: String?) async throws
+    /// Answer a question card: exactly one of `value`, `confirmed`, `cancelled`.
+    func answer(taskID: String, questionID: String, value: String?, confirmed: Bool?, cancelled: Bool) async throws
+    func revokeGrant(taskID: String, subject: String) async throws
     func configure(taskID: String, model: String?, permission: LivePermission?, effort: String?) async throws
     func command(taskID: String, command: LiveCommand) async throws
     func close(taskID: String) async throws
@@ -24,6 +27,12 @@ public protocol LiveSessionActions {
 }
 
 extension LiveSessionActions {
+    public func answer(taskID: String, questionID: String, value: String?, confirmed: Bool?, cancelled: Bool) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持问答卡")
+    }
+    public func revokeGrant(taskID: String, subject: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持撤销授权")
+    }
     public func autoCheck(taskID: String) async throws -> LiveAutoCheckSelection? { nil }
     public func setAutoCheck(taskID: String, _ selection: LiveAutoCheckSelection) async throws {
         throw LiveSessionError.unsupported("这个宿主不支持自动检查")
@@ -239,6 +248,31 @@ public final class LiveSessionStore {
             approvals.failed(id, message: "\(error)")
         }
     }
+
+    /// Question cards being sent (disabled until the host resolves them).
+    public private(set) var answering: Set<String> = []
+
+    public func answer(_ id: String, value: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false) async {
+        answering.insert(id)
+        do {
+            try await actions.answer(taskID: taskID, questionID: id, value: value, confirmed: confirmed, cancelled: cancelled)
+        } catch {
+            answering.remove(id)
+            errorText = "回答没有送达：\(error)"
+        }
+    }
+
+    public func revokeGrant(_ subject: String) async {
+        do {
+            try await actions.revokeGrant(taskID: taskID, subject: subject)
+            revokedGrants.insert(subject)
+        } catch {
+            errorText = "撤销授权失败：\(error)"
+        }
+    }
+
+    /// Grants revoked from this page (the row says so instead of offering it again).
+    public private(set) var revokedGrants: Set<String> = []
 
     public func export() async {
         do { try await actions.export(taskID: taskID) } catch { errorText = "导出失败：\(error)" }

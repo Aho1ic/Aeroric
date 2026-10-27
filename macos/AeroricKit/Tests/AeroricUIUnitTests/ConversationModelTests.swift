@@ -176,7 +176,7 @@ final class ConversationModelTests: XCTestCase {
 
     func testConsecutiveLiveToolsFoldIntoOneCollapsedGroup() {
         let rows = LiveRowGrouping.rows([
-            .userEcho(id: "u", text: "hi"),
+            .userEcho(id: "u", text: "hi", steer: .none),
             liveTool("a", .completed), liveTool("b", .completed), liveTool("c", .running),
             .message(id: "m", text: "done"),
             liveTool("d", .failed),

@@ -10,6 +10,8 @@ public enum LiveSessionContract {
     public static let promptMethod = "session.prompt"
     public static let interruptMethod = "session.interrupt"
     public static let respondMethod = "session.respond"
+    public static let answerMethod = "session.answer"
+    public static let revokeGrantMethod = "session.revokeGrant"
     public static let configureMethod = "session.configure"
     public static let commandMethod = "session.command"
     public static let closeMethod = "session.close"
@@ -52,7 +54,13 @@ public enum LiveUpdateKind: Equatable, Sendable {
     case plan([LivePlanEntry])
     case permissionRequest(id: String, toolCallId: String?, kind: String, summary: String, options: [String])
     case permissionResolved(id: String, decision: String)
-    case subagent(id: String, title: String, status: String)
+    case subagent(id: String, title: String, status: String, detail: String?)
+    /// Answered for the user from an "always allow in this session" grant.
+    case autoApproved(id: String, toolCallId: String?, kind: String, summary: String, subject: String)
+    /// The agent asks something that is not a tool approval (omp dialogs).
+    case question(LivePendingQuestion)
+    case questionResolved(id: String, outcome: String)
+    case notice(level: String, message: String)
     case usage(contextUsed: UInt64?, contextLimit: UInt64?, inputTokens: UInt64?, outputTokens: UInt64?)
     case configChanged(model: String?, permission: String?, effort: String?)
     case error(message: String, recoverable: Bool)
@@ -135,6 +143,40 @@ public struct LivePendingPermission: Equatable, Sendable {
     }
 }
 
+/// A question card: `select` | `confirm` | `input` | `editor`.
+public struct LivePendingQuestion: Equatable, Sendable, Identifiable {
+    public var id: String
+    public var style: String
+    public var title: String
+    public var message: String?
+    public var options: [String]
+    public var placeholder: String?
+    public var timeoutMs: UInt64?
+    public var askedAtMs: UInt64
+
+    public init(id: String, style: String, title: String, message: String? = nil, options: [String] = [],
+                placeholder: String? = nil, timeoutMs: UInt64? = nil, askedAtMs: UInt64 = 0) {
+        self.id = id
+        self.style = style
+        self.title = title
+        self.message = message
+        self.options = options
+        self.placeholder = placeholder
+        self.timeoutMs = timeoutMs
+        self.askedAtMs = askedAtMs
+    }
+
+    static func decode(_ f: [String: JSONValue], askedAt: UInt64) -> LivePendingQuestion? {
+        guard let id = f["id"]?.stringValue, let style = f["style"]?.stringValue,
+              let title = f["title"]?.stringValue else { return nil }
+        return LivePendingQuestion(id: id, style: style, title: title, message: f["message"]?.stringValue,
+                                   options: f["options"]?.arrayValue?.compactMap(\.stringValue) ?? [],
+                                   placeholder: f["placeholder"]?.stringValue,
+                                   timeoutMs: f["timeoutMs"]?.numberText.flatMap { UInt64($0) },
+                                   askedAtMs: f["askedAtMs"]?.numberText.flatMap { UInt64($0) } ?? askedAt)
+    }
+}
+
 public struct LiveSessionState: Equatable, Sendable {
     public var taskId: String
     public var live: Bool
@@ -155,6 +197,10 @@ public struct LiveSessionState: Equatable, Sendable {
     public var latestSeq: UInt64
     /// Why this session cannot continue natively (e.g. a Codex paginated session).
     public var resumeBlocked: String? = nil
+    /// Question cards still waiting for the user.
+    public var questions: [LivePendingQuestion] = []
+    /// The permission tier is fixed for this session (omp takes it at start).
+    public var permissionLocked = false
 
     public init(taskId: String, live: Bool, structured: Bool, family: String?, sessionId: String?, turnActive: Bool,
                 pending: [LivePendingPermission], plan: [LivePlanEntry], model: String?, permission: String?,
@@ -274,7 +320,19 @@ extension LiveUpdateKind {
             return .permissionResolved(id: id, decision: decision)
         case "subagent":
             guard let id = string(f, "id"), let title = string(f, "title"), let status = string(f, "status") else { return nil }
-            return .subagent(id: id, title: title, status: status)
+            return .subagent(id: id, title: title, status: status, detail: string(f, "detail"))
+        case "autoApproved":
+            guard let id = string(f, "id"), let kind = string(f, "kind"), let summary = string(f, "summary"),
+                  let subject = string(f, "subject") else { return nil }
+            return .autoApproved(id: id, toolCallId: string(f, "toolCallId"), kind: kind, summary: summary, subject: subject)
+        case "question":
+            return LivePendingQuestion.decode(f, askedAt: 0).map { .question($0) }
+        case "questionResolved":
+            guard let id = string(f, "id"), let outcome = string(f, "outcome") else { return nil }
+            return .questionResolved(id: id, outcome: outcome)
+        case "notice":
+            guard let level = string(f, "level"), let message = string(f, "message") else { return nil }
+            return .notice(level: level, message: message)
         case "usage":
             return .usage(contextUsed: uint(f["contextUsed"]), contextLimit: uint(f["contextLimit"]),
                           inputTokens: uint(f["inputTokens"]), outputTokens: uint(f["outputTokens"]))
@@ -348,7 +406,7 @@ extension LiveSessionState {
         }
         let entries = plan.compactMap(LivePlanEntry.decode)
         guard entries.count == plan.count else { throw LiveSessionDecodeError("a plan entry needs text and status") }
-        return LiveSessionState(
+        var state = LiveSessionState(
             taskId: taskId, live: live, structured: f["structured"]?.boolValue ?? false, family: string(f, "family"), sessionId: string(f, "sessionId"),
             turnActive: turnActive, pending: permissions, plan: entries,
             model: string(f, "model"), permission: string(f, "permission"), effort: string(f, "effort"),
@@ -356,6 +414,9 @@ extension LiveSessionState {
             inputTokens: uint(f["inputTokens"]), outputTokens: uint(f["outputTokens"]), latestSeq: latest,
             resumeBlocked: string(f, "resumeBlocked")
         )
+        state.questions = (f["questions"]?.arrayValue ?? []).compactMap { LivePendingQuestion.decode($0.fields, askedAt: 0) }
+        state.permissionLocked = f["permissionLocked"]?.boolValue ?? false
+        return state
     }
 }
 
@@ -376,6 +437,24 @@ public enum LiveSessionRequest {
         var extra: [String: JSONValue] = ["requestId": .string(requestId), "decision": .string(decision.rawValue)]
         if let reason { extra["reason"] = .string(reason) }
         return task(taskId, extra)
+    }
+
+    /// Exactly one of `value`, `confirmed` or `cancelled`.
+    public static func answer(taskId: String, questionId: String, value: String? = nil, confirmed: Bool? = nil,
+                              cancelled: Bool = false) -> JSONValue {
+        var extra: [String: JSONValue] = ["questionId": .string(questionId)]
+        if cancelled {
+            extra["cancelled"] = .bool(true)
+        } else if let confirmed {
+            extra["confirmed"] = .bool(confirmed)
+        } else {
+            extra["value"] = .string(value ?? "")
+        }
+        return task(taskId, extra)
+    }
+
+    public static func revokeGrant(taskId: String, subject: String) -> JSONValue {
+        task(taskId, ["subject": .string(subject)])
     }
 
     public static func configure(taskId: String, model: String?, permission: LivePermission?, effort: String?) -> JSONValue {

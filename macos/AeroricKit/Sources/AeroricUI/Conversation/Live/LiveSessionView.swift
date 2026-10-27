@@ -167,6 +167,13 @@ public struct LiveSessionView: View {
                         ForEach(store.pending, id: \.id) { request in
                             approvalCard(request).id("approval.\(request.id)")
                         }
+                        ForEach(store.model?.questions ?? []) { question in
+                            LiveQuestionCard(question: question, submitting: store.answering.contains(question.id)) {
+                                value, confirmed, cancelled in
+                                Task { await store.answer(question.id, value: value, confirmed: confirmed, cancelled: cancelled) }
+                            }
+                            .id("question.\(question.id)")
+                        }
                         if store.turnActive {
                             ProgressView().controlSize(.small).accessibilityIdentifier("session.live.working")
                         }
@@ -205,8 +212,12 @@ public struct LiveSessionView: View {
 
     @ViewBuilder private func liveRow(_ item: LiveItem, column: CGFloat) -> some View {
         switch item {
-        case let .userEcho(_, text):
-            MessageBubble(role: "user", content: [.text(text: text)], columnWidth: column)
+        case let .userEcho(_, text, steer):
+            VStack(alignment: .trailing, spacing: AeroricSpace.xs) {
+                MessageBubble(role: "user", content: [.text(text: text)], columnWidth: column)
+                LiveSteerLabel(steer: steer).padding(.trailing, AeroricSpace.s)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         case let .message(_, text):
             MessageBubble(role: "assistant", content: [.text(text: text)], columnWidth: column)
         case let .thought(id, text, summary):
@@ -215,6 +226,12 @@ public struct LiveSessionView: View {
             LiveToolLine(tool: tool)
         case let .notice(_, message, recoverable):
             LiveNoticeRow(message: message, recoverable: recoverable)
+        case let .info(_, level, message):
+            LiveInfoRow(level: level, message: message)
+        case let .autoApproved(_, kind, summary, subject):
+            LiveAutoApprovedRow(kind: kind, summary: summary, revoked: store.revokedGrants.contains(subject)) {
+                Task { await store.revokeGrant(subject) }
+            }
         case let .unknown(_, kind):
             LiveNoticeRow(message: "未识别的内容：\(kind)", recoverable: true)
         }
@@ -223,6 +240,7 @@ public struct LiveSessionView: View {
     private func approvalCard(_ request: LivePendingPermission) -> some View {
         LiveApprovalCard(
             request: request, phase: store.approvals.phase(request.id), enabled: true,
+            agentLabel: store.family == "omp" ? "omp · \(request.kind)" : nil,
             onDecide: { decision in Task { await store.respond(request.id, decision) } },
             onBeginDeny: { store.beginDeny(request.id) },
             onReason: { store.editReason(request.id, $0) },
@@ -350,9 +368,24 @@ public struct LiveSessionView: View {
             .id("model-\(modelPickerRequest)")
     }
 
-    private var permissionPicker: some View {
+    @ViewBuilder private var permissionPicker: some View {
         let current = store.model?.config.permission
-        return ComposerPicker(title: current.map(ComposerPickerOptions.permissionTitle) ?? "权限",
+        if store.model?.permissionLocked == true {
+            Label("\(current.map(ComposerPickerOptions.permissionTitle) ?? "权限") · 本会话固定", systemImage: "lock")
+                .font(.system(size: AeroricType.secondary, weight: .medium))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .padding(.horizontal, AeroricSpace.l)
+                .frame(height: 28)
+                .background(AeroricColor.layer2, in: Capsule(style: .continuous))
+                .help("omp 的权限在会话开始时确定，想换档请新建会话。")
+                .accessibilityIdentifier("session.live.permission.locked")
+        } else {
+            unlockedPermissionPicker(current)
+        }
+    }
+
+    private func unlockedPermissionPicker(_ current: String?) -> some View {
+        ComposerPicker(title: current.map(ComposerPickerOptions.permissionTitle) ?? "权限",
                               systemImage: "lock.shield", menu: LivePickerOptions.permissions(current: current),
                               identifier: "session.live.permission") { id in
             guard let permission = LivePermission(rawValue: id), id != current else { return }
@@ -363,7 +396,7 @@ public struct LiveSessionView: View {
 
     @ViewBuilder private var effortPicker: some View {
         let current = store.model?.config.effort
-        if let menu = LivePickerOptions.efforts(facts.efforts, current: current, editable: codex) {
+        if let menu = LivePickerOptions.efforts(facts.efforts, current: current, editable: codex || store.family == "omp") {
             ComposerPicker(title: current.map(ComposerPickerOptions.effortTitle) ?? "推理强度", systemImage: "brain",
                            menu: menu, identifier: "session.live.effort") { configure(effort: $0) }
         }

@@ -38,6 +38,15 @@ struct HostLiveSessionActions: LiveSessionActions {
         try await client().respond(taskId: taskID, requestId: requestID, decision: decision, reason: reason)
     }
 
+    func answer(taskID: String, questionID: String, value: String?, confirmed: Bool?, cancelled: Bool) async throws {
+        try await client().answer(taskId: taskID, questionId: questionID, value: value, confirmed: confirmed,
+                                  cancelled: cancelled)
+    }
+
+    func revokeGrant(taskID: String, subject: String) async throws {
+        try await client().revokeGrant(taskId: taskID, subject: subject)
+    }
+
     func configure(taskID: String, model: String?, permission: LivePermission?, effort: String?) async throws {
         try await client().configure(taskId: taskID, model: model, permission: permission, effort: effort)
     }

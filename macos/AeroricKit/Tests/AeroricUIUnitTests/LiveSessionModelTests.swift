@@ -86,8 +86,8 @@ final class LiveSessionModelTests: XCTestCase {
             .configChanged(model: "gpt-x", permission: nil, effort: "high"),
             .error(message: "上下文已压缩", recoverable: true),
             .unknown(kind: "item/future", payload: .null),
-            .subagent(id: "s", title: "检索", status: "running"),
-            .subagent(id: "s", title: "检索", status: "completed"),
+            .subagent(id: "s", title: "检索", status: "running", detail: nil),
+            .subagent(id: "s", title: "检索", status: "completed", detail: nil),
         ]))
         XCTAssertEqual(model.plan, [LivePlanEntry(text: "读", status: "completed")])
         XCTAssertEqual(model.config, LiveConfig(model: "gpt-x", permission: "ask", effort: "high"))
@@ -99,6 +99,44 @@ final class LiveSessionModelTests: XCTestCase {
     }
 
     /// A05: the turn's changes survive history replacing the live rows.
+    func testOmpQuestionsAutoApprovalsNoticesAndSteering() {
+        var model = LiveSessionModel(state: state())
+        _ = model.apply(batch([.turnStarted(turnId: "t1")]))
+        model.echo("顺便改 README")
+        XCTAssertEqual(model.items.last, .userEcho(id: "local-1", text: "顺便改 README", steer: .waiting))
+        let question = LivePendingQuestion(id: "q1", style: "select", title: "用哪个？", options: ["vitest", "jest"], timeoutMs: 30_000)
+        _ = model.apply(batch([
+            .question(question),
+            .autoApproved(id: "u2", toolCallId: nil, kind: "bash", summary: "npm run lint", subject: "bash"),
+            .notice(level: "info", message: "上下文已自动压缩"),
+            .subagent(id: "sa", title: "explore", status: "running", detail: "读取 src"),
+            .messageChunk(messageId: "m2", role: "assistant", text: "好"),
+        ], from: 2))
+        XCTAssertEqual(model.questions.map(\.id), ["q1"])
+        XCTAssertTrue(model.items.contains(.autoApproved(id: "u2", kind: "bash", summary: "npm run lint", subject: "bash")))
+        XCTAssertTrue(model.items.contains { if case .info = $0 { return true }; return false })
+        XCTAssertEqual(model.subagents.first?.detail, "读取 src")
+        XCTAssertEqual(model.items.first, .userEcho(id: "local-1", text: "顺便改 README", steer: .delivered))
+        _ = model.apply(batch([.questionResolved(id: "q1", outcome: "answered")], from: 7))
+        XCTAssertTrue(model.questions.isEmpty)
+        _ = model.apply(batch([.question(question), .turnEnded(turnId: "t1", reason: .completed, error: nil)], from: 8))
+        XCTAssertTrue(model.questions.isEmpty, "a turn end drops its questions")
+        model.echo("下一条")
+        XCTAssertEqual(model.items.last, .userEcho(id: "local-2", text: "下一条", steer: .none))
+    }
+
+    func testTheOmpStateDecodesQuestionsAndTheLockedPermission() throws {
+        let state = try LiveSessionState.decode(.object([
+            "taskId": .string("t"), "live": .bool(true), "turnActive": .bool(true), "pending": .array([]),
+            "plan": .array([]), "latestSeq": .number("3"), "permissionLocked": .bool(true),
+            "questions": .array([.object(["id": .string("q"), "style": .string("confirm"), "title": .string("继续？"),
+                                         "askedAtMs": .number("42")])]),
+        ]))
+        XCTAssertTrue(state.permissionLocked)
+        XCTAssertEqual(state.questions, [LivePendingQuestion(id: "q", style: "confirm", title: "继续？", askedAtMs: 42)])
+        XCTAssertTrue(LiveSessionModel(state: state).permissionLocked)
+    }
+
     func testTurnChangesAreKeptApartFromLiveRows() {
         var model = LiveSessionModel(state: state())
         let files = [LiveFileChange(path: "src/a.rs", additions: 3, deletions: 1),

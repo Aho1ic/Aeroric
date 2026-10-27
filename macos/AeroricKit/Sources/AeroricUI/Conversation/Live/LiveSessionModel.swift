@@ -3,25 +3,41 @@ import AeroricProtocol
 
 /// One row of the live (not yet in history) part of a session.
 public enum LiveItem: Identifiable, Equatable, Sendable {
-    /// The user's own message, echoed locally until history has it.
-    case userEcho(id: String, text: String)
+    /// The user's own message, echoed locally until history has it. `steer`:
+    /// sent while a turn ran (插话), waiting until the agent answers past it.
+    case userEcho(id: String, text: String, steer: LiveSteer)
     case message(id: String, text: String)
     case thought(id: String, text: String, summary: Bool)
     case tool(LiveTool)
     case notice(id: String, message: String, recoverable: Bool)
+    /// An informational line from the agent (`notice`).
+    case info(id: String, level: String, message: String)
+    /// An approval answered from an "always allow in this session" grant.
+    case autoApproved(id: String, kind: String, summary: String, subject: String)
     /// Protocol content this build does not render (INV-12: shown, not dropped).
     case unknown(id: String, kind: String)
 
     public var id: String {
         switch self {
-        case let .userEcho(id, _): "user:\(id)"
+        case let .userEcho(id, _, _): "user:\(id)"
         case let .message(id, _): "message:\(id)"
         case let .thought(id, _, _): "thought:\(id)"
         case let .tool(tool): "tool:\(tool.id)"
         case let .notice(id, _, _): "notice:\(id)"
+        case let .info(id, _, _): "info:\(id)"
+        case let .autoApproved(id, _, _, _): "auto:\(id)"
         case let .unknown(id, _): "unknown:\(id)"
         }
     }
+}
+
+/// Where a message sent during a turn stands.
+public enum LiveSteer: Equatable, Sendable {
+    case none
+    /// Queued: the agent sees it once the running tool finishes.
+    case waiting
+    /// The agent has moved on past it.
+    case delivered
 }
 
 /// A13: an agent repeating itself within one turn. Only a hint — the
@@ -183,6 +199,8 @@ public struct LiveSubagent: Equatable, Sendable {
     public var id: String
     public var title: String
     public var status: String
+    /// The latest activity, one line.
+    public var detail: String? = nil
 }
 
 public struct LiveConfig: Equatable, Sendable {
@@ -207,6 +225,10 @@ public struct LiveSessionModel: Equatable, Sendable {
     public private(set) var cursor: UInt64
     public private(set) var items: [LiveItem] = []
     public private(set) var pending: [LivePendingPermission] = []
+    /// Question cards waiting for the user (omp dialogs).
+    public private(set) var questions: [LivePendingQuestion] = []
+    /// The permission is fixed for this session (omp).
+    public private(set) var permissionLocked = false
     public private(set) var plan: [LivePlanEntry] = []
     public private(set) var subagents: [LiveSubagent] = []
     public private(set) var usage: UsageSummary
@@ -226,6 +248,8 @@ public struct LiveSessionModel: Equatable, Sendable {
     public init(state: LiveSessionState) {
         cursor = state.latestSeq
         pending = state.pending
+        questions = state.questions
+        permissionLocked = state.permissionLocked
         plan = state.plan
         usage = UsageSummary(contextUsed: state.contextUsed, contextLimit: state.contextLimit,
                              inputTokens: state.inputTokens, outputTokens: state.outputTokens)
@@ -246,7 +270,16 @@ public struct LiveSessionModel: Equatable, Sendable {
     /// The message the user just sent, until history has it.
     public mutating func echo(_ text: String) {
         echoCount += 1
-        items.append(.userEcho(id: "local-\(echoCount)", text: text))
+        items.append(.userEcho(id: "local-\(echoCount)", text: text, steer: turnActive ? .waiting : .none))
+    }
+
+    /// The agent produced something after a 插话: it has seen it.
+    private mutating func deliverSteers() {
+        for index in items.indices {
+            if case let .userEcho(id, text, .waiting) = items[index] {
+                items[index] = .userEcho(id: id, text: text, steer: .delivered)
+            }
+        }
     }
 
     /// Optimistic config shown until the host's `configChanged` arrives.
@@ -277,6 +310,8 @@ public struct LiveSessionModel: Equatable, Sendable {
         case let .turnEnded(_, reason, error):
             turnActive = false
             pending.removeAll()
+            questions.removeAll()
+            deliverSteers()
             if reason == .failed {
                 items.append(.notice(id: "seq\(update.seq)", message: error ?? "这一轮失败了", recoverable: false))
             } else if reason == .interrupted {
@@ -285,6 +320,7 @@ public struct LiveSessionModel: Equatable, Sendable {
             return true
         case let .messageChunk(id, role, text):
             if role == "user" { break }
+            if !items.contains(where: { $0.id == "message:\(id)" }) { deliverSteers() }
             if let index = items.firstIndex(where: { $0.id == "message:\(id)" }), case let .message(_, existing) = items[index] {
                 items[index] = .message(id: id, text: existing + text)
             } else {
@@ -330,12 +366,25 @@ public struct LiveSessionModel: Equatable, Sendable {
             }
         case let .permissionResolved(id, _):
             pending.removeAll { $0.id == id }
-        case let .subagent(id, title, status):
+        case let .subagent(id, title, status, detail):
+            let agent = LiveSubagent(id: id, title: title, status: status, detail: detail)
             if let index = subagents.firstIndex(where: { $0.id == id }) {
-                subagents[index] = LiveSubagent(id: id, title: title, status: status)
+                subagents[index] = agent
             } else {
-                subagents.append(LiveSubagent(id: id, title: title, status: status))
+                subagents.append(agent)
             }
+        case let .autoApproved(id, _, kind, summary, subject):
+            items.append(.autoApproved(id: id, kind: kind, summary: summary, subject: subject))
+        case let .question(question):
+            if !questions.contains(where: { $0.id == question.id }) {
+                var question = question
+                if question.askedAtMs == 0 { question.askedAtMs = update.atMs }
+                questions.append(question)
+            }
+        case let .questionResolved(id, _):
+            questions.removeAll { $0.id == id }
+        case let .notice(level, message):
+            items.append(.info(id: "seq\(update.seq)", level: level, message: message))
         case let .usage(used, limit, input, output):
             usage = UsageSummary(contextUsed: used ?? usage.contextUsed, contextLimit: limit ?? usage.contextLimit,
                                  inputTokens: input ?? usage.inputTokens, outputTokens: output ?? usage.outputTokens)
