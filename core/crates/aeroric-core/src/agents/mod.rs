@@ -13,6 +13,7 @@ pub mod families;
 pub mod launch;
 pub mod managed_home;
 pub mod omp;
+pub mod upgrade;
 
 pub use environment::{
     aeroric_guard_ops, combined_omp_env_ops, omp_env_ops, terminal_env_ops, EnvOp,

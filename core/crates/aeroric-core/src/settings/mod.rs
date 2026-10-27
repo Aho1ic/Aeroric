@@ -582,6 +582,84 @@ pub(crate) fn run_omp_npm_install(target_version: Option<&str>) -> Result<String
     })
 }
 
+/// One step of an agent upgrade, for runners outside `settings` that stream output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentUpgradeStep {
+    pub channel: String,
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+/// What upgrading `agent` would run, for its active installation. `Ok(None)` = not installed
+/// (no version answers), so the caller installs instead. Blocking (spawns `--version`).
+pub fn plan_agent_upgrade(agent: &str) -> Result<Option<Vec<AgentUpgradeStep>>, String> {
+    let settings = load_settings_internal();
+    let kind = upgrade_kind_for_agent(&settings, agent)
+        .ok_or_else(|| format!("Unknown agent: {agent}"))?;
+    let binary_agent = upgrade_binary_agent(kind);
+    let launch = get_agent_launch_spec_from_settings(&settings, binary_agent);
+    if detect_version(&launch).is_none() {
+        return Ok(None);
+    }
+    let configured_program = get_agent_configured_path(&settings, binary_agent);
+    let active_program = agent_upgrade_detection_program(&configured_program, &launch);
+    let commands = build_agent_upgrade_commands(kind, &active_program, None)?;
+    Ok(Some(
+        commands
+            .into_iter()
+            .map(|command| AgentUpgradeStep {
+                channel: command.channel,
+                program: command.program,
+                args: command.args,
+            })
+            .collect(),
+    ))
+}
+
+/// The installed version of `agent`'s binary, read fresh; `None` = not installed.
+pub fn installed_agent_version(agent: &str) -> Option<String> {
+    let settings = load_settings_internal();
+    let kind = upgrade_kind_for_agent(&settings, agent)?;
+    let launch = get_agent_launch_spec_from_settings(&settings, upgrade_binary_agent(kind));
+    detect_version(&launch)
+}
+
+/// The install channel of `agent`'s active binary: `npm`, `homebrew`, `standalone`, ….
+pub fn agent_install_channel(agent: &str) -> String {
+    let settings = load_settings_internal();
+    let Some(kind) = upgrade_kind_for_agent(&settings, agent) else {
+        return String::new();
+    };
+    let binary_agent = upgrade_binary_agent(kind);
+    let launch = get_agent_launch_spec_from_settings(&settings, binary_agent);
+    let configured_program = get_agent_configured_path(&settings, binary_agent);
+    upgrade_manager_for_path(&agent_upgrade_detection_program(
+        &configured_program,
+        &launch,
+    ))
+    .to_string()
+}
+
+/// `npm` on the login PATH, empty when missing.
+pub fn npm_program() -> String {
+    detect_path("npm")
+}
+
+/// The login shell's environment, for upgrade commands run outside `settings`.
+pub fn login_shell_env() -> &'static [(String, String)] {
+    get_login_shell_env()
+}
+
+/// The managed omp home (`~/.aeroric/agent-homes/omp`); never the user's `~/.omp`.
+pub fn managed_omp_home() -> Option<std::path::PathBuf> {
+    omp_managed_home()
+}
+
+/// Forget cached `--version` answers after an upgrade.
+pub fn forget_agent_versions() {
+    clear_cached_versions();
+}
+
 /// Claude/Codex 的包管理器升级(dsh 走 `agent_tools` 的托管路径)。
 pub(crate) fn run_builtin_agent_upgrade(
     agent: &str,

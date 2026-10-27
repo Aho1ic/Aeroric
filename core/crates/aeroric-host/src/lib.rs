@@ -4,6 +4,7 @@
 
 pub mod adapter_services;
 pub mod agent_connections_services;
+pub mod agent_upgrade_services;
 pub mod auth;
 pub mod canvas_services;
 pub mod codec;

@@ -389,6 +389,17 @@ impl HostServices {
             since: Some(1),
             note: Some("Host-local read-only import of existing Claude/Codex sessions".into()),
         });
+        // 2026-10-27：Agent 升级与新版本提醒；仅本机 UDS，升级只在用户点击时执行。
+        crate::agent_upgrade_services::register_agent_upgrade_services(
+            &mut set,
+            Arc::clone(&context),
+        );
+        capabilities.push(aeroric_protocol::capability::Capability {
+            name: crate::agent_upgrade_services::CAPABILITY.into(),
+            enabled: true,
+            since: Some(1),
+            note: Some("Host-local agent version check, upgrade and reminders".into()),
+        });
         crate::ide_services::register_ide_services(&mut set, Arc::clone(&context));
         crate::lsp_services::register_lsp_services(
             &mut set,
