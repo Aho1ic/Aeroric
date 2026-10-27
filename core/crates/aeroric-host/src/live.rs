@@ -144,14 +144,22 @@ impl Routing for HostRouting {
         agent_config_id: Option<&str>,
     ) -> Option<Route> {
         if family == ProtocolFamily::Omp {
-            // ADR-043 phase two: local omp sessions (built-in or a custom omp
-            // profile) are native; a pinned Agent configuration keeps the PTY
-            // path, which owns its gateway wiring.
-            if agent_config_id.is_some_and(|id| !id.trim().is_empty()) {
-                return None;
-            }
+            // ADR-043 phase two: local omp sessions are native — built-in, a
+            // custom omp profile, or a pinned omp Agent configuration through
+            // the local gateway. Any other pinned harness is refused on the PTY.
+            let config = match agent_config_id.filter(|id| !id.trim().is_empty()) {
+                Some(id) => {
+                    let config = resolve_config(self.context.paths.data_dir(), id).ok()?;
+                    if config.harness != Harness::Omp {
+                        return None;
+                    }
+                    Some(config.config_id)
+                }
+                None => None,
+            };
             return Some(Route::Omp(OmpKey {
                 agent: agent.to_string(),
+                config,
             }));
         }
         if !matches!(family, ProtocolFamily::Codex | ProtocolFamily::Claude) {
@@ -212,6 +220,9 @@ impl Routing for HostRouting {
 /// user's `~/.omp`. No `AERORIC_TASK_ID`/`AERORIC_EVENT_DIR`, so the managed
 /// hook stays inert: status comes from the protocol.
 fn omp_launcher(context: Arc<CoreContext>, key: OmpKey) -> OmpLauncher {
+    if let Some(config_id) = key.config.clone() {
+        return omp_config_launcher(context, config_id);
+    }
     Arc::new(move |start: &OmpStart| {
         let input = if key.agent == "omp" {
             harness_path(&context, "omp")
@@ -245,6 +256,113 @@ fn omp_launcher(context: Arc<CoreContext>, key: OmpKey) -> OmpLauncher {
             start.resume.as_deref(),
         );
         spawn_checked(&spec, omp_version_supported, &args, "omp")
+    })
+}
+
+/// omp pinned to an Agent configuration: the built-in omp with the
+/// configuration's own managed home, whose only provider is the local gateway
+/// (its Claude entry for Messages, its Codex entry for Responses). The task
+/// token is injected per process and revoked when the process goes.
+fn omp_config_launcher(context: Arc<CoreContext>, config_id: String) -> OmpLauncher {
+    use aeroric_core::agent_connections::model::WireProtocol;
+    Arc::new(move |start: &OmpStart| {
+        let config = resolve_config(context.paths.data_dir(), &config_id)?;
+        let base = crate::gateway::ensure_running(context.paths.data_dir())?;
+        let (base_url, api) = match config.protocol {
+            WireProtocol::Responses => (format!("{base}/codex/v1"), "openai-responses"),
+            _ => (format!("{base}/claude"), "anthropic-messages"),
+        };
+        let home = context
+            .paths
+            .data_dir()
+            .join("agent-homes")
+            .join(&config.home_dir_name);
+        aeroric_core::settings::omp_home::prepare_gateway_home(
+            &home,
+            &base_url,
+            api,
+            &config.models,
+        )?;
+        let input = harness_path(&context, "omp")
+            .map(LaunchInput::new)
+            .unwrap_or_else(|| LaunchInput::new("omp"));
+        let mut spec = spec_with_login_env(input);
+        spec.cwd = Some(start.cwd.clone());
+        let token =
+            aeroric_core::local_router::task_tokens::issue(&start.task_id, Some(config_id.clone()));
+        for (name, value) in [
+            (
+                "PI_CODING_AGENT_DIR".to_string(),
+                home.to_string_lossy().into_owned(),
+            ),
+            (
+                aeroric_core::settings::omp_home::OMP_API_KEY_ENV.to_string(),
+                token.clone(),
+            ),
+        ] {
+            spec.env.retain(|(existing, _)| existing != &name);
+            spec.env.push((name, value));
+        }
+        for key in ["NO_PROXY", "no_proxy"] {
+            let mut list: Vec<String> = spec
+                .env
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            for bypass in ["127.0.0.1", "localhost", "::1"] {
+                if !list.iter().any(|item| item == bypass) {
+                    list.push(bypass.to_string());
+                }
+            }
+            spec.env.retain(|(name, _)| name != key);
+            spec.env.push((key.to_string(), list.join(",")));
+        }
+        for name in aeroric_core::agents::environment::OMP_PROFILE_KEYS {
+            spec.env.retain(|(existing, _)| existing != name);
+            spec.unset_env.push((*name).to_string());
+        }
+        // The provider is the gateway's; a mapped name selects the route.
+        let model = start
+            .model
+            .as_deref()
+            .filter(|m| !m.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| Some(config.default_model.clone()).filter(|m| !m.trim().is_empty()))
+            .map(|m| {
+                if m.starts_with("aeroric/") {
+                    m
+                } else {
+                    format!("aeroric/{m}")
+                }
+            });
+        let args = aeroric_core::agents::launch::omp_rpc_args(
+            &start.permission,
+            &start.cwd,
+            model.as_deref(),
+            start.effort.as_deref(),
+            start.resume.as_deref(),
+        );
+        let own = token.clone();
+        match spawn_checked(&spec, omp_version_supported, &args, "omp") {
+            Ok((transport, guard)) => Ok((
+                transport,
+                guard.map(|guard| {
+                    guard.with_cleanup(move || {
+                        aeroric_core::local_router::task_tokens::revoke_token(&own)
+                    })
+                }),
+            )),
+            Err(reason) => {
+                aeroric_core::local_router::task_tokens::revoke_token(&token);
+                Err(reason)
+            }
+        }
     })
 }
 

@@ -69,7 +69,57 @@ pub fn model_protocols<'a>(
 }
 
 pub fn reach_protocols(harness: Harness, protocols: &[WireProtocol]) -> Result<Reach, Unavailable> {
-    let native = harness.native_protocol();
+    reach_in(harness.native_protocol(), harness, protocols)
+}
+
+/// The protocol a configuration's harness talks to the gateway in. Fixed per
+/// harness, except omp, which speaks what its connections need least
+/// translation for (A1, 2026-10-27): Responses when every connection behind the
+/// configuration offers Responses and none Messages, else Messages — the
+/// gateway carries Messages to all three protocols.
+pub fn config_protocol(doc: &ConnectionsDocument, config: &AgentConfig) -> WireProtocol {
+    if config.harness != Harness::Omp {
+        return config.harness.native_protocol();
+    }
+    let behind: Vec<&Connection> = match &config.target {
+        ConfigTarget::Connection { connection_id } => doc
+            .connections
+            .iter()
+            .filter(|c| &c.id == connection_id)
+            .collect(),
+        ConfigTarget::Pool { pool_id } => doc
+            .pools
+            .iter()
+            .find(|p| &p.id == pool_id)
+            .map(|pool| {
+                doc.connections
+                    .iter()
+                    .filter(|c| pool.members.iter().any(|m| m.connection_id == c.id))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        ConfigTarget::Route { .. } => doc.connections.iter().filter(|c| c.enabled).collect(),
+    };
+    let all_responses = !behind.is_empty()
+        && behind
+            .iter()
+            .all(|c| c.protocols.contains(&WireProtocol::Responses));
+    let any_messages = behind
+        .iter()
+        .any(|c| c.protocols.contains(&WireProtocol::Messages));
+    if all_responses && !any_messages {
+        WireProtocol::Responses
+    } else {
+        WireProtocol::Messages
+    }
+}
+
+/// [`reach_protocols`] for a harness speaking `native` to the gateway.
+pub fn reach_in(
+    native: WireProtocol,
+    harness: Harness,
+    protocols: &[WireProtocol],
+) -> Result<Reach, Unavailable> {
     if protocols.contains(&native) {
         return Ok(Reach::Direct);
     }
@@ -157,7 +207,9 @@ pub fn candidates(
 ) -> (Vec<Candidate>, Vec<(String, Unavailable)>) {
     let mut out = Vec::new();
     let mut excluded = Vec::new();
+    let native = config_protocol(doc, config);
     fn consider(
+        native: WireProtocol,
         config: &AgentConfig,
         model: &str,
         connection: &Connection,
@@ -178,7 +230,7 @@ pub fn candidates(
             ));
             return;
         };
-        match reach_protocols(config.harness, model_protocols(connection, entry)) {
+        match reach_in(native, config.harness, model_protocols(connection, entry)) {
             Ok(reach) => out.push(Candidate {
                 connection_id: connection.id.clone(),
                 upstream_model: entry.upstream_id.clone(),
@@ -193,7 +245,7 @@ pub fn candidates(
     let lookup = |id: &str| doc.connections.iter().find(|c| c.id == id);
     match &config.target {
         ConfigTarget::Connection { connection_id } => match lookup(connection_id) {
-            Some(c) => consider(config, model, c, None, &mut out, &mut excluded),
+            Some(c) => consider(native, config, model, c, None, &mut out, &mut excluded),
             None => excluded.push((
                 connection_id.clone(),
                 Unavailable::ConnectionMissing {
@@ -205,9 +257,15 @@ pub fn candidates(
             Some(pool) => {
                 for member in &pool.members {
                     match lookup(&member.connection_id) {
-                        Some(c) => {
-                            consider(config, model, c, Some(member), &mut out, &mut excluded)
-                        }
+                        Some(c) => consider(
+                            native,
+                            config,
+                            model,
+                            c,
+                            Some(member),
+                            &mut out,
+                            &mut excluded,
+                        ),
                         None => excluded.push((
                             member.connection_id.clone(),
                             Unavailable::ConnectionMissing {
@@ -230,6 +288,7 @@ pub fn candidates(
                 .and_then(|id| doc.pools.iter().find(|p| &p.id == id));
             for connection in &doc.connections {
                 consider(
+                    native,
                     config,
                     model,
                     connection,
@@ -477,7 +536,13 @@ pub fn offered_models(doc: &ConnectionsDocument, config: &AgentConfig) -> Vec<St
             }
         }
         for model in connection.routable_models() {
-            if reach_protocols(config.harness, model_protocols(connection, model)).is_err() {
+            if reach_in(
+                config_protocol(doc, config),
+                config.harness,
+                model_protocols(connection, model),
+            )
+            .is_err()
+            {
                 continue;
             }
             let name = model.routing_name().to_string();

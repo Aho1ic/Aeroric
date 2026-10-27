@@ -205,14 +205,15 @@ fn codex_configurations_get_their_own_server_and_everything_else_stays_put() {
     assert_eq!(
         route(ProtocolFamily::Omp, "omp", None),
         Some(Route::Omp(OmpKey {
-            agent: "omp".into()
+            agent: "omp".into(),
+            config: None
         })),
         "local omp runs natively (ADR-043 phase two)"
     );
     assert_eq!(
         route(ProtocolFamily::Omp, "omp", Some("cfg-codex")),
         None,
-        "a pinned configuration keeps omp on the PTY"
+        "a configuration of another harness is refused on the PTY"
     );
     assert_eq!(
         route(ProtocolFamily::Codex, "my-wrapper", None),

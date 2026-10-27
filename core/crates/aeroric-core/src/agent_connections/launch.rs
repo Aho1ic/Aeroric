@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::migration::{self, MigrationReport};
-use super::model::{ConnectionsDocument, Harness};
+use super::model::{ConnectionsDocument, Harness, WireProtocol};
 use super::store;
 
 /// Prefix that keeps configuration ids in the native catalog apart from legacy
@@ -23,6 +23,11 @@ pub struct ConfigLaunch {
     pub harness: Harness,
     /// Directory name under `<data dir>/agent-homes/`.
     pub home_dir_name: String,
+    /// What the harness speaks to the gateway (omp picks per configuration).
+    pub protocol: WireProtocol,
+    /// The mapped model names the configuration offers.
+    pub models: Vec<String>,
+    pub default_model: String,
 }
 
 impl ConfigLaunch {
@@ -117,6 +122,9 @@ fn resolve_in(
         config_id: config.id.clone(),
         harness: config.harness,
         home_dir_name: home_dir_name(report, config_id),
+        protocol: crate::agent_connections::routing::config_protocol(document, &config),
+        models: crate::agent_connections::routing::offered_models(document, &config),
+        default_model: config.default_model.clone(),
     })
 }
 
@@ -228,9 +236,14 @@ mod tests {
         assert!(resolve_config(&root.0, "gone")
             .unwrap_err()
             .contains("no longer exists"));
-        assert!(resolve_config(&root.0, "cfg-omp")
-            .unwrap_err()
-            .contains("cannot launch through the gateway"));
+        let omp = resolve_config(&root.0, "cfg-omp").unwrap();
+        assert_eq!((omp.harness, omp.agent()), (Harness::Omp, "omp"));
+        assert_eq!(
+            omp.protocol,
+            WireProtocol::Messages,
+            "omp speaks Messages unless every connection is Responses-only"
+        );
+        assert_eq!(claude.protocol, WireProtocol::Messages);
     }
 
     #[test]

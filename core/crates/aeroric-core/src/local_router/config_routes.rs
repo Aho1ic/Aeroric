@@ -333,7 +333,7 @@ pub fn resolve(
         };
         let bridge = matches!(candidate.reach, Reach::ViaGateway { .. });
         let speaks = match candidate.reach {
-            Reach::Direct => config.harness.native_protocol(),
+            Reach::Direct => crate::agent_connections::routing::config_protocol(doc, config),
             Reach::ViaGateway { to, .. } => to,
         };
         match UpstreamTarget::with_details(

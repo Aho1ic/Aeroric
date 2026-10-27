@@ -58,9 +58,10 @@ impl Harness {
         }
     }
 
-    /// Q32-a: only these go through the gateway in the first batch.
+    /// Q32-a: only these go through the gateway (omp since 2026-10-27, over the
+    /// Claude or Codex entry — see `routing::config_protocol`).
     pub fn gateway_supported(self) -> bool {
-        matches!(self, Self::Claude | Self::Codex)
+        matches!(self, Self::Claude | Self::Codex | Self::Omp)
     }
 }
 

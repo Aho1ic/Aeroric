@@ -221,11 +221,24 @@ impl CliPtyExecutor {
         agent: &str,
     ) -> Result<Option<ConfigLaunch>, ExecutorFailure> {
         let data_dir = self.context.paths.data_dir();
-        match pinned.filter(|id| !id.trim().is_empty()) {
+        let config = match pinned.filter(|id| !id.trim().is_empty()) {
             Some(id) => resolve_config(data_dir, id)
                 .map(Some)
-                .map_err(|reason| ExecutorFailure::Spawn { reason }),
-            None => Ok(legacy_mapping(data_dir, agent)),
+                .map_err(|reason| ExecutorFailure::Spawn { reason })?,
+            None => legacy_mapping(data_dir, agent),
+        };
+        // The terminal path wires Claude and Codex only; an omp configuration
+        // runs as a native session (2026-10-27) and never as a Claude here.
+        match config {
+            Some(config) if !matches!(config.harness, Harness::Claude | Harness::Codex) => {
+                Err(ExecutorFailure::Spawn {
+                    reason: format!(
+                        "agent configuration `{}` runs only as a native local session",
+                        config.config_id
+                    ),
+                })
+            }
+            other => Ok(other),
         }
     }
 

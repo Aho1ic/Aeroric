@@ -307,6 +307,27 @@ pub(crate) fn write_custom_provider_models_yml(
     crate::settings::atomic_write_private(&models_path, &out)
 }
 
+/// An Agent configuration's omp home (2026-10-27): the managed layout plus a
+/// models.yml whose only provider is the local gateway at `base_url`, speaking
+/// `api`. The task token arrives through [`OMP_API_KEY_ENV`], never the file.
+pub fn prepare_gateway_home(
+    home: &std::path::Path,
+    base_url: &str,
+    api: &str,
+    models: &[String],
+) -> Result<(), String> {
+    ensure_managed_home_dirs(home)?;
+    let config_path = home.join("config.yml");
+    if !config_path.is_file() {
+        crate::settings::atomic_write_private(&config_path, &managed_config_content())?;
+    }
+    let mcp_path = home.join("mcp.json");
+    if !mcp_path.is_file() {
+        crate::settings::atomic_write_private(&mcp_path, "{\n}\n")?;
+    }
+    write_custom_provider_models_yml(home, base_url, "via-env", api, models)
+}
+
 /// 把 Aeroric 早先写进 models.yml 的明文 `apiKey` 换成变量名(启动时一次性)。
 /// 只改带生成标记的文件;用户手改过(没有标记)的不碰,返回 `Ok(false)`。
 pub fn migrate_plaintext_models_yml(home: &std::path::Path) -> Result<bool, String> {

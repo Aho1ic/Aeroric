@@ -46,6 +46,8 @@ pub struct ClaudeKey {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct OmpKey {
     pub agent: String,
+    /// A pinned Agent configuration: omp talks to the local gateway.
+    pub config: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

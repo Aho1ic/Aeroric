@@ -106,19 +106,39 @@ fn mapped_name_gathers_every_channel_and_translates_protocols() {
 }
 
 #[test]
-fn omp_cannot_use_a_translated_channel_yet() {
+fn omp_speaks_messages_to_the_gateway_and_reaches_every_channel() {
     let doc = deepseek_doc();
-    let (found, excluded) = candidates(
-        &doc,
-        &route_config(Harness::Omp, None),
-        "deepseek-v4.1-flash",
+    let config = route_config(Harness::Omp, None);
+    assert_eq!(config_protocol(&doc, &config), WireProtocol::Messages);
+    let (found, excluded) = candidates(&doc, &config, "deepseek-v4.1-flash");
+    assert!(
+        found.len() >= 2,
+        "native and translated channels alike: {found:?}"
     );
-    assert_eq!(found.len(), 1, "only the native Chat Completions channel");
-    assert!(excluded.iter().any(|(id, why)| id == "b"
-        && *why
-            == Unavailable::GatewayNotYetForHarness {
-                harness: Harness::Omp
-            }));
+    assert!(!excluded
+        .iter()
+        .any(|(_, why)| matches!(why, Unavailable::GatewayNotYetForHarness { .. })));
+}
+
+#[test]
+fn omp_speaks_responses_only_when_every_channel_is_responses_only() {
+    let mut doc = deepseek_doc();
+    for connection in &mut doc.connections {
+        connection.protocols = vec![WireProtocol::Responses];
+    }
+    assert_eq!(
+        config_protocol(&doc, &route_config(Harness::Omp, None)),
+        WireProtocol::Responses
+    );
+    doc.connections[0].protocols.push(WireProtocol::Messages);
+    assert_eq!(
+        config_protocol(&doc, &route_config(Harness::Omp, None)),
+        WireProtocol::Messages
+    );
+    assert_eq!(
+        config_protocol(&doc, &route_config(Harness::Codex, None)),
+        WireProtocol::Responses
+    );
 }
 
 #[test]
@@ -513,10 +533,15 @@ fn every_saved_connection_is_offered_per_gateway_harness() {
     );
     assert!(doc.configs.is_empty(), "nothing is written");
 
-    // Gone with the connection, never for omp/dsh, never for a typo.
+    // Gone with the connection, never for dsh, never for a typo; omp gets
+    // them too since it reaches the gateway (2026-10-27).
+    assert_eq!(
+        doc.config(&via(Harness::Omp, "b")).map(|c| c.harness),
+        Some(Harness::Omp)
+    );
     doc.connections[0].enabled = false;
     assert!(doc.config(&via(Harness::Codex, "a")).is_none());
-    assert!(doc.config(&via(Harness::Omp, "b")).is_none());
+    assert!(doc.config(&via(Harness::Dsh, "b")).is_none());
     assert!(doc.config("via-codex-missing").is_none());
     assert!(doc.config("via-").is_none());
     // A connection without a routable model offers nothing.

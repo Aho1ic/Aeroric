@@ -645,7 +645,8 @@ mod tests {
         assert!(!entry(&directory, "agent-config:cfg-empty")
             .blocked_reasons
             .is_empty());
-        assert!(!entry(&directory, "agent-config:cfg-omp")
+        // omp reaches the gateway too (2026-10-27).
+        assert!(entry(&directory, "agent-config:cfg-omp")
             .blocked_reasons
             .is_empty());
         // The legacy entry is still there and keeps its own identity.
