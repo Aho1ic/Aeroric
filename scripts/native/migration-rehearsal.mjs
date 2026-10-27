@@ -297,6 +297,88 @@ async function main() {
       );
       check("被拒之后原宿主仍可服务", runCli(["doctor", "--json"], { dataDir }).code === EXIT.OK);
 
+      // ── 3b. 一致性备份 / 校验 / 恢复（AP8 Action 1）────────────────────
+      //
+      // 这一段在一台**活着**的宿主上跑：那正是"停写窗口很难有"的真实情形。判据不是
+      // "备份成功"，而是"备份出来的东西**打开得了、行数对得上、恢复之后旧客户端
+      // 形状还在**" —— 只报成功不校验的备份，正是 `cp` 那种静默损失的来源。
+      const backupDir = path.join(root, "backup");
+      const backupCreate = runCli(["backup", "create", "--out", backupDir, "--live"], {
+        dataDir,
+      });
+      check(
+        "在活宿主上建备份（库走 backup API）",
+        backupCreate.code === EXIT.OK,
+        `rc=${backupCreate.code} ${backupCreate.stderr.slice(0, 200)}`,
+      );
+
+      const backupVerify = runCli(["backup", "verify", "--backup", backupDir], {
+        dataDir,
+      });
+      check(
+        "备份自带校验：摘要 + integrity_check + 行数全对",
+        backupVerify.code === EXIT.OK,
+        `rc=${backupVerify.code} ${backupVerify.stdout.slice(0, 300)}`,
+      );
+
+      const manifestPath = path.join(backupDir, "manifest.json");
+      const manifest = readJson(manifestPath);
+      check(
+        "清单覆盖了真实文件与库，且未收录租约/凭据",
+        (manifest?.entries?.length ?? 0) > 0 &&
+          !(manifest?.entries ?? []).some((e) => /^\.write\.lock$|^host\.token$/.test(e.relPath)),
+        JSON.stringify(manifest?.entries ?? []).slice(0, 300),
+      );
+
+      // 备份之后的**新写入**：恢复必须拒绝动它（"恢复"不是"回滚掉别人的工作"）。
+      const newerTaskFile = path.join(dataDir, "projects", "p1", "tasks.json");
+      const afterBackup = readJson(newerTaskFile) ?? [];
+      writeFileSync(
+        newerTaskFile,
+        JSON.stringify(
+          [...afterBackup, { id: "t-written-after-backup", projectId: "p1", status: "done" }],
+          null,
+          2,
+        ),
+      );
+      const refused = runCli(["backup", "restore", "--backup", backupDir], { dataDir });
+      check(
+        "有更新写入时恢复被拒（不静默覆盖）",
+        refused.code !== EXIT.OK,
+        `rc=${refused.code} ${refused.stderr.slice(0, 200)}`,
+      );
+      check(
+        "被拒之后新写入原样还在",
+        (readJson(newerTaskFile) ?? []).some((t) => t.id === "t-written-after-backup"),
+        JSON.stringify(readJson(newerTaskFile) ?? []).slice(0, 300),
+      );
+
+      // 显式丢弃才真的回滚，且旧客户端的不定型键随之回来。
+      const restored = runCli(
+        ["backup", "restore", "--backup", backupDir, "--discard-newer"],
+        { dataDir },
+      );
+      check("显式丢弃后可恢复", restored.code === EXIT.OK, `rc=${restored.code} ${restored.stderr.slice(0, 200)}`);
+      const restoredTasks = readJson(newerTaskFile) ?? [];
+      check(
+        "恢复换回了备份时的内容（新写入与旧不定型键都能分辨）",
+        !restoredTasks.some((t) => t.id === "t-written-after-backup") &&
+          restoredTasks.some((t) => t.legacyLaunchFamily === "claude"),
+        JSON.stringify(restoredTasks).slice(0, 400),
+      );
+
+      // 篡改备份里的一个文件：校验必须红，而不是"文件在就算好"。
+      const tampered = manifest?.entries?.[0]?.relPath;
+      if (tampered) {
+        writeFileSync(path.join(backupDir, tampered), "tampered\n");
+        const afterTamper = runCli(["backup", "verify", "--backup", backupDir], { dataDir });
+        check(
+          "备份被改过之后校验报红",
+          afterTamper.code !== EXIT.OK,
+          `rc=${afterTamper.code} ${afterTamper.stdout.slice(0, 200)}`,
+        );
+      }
+
       // ── 4. 回退面：目录仍然只是"旧客户端的目录" ──────────────────────
       const third = runCli(["doctor", "--json"], { dataDir });
       let parsed = null;

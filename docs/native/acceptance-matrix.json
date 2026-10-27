@@ -1,0 +1,734 @@
+{
+  "note": "AP8 R-AP8-3 的机器可读台账。叙事版 docs/native/acceptance-matrix.md；由 scripts/native/parity.mjs 对账。evidence 里的每个名字都必须是 checks.json 里已注册且有 argv 的 case。",
+  "schemaVersion": 1,
+  "rows": [
+    {
+      "id": "F01",
+      "capability": "项目、分组、固定、排序、隐藏、头像、最近访问",
+      "evidence": [
+        "projects-core-rust",
+        "projects-save-single-queue"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F02",
+      "capability": "任务创建、todo、排队、失败原因、归档、收藏、重命名、完成/取消",
+      "evidence": [
+        "tasks-status-machine-rust",
+        "tasks-idempotency-rust",
+        "tasks-parity-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F03",
+      "capability": "四族与自定义 Agent、模型/effort/权限、升级、配置导入导出",
+      "evidence": [
+        "agent-launch-parity-rust",
+        "agent-config-authority-host-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端只选择已有会话的控制面,不提供模型/凭据配置(AP5 范围)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F04",
+      "capability": "原始 PTY、输入、resize、IME、回放、后台输出、generation",
+      "evidence": [
+        "terminal-unit-rust",
+        "terminal-pty-bytes-rust",
+        "terminal-replay-rust",
+        "terminal-pty-exit-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F05",
+      "capability": "会话发现/分页/导出、恢复/接管/跨族 handoff、用量",
+      "evidence": [
+        "terminal-history-rust",
+        "terminal-history-host-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F06",
+      "capability": "DSH 原生消息/tool/审批/问题/附件/slash/queue/goal/jobs",
+      "evidence": [
+        "dsh-approvals-rust",
+        "dsh-host-rust",
+        "dsh-reconnect-rust",
+        "session-dsh-omp-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F07",
+      "capability": "文件树、搜索替换、编辑、Markdown、图片、保存冲突、local history",
+      "evidence": [
+        "files-core-rust",
+        "file-history-rust",
+        "file-write-authority-host-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F08",
+      "capability": "LSP、诊断、symbol、completion、run/test、DAP、预览",
+      "evidence": [
+        "lsp-protocol-rust",
+        "dap-protocol-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "unsupported",
+          "reason": "IDE 面是桌面工作区能力,无头 CLI 不承载编辑器/LSP 会话"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端不承载编辑器/LSP(AP5 范围)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F09",
+      "capability": "Git status/diff/stage/commit/push/history",
+      "evidence": [
+        "git-service-rust",
+        "git-services-host-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "unsupported",
+          "reason": "Git 面经宿主服务提供,CLI 未开专属子命令"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F10",
+      "capability": "worktree 创建/隔离/统计/合并/丢弃",
+      "evidence": [
+        "worktree-lifecycle-rust",
+        "worktree-diff-stats-host-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "unsupported",
+          "reason": "worktree 面经宿主服务提供,CLI 未开专属子命令"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端不承载 worktree(AP5 范围)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F11",
+      "capability": "SSH、主机 key、SFTP、远程文件/Git/终端、连接恢复",
+      "evidence": [
+        "ssh-host-keys-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "unsupported",
+          "reason": "SSH 面经宿主服务提供,CLI 未开专属子命令"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端不直接建 SSH 连接(远端 owner 在 Mac,AP2)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F12",
+      "capability": "WSL 配置、项目、Agent、文件、Git、终端",
+      "evidence": [
+        "platform-capabilities-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "unsupported",
+          "reason": "产品已退休 WSL 面,平台能力如实报 not-declared"
+        },
+        {
+          "surface": "native-macos",
+          "state": "unsupported",
+          "reason": "AP1 重定基线后 WSL 不在 Apple-only 首发范围"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "同上"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F13",
+      "capability": "Docker、端口、Conda 环境",
+      "evidence": [
+        "infrastructure-rust",
+        "conda-policy-rust",
+        "conda-discovery-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端不承载基础设施面板(AP5 范围)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F14",
+      "capability": "DBX SQL/Redis/Mongo、表格、结构、导入导出、生产确认、取消查询",
+      "evidence": [
+        "database-confirmation-rust",
+        "database-execution-host-rust",
+        "database-transfer-host-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端不承载数据库面板(AP5 范围)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F15",
+      "capability": "notebook/quick notes、富文本/Markdown、附件、模板、标签/双链",
+      "evidence": [
+        "notebook-contract-rust",
+        "notebook-lib-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端不承载 notebook(AP5 范围)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F16",
+      "capability": "notebook RAG、embedding secret、同步/对象存储/OAuth",
+      "evidence": [
+        "rag-pipeline-rust",
+        "notebook-sync-contract-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端不承载 RAG/同步配置(AP5 范围)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F17",
+      "capability": "Skill Hub、MCP、hooks、插件、provider、proxy",
+      "evidence": [
+        "extensions-contract-rust",
+        "provider-services-contract-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端不承载扩展/provider 配置(AP5 范围)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F18",
+      "capability": "手机/远程控制、配对、E2EE、replay、审批/终端租约",
+      "evidence": [
+        "remote-headless-rust",
+        "remote-lan-roundtrip-rust",
+        "remote-network-exposure-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F19",
+      "capability": "通知、统计、清理、周报、权限、更新和 Release 页面",
+      "evidence": [
+        "maintenance-rust",
+        "maintenance-metrics-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F20",
+      "capability": "capability-driven plan/fork/revert/share",
+      "evidence": [
+        "session-controls-core-rust",
+        "session-controls-host-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F21",
+      "capability": "memory/checkpoint、task tree、goal/stop、后台 subagent",
+      "evidence": [
+        "agent-work-graph-core-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F22",
+      "capability": "compose、确定性 workflows、bounded retry、Dream/Distill",
+      "evidence": [
+        "workflows-core-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端不承载 workflow 编排(AP5 范围)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F23",
+      "capability": "ACP、OAuth、插件/连接器、browser/多模态/voice",
+      "evidence": [
+        "external-protocols-core-rust"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端不承载 ACP/OAuth/媒体面(AP5 范围)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F24",
+      "capability": "设置中 TUI/高级 ↔ 纯原生 UI 无损切换",
+      "evidence": [
+        "mode-switch-unit"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端自身即原生,无模式切换(AP5 范围)"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F25",
+      "capability": "glass/classic、a11y、菜单、窗口、快捷键、多窗口",
+      "evidence": [
+        "native-design-unit",
+        "shell-unit"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "unsupported",
+          "reason": "视觉/可访问性面不属于无头 CLI"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "accepted"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    },
+    {
+      "id": "F26",
+      "capability": "不带 GUI 的启动/操作/退出与复连",
+      "evidence": [
+        "cli-headless-rust",
+        "cli-smoke-headless",
+        "migration-rehearsal",
+        "fault-injection"
+      ],
+      "surfaces": [
+        {
+          "surface": "cli",
+          "state": "accepted"
+        },
+        {
+          "surface": "native-macos",
+          "state": "accepted"
+        },
+        {
+          "surface": "ios-companion",
+          "state": "unsupported",
+          "reason": "伴随端不承载无头入口"
+        },
+        {
+          "surface": "tauri-legacy",
+          "state": "retired",
+          "reason": "AP10 清退旧前端"
+        }
+      ]
+    }
+  ]
+}

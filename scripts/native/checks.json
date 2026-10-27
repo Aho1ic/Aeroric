@@ -11,25 +11,18 @@
       "commands run from the repository root resolved from this file's location"
     ],
     "floors": {
-      "active-task-command-rust@cutover": 6,
-      "adapter-acceptance-real-kernel@tauri-adapter": 19,
-      "adapter-event-payload-contract@tauri-adapter": 5,
-      "adapter-intent-queue@tauri-adapter": 9,
-      "adapter-invariants-unit@tauri-adapter": 28,
       "agent-config-authority-host-rust@cutover": 12,
-      "agent-config-command-rust@cutover": 10,
       "agent-config-files-core-rust@cutover": 7,
       "agent-config-files-host-rust@cutover": 8,
-      "agent-config-paths-adapter-rust@cutover": 2,
       "agent-config-paths-core-rust@cutover": 9,
       "agent-config-roots-cli-rust@cutover": 3,
       "agent-config-roots-core-rust@cutover": 8,
       "agent-config-roots-host-rust@cutover": 8,
       "agent-launch-parity-rust@agents": 2,
+      "agent-work-graph-core-rust@agent-work-graph": 10,
       "cli-headless-rust@cli": 6,
       "cli-unit-rust@cli": 4,
       "conda-cli-rust@cutover": 4,
-      "conda-command-rust@cutover": 8,
       "conda-discovery-rust@infrastructure": 4,
       "conda-policy-rust@infrastructure": 7,
       "conda-services-rust@cutover": 8,
@@ -37,18 +30,53 @@
       "core-rust-skeleton@skeleton": 5,
       "dap-protocol-rust@ide": 3,
       "database-confirmation-rust@database": 7,
+      "database-dbx-cli-rust@cutover": 2,
+      "database-dbx-cli-rust@database": 2,
+      "database-dbx-core-rust@cutover": 23,
+      "database-dbx-core-rust@database": 23,
+      "database-dbx-host-rust@cutover": 15,
+      "database-dbx-host-rust@database": 15,
+      "database-execution-host-rust@cutover": 4,
+      "database-execution-host-rust@database": 4,
+      "database-import-export-cli-rust@cutover": 3,
+      "database-import-export-cli-rust@database": 3,
+      "database-import-export-core-rust@cutover": 17,
+      "database-import-export-core-rust@database": 17,
+      "database-import-export-host-rust@cutover": 14,
+      "database-import-export-host-rust@database": 14,
+      "database-legacy-sqlite-host-rust@cutover": 3,
+      "database-legacy-sqlite-host-rust@files": 3,
+      "database-mongo-host-rust@cutover": 2,
+      "database-mongo-host-rust@database": 2,
+      "database-redis-host-rust@cutover": 2,
+      "database-redis-host-rust@database": 2,
+      "database-schema-host-rust@cutover": 3,
+      "database-schema-host-rust@database": 3,
+      "database-sql-builders-host-rust@cutover": 3,
+      "database-sql-builders-host-rust@database": 3,
+      "database-transfer-core-rust@cutover": 10,
+      "database-transfer-core-rust@database": 10,
+      "database-transfer-host-rust@cutover": 10,
+      "database-transfer-host-rust@database": 10,
       "database-ui-unit@database": 4,
-      "debug-config-command-rust@cutover": 37,
       "debug-config-core-rust@cutover": 10,
       "debug-config-host-rust@cutover": 8,
       "digest-unit@skeleton": 17,
+      "dsh-approvals-rust@dsh": 9,
+      "dsh-host-rust@dsh": 26,
+      "dsh-reconnect-rust@dsh": 5,
       "editor-ui-unit@editor": 7,
+      "event-pump-confirm-rust@cutover": 1,
+      "event-pump-confirm-rust@database": 1,
       "event-replay-rust@host": 3,
       "executor-pty-rust@host": 3,
       "extensions-contract-rust@extensions": 7,
       "extensions-ui-unit@extensions": 5,
-      "extraction-unit@skeleton": 19,
+      "external-protocols-core-rust@external-protocols": 13,
+      "external-protocols-macos-swift@external-protocols": 13,
       "file-history-rust@editor": 7,
+      "file-preview-host-rust@cutover": 2,
+      "file-preview-host-rust@files": 2,
       "file-services-batch2-rust@cutover": 4,
       "file-target-host-rust@cutover": 33,
       "file-target-host-rust@files": 33,
@@ -61,79 +89,59 @@
       "files-client-wire@files": 13,
       "files-core-rust@files": 13,
       "files-ui-unit@files": 4,
-      "formatter-policy-command-rust@cutover": 11,
-      "formatter-policy-command-rust@editor": 11,
-      "formatter-policy-command-rust@files": 11,
       "formatter-policy-core-rust@cutover": 5,
       "formatter-policy-core-rust@editor": 5,
       "formatter-policy-core-rust@files": 5,
       "gate-runner-unit@skeleton": 36,
       "git-service-rust@git": 9,
+      "git-services-host-rust@cutover": 31,
       "git-ui-unit@git": 5,
       "host-cutover-rust@cutover": 5,
-      "host-dispatch-rust@cutover": 6,
-      "host-lib-rust@host": 26,
+      "host-lib-rust@host": 34,
       "host-lifecycle-rust@host": 4,
-      "host-placement-rust@cutover": 10,
-      "host-supervisor-rust@cutover": 14,
+      "ide-test-services-rust@cutover": 5,
+      "ide-test-services-rust@database": 5,
       "ide-ui-unit@ide": 5,
       "infrastructure-rust@infrastructure": 6,
       "infrastructure-ui-unit@infrastructure": 5,
-      "invariants-unit@skeleton": 13,
-      "inventory-unit@skeleton": 57,
       "ipc-auth-rust@host": 4,
       "ipc-frames-rust@host": 5,
-      "legacy-copy-command-rust@cutover": 6,
-      "legacy-copy-command-rust@files": 6,
       "legacy-copy-core-rust@cutover": 8,
       "legacy-copy-core-rust@files": 8,
-      "legacy-directory-command-rust@cutover": 6,
-      "legacy-directory-command-rust@files": 6,
       "legacy-directory-core-rust@cutover": 3,
       "legacy-directory-core-rust@files": 3,
-      "legacy-entry-command-rust@cutover": 8,
-      "legacy-entry-command-rust@files": 8,
       "legacy-entry-core-rust@cutover": 4,
       "legacy-entry-core-rust@files": 4,
-      "legacy-history-command-rust@cutover": 12,
-      "legacy-history-command-rust@files": 12,
       "legacy-history-core-rust@cutover": 8,
       "legacy-history-core-rust@files": 8,
-      "legacy-modify-command-rust@cutover": 7,
-      "legacy-modify-command-rust@files": 7,
       "legacy-modify-core-rust@cutover": 4,
       "legacy-modify-core-rust@files": 4,
-      "legacy-path-command-rust@cutover": 7,
-      "legacy-path-command-rust@files": 7,
       "legacy-path-core-rust@cutover": 3,
       "legacy-path-core-rust@files": 3,
-      "legacy-read-command-rust@cutover": 7,
-      "legacy-read-command-rust@files": 7,
       "legacy-read-core-rust@cutover": 3,
       "legacy-read-core-rust@files": 3,
       "legacy-rename-core-rust@cutover": 4,
       "legacy-rename-core-rust@files": 4,
-      "legacy-write-command-rust@cutover": 5,
-      "legacy-write-command-rust@files": 5,
       "legacy-write-core-rust@cutover": 5,
       "legacy-write-core-rust@files": 5,
       "lsp-protocol-rust@ide": 9,
+      "lsp-session-services-rust@cutover": 6,
+      "lsp-session-services-rust@database": 6,
       "maintenance-host-services-rust@maintenance": 7,
       "maintenance-metrics-rust@maintenance": 11,
       "maintenance-rust@maintenance": 26,
       "maintenance-swift-permissions@maintenance": 16,
       "maintenance-swift-ui@maintenance": 13,
-      "native-design-unit@native-design": 14,
+      "native-design-unit@native-design": 411,
       "native-terminal-unit@native-terminal": 12,
       "notebook-contract-rust@notebook": 12,
       "notebook-lib-rust@notebook": 428,
+      "notebook-rag-host-rust@cutover": 4,
+      "notebook-rag-host-rust@notebook": 4,
       "notebook-sync-contract-rust@notebook-services": 6,
       "notebook-ui-unit@notebook": 9,
       "platform-capabilities-rust@platforms": 5,
-      "platform-command-rust@cutover": 7,
       "platform-host-rust@cutover": 3,
-      "prepare-tauri-host-unit@cutover": 7,
-      "project-config-command-rust@cutover": 13,
       "project-config-core-rust@cutover": 3,
       "project-config-host-rust@cutover": 4,
       "project-config-mutations-core-rust@cutover": 7,
@@ -144,29 +152,28 @@
       "project-copy-host-rust@cutover": 6,
       "project-copy-host-rust@files": 6,
       "project-files-core@files": 11,
-      "project-list-command-rust@cutover": 7,
       "project-list-host-rust@cutover": 3,
-      "project-tasks-command-rust@cutover": 8,
       "project-tasks-host-rust@cutover": 3,
       "projects-core-rust@projects": 16,
-      "projects-parity-is-derived-from-client@projects": 2,
-      "projects-save-single-queue@projects": 3,
       "protocol-rust@protocol": 50,
       "protocol-swift-golden@protocol": 20,
-      "protocol-ts-golden@protocol": 21,
-      "protocol-ts-vocabulary@protocol": 7,
       "provider-services-contract-rust@provider-services": 7,
       "provider-services-rust-operations@provider-services": 9,
       "provider-services-rust-providers@provider-services": 19,
       "provider-services-ui-unit@provider-services": 9,
+      "push-core-rust@push": 26,
+      "push-host-rust@push": 6,
+      "push-ios-swift@push": 9,
+      "push-macos-swift@push": 7,
+      "push-protocol-rust@push": 7,
+      "push-sender-rust@push": 34,
       "rag-pipeline-rust@notebook-services": 4,
+      "remote-companion-ios-swift@remote": 5,
       "remote-headless-rust@remote": 9,
-      "remote-lan-roundtrip-rust@remote": 7,
-      "remote-network-exposure-rust@remote": 9,
       "remote-ui-unit@remote": 5,
-      "run-config-command-rust@cutover": 12,
       "run-config-core-rust@cutover": 9,
       "run-config-host-rust@cutover": 8,
+      "runtime-kill-target-rust@runtime": 5,
       "runtime-lifecycle-rust@runtime": 5,
       "search-core-legacy@files": 18,
       "search-core-regressions@files": 8,
@@ -174,101 +181,49 @@
       "search-services-rust@files": 12,
       "search-write-authority-host-rust@cutover": 22,
       "search-write-authority-host-rust@files": 22,
-      "session-query-command-rust@cutover": 3,
+      "session-controls-core-rust@session-controls": 42,
+      "session-controls-host-rust@session-controls": 6,
+      "session-controls-ios-swift@session-controls": 12,
+      "session-controls-macos-swift@session-controls": 9,
+      "session-dsh-omp-rust@dsh": 7,
       "session-query-host-rust@cutover": 3,
       "sessions-ui-unit@sessions-ui": 20,
       "settings-preferences-rust@cutover": 12,
       "settings-services-rust@cutover": 17,
       "settings-transaction-rust@cutover": 5,
       "settings-ui-unit@settings-ui": 13,
-      "shell-unit@shell": 36,
-      "src-tauri-lib-tests@tauri-adapter": 1276,
+      "shell-unit@shell": 411,
       "ssh-host-keys-rust@connections": 8,
       "storage-backends-rust@notebook-services": 6,
+      "storage-backup-rust@system-parity": 7,
       "storage-core-rust@storage": 488,
+      "swift-client-schema-mirror@swift-client": 2,
       "swift-client-tsan@swift-client": 28,
       "swift-client-unit@swift-client": 33,
       "swift-package-smoke@skeleton": 12,
       "sync-ui-unit@notebook-services": 5,
-      "task-status-unit@skeleton": 18,
+      "task-events-log-rust@cutover": 1,
+      "task-events-log-rust@database": 1,
       "tasks-idempotency-rust@tasks": 10,
-      "tasks-parity-is-derived-from-client@tasks": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 78,
       "tasks-status-machine-rust@tasks": 56,
       "tasks-ui-unit@tasks-ui": 10,
-      "terminal-history-command-rust@cutover": 11,
-      "terminal-history-host-rust@cutover": 3,
+      "terminal-history-host-rust@cutover": 5,
       "terminal-history-mutations-core-rust@cutover": 7,
       "terminal-history-mutations-host-rust@cutover": 7,
       "terminal-history-paths-rust@cutover": 7,
       "terminal-history-rust@terminal-core": 7,
-      "terminal-invariants-unit@terminal-core": 10,
-      "terminal-lease-invariants-unit@cutover": 16,
       "terminal-lease-rust@terminal-core": 4,
       "terminal-pty-bytes-rust@terminal-core": 6,
       "terminal-pty-exit-rust@terminal-core": 10,
       "terminal-replay-rust@terminal-core": 5,
       "terminal-unit-rust@terminal-core": 66,
       "validate-agent-launch-host-rust@cutover": 2,
+      "workflows-core-rust@workflows": 8,
       "worktree-diff-stats-host-rust@cutover": 4,
-      "git-services-host-rust@cutover": 31,
-      "file-preview-host-rust@files": 2,
-      "file-preview-host-rust@cutover": 2,
-      "database-legacy-sqlite-host-rust@files": 3,
-      "database-legacy-sqlite-host-rust@cutover": 3,
-      "watcher-discipline-unit@skeleton": 11,
       "worktree-lifecycle-rust@worktree": 6,
-      "worktree-ui-unit@worktree": 6,
-      "database-dbx-core-rust@database": 23,
-      "database-dbx-host-rust@database": 15,
-      "database-sql-builders-host-rust@database": 3,
-      "database-execution-host-rust@database": 4,
-      "database-schema-host-rust@database": 3,
-      "database-dbx-cli-rust@database": 2,
-      "database-dbx-command-rust@database": 5,
-      "database-dbx-core-rust@cutover": 23,
-      "database-dbx-host-rust@cutover": 15,
-      "database-sql-builders-host-rust@cutover": 3,
-      "database-execution-host-rust@cutover": 4,
-      "database-schema-host-rust@cutover": 3,
-      "notebook-rag-host-rust@notebook": 4,
-      "database-redis-host-rust@database": 2,
-      "database-mongo-host-rust@database": 2,
-      "notebook-rag-host-rust@cutover": 4,
-      "database-redis-host-rust@cutover": 2,
-      "database-mongo-host-rust@cutover": 2,
-      "database-dbx-cli-rust@cutover": 2,
-      "database-dbx-command-rust@cutover": 5,
-      "database-import-export-core-rust@database": 17,
-      "database-import-export-host-rust@database": 14,
-      "database-import-export-cli-rust@database": 3,
-      "database-import-export-command-rust@database": 7,
-      "database-import-export-core-rust@cutover": 17,
-      "database-import-export-host-rust@cutover": 14,
-      "database-import-export-cli-rust@cutover": 3,
-      "database-import-export-command-rust@cutover": 7,
-      "database-transfer-core-rust@database": 10,
-      "database-transfer-core-rust@cutover": 10,
-      "database-transfer-host-rust@database": 10,
-      "database-transfer-host-rust@cutover": 10,
-      "database-transfer-command-rust@database": 5,
-      "database-transfer-command-rust@cutover": 5,
-      "event-pump-rust@tauri-adapter": 3,
-      "event-pump-confirm-rust@cutover": 1,
-      "event-pump-confirm-rust@database": 1,
-      "task-events-log-rust@cutover": 1,
-      "task-events-log-rust@database": 1,
-      "ide-test-services-rust@cutover": 5,
-      "ide-test-services-rust@database": 5,
-      "lsp-session-services-rust@cutover": 6,
-      "lsp-session-services-rust@database": 6,
-      "push-protocol-rust@push": 7,
-      "push-sender-rust@push": 34,
-      "push-core-rust@push": 26,
-      "push-host-rust@push": 6,
-      "push-ios-swift@push": 9,
-      "push-macos-swift@push": 7
+      "worktree-ui-unit@worktree": 6
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -422,156 +377,6 @@
           "timeoutMs": 900000
         },
         {
-          "name": "patches-match-src-tauri",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/check-patches.mjs",
-            "--min-entries",
-            "9"
-          ],
-          "$note": "正控：两侧都必须解析出 ≥9 条 patch。空表比对曾经输出「0 patch entries identical」并 exit 0——删掉或改名的 patch 表就是这样悄悄让 core 与出货客户端解析不同源码的。现也识别 `[patch.\"...\"]` 引号注册表。",
-          "timeoutMs": 120000
-        },
-        {
-          "name": "inventory-consistency",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/inventory.mjs",
-            "--check"
-          ],
-          "timeoutMs": 300000
-        },
-        {
-          "name": "extraction-docs-current",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/extraction.mjs",
-            "--module=database",
-            "--module=notebook",
-            "--task=P7-04",
-            "--task=P7-05",
-            "--check",
-            "docs/native/extraction/database-notebook.md"
-          ],
-          "$note": "§5.1 展开表必须能从源码重导：行数/落点/每文件 wrapper 数与 command-map.json 不一致就失败。首次实跑就暴露本文档两列历史数字是错的（914→782、586→650），因为原来生成它的是一次性代码、无法复现。",
-          "timeoutMs": 300000
-        },
-        {
-          "name": "extraction-docs-current-dsh-webui",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/extraction.mjs",
-            "--module=dsh_webui",
-            "--task=P3-05",
-            "--check",
-            "docs/native/extraction/dsh-webui.md"
-          ],
-          "$note": "第 4 块 §5.1 展开，同时证明延后它的理由是假的：dsh_webui 是 9 个文件 / 66 个 wrapper（14 条在同名兄弟文件 + 52 条在 commands.rs），不是「66 个文件」。为它给生成器加了「模块 = 目录 + 兄弟 .rs」的走法。",
-          "timeoutMs": 300000
-        },
-        {
-          "name": "extraction-docs-current-remote",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/extraction.mjs",
-            "--module=remote",
-            "--task=P8-03",
-            "--check",
-            "docs/native/extraction/remote.md"
-          ],
-          "$note": "remote/ 的 §5.1 展开（第 3 个模块，本轮解除阻塞：mobile 经 remote RPC 而非 Tauri invoke，0 处 @tauri-apps 引用）。dsh_webui/ 仍等 Q7/G17。",
-          "timeoutMs": 300000
-        },
-        {
-          "name": "extraction-docs-current-sessions",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/extraction.mjs",
-            "--module=session",
-            "--module=session_dsh",
-            "--module=session_omp",
-            "--module=event_watcher",
-            "--module=usage",
-            "--module=agent_usage",
-            "--module=usage_index",
-            "--module=analytics",
-            "--task=P3-04",
-            "--check",
-            "docs/native/extraction/sessions.md"
-          ],
-          "$note": "P3-04（sessions/usage/watcher）的 §5.1 展开先行交付：11 个文件 / 13 个 command wrapper / 11 226 行，逐行可从源码重导，与 command-map.json 交叉校验。文档下方的 8 条手写约束不在重导覆盖内（tableDrift 只比表格行），但每条都在 2026-09-28 当场回源：OMP 三根中只有 agent-homes 可进 core（session_omp.rs:127/136/142-145 对照 INV-06 与 ADR-001 §5）、dsh 的时限窗实际在 session.rs:1876-1890 而非 session_dsh.rs（那里 grep deadline|timeout 0 命中）、引用解析阶梯的计划行号 549-615 已漂到 taskLifecycle.ts:574/592/607、claimed_session_paths 保持路径粒度（ADR-020 §3，站点 session.rs:97 + lib.rs:118/1278/1287/1293/1310）、DSH 转录 raw/zstd 两形并存且切回 none 会留旧产物（session_dsh.rs:36/38/9-10/111-115）。落点目录按正文归并成 sessions/，不照 destination 列建六个平行目录。",
-          "timeoutMs": 120000
-        },
-        {
-          "name": "extraction-unit",
-          "kind": "test",
-          "argv": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "scripts/native/extraction.test.mjs"
-          ],
-          "parse": "node-test",
-          "minCases": 19,
-          "$note": "计数语义本身的负例：`#[cfg(test)]` 与 `mod tests {` 分行、字段级 cfg(test) 不得开测试块、带参数的 `#[tokio::test(...)]` 要算、impl 方法不得当顶层导出、漂移检测四种、空模块必须报错而不是产出空表。",
-          "timeoutMs": 300000
-        },
-        {
-          "name": "inv09-signing-baseline",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/check-signing-baseline.mjs"
-          ],
-          "$note": "INV-09 此前没有任何守卫：基线 signingIdentity=\"-\" / hardenedRuntime=false 是刻意选择（链接器签名会让 TCC 授权每次重建作废），签名 CI 路径靠 release workflow 现场生成 tauri.macos-signed.json 覆盖回 true。缺键也算违规——Tauri 默认 hardenedRuntime=true，删键等于静默改基线。",
-          "timeoutMs": 120000
-        },
-        {
-          "name": "invariants-unit",
-          "kind": "test",
-          "argv": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "scripts/native/invariants.test.mjs"
-          ],
-          "parse": "node-test",
-          "minCases": 13,
-          "$note": "两条「不得静默改变」的不变量的负例：签名字段被翻转/被删、workflow 不再开回 hardenedRuntime、patch 表被删空、只删一侧、rev 漂移。",
-          "timeoutMs": 300000
-        },
-        {
-          "name": "inventory-freeze-is-noop",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/inventory.mjs",
-            "--freeze-check"
-          ],
-          "$note": "『冻结清单』必须真的可复现：--freeze 重写 events/panels 后的字节必须与已提交工件一致。实测反例：修复前跑一次 --freeze 会删掉全部 14 条人工 event note 并把 disposition 从 emitted-dynamically/redundant-channel 重置成 untriaged（714 866 → 713 046 B），而 --check 当时仍报 consistent。合并现在按『只覆盖源派生键』工作，人写的键（含未来新增的）一律保留。",
-          "timeoutMs": 300000
-        },
-        {
-          "name": "inventory-unit",
-          "kind": "test",
-          "argv": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "scripts/native/inventory.test.mjs"
-          ],
-          "parse": "node-test",
-          "minCases": 57,
-          "$note": "必须显式 --test-reporter=tap：默认 spec reporter 不输出 `# pass N`，countCases 得 0 并被零用例规则判失败（P1-04 真实发生过）。",
-          "timeoutMs": 300000
-        },
-        {
           "name": "log-redaction-selftest",
           "kind": "gate",
           "argv": [
@@ -619,44 +424,6 @@
           "parse": "node-test",
           "minCases": 17,
           "$note": "负例在临时副本上跑，绝不改动已冻结清单。首次实现即抓出一个假阳性：按引用比较对象让自校验把自己刚写的分片判成不匹配。2026-09-28 数组分片那批用例又抓到一个更严重的：重建断言只比对计划载荷、没比对磁盘上的片，等于对手工改过的分片全盲；现在从磁盘重组，且计划不再产出的同名孤儿片必须报错。同批还查明 `pnpm native:digest --check` 展开成 `--write --check`，也就是一直在写不在查——CLI 现在拒绝同时给两个模式。",
-          "timeoutMs": 300000
-        },
-        {
-          "name": "task-status-unit",
-          "kind": "test",
-          "argv": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "scripts/native/task-status.test.mjs"
-          ],
-          "parse": "node-test",
-          "minCases": 18,
-          "$note": "F3 的修法（Q7）进门禁：§进度总表、docs/native/task-status.json、feature-matrix.json 的派生列三方互查，18 条里 12 条是反例。关键一条是 D12——规范源读不到必须报错，不得退化成「当作没变化」；实测形状：删掉 carrier 后 check() 报 `task-status carrier unreadable`，写成空数组时报「refusing to treat an empty carrier」。派生列禁止手改（final_state 这一列已删），--freeze 在镜像输入互相矛盾时拒绝写出（把 side_phases 的 Phase 6 摘掉就会撞上）。",
-          "timeoutMs": 300000
-        },
-        {
-          "name": "watcher-discipline-src",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/watcher-discipline.mjs"
-          ],
-          "$note": "P3-04 第七片源守卫(补记二百四十七):会话层不得回到裸 thread::spawn、move |_token| 拿而不查、Exit 块漏 supervisor.shutdown() 或把它挪到关服务之后;三个登记名各恰好一处;lazy-attach 区域必须两处 token 检查(入口 return + 循环 break)。行为面由 core runtime_lifecycle 与 registry 两代测试钉,本条守接线形状。",
-          "timeoutMs": 60000
-        },
-        {
-          "name": "watcher-discipline-unit",
-          "kind": "test",
-          "argv": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "scripts/native/watcher-discipline.test.mjs"
-          ],
-          "parse": "node-test",
-          "minCases": 11,
-          "$note": "守卫自己的 11 条:正锚(真语料必须过)+读不到语料报错不是静默+spawn 复现红且点名+注释里的 spawn 不算+|_token| 复现红+resume 入口检查删除红+lazy 循环检查删除红+shutdown 缺失红+顺序反了红+登记名重复红+run_loop 不查 token 红。",
           "timeoutMs": 300000
         }
       ]
@@ -706,33 +473,6 @@
           "minCases": 20,
           "$note": "Swift 读的是同一批 fixtures；--filter 保证这个 case 的地板只随 golden 用例变化，不被包内其他套件涨跌带走。",
           "timeoutMs": 900000
-        },
-        {
-          "name": "protocol-ts-golden",
-          "kind": "test",
-          "parse": "vitest",
-          "argv": [
-            "pnpm",
-            "vitest",
-            "run",
-            "src/test/native-host-protocol.test.ts"
-          ],
-          "minCases": 21,
-          "timeoutMs": 900000
-        },
-        {
-          "name": "protocol-ts-vocabulary",
-          "kind": "test",
-          "parse": "vitest",
-          "argv": [
-            "pnpm",
-            "vitest",
-            "run",
-            "src/test/contracts-parity.test.ts"
-          ],
-          "minCases": 7,
-          "timeoutMs": 900000,
-          "$note": "补记六十一：shared.ts 的四个字面量联合（族/状态/权限模式/内建 agent）与 Rust 生成的 envelope.constants 做集合相等。此前这条链条两处都松：没有任何门禁跑这个文件（它只在 pnpm test 里被顺带执行），而产物==Rust 那头虽硬、TS==产物那头根本不存在。两侧各有尺寸门槛正控，防产物读空变永真。补记七十一加第五条：`TaskIntentOp` ↔ `constants.taskIntents.ops` 与 9/4 分类交叉核对（metadata∪state 恰好覆盖 13 条、两侧各数一次）——ADR-037 的词汇表从此是产物事实，TS/宿主各抄一份的第三天会被这条抓到。"
         },
         {
           "name": "contracts-free-of-local-state",
@@ -877,35 +617,6 @@
           ],
           "$note": "AlreadyInUse 是一条拒绝，不是一纸击杀授权：不变量的主语是「租约拒绝的决策面」，不是「core 里不许存在进程管理」。原口径扫描 core 全部源码，在 P2 时代（core 没有进程管理）恰好等价；P3-01 切片二把宿主 subprocess.rs 的进程组终止迁入 core/runtime/subprocess.rs（杀的是 core 自己 spawn 的子进程树，与迁移前宿主侧行为逐字节相同，也从来不在本不变量的主语里），全 core 扫描因此改为点名租约决策面文件。收窄是本次评审过的编辑，不是为了让红牌变绿——两个测试夹具的正控照旧。两条正控证明拒绝路径与「never kill」这句提示都还在文件里。",
           "timeoutMs": 120000
-        },
-        {
-          "name": "legacy-client-ignores-core-exclusive-files",
-          "kind": "absent",
-          "argv": [
-            "rg",
-            "-n",
-            "--no-ignore",
-            "runtime\\.json|project-groups\\.json|task-operations\\.json",
-            "src-tauri/src"
-          ],
-          "controls": [
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "aeroric-core",
-              "src-tauri/Cargo.toml"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "core_bridge",
-              "src-tauri/src/lib.rs"
-            ]
-          ],
-          "$note": "ADR-012/013：`runtime.json` 与 `project-groups.json` 都是核心独占、可丢弃的状态——旧客户端读不到它们就必须真的不读它们，否则「删掉也不影响」这句前提会被一次 legacy 读取悄悄作废（而 `AppSettings` 是强类型 struct，把它塞进 settings.json 更会在下一次保存时被抹掉）。两条正控证明 src-tauri 确实编译进了 core 与桥接模块，rg 不是因为路径写错才返回 1。 P2-04 追加 task-operations.json：它是 spawn-once 的唯一凭据，旧客户端整表覆盖会把它抹掉。",
-          "timeoutMs": 120000
         }
       ]
     },
@@ -930,34 +641,6 @@
           "minCases": 16,
           "$note": "P2-03 的两半：41 条 parity 用例重放 `contracts/native/v1/fixtures/projects.json`（期望由旧客户端 TypeScript 亲自算出，其中 2 条是 ADR-013 声明的有意分歧，必须与客户端结果不同且带理由，否则 Rust 用例直接红）+ 15 条服务层用例：一次真实改动推进一格 revision、无效改动与被拒写入不消耗 revision、分组清单是 core 独占文件且不碰 settings.json、reorder 重复 id 去重、本地路径只做无损归一、id 由调用方给且重复 id 拒绝落盘、坏 location 看得见但不可寻址且永远可删。地板 16 = 1 + 15；parity 表另由 projects-parity-is-derived-from-client 在 TS 侧断言。",
           "timeoutMs": 900000
-        },
-        {
-          "name": "projects-parity-is-derived-from-client",
-          "kind": "test",
-          "parse": "vitest",
-          "argv": [
-            "pnpm",
-            "vitest",
-            "run",
-            "src/test/project-core-parity.test.ts"
-          ],
-          "minCases": 2,
-          "$note": "期望值不是手抄的：这条 case 用真实的 src/projectOrder.ts、projectGroups.ts、appProjectState.ts、state/app/projectMutations.ts 重放知识表里的每一条，一旦产品侧行为变了，这里是红的（而 Rust 侧同一张表的断言在 projects-core-rust）。重派生知识表需要显式环境变量，属于评审动作。",
-          "timeoutMs": 900000
-        },
-        {
-          "name": "projects-save-single-queue",
-          "kind": "test",
-          "parse": "vitest",
-          "argv": [
-            "pnpm",
-            "vitest",
-            "run",
-            "src/test/project-save-single-queue.test.ts"
-          ],
-          "minCases": 3,
-          "timeoutMs": 900000,
-          "$note": "Action 3 的第一步（用户已拍板：先让 JS 交出整表快照、再翻 commit）：projects.json 只有一个整份覆盖写点，所以全进程只能有一条落盘链。此前 appProjectState 与 projectsStore 各持一个 createProjectPersister 实例，而 AppOpsProvider 的回退 ops（rename/pin/reorder）走后者，于是 ① App 的 flushProjects() 在 store 那份写还挂着时就返回（退出会丢改动），② 两条链互相覆盖同一个文件。两条用例在双实例下实测为红、共用单例（src/projectSaveQueue.ts）后为绿。"
         },
         {
           "name": "projects-contracts-current",
@@ -1089,20 +772,6 @@
           "timeoutMs": 900000
         },
         {
-          "name": "tasks-parity-is-derived-from-client",
-          "kind": "test",
-          "parse": "vitest",
-          "argv": [
-            "pnpm",
-            "vitest",
-            "run",
-            "src/test/task-core-parity.test.ts"
-          ],
-          "minCases": 3,
-          "$note": "期望值不是手抄的：这条用真实的 src/state/app/taskStatus.ts、taskMutations.ts、taskLifecycle.ts、taskSession.ts、taskCompletion.ts、taskCleanup.ts、sessionHandoff.ts 重算每一条。产品侧行为一变这里是红的（Rust 侧同一张表在 tasks-parity-rust）。重新派生需要显式环境变量，属于评审动作。builtIn 标志由客户端自己的 isBuiltInAgent 读出后写进用例——第一版把内置 id 写成显示名 'claude-gpt-5.5'（真名是 claude_gpt55），两侧就因为一个字符串分歧过。",
-          "timeoutMs": 900000
-        },
-        {
           "name": "tasks-contracts-current",
           "kind": "gate",
           "argv": [
@@ -1163,86 +832,6 @@
       "$note": "P2-05 的宿主侧门禁。**已生效**：验收 #2 的真内核证据（`adapter-acceptance-real-kernel`）、ADR-020/021/031/032 的机械检查（含逐条负例）、两工作区 fmt 与 clippy、`pnpm typecheck`、src-tauri `--lib` 用例计数地板（接线 §12 后 2479）。**ADR-023 完全生效**：两个家族 emitters = 1，且观察通道的写半边已按 mode() 三分接上（writer 提交、deferred 经桥落盘、只读只决策），`core-observer-does-not-write-yet` 守卫随接线 §12 撤销——它防的那件事（两个写者并存）已由整表快照写退役 + 接线 §12 ④ 的可数断言接管。**ADR-022 完全生效**：21 处调用点全部离开快照车道，`adapter-invariants` 第六条规则断言生产 web 源的快照写调用点 == 0。ADR-024（分组一次性导入）**仍未生效**，按规矩挂账：分组名单仍由前端 localStorage 权威，一次性导入归 P3-01 之后的 Action 3 收尾。ADR-026 的重放半边在意图队列里（元数据重放一次、状态 op 永不重放），冲突处置的宿主侧验收待真实 REVISION_CONFLICT 出现后补证据。G18 未裁决，归 P3-02。",
       "cases": [
         {
-          "name": "adapter-invariants-unit",
-          "kind": "test",
-          "parse": "node-test",
-          "minCases": 28,
-          "timeoutMs": 300000,
-          "argv": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "scripts/native/adapter-invariants.test.mjs"
-          ],
-          "$note": "三条宿主不变量各自的负例：第二个运行身份来源回归、版本戳泄漏到别的文件/别的函数、反查释放之外出现 claim remove、helper 里不再 remove（口号化）、writer 递交扩到非 macOS、以及\"读不到就报错而不是报干净\"。另含一条防止把方法算成上一个自由函数的归属回归。"
-        },
-        {
-          "name": "adapter-invariants-src",
-          "kind": "gate",
-          "timeoutMs": 180000,
-          "argv": [
-            "node",
-            "scripts/native/adapter-invariants.mjs"
-          ],
-          "$note": "对真实 src-tauri 源码树跑同一组断言；文件数不足即失败，空语料不得算通过。规则六条：ADR-020/032（运行身份只有一个来源）、ADR-031（claim 只在一处释放）、ADR-021（写权只在 macOS 递交）、ADR-023（已移交家族恰好一行发射）、Action 4（调用方向 command → TaskService → executor → *_core，不得回头调 command wrapper，也不得在未委派前 return Ok）、接线 §12 ④（生产 web 源不得再命名整表快照写路径与它的三个 flush 包装，lib.rs 不得再注册那条整表写命令；正控要求扫描到采纳桥与退出排空两处替换物，测试文件按明示规则豁免）。Action 4 的命令名取自 command-map.json 的 660 条注册表，所以新增命令自动纳入；扫描前过一遍 codeOnly，注释里提到 TaskService 既不能让它变红也不能让它变绿。"
-        },
-        {
-          "name": "adapter-acceptance-real-kernel",
-          "kind": "test",
-          "parse": "rust",
-          "minCases": 19,
-          "timeoutMs": 900000,
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "core_adapter_tests::",
-            "--",
-            "--test-threads=1"
-          ],
-          "$note": "P2-05 验收 #2 的证据本身，因此单独成一条而不是藏在 2464 里：真 LegacyTaskExecutor + 真 PTY + 真子进程跑 fake 任务。`--test-threads=1` 是必需的——第 6 条是 `startup_wiring_…`：装进 managed state 的东西必须真被装过一次，否则接线本身从未被执行。这一组要改宿主的全局存储根（见 `platform::install_scratch_home`），并发跑会让别人在窗口里读到我的 home、或让我读到默认 settings.json。全量 `--lib` 也跑这 5 条，两者不互相替代：串行这一条给确定性证据，全量那条证明共存不破坏既有 2459 条。第 8 条 `the_wired_service_asks_the_host_about_a_run_core_never_minted`（ADR-036）是这一组里唯一驱动`install_core_services` 真正建出来的那对（`TaskService` + 宿主 `LiveRuns`）的用例：其余场景一律喂 `NoLiveRuns`，所以“接线把端口接错了”在它们那里是隐形的。它登记的是一条 generation 0 的运行——正是产品路径今天的全部。 G39 收口（P3-06，2026-09-30）：默认必选恢复——runner 为每条注入 AERORIC_HOME=<scratch>（宿主 `storage::aeroric_dir()` 单点认它），真实 `~/.aeroric` 不再被门禁触碰。",
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          }
-        },
-        {
-          "name": "src-tauri-lib-tests",
-          "kind": "test",
-          "parse": "rust",
-          "minCases": 1276,
-          "timeoutMs": 1800000,
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "--test-threads=1"
-          ],
-          "$note": "P8-05切片111:原Conda本地3测迁core、actual command新增7测,净+4,1272→1276;远端构建器仍在。 2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ 2468（ADR-036 那条）→ **2470**（补记五十一观察通道本体那两条）→ **2473**（补记六十六：意图入口的三条——写者侧谁提交、只读侧一个字节都不写、非递交平台的转发那一步落的是什么）→ **2474**（接线步骤②：`Persist::ViaHost` 的宿主桥取代宿主侧 `save_decided_records`，两条——桥按字节存下 core 的决定、只有递交写权的 context 才拿得到通往磁盘的门）→ **2477**（接线步骤②b：`launch_via_core` 入口先行，三条——解析不出项目就不寄存、执行器按名拒绝时落 failed 并收回 channel、只读实例拒绝启动且归还 channel）→ **2478**（②c `resume_via_core`：寄存**之后**被 core 的守卫拒掉时 channel 必须收回且一字节不写——与②b 那条“寄存之前就失败”正好是两种错误路径）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。**这一条改成串行（`--test-threads=1`）的理由**：并行时 `core_adapter_tests` 的 10 个场景会经由 `platform::install_scratch_home` 换掉进程全局的 `home_dir()`，任何在两次路径解析之间被换根的测试都会读到别的目录。这不是推测，是实测到的三个受害者——`app_settings::…wrapper_and_sidecar`（sidecar 写进 live `~/.aeroric`、读回时根已经换成 scratch）、`agent_scripts::…resets_codex_chat_bridge_wrappers_when_setting_is_off`，以及场景自己的状态断言；15 次并行跑红 4 次。串行 66s（并行 18s）换来的是这张安全网不再自己制造噪声。真正的修法是把数据根做成可注入的参数（Action 3），不是继续加锁。→ **2479**（接线 §12：观察者按 mode() 三分——writer 臂提交并宣布的新用例、只读臂宣布而不写的对照用例；净 +1）。→ **2476**（P3-01 切片二：subprocess.rs 连同 3 条真进程测试迁入 core 的 runtime::subprocess，宿主侧改薄 re-export；3 条＝argument_tests 1 条 + unix 真进程 2 条，搬家不是消失，core 侧 +3）。→ **2466**（P3-01 切片三：run_registry 的 8 条测试与 pty 的 2 条版本戳测试随 TaskRegistry 本体迁入 core——core 侧 +10，搬家不是消失）。→ **2467**（切片五：platform_adapter.rs 带 2 条纯函数测试入账，fs.rs 的剪贴板解析测试随体迁入 = 净 +1）。→ **2465**（P3-02 首片：agent_family_maps 的 2 条映射表测试随体迁入 core 的 agents::launch——core 侧 +3）。 G39 收口（P3-06，2026-09-30）：默认必选恢复——runner 为每条注入 AERORIC_HOME=<scratch>（宿主 `storage::aeroric_dir()` 单点认它），真实 `~/.aeroric` 不再被门禁触碰。 P7-05：notebook 业务随 core 上收，454 条既有单测（tests.rs＋import/*_tests）移入 aeroric-core（notebook --lib 442＋notebook_contract 12，进默认门禁），宿主地板 2465→2011。 → **1329**（P8-02 刀六：agent_ops 8 条纯状态单测随业务入 core operations::tests（core 刀三已有 9 条同语义），宿主薄壳化后删除；floor 2011 自 P7-06 起已过时——sync/rag/storage 545 条与 P8-02 刀二 app_settings 129 条上收 core 时漏更，本轮一次性对齐实测 1337−8=1329（无代理、--test-threads=1，2026-10-04 实测）） → **1293**（P8-03 刀一：remote 纯逻辑 8 文件上收 core，37 条内联测试随业务走，宿主补 1 条 golden capabilities 对账测试；1329−36=1293，2026-10-04 无代理实测） → **1285**（P8-03 刀三b 第一片：auth_stress_tests 8 条逐字迁 core tests/remote_headless.rs；1293−8，2026-10-05 无代理实测） → **1277**（P8-03 刀三b 二片：server/rpc/orca_rpc/注册表上收 core，host 任务校验合并 execute_task_request；1285−8=1277，2026-10-06 无代理实测） → **1222**（P8-04 刀二：analytics 23＋usage_index 21＋agent_usage 8＋usage 3 ＝ 55 条随 metrics 族迁入 core，宿主地板按实测下调；这 55 条现在跑在 core 侧 `--lib metrics` 门禁里） → **1215**（P8-04 刀三：notification.rs 的 11 条判定/记账用例随业务体上收 core（去掉 11、留 4 条宿主专属＝包工具/下载上限/helper 开关/平台探测）） → **1207**（P8-04 刀三续：`report.rs` 的 8 条渲染用例随渲染器进 core（core 侧 `tests/maintenance.rs` 同名覆盖），本文件只留 1 条通道契约用例） → **1225**（P8-05 切片三：host_client/supervisor 14 条＋placement 4 条） → **1232**（P8-05 切片六：host_dispatch 6 条） → **1213**（2026-10-08 P8-05切片十四：18条search内联用例随完整业务迁入core files::search；原fs fallback用例保留并调用同一个core实现；1231−18，不是删除覆盖）。 → **1219**（2026-10-08 P8-05切片十九：get_active_task_ids六条实际命令级mock-runtime/UDS用例；原1213全部保留）。 → **1226**（P8-05切片二十一：项目列表真实IPC边界7条；同步helper保留，External不得读取本地或修改权限，command套件实跑7/0＋1219 filtered）。 → **1234**（P8-05切片二十二：精确projectId任务列表真实IPC新8条；与二十一7条共跑15/0、1219 filtered，原同步helper及内部调用保留）。 → **1297**（2026-10-11 P8-05切片一百零二按实测重锚：1345 自切片五十四（当时实测1358）后未随迁移轮更新——P7-05/P8-02 至 P8-05 切片九十五～一百零二把 database（connections/query/grid/import_export 等）业务与测试持续上收 core，宿主侧每片只跑模块过滤 case，全量计数未被任何门禁盯住；本轮导入导出 10 条上收后 Tauri 侧 7 条命令壳测试全量保留，gate 口径（--locked --lib -- --test-threads=1、AERORIC_HOME scratch、无代理）实测 **1297/0**，floor 1345→1297 双写；含本日修复的 secrets allowlist 补录与 command_test! 大栈宏的 7 条）。 → **1294**（2026-10-11 P8-05切片一百零三按实测重锚：transfer.rs 9 条旧测试随主体迁 core `transfer_face_tests`（8 迁移＋事件通道测试改为窗口 sink 语义钉）＋新增 transfer_command_tests 5 条＋transfer.rs 内 sink 语义钉 1 条；gate 口径实测 1294/0，floor 1297→1294 双写） → **1297**（2026-10-11 P8-05切片一百零四：事件泵适配层 3 条进 lib，floor 1294→1297 双写） → **1293**（2026-10-11 P8-05切片一百零五：载荷构造与字词 pin 上收 core（sink_tests 2→1 且 core +2），Tauri lib 净 −1；实测 1293/0 双写） → **1282**（2026-10-12 P8-05切片一百零八：运行面主体上收 core `ide::run_face`（进程注册表/棘轮/清理线程/读取观察线程），run_config.rs 内部 prune 测试随迁 core；Tauri lib 实测 1282/0，floor 1293→1282 双写）;flat 1282→1272 见下) → **1272**(2026-10-12 P8-05切片一百零九/一百一十:LSP 生命周期面与会话面上收 core(`ide::lsp_face`/`ide::lsp_session`),lsp.rs 内 parse/protocol/edit/注册表测试随主体迁 core(本地重复定义全删、按旧名 re-export);gate 口径实测 **1272/0**,floor 1282→1272 双写",
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          }
-        },
-        {
-          "name": "src-tauri-cargo-fmt",
-          "kind": "gate",
-          "timeoutMs": 300000,
-          "argv": [
-            "cargo",
-            "fmt",
-            "--check",
-            "--manifest-path",
-            "src-tauri/Cargo.toml"
-          ],
-          "$note": "本轮查明：scripts/native 里此前没有任何 fmt 检查，而工作树里确实躺着四个未格式化的文件。"
-        },
-        {
           "name": "core-cargo-fmt",
           "kind": "gate",
           "timeoutMs": 300000,
@@ -1269,109 +858,6 @@
             "warnings"
           ],
           "$note": "补上 src-tauri 有、core 没有的那一半：core 此前只跑 fmt、从不跑 clippy，所以 doc_lazy_continuation、needless_borrow 一类 lint 在这里是隐形的——`cargo check` 与 `--lib` 都看不见它们。`--all-targets` 必须带，否则 16 个测试二进制不参与 lint。本机实测 exit 0；stderr 上那一串 unused-patch 警告来自 `../dbx` 与 vendor 的 [patch] 表，不改变退出码（见仓库记忆里的 stderr 陷阱）。"
-        },
-        {
-          "name": "src-tauri-clippy",
-          "kind": "gate",
-          "timeoutMs": 1800000,
-          "argv": [
-            "cargo",
-            "clippy",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--all-targets",
-            "--",
-            "-D",
-            "warnings"
-          ],
-          "$note": "首次进门禁：`--lib` 全绿的同时这里有 3 处缺安全说明的 unsafe（deny 级，cargo check 看不见）与 13 处 needless_borrow。`--all-targets` 是必须的——不带它测试代码不参与 lint。"
-        },
-        {
-          "name": "ts-typecheck",
-          "kind": "gate",
-          "timeoutMs": 900000,
-          "argv": [
-            "pnpm",
-            "typecheck"
-          ],
-          "$note": "vitest 只转译不类型检查：`expect(a).toEqual(b, msg)` 这类 TS2554 曾长期只被 tsc 看见。TS 证据必须两条一起跑，因此本 case 与 `pnpm test` 不互相替代。"
-        },
-        {
-          "name": "adapter-event-payload-contract",
-          "kind": "test",
-          "parse": "vitest",
-          "argv": [
-            "pnpm",
-            "vitest",
-            "run",
-            "src/test/native-core-adapter.test.ts"
-          ],
-          "minCases": 5,
-          "timeoutMs": 900000,
-          "$note": "P2-05 Action 5 点名的 TS 侧契约测试（此前根本不存在）。它把 useAppTauriEvents.ts 里 listen<{…}> 的**类型字面量**与 src-tauri 各处 .emit(...) 的 json! 字面量、以及 core_adapter.rs 两个载荷构造函数，三方都从真实源码里扫出来对比，一条键都不手抄。方向是 legacy ⊆ core：那 8 处发射点要被删掉，任何 legacy 带而 core 表达不了的键都会在删除的当下静默消失。首跑即抓出 failure_reason —— 客户端解构它并落进 storage.rs 的持久字段，而 core 的 TaskNotification::Status 当时装不下它，这与 ADR-023『payload 不变』直接冲突，因此端口先长出了 Option 的 failure_reason。可失败性已验证：把载荷构造函数改回不带该键，这条 case 立刻红。正控断言键集合非空，因为本文件第一版只数发射点个数，一个把键集扫成空的括号 bug 仍然全绿。"
-        },
-        {
-          "name": "adapter-intent-queue",
-          "kind": "test",
-          "parse": "vitest",
-          "argv": [
-            "pnpm",
-            "vitest",
-            "run",
-            "src/test/task-intent-queue.test.ts"
-          ],
-          "minCases": 9,
-          "timeoutMs": 900000,
-          "$note": "补记七十一：ADR-022 的意图队列（`src/taskIntentQueue.ts`）的机制用例。钉的是四件事：同项目 FIFO、权威快照经 onAdopt 交回宿主、ADR-026 的两类失败（元数据在 REVISION_CONFLICT 时重放恰好一次；状态 op 永不重放、非冲突错误对两类都只报不重放）、ADR-017 的调用方身份（同 operationKey 在未发出前合并载荷，落过盘后再来一发是新事实不是重试）。最后一条还把 `METADATA_TASK_INTENT_OPS` 与产物 `constants.taskIntents.metadata` 对表——TS 那份分类是镜像，不是第二权威。21 处调用点的切换全部走这一条队列；切换完成之前旧快照队列仍在，两者不共存于同一次落盘。"
-        },
-        {
-          "name": "core-adapter-never-relocates-data-dir",
-          "kind": "absent",
-          "argv": [
-            "rg",
-            "-n",
-            "--no-ignore",
-            "resolve_data_dir|DataDir::",
-            "src-tauri/src/core_adapter.rs"
-          ],
-          "controls": [
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "CoreGateway",
-              "src-tauri/src/core_adapter.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "install_core_services",
-              "src-tauri/src/lib.rs"
-            ]
-          ],
-          "$note": "ADR-027 决策 3：拿不到租约时**不得**退到临时目录——两份都看起来健康的数据集是分叉里最接近静默丢数据的一种。宿主唯一的那条退路是 `storage::resolve_data_dir`（以及它返回的 `DataDir`），所以它一旦出现在 adapter 里就是违规。两条正控：一条证明扫描真读到了 core_adapter.rs（不是路径写错才返回 1），一条证明接线真的在 lib.rs 里（否则这个文件可以整体消失而守卫仍绿）。行为侧的等价断言在 `a_refused_lease_is_reported_and_names_the_directory_it_will_not_write`：只读实例记录里的 fallback 必须逐字节等于那个真实目录，不是子串包含——包含关系在'悄悄搬走又把旧名字写进消息'时仍会通过。",
-          "timeoutMs": 120000
-        },
-        {
-          "name": "event-pump-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "host_event_pump::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 3,
-          "$note": "P8-05 slice104: the desktop event pump adapter - v1-topic-to-legacy-channel translation pinned against the authority table (dots are illegal Tauri window event names), plain-name passthrough, dotted-unknown drop; scripted UDS loop proves snapshot-cursor bootstrap, batch delivery and cursor advance over a real HostClient.",
-          "timeoutMs": 900000
         }
       ]
     },
@@ -1396,6 +882,25 @@
           "minCases": 5,
           "$note": "P3-01 的运行时生命周期验收,计划原文三条判据逐一落地:①启动两次不重复 watcher(监督者按名去重,同名的第二次启动被拒且唯一循环继续工作);②shutdown 两次安全且监督者可重用(第二次是安静 no-op、重启语义成立);③退出监控不能清新 generation(旧代 retire 幂等——重复退出报告 retire 不到任何东西;remove_pty_handles 只带走旧代,新生代句柄完好;结算守卫在另一代在飞时零消费)。另两条是机制钉子:有界拆除(无视 token 的 watcher 在宽限内被 detach 而不是把退出挂死——PTY reader 阻塞在 read 上的形状)与结算幂等(重复结算零消费、各任务标记独立成账)。句柄错配拒绝路径不走测试:remove_pty_handles_if_current 按 ADR-020 合同是 debug_assert!(实现 bug),测试构建走到即 panic。宿主 spawn 站点全部经 WatcherSupervisor(切片四接管),所以在这里钉住=钉住宿主行为。地板 5 = 5 条测试。",
           "timeoutMs": 300000
+        },
+        {
+          "name": "runtime-kill-target-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "--",
+            "runtime::kill"
+          ],
+          "minCases": 5,
+          "$note": "AP7 复核发现并根修的真实缺陷的机器判据:退出序杀进程不得触碰 `child_handles`(退出观察线程跨 `child.lock().wait()` 整程持有它,实测 `serve` SIGTERM 2/12 挂死 30s+、12/12 留孤儿),改为按 spawn 时捕获的 pid/pgid 发信号。5 条:setsid 组长号成对成立;**POSIX 广播形状(-1/0/1/负数)在构造期即被拒**——`kill(-1, SIGKILL)` 会注销用户图形会话、`kill(0, …)` 会连带宿主,这是 2026-10-13 本机真实事故的形状,必须由代码而不是调用方纪律挡住;with_group 两侧同门;已消失目标为空操作;真 setsid 子进程组被 SIGKILL 回收。"
         }
       ]
     },
@@ -1531,127 +1036,6 @@
           "timeoutMs": 600000
         },
         {
-          "name": "host-exit-settlement-goes-through-core",
-          "kind": "absent",
-          "argv": [
-            "rg",
-            "-n",
-            "--no-ignore",
-            "had_agent_session|if exit_ok \\|\\||status == \"failed\"",
-            "src-tauri/src/pty.rs"
-          ],
-          "controls": [
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "aeroric_core::terminal::settle_exit\\(&aeroric_core::terminal::ExitFacts",
-              "src-tauri/src/pty.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "ExitDecision::NoStatus",
-              "src-tauri/src/pty.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "reason\\.host_sentence\\(\\)",
-              "src-tauri/src/pty.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "remove_pty_handles_if_current\\(run, child_handle\\)",
-              "src-tauri/src/pty.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "SessionEvidence::PlaceholderOnly",
-              "src-tauri/src/pty.rs"
-            ]
-          ],
-          "$note": "P3-03 切片三的宿主侧守卫:`finalize_task_exit` 不得自己判状态。禁形 = 旧的 `had_agent_session` 判定、`if exit_ok ||` 那句、以及 `status == \"failed\"` 这种字符串回读;正控 = 它必须调 core 的 `settle_exit`、必须区分 `ExitDecision::NoStatus`(取消/手动完成不发状态)、reason 必须经 `host_sentence()`(文案留在宿主,合并到 core 那句是文案改动、待 grill 轮)、必须仍在句柄守卫上调 `remove_pty_handles_if_current`、且 Claude 的占位条目必须报成 `PlaceholderOnly`(家族事实的证据来源,不是判定)。口径限制已被补上:本 case 仍只断形状,计数由同模块的 terminal-invariants-src / terminal-invariants-unit 两条 case 承担(补记一百零六)。"
-        },
-        {
-          "name": "host-reader-publishes-raw-bytes-before-decode",
-          "kind": "absent",
-          "argv": [
-            "rg",
-            "-n",
-            "--no-ignore",
-            "let mut leftover|valid_up_to|from_utf8\\(&combined",
-            "src-tauri/src/pty.rs"
-          ],
-          "controls": [
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "terminal\\.publish\\(&stream_identity",
-              "src-tauri/src/pty.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "projection\\.push\\(chunk\\)",
-              "src-tauri/src/pty.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "aeroric_core::terminal::Utf8Projection",
-              "src-tauri/src/pty.rs"
-            ]
-          ],
-          "$note": "Action 1 那句\"reader 首先发布原始 bytes,legacy Tauri sink 才增量解码\"在宿主侧的可执行形状。`spawn_pty_reader` 要 Wry 运行时才能真跑,所以宿主这条管道靠源码守卫钉:旧的急解码形状(`let mut leftover` / `valid_up_to` / `from_utf8(&combined`)不得复现,新形状(publish 先于 push、投影原件来自 core)必须在。三条正控证明 rg 读得到这个文件、且模式确实匹配的是产品代码而不是注释。局限如实记录:守卫证明的是\"调用了这两件原件\",顺序正确性由 core 侧用例 + 这条守卫共同围堵,完整端到端仍要 P5-01 的真终端会话。",
-          "timeoutMs": 120000
-        },
-        {
-          "name": "host-resize-rules-come-from-core",
-          "kind": "absent",
-          "argv": [
-            "rg",
-            "-n",
-            "--no-ignore",
-            "cols < 2 \\|\\| rows < 2",
-            "src-tauri/src/pty.rs"
-          ],
-          "controls": [
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "aeroric_core::terminal::decide_resize\\(",
-              "src-tauri/src/pty.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "aeroric_core::terminal::ViewFocus::Foreground",
-              "src-tauri/src/pty.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "stage_pending_size\\(task_id",
-              "src-tauri/src/pty.rs"
-            ]
-          ],
-          "$note": "P3-03 切片四B 的宿主侧守卫:resize 的畸形尺寸裁决已上收 core 的 `decide_resize` 一张表,宿主只保留信箱事实(有没有活跃 master、暂存到下一次运行)。禁形 = 内联的 `cols < 2 || rows < 2` 判定;正控 = 裁决必须经 core、焦点显式按前台(旧命令层没有视图焦点概念)、`stage_pending_size` 信箱仍在宿主(窗口/进程事实,core 不猜)。局限如实记录:守卫断的是『形状』;『20 次 resize 最终尺寸正确、被拒形状一次都没打到 PTY』由 terminal-lease-rust 的真 PTY 用例承担。",
-          "timeoutMs": 120000
-        },
-        {
           "name": "terminal-history-rust",
           "kind": "test",
           "parse": "rust",
@@ -1669,123 +1053,6 @@
           ],
           "minCases": 7,
           "$note": "P3-03 切片四C:磁盘终端历史的压实策略上收 core(terminal/history.rs),与 stream.rs 的内存 replay 窗口同归 terminal/ 一个 owner——『有界 replay 与 history compaction 共享一个 owner』(Action 4)的落地形状。7 条单元:①上限内原样;②切点永不落进多字节序列中间;③str 版 is_char_boundary 算法原样重放当 oracle,合法 UTF-8 上与字节版逐字节相等(迁移前宿主两份近重复实现由此钉住);④读侧 take(4) 跳过语义原样重放当 oracle,含全续字节垃圾的上限封顶;⑤高水位表(恰好压线=追加、+1=压实);⑥压实回 max 而非 max+slack;⑦目录巡检与追加路径是同一张表(incoming=0)。文件 I/O 与目录遍历仍在宿主 storage.rs(适配层),宿主 4 条既有 terminal_history 测试原样跑通=行为不变。",
-          "timeoutMs": 300000
-        },
-        {
-          "name": "host-history-policy-comes-from-core",
-          "kind": "absent",
-          "argv": [
-            "rg",
-            "-n",
-            "--no-ignore",
-            "fn utf8_tail_bytes|is_char_boundary",
-            "src-tauri/src/storage.rs"
-          ],
-          "controls": [
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "aeroric_core::terminal::history::utf8_tail_bytes",
-              "src-tauri/src/storage.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "skip_leading_utf8_continuations",
-              "src-tauri/src/storage.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "HistoryRetention",
-              "src-tauri/src/storage.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "needs_compaction",
-              "src-tauri/src/storage.rs"
-            ]
-          ],
-          "$note": "P3-03 切片四C 的宿主侧守卫:历史压实的策略(尾切、续字节跳过、高水位判定)只有 core 一份实现。禁形 = 宿主里重新出现本地的 `fn utf8_tail_bytes` 或任何内联的字符边界判定(`is_char_boundary`——注释里也不许,判定本体只许在 core);正控 = 三个调用点(目录巡检、str 委托、追加压实)与读侧跳过都必须经 core 的原件,`needs_compaction` 证明判定走的是同一张表。宿主的文件 I/O、原子重写与权限收紧不属于策略,留在原地。",
-          "timeoutMs": 120000
-        },
-        {
-          "name": "single-pty-activation-mechanics",
-          "kind": "absent",
-          "argv": [
-            "rg",
-            "-n",
-            "--no-ignore",
-            "\\.spawn_command\\(|\\.try_clone_reader\\(|\\.take_writer\\(",
-            "src-tauri/src"
-          ],
-          "controls": [
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "activate_pty_session\\(",
-              "src-tauri/src/pty.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "activate_pty_session\\(",
-              "src-tauri/src/ssh.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "activate_pty_session\\(",
-              "src-tauri/src/wsl.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "spawn_command",
-              "core/crates/aeroric-core/src/terminal/executor.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "register_pty_session",
-              "core/crates/aeroric-core/src/runtime/registry.rs"
-            ]
-          ],
-          "$note": "P3-03 切片四D 的守卫:Action 6『不保留两份同 target 的启动 body』的可数形状——spawn→丢 slave→reader→writer→注册这五步装配机械此前在宿主有七份逐字相同拷贝(local launch/local resume/open-shell/SSH 任务/SSH 终端/WSL 任务/WSL shell),现在唯一一份在 core 的 terminal::executor::activate_pty_session,注册本体是 TaskRegistry::register_pty_session。禁形 = 宿主任何地方再出现这三个机械调用;正控 = 三个宿主文件都在调 core 装配体,且 core 两侧原件真实在位。命令构造(build_*_cmd/pty_command_from_spec/build_ssh_command)与 SSH/WSL 分支编排不属于机械,留在原处(P7 才换分支本体)。",
-          "timeoutMs": 120000
-        },
-        {
-          "name": "terminal-invariants-src",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/terminal-invariants.mjs"
-          ],
-          "$note": "P3-03 收尾轮的计数守卫(补记一百零六):`settle_exit` 在宿主必须**恰好被调用一次**,且那唯一一处必须在 `finalize_task_exit` 内;core 必须**恰好定义一次** `pub fn settle_exit`。为什么单独一条:`host-exit-settlement-goes-through-core` 是 absent 形状,只能断形状在/旧形状没了,断不了次数(它自己的 $note 就把这条列为口径限制并记在收尾)。命中前先过 codeOnly()(注释与字符串里的 settle_exit( 不算),语料读不到直接报错——D12 那条纪律:「没读到」不等于「没有」。变异实证:对 /tmp 假仓(宿主两处调用)判出 found 2 并点名两处。",
-          "timeoutMs": 180000
-        },
-        {
-          "name": "terminal-invariants-unit",
-          "kind": "test",
-          "argv": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "scripts/native/terminal-invariants.test.mjs"
-          ],
-          "parse": "node-test",
-          "minCases": 10,
-          "$note": "计数守卫自己的 10 条反例:一处合格 / 两处必红且点名 / 零处必红(宿主自己又决定了) / 注释里的提及不算命中(正控:不剥注释就会假绿) / 字符串里的提及同样不算 / 唯一调用挪出 finalize_task_exit 必红 / core 定义缺失必红 / core 两处定义必红 / 宿主语料为空必红 / core 文件读不到必红。",
           "timeoutMs": 300000
         }
       ]
@@ -1807,8 +1074,8 @@
             "aeroric-host",
             "--lib"
           ],
-          "minCases": 26,
-          "$note": "aeroric-host 的单元面：codec 流边界(3)+uds 路径上限/探活/残留(3)+auth token/UID/握手判据(5)+dispatcher gate/装配(4)+subscriptions(2)+terminal.get_active_task_ids 活跃任务过滤(1)。floor 从 2026-09-30 现测起算（补记二百七十八）并随 P8-05 切片十一抬到 26。"
+          "minCases": 34,
+          "$note": "aeroric-host 的单元面：codec 流边界(3)+uds 路径上限/探活/残留(3)+auth token/UID/握手判据(5)+dispatcher gate/装配(4)+subscriptions(2)+terminal.get_active_task_ids 活跃任务过滤(1)。floor 从 2026-09-30 现测起算（补记二百七十八）并随 P8-05 切片十一抬到 26。 AP8 追加 evicted 分类(floor 26→34,与实测同步):`evicted` 是三个 replay reason 里**唯一有实现却零测试**的那个(AP8 勘察点名)。它必须与 `notStarted` 分开:前者→客户端走 session.history,后者→挂起等活流,混同则重连后一片空白却不知道该等还是该死心(ADR-038 决策 2 的全部意义)。区分依据是『任务记录还在但该代不在册』,所以用例真的落盘了项目+任务记录——否则落到的还是 unknownStream,用例测不到它声称的东西(已实测:关掉 evicted 分支该用例当场红)。"
         },
         {
           "name": "ipc-auth-rust",
@@ -2064,6 +1331,21 @@
           ],
           "$note": "G09（P4-02 收口当场建）：AeroricClient 的 socket I/O 唯一出口＝HostConnection.swift（SocketTransport 阻塞泵与 Darwin.connect 在 :56/:165）。其余文件（RequestRegistry/EventReducer/HostSupervisor/JSONLCodec/ReconnectPolicy/PackageSmoke/State Store）不得直接开套接字——禁形限定到真套接字调用（Darwin.socket/connect、socket(、CFSocket、NWConnection），actor 方法调用如 connection.connect() 不属禁形。新增传输面只能从 HostConnection 走，否则请求路由、重连相位与事件泵会各自造一套连接语义。三条正控：①唯一出口真实在（否则守卫恒真）；②③被扫模块真实内容（排除路径写错致 rg 读空）。",
           "timeoutMs": 120000
+        },
+        {
+          "name": "swift-client-schema-mirror",
+          "kind": "test",
+          "parse": "swift",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "RuntimeSchemaVersionTests"
+          ],
+          "minCases": 2,
+          "$note": "2026-10-13 用户实测缺陷的回归钉子:原生客户端对 `runtime.json` 的 schemaVersion 上限是一个**与 core 平行、会静默漂移的第二真相源**——core 在 P2-04 就到了 2(加 `contentFingerprints`,是真 schema 变更),而客户端一直拒绝 >1,于是**每个真实数据目录**都被它自己的宿主判成『requires a newer client (supported: 1)』,界面显示**协议不兼容**、任务全跑不了。两条:①从 core 的 Rust 源码解析 `RUNTIME_SCHEMA_VERSION` 并断言与 Swift 的 `RuntimeSchemaVersion.supported` 相等(改 buggy 值 1 会当场红——已实测);②更高的版本仍必须被拒、且 runtime.json 一字不动(否则『把数字调大直到界面变绿』会变成看起来成立的修法)。"
         }
       ]
     },
@@ -2081,8 +1363,8 @@
             "AeroricUIUnitTests"
           ],
           "parse": "swift",
-          "minCases": 14,
-          "$note": "P4-03 AeroricUI 门禁地板：ThemePolicyTests 10（tokens 数字对齐 React tokens.ts×4＋语义色动态性×2＋SurfaceChoice reduce-transparency 策略×2＋reduce-motion×1＋spacing 步数×1）＋PackageSmokeTests 4（P4-02 遗留依赖方向冒烟）＝14。--filter 只随该 filter 变化。",
+          "minCases": 411,
+          "$note": "G4 v2批准的Visual惰性生命周期新增2例；2026-10-18全target实跑411/0（含原409），不代表真窗口或G4验收。Stage 01 AeroricUI 全 target 门禁：既有 350 例＋NativeSkillReviewTests 59 例＝409（2026-10-18 独立审阅修正后全 target 实跑，0 failures / 0 skipped；此前共享接入前当前源码为408，含本次新文件，不冒充实施前无变更基线；单测及 hosting 不代表真窗口 UI 验收）。argv/filter 保持 AeroricUIUnitTests，与 shell-unit 同一执行集；不是仅 ThemePolicyTests 的早期小计。",
           "timeoutMs": 900000
         },
         {
@@ -2173,8 +1455,8 @@
             "AeroricUIUnitTests"
           ],
           "parse": "swift",
-          "minCases": 36,
-          "$note": "P4-04/P5-01 AeroricUI 门禁地板：ThemePolicyTests 10＋PackageSmokeTests 4＋ShellPolicyTests 10（P4-03/04）＋TerminalCoordinatorTests 12（P5-01：cursor 记账/输入策略/租约闸门/100 次 attach-detach/OSC52 与链接策略）＝36。与 native-design-unit 同 filter 同 argv，各自地板独立。",
+          "minCases": 411,
+          "$note": "G4 v2批准的Visual惰性生命周期新增2例；2026-10-18全target实跑411/0（含原409），不代表真窗口或G4验收。Stage 01 AeroricUI 全 target 门禁：既有 350 例＋NativeSkillReviewTests 59 例＝409（2026-10-18 独立审阅修正后全 target 实跑，0 failures / 0 skipped；此前共享接入前当前源码为408，含本次新文件，不冒充实施前无变更基线；单测及 hosting 不代表真窗口 UI 验收）。与 native-design-unit 同 filter 同 argv，各自地板独立，不缩 filter、不降低 floor。保留既有外壳策略/终端/导航重排回归，早期 36 例不是当前执行总数。",
           "timeoutMs": 900000
         },
         {
@@ -2519,16 +1801,6 @@
           "minCases": 13
         },
         {
-          "name": "search-single-owner",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/search-invariants.mjs"
-          ],
-          "timeoutMs": 900000,
-          "$note": "G43：只一个core rg parser，八条Tauri command均dispatch，禁止复活两条假等价replace alias。"
-        },
-        {
           "name": "file-write-authority-host-rust",
           "kind": "test",
           "argv": [
@@ -2546,16 +1818,6 @@
           "minCases": 14,
           "timeoutMs": 900000,
           "$note": "Slice32: eight real UDS mutations, missing/current-lost lease, pre-root refusal, read/query and writer controls; injected scratch trash and no formatter process."
-        },
-        {
-          "name": "file-write-authority-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/file-write-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice32: shared current-writer admission before project/root IO, conditional history restore and unchanged default core trash. Slice34: one core project-copy owner; symlink-aware directory validation before mkdir and any-existing-leaf refusal before copy. Slice35: size-before-resolved-leaf write and exclusive create, preserving current-writer admission. Slice36: one pure explicit-target decoder before writer/root and post-root canonical Local equality at all9 handlers; no remote fallback. Slice37: existing core addressability before location resolution, both stored-record scans before path, and typed errors across the resolver port."
         },
         {
           "name": "search-write-authority-host-rust",
@@ -2729,38 +1991,6 @@
           "$note": "Slice44: distinct seven-key legacy/six-key native wire, empty/error no-process core boundaries; synthetic roots only."
         },
         {
-          "name": "legacy-directory-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_directory_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 6,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice44: same six actual-command compatibility fixtures before/after exact extraction; each env-cleared child uses scratch fake git and one-case guard."
-        },
-        {
-          "name": "legacy-directory-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-directory-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice44: sole legacy directory model/business, original guarded worker, git semantics and distinct native wire; not External placement or alias equivalence."
-        },
-        {
           "name": "legacy-path-core-rust",
           "kind": "test",
           "argv": [
@@ -2778,38 +2008,6 @@
           "minCases": 3,
           "timeoutMs": 900000,
           "$note": "Slice45: shared exact legacy absolute-target guard versus native directory/relative policy; synthetic roots, original errors and no initialization."
-        },
-        {
-          "name": "legacy-path-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_path_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 7,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice45: unchanged old/new helper and real text/image/directory/write/copy compatibility; env-cleared exact scratch child, mode/order/odd-root/leaf/error/snapshot assertions."
-        },
-        {
-          "name": "legacy-path-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-path-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice45: one legacy guard, exact branch/error order and six caller mode/worker positions; native policies unchanged; tested with positive and negative source controls."
         },
         {
           "name": "legacy-read-core-rust",
@@ -2831,38 +2029,6 @@
           "$note": "Slice46: shared exact legacy text/image DTO, MIME catalog, raw IO and metadata limits contrasted with unchanged native read/preview; scratch-only no-write checks."
         },
         {
-          "name": "legacy-read-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_read_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 7,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice46: seven unchanged before/after actual text/image queries; exact2/10MiB, errors/order, all MIME/Base64/wire and canonical/unresolved-leaf compatibility. Each env-cleared scratch child executes exactly one real test, bounded and reaped."
-        },
-        {
-          "name": "legacy-read-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-read-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice46: one old query owner, unchanged pre-worker guard/flags and native distinctions;6 positive/51 negative source controls. No large-response RPC or External completion claim."
-        },
-        {
           "name": "legacy-entry-core-rust",
           "kind": "test",
           "argv": [
@@ -2880,38 +2046,6 @@
           "minCases": 4,
           "timeoutMs": 900000,
           "$note": "Slice47: exact legacy name-byte/platform/new-path policy, exclusive-create IO, collision/raw-error/native differences and no repair; scratch only. Windows-only assertions not executed on macOS."
-        },
-        {
-          "name": "legacy-entry-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_entry_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 8,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice47: eight unchanged old/new actual-command/helper cases; env-cleared exact scratch child, names/relative-file roots/error order/leaf links/modes and retained rename-trim/copy-raw behavior. No real Trash/agents/shell."
-        },
-        {
-          "name": "legacy-entry-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-entry-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice47: one name/new-path/Windows-table/exclusive-create owner; unchanged worker/guard/join and rename/copy/native boundaries,5 positive/60 negative source controls; not host placement."
         },
         {
           "name": "legacy-modify-core-rust",
@@ -2933,38 +2067,6 @@
           "$note": "Slice48: exact existing-entry guards; direct delete-guard and scratch actual-rename only, never real OS Trash; frozen baseline and native distinction. Slice51: rename worker business now shares the same legacy owner; actual delete/Trash, guard4 and frozen command7 remain unchanged. Direct core rename has its own four-case suite."
         },
         {
-          "name": "legacy-modify-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_modify_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 7,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice48: exact existing-entry guards; direct delete-guard and scratch actual-rename only, never real OS Trash; frozen baseline and native distinction. Slice51: rename worker business now shares the same legacy owner; actual delete/Trash, guard4 and frozen command7 remain unchanged. Direct core rename has its own four-case suite."
-        },
-        {
-          "name": "legacy-modify-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-modify-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice48: exact existing-entry guards; direct delete-guard and scratch actual-rename only, never real OS Trash; frozen baseline and native distinction. Slice51: rename worker business now shares the same legacy owner; actual delete/Trash, guard4 and frozen command7 remain unchanged. Direct core rename has its own four-case suite."
-        },
-        {
           "name": "legacy-copy-core-rust",
           "kind": "test",
           "argv": [
@@ -2981,38 +2083,6 @@
           "parse": "rust",
           "minCases": 8,
           "timeoutMs": 900000,
-          "$note": "Slice49: exact recursive/self-copy helpers and unchanged actual clipboard-copy caller; all effects/referents scratch-only, no OS clipboard/Trash; native admission stays distinct. Slice50: target-kind/ordered loop now also shared; original worker/empty/strict admission and six actual cases unchanged. Core suite measured8; command6/full1337 floors unchanged."
-        },
-        {
-          "name": "legacy-copy-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_copy_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 6,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice49: exact recursive/self-copy helpers and unchanged actual clipboard-copy caller; all effects/referents scratch-only, no OS clipboard/Trash; native admission stays distinct. Slice50: target-kind/ordered loop now also shared; original worker/empty/strict admission and six actual cases unchanged. Core suite measured8; command6/full1337 floors unchanged."
-        },
-        {
-          "name": "legacy-copy-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-copy-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
           "$note": "Slice49: exact recursive/self-copy helpers and unchanged actual clipboard-copy caller; all effects/referents scratch-only, no OS clipboard/Trash; native admission stays distinct. Slice50: target-kind/ordered loop now also shared; original worker/empty/strict admission and six actual cases unchanged. Core suite measured8; command6/full1337 floors unchanged."
         },
         {
@@ -3054,38 +2124,6 @@
           "$note": "Slice52: exact legacy hex-layout history, ID/error order, metadata/list/prune, snapshot/restore skips and scratch-contained links; native layout stays distinct."
         },
         {
-          "name": "legacy-history-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "local_history::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 12,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice52: frozen8 actual commands/save-consumer cases plus unchanged4 history tests. Env-cleared exact scratch children; no real history, formatter, Trash or home."
-        },
-        {
-          "name": "legacy-history-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-history-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice52:21 exact legacy bodies,2 unchanged workers plus the slice54-delegated save command, equal shared DTO/layout/clock/root and distinct native/host/notebook policy. Source probes complement runtime cases; no extra External method is credited."
-        },
-        {
           "name": "formatter-policy-core-rust",
           "kind": "test",
           "argv": [
@@ -3105,38 +2143,6 @@
           "$note": "Slice53: exact shared DTO/selector/read-only validator and native pre-spawn callback order. Scratch-only referents; no successful formatter execution or general rollback claim."
         },
         {
-          "name": "formatter-policy-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "formatter::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 11,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice53: frozen8 old-behavior cases plus unchanged3 selector tests; actual command pre-spawn refusals, legacy history order/skips/failures and scratch env-cleared exact children. No real formatter/login-shell/Trash."
-        },
-        {
-          "name": "formatter-policy-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/formatter-policy-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice53: exact shared DTO/helper and actual/native/host worker source, thin bindings, frozen old3/actual8/direct5 and isolation. Source controls complement runtime tests; no new External capability."
-        },
-        {
           "name": "legacy-write-core-rust",
           "kind": "test",
           "argv": [
@@ -3154,38 +2160,6 @@
           "minCases": 5,
           "timeoutMs": 900000,
           "$note": "Slice54: direct legacy write composition cases — guard refusals, snapshot-before-write, content vocabulary, snapshot/write failure retention. Scratch-only referents; no formatter/Trash/HOME."
-        },
-        {
-          "name": "legacy-write-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_write_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 5,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice54: frozen5 actual command cases in env-cleared exact scratch children; refusals before history/write, snapshot-before-write and failure retention. No formatter/Trash/HOME access."
-        },
-        {
-          "name": "legacy-write-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-write-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice54: one core write composition, thin desktop command, unchanged mobile RPC/native writer/registration and frozen actual5/direct5; 5 positive/11 negative source probes."
         }
       ]
     },
@@ -3244,38 +2218,6 @@
           "minCases": 5,
           "timeoutMs": 900000,
           "$note": "Slice53: exact shared DTO/selector/read-only validator and native pre-spawn callback order. Scratch-only referents; no successful formatter execution or general rollback claim."
-        },
-        {
-          "name": "formatter-policy-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "formatter::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 11,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice53: frozen8 old-behavior cases plus unchanged3 selector tests; actual command pre-spawn refusals, legacy history order/skips/failures and scratch env-cleared exact children. No real formatter/login-shell/Trash."
-        },
-        {
-          "name": "formatter-policy-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/formatter-policy-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice53: exact shared DTO/helper and actual/native/host worker source, thin bindings, frozen old3/actual8/direct5 and isolation. Source controls complement runtime tests; no new External capability."
         }
       ]
     },
@@ -3659,28 +2601,6 @@
           "$note": "P8-05 slice102: actual CLI subprocesses attach to a memory-secrets host; SQL/CSV/JSON/database-export roundtrip checks rows and file bytes, readonly refusal and malformed/unsupported methods cannot initialize DBX. Never spawn production serve."
         },
         {
-          "name": "database-import-export-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "database::import_export_command_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 7,
-          "timeoutMs": 1800000,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "$note": "P8-05 slice102: ten actual desktop adapters with ScriptedHost and no local DbxState; exact wire, host refusal/disconnect and malformed typed/unit replies cannot fall back. Embedded preview and UPDATE refusal need no local state or credentials."
-        },
-        {
           "name": "database-dbx-core-rust",
           "kind": "test",
           "argv": [
@@ -3849,28 +2769,6 @@
           "$note": "P8-05 slice95: real CLI subprocesses call all five authenticated host services and explicit invalid/missing/writer refusals. Library host injected with memory secrets; never spawn production serve for credential tests."
         },
         {
-          "name": "database-dbx-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "database::connection_command_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 5,
-          "timeoutMs": 1800000,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "$note": "P8-05 slice95: real desktop command adapters with authenticated ScriptedHost; five exact payloads, refusal/disconnect/malformed-list no-fallback, empty Embedded control. No local DbxState installed in External tests, no OS secret-store operations."
-        },
-        {
           "name": "database-transfer-core-rust",
           "kind": "test",
           "argv": [
@@ -3910,25 +2808,6 @@
           "parse": "rust",
           "minCases": 10,
           "$note": "P8-05 slice103: real authenticated UDS over scratch SQLite - sqlite-to-sqlite transfer moving rows with dbx.transfer_progress terminal events, pre-cancelled transfer reporting cancelled without copying, self-target and readonly-target refusals before effects, pure diff/plan faces on a read-only host, real backup round trip, data compare from two scratch connections, legacy db_read_sql_file shapes.",
-          "timeoutMs": 900000
-        },
-        {
-          "name": "database-transfer-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "database::transfer_command_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 5,
-          "$note": "P8-05 slice103: ten actual command adapters through MockApp + ScriptedHost - wire preservation, refusals never fall back, Embedded pure faces and real backup through a saved connection, unknown-connection start refusal without local state.",
           "timeoutMs": 900000
         },
         {
@@ -4311,44 +3190,6 @@
           "timeoutMs": 900000
         },
         {
-          "name": "remote-lan-roundtrip-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "remote::lan_roundtrip_tests",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 7,
-          "$note": "P8-03：lan_roundtrip 集成测试（E2EE 握手/auth/审批/终端快照/live/输入/resize/events 补发/存储只读）。实测 7 条（M3 三合一合并后），minCases=7 对实测双写。",
-          "timeoutMs": 1200000
-        },
-        {
-          "name": "remote-network-exposure-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "remote::network_exposure_tests",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 9,
-          "$note": "P8-03：network_exposure 9 条（loopback 起步/配对扩宽/撤销收窄/公网端点显式选择/invite 生命周期串行/重启重连）。",
-          "timeoutMs": 1200000
-        },
-        {
           "name": "remote-ui-unit",
           "kind": "test",
           "argv": [
@@ -4363,6 +3204,22 @@
           "minCases": 5,
           "$note": "P8-03 刀五：RemoteClient wire 解析 5 用例。",
           "timeoutMs": 1200000
+        },
+        {
+          "name": "remote-companion-ios-swift",
+          "kind": "test",
+          "parse": "swift",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "ios/AeroricCompanionKit",
+            "--filter",
+            "CompanionIntegrationTests"
+          ],
+          "minCases": 5,
+          "$note": "AP8 R-AP8-6(承接 AP5 的伴随端证据):E2EE v2 握手与静态公钥指纹校验、控制帧/终端帧加解密与乱序重放拒绝、**Mac 权威执行与离线禁排**(不排队审批/终端输入)、重连按 epoch/快照恢复与过期审批拒绝、设备撤销清理、盲文/IME 载荷与自适应布局。这 5 条此前**从未进过任何门禁**——AP5 落盘时只跑了 push 与 session-controls 的 filter,所以『离线不排队』与『撤销后清理』这类安全语义只靠一次性运行记录。真机(断线/重连/推送投递)仍按 GAP-AP8-DEVICE 具名阻塞;这里钉的是协议与状态机。",
+          "timeoutMs": 300000
         }
       ]
     },
@@ -4456,16 +3313,6 @@
           "minCases": 16,
           "$note": "P8-04 刀五：PermissionPresentationTests 16 用例——ad-hoc/linker 不读成永久授权、notBundled 优先且无 Re-authorize、稳定签名仍给计划、非 macOS 平台坦白、确认门控三条否决、执行序（未确认/先 reset 后 request/不越界清服务）、unknown 不算已授权、reportOnly 无按钮、重启提示四分支、两张映射表与宿主同表、报告装配只收已授权可清项并带自己的身份、签名分类四条。不触碰真实系统状态。",
           "timeoutMs": 1200000
-        },
-        {
-          "name": "pending-update-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/pending-update-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "P8-05切片20：core唯一pending公开映射、落盘DTO不增ready字段、Tauri惰性本地读和条件维护端口；不是纯函数/真实UDS/CLI行为测试的替代品。"
         }
       ],
       "$note": "P8-04（统计/通知/清理/周报/权限/更新）：五条 case 覆盖 core 规则、metrics 族（G21 落点＋G03 watcher）、宿主 UDS 服务面、Swift 客户端与七视图状态面、权限呈现策略。平台权限的真实 TCC 读数与 tccutil 实跑**不在门禁里**（会改本机授权状态）——按 §5.4 交用户手测并记档。 P8-05切片20新增公开pending DTO所有权gate，共六条case；两组Rust地板24→26、5→7，待装查询不扩大默认CLI能力。"
@@ -4492,79 +3339,6 @@
           "timeoutMs": 900000
         },
         {
-          "name": "tauri-host-smoke",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/tauri-host-smoke.mjs"
-          ],
-          "$note": "P8-05 切片一（**跨进程**那一半，单测覆盖不到）：隔离 data-dir＋repo 外 cwd＋三方同时 `serve` → 恰好一个存活、败者以 3 退出并指名持有者、PID 全回收；doctor 报同一个 socket；未来 schema 不改文件；helper 缺失明确失败。**本 case 目前只覆盖 CLI 侧仲裁**——Tauri 侧 supervisor/helper 打包（prepare-tauri-host、host_supervisor_tests、host-owner.test.ts）尚未落地，落地后同批加进本模块。",
-          "timeoutMs": 600000
-        },
-        {
-          "name": "host-supervisor-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "host_client_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 14,
-          "$note": "P8-05 切片三：客户端与监督层 14 用例——客户端半边起**真 UDS 服务端**（脚本化）跑真连接：token 读文件/错误 token 是 Rejected 而不是 Transport/无 token 不连接/无 socket 是 Unreachable/请求与失败帧真往返（params 到达服务端）/服务端中途断开是 Transport；监督层半边端口全注入：先连后起（活宿主时一次都不 spawn）/活且兼容直接 attach/版本偏斜不被装扮成认证失败/helper 只在 bundle 与生成路径找（不搜 PATH）/关闭 spawn 时绝不自立/spawn 失败保留原文/就绪超时是 NotReady/判决真的问了探测。",
-          "timeoutMs": 1800000
-        },
-        {
-          "name": "host-placement-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "core_adapter::tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 10,
-          "$note": "P8-05 切片三：`core_adapter::tests::` 全节 10 用例（本片新增 4 条＝判决矩阵（只有『允许移交＋已有活宿主』才外置；未移交平台恒内嵌）；另 6 条是该文件既有的模式矩阵/只读拒绝/事件词表用例）＋External **不去取租约**（租约文件都不该出现、core 独立拒绝写）＋外置连不上时只读并如实报告（不回退成内嵌写者）＋无活宿主时内嵌且**不去连**（不浪费 2s 超时）。",
-          "timeoutMs": 1800000
-        },
-        {
-          "name": "prepare-tauri-host-unit",
-          "kind": "test",
-          "argv": [
-            "node",
-            "--test",
-            "scripts/native/prepare-tauri-host.test.mjs"
-          ],
-          "parse": "node-test",
-          "minCases": 7,
-          "$note": "P8-05 切片四：helper 打包脚本的**拒绝行为** 7 用例——未知三元组/未知参数被拒；**CI 下缺三元组是硬拒绝且不打『推导』字样**（Action 8 禁令的可测形态）；本地兜底用 rustc 宿主三元组并大声标明来源；Tauri 自己传的 TAURI_ENV_TARGET_TRIPLE 生效；externalBin 命名约定（含 Windows 的 .exe）；--dry-run 不落盘。",
-          "timeoutMs": 300000
-        },
-        {
-          "name": "prepare-tauri-host-dry-run",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/prepare-tauri-host.mjs",
-            "--triple=aarch64-apple-darwin",
-            "--dry-run"
-          ],
-          "$note": "P8-05 切片四：脚本在显式三元组下可运行并报出 source/target 两条路径（真构建与架构核对见 `pnpm native:prepare-tauri-host` 的手跑记录：arm64 校验通过、28 597 776 B、版本 0.1.0）。",
-          "timeoutMs": 300000
-        },
-        {
           "name": "migration-rehearsal",
           "kind": "gate",
           "argv": [
@@ -4572,59 +3346,6 @@
             "scripts/native/migration-rehearsal.mjs"
           ],
           "$note": "P8-05 Action 4：合成数据演练 16 项 check——旧客户端形状目录上启动/读得懂/启动不改任务表；字节保真（旧客户端写的 legacyLaunchFamily 与 legacyOnlyKey 原样保留）；SIGKILL 崩溃后冷启动成功且记录不少；尸体 socket 不挡重启、活宿主的第二个竞争者被拒且原宿主仍服务；数据原位读写（回退面）。**只用合成数据，不碰真实 ~/.aeroric**。"
-        },
-        {
-          "name": "host-dispatch-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "host_dispatch_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 6,
-          "$note": "P8-05 切片六：domain 转发面 7 用例——Embedded 走本地且本地恰好求值一次；External 走宿主且**本地一次都不求值**（『不回退』的机器形状）；宿主说没这个方法 ⇒ NotServed（含『协调重启』文案）；参数写错**不**被装扮成缺方法；External 无连接时拒绝而不是本地跑；判决与 decide_placement 同源（调用点与宿主的对账由 `host-coverage` 那条 case 做）。",
-          "timeoutMs": 1800000
-        },
-        {
-          "name": "host-coverage",
-          "kind": "gate",
-          "argv": [
-            "scripts/native/host-coverage.mjs",
-            "--floor=312"
-          ],
-          "$note": "P8-05切片111:Conda本地发现真进程/UDS/CLI/desktop接线,311→312棘轮;SSH孪生未注册。 P8-05切片110:299→311棘轮——ide 的 LSP 会话面 12 条本地方法真的注册上了;此前 6 条位置型经辅助函数传名注册,被脚本的调用点扫描漏掉(读数 305 是假的),现按字面量 set.register 注册后如实为 311。 P8-05切片十四：60/641棘轮（56→58 本地text/structured；→60 文件名list/search）。两个replace假alias删除，由真实legacy handler保住原有两条覆盖。远端target未实现不计入；22处可静态识别dispatch均指向已注册父方法，target能力另外由UDS用例钉拒绝。 P8-05切片21：保留ADR-002冻结的project.load_projects并补真实裸数组handler，既有project.list对象wire不变；共享core读取，禁止用改映射或错shape alias虚抬覆盖。返工后真实新增注册上已重测61/641、31处dispatch（dualwire-final.M056zV），不是首版错误改名的暂态读数。 P8-05切片22：真实project.load_project_tasks直接复用core load_tasks，非task.list别名；定向实测62/641、32处dispatch，命令新8/0及真host3/0。 Slice27: measured70/641 and40 actual dispatches after real config init/write registration; read-only lease and no-local-fallback behavior tested. Slice28: measured71/641,41 actual dispatch sites after real sequential history-delete registration; floor71. Slice29: frozen ide.read_run_configs/write_run_configs real local handlers,73/641 and43 actual dispatches. Remote targets explicitly refused, not credited as SSH/WSL coverage. Slice31 measured75/641,45 dispatches: real debug-config definition read/write, not remote DAP support. P8-05切片58：+session.read_session_message_page 真实宿主注册（read-only 分页，codex/dsh/omp/family 分支），78/641、floor78、转发点 50→51。 P8-05切片80：git.git_branch_graph 真实宿主注册（worktree-root 探测→has_head 探测→log 的 legacy 三步机制逐字），101/641、floor101、转发点 73→74、git 缺口 18→17。 P8-05切片81：git.git_stash_list＋git.git_stash_diff 一对 stash 读侧孪生上收（core 旧 stash_list 四轴不等价就地改齐：四段 format/10s/回落文案/五字段 DTO），103/641、floor103、转发点 74→76、git 缺口 17→15。 P8-05切片82：git.git_stage_files＋git.git_unstage_files 复数孪生上收（HEAD 探测回落 reset 是契约、空列表静默成功、去重先校验后去重），105/641、floor105、转发点 76→78、git 缺口 15→13。 P8-05切片83：git.git_file_diff＋git.git_show_file_diff 上收（file_diff 补 validate_git_relative_path——legacy 的 --no-index 回落是任意文件读取原语，服务端权威校验优先），107/641、floor107、转发点 78→80、git 缺口 13→11。 P8-05切片84：git.git_commit_detail 上收（三段输出解析逐字、三次调用都不查退出码是 legacy 行为、wire 是 snake_case 无 rename），108/641、floor108、转发点 80→81、git 缺口 11→10。 P8-05切片85：discard 三件套上收（trash 进废纸篓不永久删除、保护路径跳过而非报错、unborn HEAD 走 rm --cached、幸存保护目录本身是 untracked），111/641、floor111、转发点 81→84、git 缺口 10→7。 P8-05切片86：git.git_conflict_preview＋git.git_resolve_conflict 上收（core 旧 conflict_preview/resolve_conflict 形状不同且测试在用，新函数 _result/_with_resolution 后缀保留旧入口；resolve 即 stage 是 legacy 语义），113/641、floor113、转发点 84→86、git 缺口 7→5。 P8-05切片87：网络三件套上收（core 新增 run_git_network 防挂死环境、legacy 三条的 trim 不对称逐字保留、--all/prune 轴、本地 bare remote 全程端状态断言），116/641、floor116、转发点 86→89、git 缺口 5→2。 P8-05切片88：git.git_clone 上收（URL 传输助手形态拒绝、clone 目标按定义不存在故用专用校验、--branch 轴、父目录执行），117/641、floor117、转发点 89→90、git 缺口 2→1。 P8-05切片89：git.generate_commit_message 上收（agent 孵化面——codex 一律策略逐字、超时改 kill 是泄漏修复、50_000 字节截断修 legacy panic 隐患；机器可测面只有无暂存拒绝），118/641、floor118、转发点 90→91、git 缺口 1→0（git 族全量闭合）。 P8-05切片90：notebook 族命名对账——修仪器盲区（host-coverage 扫描器此前不认 service!/service_ctx! 宏调用点，P7-05/06 的 71 条 notebook 注册全部不可见）＋70 条别名入表（台账双前缀 notebook.notebook_X ↔ 宿主 notebook.X；52 条带 Swift NotebookClient 字面证据、18 条 sync/rag 面证据为宿主注册＋P7-06 同一 core 实现），188/641、floor188；notebook 缺口 73→3（attachment_save_from_path/rag_index/rag_context 待查）。 P8-05切片92：files.read_image_preview＋files.read_clipboard_file_paths 上收（CoreContext 新增 platform 端口＋宿主 HostOsServices 适配器；帧上限预检回干净错误），190/641、floor190。 P8-05切片94（database刀零）：legacy_sqlite 八条上收（业务主体 core database::legacy_sqlite verbatim ~800行；连接文件 Value 直读直写防typed round-trip丢字段；SSH endpoint 显式 UnsupportedCapability；八条Tauri命令同批转发），198/641、floor198。 P8-05切片95：database 连接 CRUD 五条上收（dbx_list_connections/dbx_save_connection/dbx_delete_connection/dbx_test_connection/dbx_connect 五方法宿主注册＋Tauri 转发壳；dbx_disconnect/backup_sqlite 留 Tauri 本地态），203/641、floor203、转发点 99→104、database 缺口 87→82。 P8-05切片96（database刀二）：SQL builders／grid 预览纯函数族 20 条上收（16 条 dbx_build_*＋preview_grid_sql＋data_grid 三 builder；core database::sql_builders re-export dbx-core 为宿主单一依赖点＋DuckDB ATTACH 本地构造 verbatim 上收；Tauri 20 条转发壳），223/641、floor223、转发点 104→124、database 缺口 82→62。 P8-05切片97（database刀三）：执行面＋生产确认回路 11 条上收（execute_query/multi、cancel、close_session、query_table_data、grid save 三条、assess 两条、respond——core database::execution verbatim＋ConfirmEventSink 注入：宿主 EventLog append、Tauri 窗口 emit、超时参数化），234/641、floor234、转发点 124→135、database 缺口 62→51。 P8-05切片98（database收尾）：schema／驱动面 7 条上收（list_databases/schemas/objects、get_columns/get_table_ddl/get_object_source、driver_manifest——core database::schema_face verbatim；include_str 清单资产随迁），241/641、floor241、转发点 135→142、database 缺口 51→44。 P8-05切片99：notebook 缺口三条清零——attachment_save_from_path 别名对账（Swift NotebookClient 字面证据）＋rag_index/rag_context 上收（core notebook::rag::face verbatim；宿主 EventLog append v1 topic notebook.rag_index_progress；Tauri 窗口双发 Embedded 原样；NativeJobGuard 并发互斥），244/641、floor244、转发点 142→144、notebook 缺口 3→0。 P8-05切片100：redis 面 18 条上收（core database::redis_face verbatim——18 命令＋适配器/归一化/补充安全闸＋8 条随迁单测；无真 redis 服务，机器可测面＝参数 decode＋连接拒绝形状，真库 e2e 仍挂 P10-01），262/641、floor262、转发点 144→162、database 缺口 44→26。 P8-05切片101：mongo 面 6 条上收（core database::mongo_face verbatim——run_cancellable 取消登记/normalize；无真 mongo 服务，机器可测面＝参数 decode＋连接拒绝形状，真库 e2e 仍挂 P10-01），268/641、floor268、转发点 162→168、database 缺口 26→20。 P8-05切片102：导入导出10个既有wire上收，含UPDATE SQL明确不支持而非虚假成功；core统一业务与双向DTO、host当前writer准入、file-only preview、Tauri延迟本地态。Scratch SQLite五格式/导入/SQL/数据库导出与CLI、actual command回归；278/641、floor278、转发点168→178、database缺口20→10。生产确认仍以host双连接证据为限，不代表External GUI事件泵已完成。 P8-05切片103：transfer／差异比较面7条＋连接生命周期2条（dbx_disconnect/backup_sqlite_database）＋legacy db_read_sql_file 1条上收（core database::transfer_face verbatim＋dbx_connections 两主体＋legacy_sqlite db_read_sql_file；进度经 TransferProgressSink 注入：宿主 EventLog append v1 topic dbx.transfer_progress、Tauri 窗口 legacy 通道——v1 topic 半边被 Tauri 事件名校验拒绝（点号非法，IllegalEventName），与切片九十九 rag 先例同实况，测试双钉）。sqlite→sqlite 真传输/预取消/自目标/只读拒绝/纯函数面/真备份/跨库比较全走 scratch SQLite 真链路。288/641、floor278→288、转发点178→188、database 缺口 10→0（database 族全量闭合）。 P8-05切片106：ide 刀一——tests 命令族本地面 2 条上收（ide.discover_tests/ide.run_tests；core ide::tests_face verbatim——DTO/发现/运行/三 parser/依赖 helpers；python 探测与 login env 注入、宿主 default_python_program；remote 孪生留 Tauri SSH 适配层），290/641、floor 288→290、转发点 188→190、ide 缺口 58→56。 P8-05切片107：ide 刀二——ide.run_diagnostics 同形上收（core ide::diagnostics_face verbatim——DTO/五剖析器/命令构建/运行主体；envs 注入同 tests_face；remote 孪生与 shell_command 留 Tauri SSH 适配层），291/641、floor 290→291、转发点 190→191、ide 缺口 56→55。 P8-05切片108：ide 刀三——运行面 3 条上收（ide.start_run_config/stop_run_config/read_run_process；core ide::run_face verbatim——RunProcessState 进程注册表/输出读取/退出观察/完成棘轮/清理线程；两处注入＝shell 启动器（宿主 sh -c／Tauri 平台 shell）与 login env；remote 孪生经 register_running_process 共享同一注册表），294/641、floor 291→294、转发点 191→194、ide 缺口 55→52。 P8-05切片109:ide 刀四——LSP 生命周期面 5 条上收(ide.lsp_server_status/open/change/close/shutdown_project;core ide::lsp_face verbatim——DTO 单一定义+文档注册表 LSP_DOCUMENTS+language_id/default_server_command/validate_document_path/local_lsp_lifecycle_context+簿记入口 lsp_open_document/lsp_change_document/lsp_close_document/lsp_shutdown_project+快照读取面 lsp_session_document_snapshots/lsp_session_open_document_snapshots;envs 注入=宿主空表/Tauri login shell env;Tauri 生命周期五命令改转发壳(close 的会话 shutdown 半边留闭包)、本地重复注册表/DTO/helper 删除、remote 孪生经 lsp_registry_* pub 访问器共享同一注册表),299/641、floor 294→299、转发点 194→199、ide 缺口 52→47。",
-          "timeoutMs": 300000
-        },
-        {
-          "name": "terminal-lease-invariants-src",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/terminal-lease-invariants.mjs"
-          ],
-          "$note": "P8-05 移交项（P3-03 Q5，用户 2026-09-27/28 确认照原样）的计数守卫：宿主只剩一条 PTY acquire/release 通道。C1 write_gate 调用恰 2 处（executor.rs input＋resize）；C2 lease.acquire/release 各恰 2 且每通道 fn 一次；C3 pty_writers 恰 1（input）/ master_for 恰 2（resize＋kill_run——killpg 是进程杀路径不是控制权写，如实记账）；C4 channel 文件内 write_all/.resize( 各恰一且都在闸内；C5 漏斗恰两条 executor.input（services.rs task.input ＋ remote_headless.rs remote task_input）与一条 executor.resize（services.rs）；C6 write_gate 只在 core 定义恰一次。legacy Tauri（src-tauri/src/pty.rs send_input/resize_pty）cutover 前不取租约是 INV-04 记账、不在语料内——本守卫量新宿主（host＋CLI）两面。语料读不到一律报错，不把『没读到』当『没有』。",
-          "timeoutMs": 180000
-        },
-        {
-          "name": "terminal-lease-invariants-unit",
-          "kind": "test",
-          "argv": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "scripts/native/terminal-lease-invariants.test.mjs"
-          ],
-          "parse": "node-test",
-          "minCases": 16,
-          "$note": "计数守卫自己的 16 条用例：真语料过/合成单通道过/二闸必红且点名/零闸必红/闸落错文件必红/闸落非通道 fn 必红/缺 acquire 必红/缺 release 必红/第二 pty_writers 必红/第三 master_for 消费者必红/executor.rs 内无闸第二 write_all 必红/第二条 executor.input 漏斗必红/core 租约未读必红/core 两处定义必红/注释与字符串提及不算调用点（正控）/CLI 语料空必红。",
-          "timeoutMs": 300000
         },
         {
           "name": "file-services-batch2-rust",
@@ -4722,70 +3443,6 @@
           "$note": "P8-05切片十五：注入scratch，pure偏好/原始键保留与整段RMW事务/只读/坏文件拒写；不调用legacy loader或agent。"
         },
         {
-          "name": "settings-preference-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/settings-preference-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "七个真实Tauri dispatch、core唯一pure DTO/normalize与core/legacy同一把settings锁；不是行为用例替代品。 DSH校验共享、Rust/React/Swift词表对齐及原生过期选择guard。 proxy两DTO/纯normalizer/字段helper同源，禁止残留generic writer或替换后回填旧代理。"
-        },
-        {
-          "name": "active-task-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "pty::active_task_ids_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 6,
-          "timeoutMs": 1800000,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "$note": "P8-05切片十九：实际Tauri命令的六条mock-runtime/真认证UDS用例；Embedded保留child表重复/过滤且忽略registry-only；External宿主结果/缺方法/断连/坏shape/无session均不得回退本地表。inert child，不启动进程或访问真实HOME。"
-        },
-        {
-          "name": "active-task-command-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/active-task-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "get_active_task_ids真实命令dispatch、无参wire、局部表读取位于惰性future，禁止以本地/空表吞External错误；不是命令级UDS测试替代品。"
-        },
-        {
-          "name": "project-list-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "storage::load_projects_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 7,
-          "timeoutMs": 1800000,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "$note": "P8-05切片21：真实项目列表IPC的7条mock-runtime/认证UDS测试；Embedded保持目录/权限/错误语义；External顺序/重复/公开字段、空结果无本地目录、坏shape/缺方法/IO/断连/无session拒绝。"
-        },
-        {
           "name": "project-list-host-rust",
           "kind": "test",
           "argv": [
@@ -4803,38 +3460,6 @@
           "minCases": 3,
           "timeoutMs": 900000,
           "$note": "P8-05切片21：真实host两条双wire只读合同，冻结project.load_projects裸数组与既有project.list对象各自断言；手写scratch项目、raw未知字段/顺序/重复/字节/模式保真、缺文件/空/坏输入和同连接恢复。"
-        },
-        {
-          "name": "project-list-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/project-list-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "P8-05切片21：唯一IPC注册路径、冻结project.load_projects裸数组、既有project.list对象wire与单一core读/错误路径、惰性本地读；同步内部helper仍保留，不冒充所有project读取已迁移。"
-        },
-        {
-          "name": "project-tasks-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "storage::load_project_tasks_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 8,
-          "timeoutMs": 1800000,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "$note": "P8-05切片22：八条真实mock-runtime/认证UDS命令测试；Embedded旧非法ID目录/权限顺序；External精确projectId、stored owner/顺序/重复/typed字段和所有拒绝分支，绝不本地IO或回退。"
         },
         {
           "name": "project-tasks-host-rust",
@@ -4856,38 +3481,6 @@
           "$note": "P8-05切片22：冻结project.load_project_tasks真实只读handler三条UDS合同；孤立项目/raw未知字段/原projectId/padded路径、缺失/坏输入/同连接恢复，27类参数/ID拒绝与字节/模式/目录不变，附无租约core读对照。"
         },
         {
-          "name": "project-tasks-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/project-tasks-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "P8-05切片22：唯一真实IPC注册与冻结名称；host单次调用原core raw reader，无registry/fingerprint/写权检查/新IO算法；同步helper正文及惰性本地执行保留。"
-        },
-        {
-          "name": "platform-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "platform::command_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 7,
-          "timeoutMs": 1800000,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "$note": "P8-05切片23：七条真实mock-runtime/认证UDS平台命令测试；Embedded本地同步求值；External通过host_dispatch获取宿主值、拒绝分支与畸形应答不回退本地。"
-        },
-        {
           "name": "platform-host-rust",
           "kind": "test",
           "argv": [
@@ -4907,38 +3500,6 @@
           "$note": "P8-05切片23：真实host平台服务三条UDS测试；platform.get_platform_runtime_info与platform.build_runnable_file_command只读无副作用、参数严格校验与非法输入拒绝。"
         },
         {
-          "name": "platform-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/platform-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "P8-05切片23：唯一真实IPC注册、core纯平台函数单源、Tauri host_dispatch转发与本地惰性求值不回退。"
-        },
-        {
-          "name": "terminal-history-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "storage::read_terminal_history_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 11,
-          "timeoutMs": 1800000,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "$note": "P8-05切片24：三条真实mock-runtime/认证UDS终端历史读取命令测试；Embedded本地读取与不存在返回空字符串；External经host_dispatch获取宿主值且拒绝分支不回退本地。 Slice28: retained read tests plus canonical/padded-name parity and seven actual delete-command regressions; measured11, no skips."
-        },
-        {
           "name": "terminal-history-host-rust",
           "kind": "test",
           "argv": [
@@ -4953,41 +3514,9 @@
             "terminal_history_services"
           ],
           "parse": "rust",
-          "minCases": 3,
+          "minCases": 5,
           "timeoutMs": 900000,
-          "$note": "P8-05切片24：真实host终端历史服务两条UDS测试；project.read_task_terminal_history不存在返回空字符串、参数非法与路径穿越严格拒绝。 Slice28: authenticated padded-ID canonical/decoy read regression; measured3, no skips."
-        },
-        {
-          "name": "terminal-history-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/terminal-history-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "P8-05切片24：唯一真实IPC注册、core尾部读取函数单源、Tauri host_dispatch转发与本地惰性求值不回退。"
-        },
-        {
-          "name": "session-query-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "session::session_query_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 3,
-          "timeoutMs": 1800000,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "$note": "P8-05切片25：三条真实mock-runtime/认证UDS会话查询命令测试；Embedded本地读取与校验；External经host_dispatch获取宿主值且拒绝分支不回退本地。"
+          "$note": "P8-05切片24：真实host终端历史服务两条UDS测试；project.read_task_terminal_history不存在返回空字符串、参数非法与路径穿越严格拒绝。 Slice28: authenticated padded-ID canonical/decoy read regression; measured3, no skips. AP8 追加两条(floor 3→5):**答复必须装得进一帧**——实测把 8 MiB 尾部整段塞进 `result` 会让 `write_frame` 超限失败、宿主直接断连(客户端只看到 'host closed the connection'),于是'小历史读得到、大历史读不到';以及受限读取必须保留**尾部**(丢开头不丢结尾,读历史的人要的是刚发生的事)。"
         },
         {
           "name": "session-query-host-rust",
@@ -5007,16 +3536,6 @@
           "minCases": 3,
           "timeoutMs": 900000,
           "$note": "P8-05切片25：真实host会话查询服务UDS测试；session.read_session_id与session.session_supports_native_resume校验与判定。 切片58：+session.read_session_message_page——codex分页/dsh明文分支/cursor续读/缺文件IoError/坏参数InvalidArgument。"
-        },
-        {
-          "name": "session-query-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/session-query-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "P8-05切片25：唯一真实IPC注册、Tauri host_dispatch转发与本地惰性求值不回退。"
         },
         {
           "name": "project-config-core-rust",
@@ -5057,38 +3576,6 @@
           "$note": "Slice26: real authenticated frozen settings.read_project_config; defaults/rich/IO/params/space-path/symlink/no-write and same-connection recovery."
         },
         {
-          "name": "project-config-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "config::project_config_command_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 13,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice26: actual IPC command with mock Runtime and authenticated ScriptedHost; Embedded control, precise wire and five strict External refusal/result paths. Slice27: retains read6 and adds mutation7 (two Embedded controls/five External behaviors); measured13, zero ignored."
-        },
-        {
-          "name": "project-config-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/project-config-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice26: one core DTO/read, retained synchronous internal callers, frozen registered RPC and lazy Tauri dispatch."
-        },
-        {
           "name": "project-config-mutations-core-rust",
           "kind": "test",
           "argv": [
@@ -5125,16 +3612,6 @@
           "minCases": 7,
           "timeoutMs": 900000,
           "$note": "Slice27: authenticated UDS init/write, complete replacement, params/IO/read-only/unauthenticated refusal, symlinks and two-client init/write race."
-        },
-        {
-          "name": "project-config-mutations-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/project-config-mutation-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice27: real frozen mutation registration, checked core writes, deferred compatibility path and exact extracted legacy atomic mechanism."
         },
         {
           "name": "terminal-history-paths-rust",
@@ -5232,38 +3709,6 @@
           "$note": "Slice29: real authenticated frozen definition read/write; typed errors/defaults/versions/links/authority and ADR-006 target refusal, no process execution."
         },
         {
-          "name": "run-config-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "run_config::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 12,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice29: actual generic Runtime commands (8) plus all15 original local/remote/process pure regressions; External no fallback or local validation/IO. P8-05切片108：运行面 3 条改宿主转发壳（core ide::run_face 进程注册表），本地注册表内部测试随主体迁 core（23→12 实测双写）。"
-        },
-        {
-          "name": "run-config-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/run-config-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice29: one legacy document owner, independent native policy, checked writes, original IPC/target wire, no executor or local External fallback."
-        },
-        {
           "name": "project-config-targets-host-rust",
           "kind": "test",
           "argv": [
@@ -5281,16 +3726,6 @@
           "minCases": 5,
           "timeoutMs": 900000,
           "$note": "Slice30: real authenticated project-config read/init/write target refusal, malformed/conflicting targets and local/auth/writer positive controls. Red1/5 then5/5; no actual remote IO."
-        },
-        {
-          "name": "local-definition-target-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/local-target-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice30: single pure protocol target guard across5 local definition handlers; full typed decoding and refusal precede core IO. No new method/remote coverage."
         },
         {
           "name": "debug-config-core-rust",
@@ -5331,38 +3766,6 @@
           "$note": "Slice31: actual authenticated frozen handlers, typed lowercase launch/attach documents, target refusal, authority, symlink and IO/connection recovery."
         },
         {
-          "name": "debug-config-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "dap::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 37,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice31: actual IPC eight placement cases plus all29 retained DAP/local/remote/protocol tests; no real debugger or external home."
-        },
-        {
-          "name": "debug-config-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/debug-config-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice31: one definition owner, preserved native/live validators, typed target-aware checked host, deferred real commands."
-        },
-        {
           "name": "file-write-authority-host-rust",
           "kind": "test",
           "argv": [
@@ -5382,16 +3785,6 @@
           "$note": "Slice32: eight real UDS mutations, missing/current-lost lease, pre-root refusal, read/query and writer controls; injected scratch trash and no formatter process."
         },
         {
-          "name": "file-write-authority-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/file-write-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice32: shared current-writer admission before project/root IO, conditional history restore and unchanged default core trash. Slice34: one core project-copy owner; symlink-aware directory validation before mkdir and any-existing-leaf refusal before copy. Slice35: size-before-resolved-leaf write and exclusive create, preserving current-writer admission. Slice36: one pure explicit-target decoder before writer/root and post-root canonical Local equality at all9 handlers; no remote fallback. Slice37: existing core addressability before location resolution, both stored-record scans before path, and typed errors across the resolver port."
-        },
-        {
           "name": "search-write-authority-host-rust",
           "kind": "test",
           "argv": [
@@ -5409,16 +3802,6 @@
           "minCases": 22,
           "timeoutMs": 900000,
           "$note": "Slice33: both apply wires, missing/lost/empty writer authority, target-before-admission-before-root ordering, six queries and normal/stale writer; missing rg/fake Git only. Slice38: +13 measured saved-record id/path/target/worktree eligibility regressions and controls (160 pairs), fake-Git no-execution marker, unrelated poison-task skip, independent vault/revocation and record-change recovery; original9 retained."
-        },
-        {
-          "name": "search-write-authority-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/search-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice33: shared parser plus current-writer check only for the two apply operations after pure target refusal and before registry/root IO."
         },
         {
           "name": "project-copy-core-rust",
@@ -5573,16 +3956,6 @@
           "$note": "Slice39: actual UDS current/lost writer, strict typed settings, raw/no-repair/read-only/params/IO/recovery controls; all red paths use scratch/no-default agents."
         },
         {
-          "name": "agent-config-authority-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/agent-config-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice39: string params then live writer before settings/path IO; corrupt typed settings stay errors for all three methods. Not yet shared path/IO or Tauri placement. Slices40–41: one borrowed pure selector and shared explicit-path IO/checked versus legacy authority. Default roots and IPC placement still separate. Slice42 adds shared default roots, preserved lazy legacy wrappers and trusted config-only CLI HOME capture before startup; common context remains unchanged. Slice43 guards actual frozen command registrations, typed replies, lazy worker before legacy loader and isolated real-command tests."
-        },
-        {
           "name": "agent-config-paths-core-rust",
           "kind": "test",
           "argv": [
@@ -5600,28 +3973,6 @@
           "minCases": 9,
           "timeoutMs": 900000,
           "$note": "Slice40: pure borrowed selector; builtin/custom family, exact/first ID, path spelling, lazy counted ports and error parity."
-        },
-        {
-          "name": "agent-config-paths-adapter-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "config::tests::agent_config_",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 2,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice40: exact borrowed desktop projection and actual configured-path adapter without HOME fallback; no IPC placement change."
         },
         {
           "name": "agent-config-files-core-rust",
@@ -5721,28 +4072,6 @@
           "$note": "Slice42: measured scratch-only injected defaults, legacy callback compatibility, trusted config-only home port and pre-startup CLI refusals; no common metrics/session root expansion."
         },
         {
-          "name": "agent-config-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "config::agent_config_command_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 10,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice43: actual three IPCs, unchanged Embedded loader/raw/atomic behavior and strict typed External/no-session/no-gateway refusals. Each case re-execs under env_clear with fake shell/which and scratch roots; child count must be1, no real rc/agent."
-        },
-        {
           "name": "legacy-directory-core-rust",
           "kind": "test",
           "argv": [
@@ -5760,38 +4089,6 @@
           "minCases": 3,
           "timeoutMs": 900000,
           "$note": "Slice44: distinct seven-key legacy/six-key native wire, empty/error no-process core boundaries; synthetic roots only."
-        },
-        {
-          "name": "legacy-directory-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_directory_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 6,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice44: same six actual-command compatibility fixtures before/after exact extraction; each env-cleared child uses scratch fake git and one-case guard."
-        },
-        {
-          "name": "legacy-directory-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-directory-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice44: sole legacy directory model/business, original guarded worker, git semantics and distinct native wire; not External placement or alias equivalence."
         },
         {
           "name": "legacy-path-core-rust",
@@ -5813,38 +4110,6 @@
           "$note": "Slice45: shared exact legacy absolute-target guard versus native directory/relative policy; synthetic roots, original errors and no initialization."
         },
         {
-          "name": "legacy-path-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_path_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 7,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice45: unchanged old/new helper and real text/image/directory/write/copy compatibility; env-cleared exact scratch child, mode/order/odd-root/leaf/error/snapshot assertions."
-        },
-        {
-          "name": "legacy-path-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-path-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice45: one legacy guard, exact branch/error order and six caller mode/worker positions; native policies unchanged; tested with positive and negative source controls."
-        },
-        {
           "name": "legacy-read-core-rust",
           "kind": "test",
           "argv": [
@@ -5862,38 +4127,6 @@
           "minCases": 3,
           "timeoutMs": 900000,
           "$note": "Slice46: shared exact legacy text/image DTO, MIME catalog, raw IO and metadata limits contrasted with unchanged native read/preview; scratch-only no-write checks."
-        },
-        {
-          "name": "legacy-read-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_read_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 7,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice46: seven unchanged before/after actual text/image queries; exact2/10MiB, errors/order, all MIME/Base64/wire and canonical/unresolved-leaf compatibility. Each env-cleared scratch child executes exactly one real test, bounded and reaped."
-        },
-        {
-          "name": "legacy-read-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-read-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice46: one old query owner, unchanged pre-worker guard/flags and native distinctions;6 positive/51 negative source controls. No large-response RPC or External completion claim."
         },
         {
           "name": "legacy-entry-core-rust",
@@ -5915,38 +4148,6 @@
           "$note": "Slice47: exact legacy name-byte/platform/new-path policy, exclusive-create IO, collision/raw-error/native differences and no repair; scratch only. Windows-only assertions not executed on macOS."
         },
         {
-          "name": "legacy-entry-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_entry_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 8,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice47: eight unchanged old/new actual-command/helper cases; env-cleared exact scratch child, names/relative-file roots/error order/leaf links/modes and retained rename-trim/copy-raw behavior. No real Trash/agents/shell."
-        },
-        {
-          "name": "legacy-entry-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-entry-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice47: one name/new-path/Windows-table/exclusive-create owner; unchanged worker/guard/join and rename/copy/native boundaries,5 positive/60 negative source controls; not host placement."
-        },
-        {
           "name": "legacy-modify-core-rust",
           "kind": "test",
           "argv": [
@@ -5966,38 +4167,6 @@
           "$note": "Slice48: exact existing-entry guards; direct delete-guard and scratch actual-rename only, never real OS Trash; frozen baseline and native distinction. Slice51: rename worker business now shares the same legacy owner; actual delete/Trash, guard4 and frozen command7 remain unchanged. Direct core rename has its own four-case suite."
         },
         {
-          "name": "legacy-modify-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_modify_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 7,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice48: exact existing-entry guards; direct delete-guard and scratch actual-rename only, never real OS Trash; frozen baseline and native distinction. Slice51: rename worker business now shares the same legacy owner; actual delete/Trash, guard4 and frozen command7 remain unchanged. Direct core rename has its own four-case suite."
-        },
-        {
-          "name": "legacy-modify-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-modify-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice48: exact existing-entry guards; direct delete-guard and scratch actual-rename only, never real OS Trash; frozen baseline and native distinction. Slice51: rename worker business now shares the same legacy owner; actual delete/Trash, guard4 and frozen command7 remain unchanged. Direct core rename has its own four-case suite."
-        },
-        {
           "name": "legacy-copy-core-rust",
           "kind": "test",
           "argv": [
@@ -6014,38 +4183,6 @@
           "parse": "rust",
           "minCases": 8,
           "timeoutMs": 900000,
-          "$note": "Slice49: exact recursive/self-copy helpers and unchanged actual clipboard-copy caller; all effects/referents scratch-only, no OS clipboard/Trash; native admission stays distinct. Slice50: target-kind/ordered loop now also shared; original worker/empty/strict admission and six actual cases unchanged. Core suite measured8; command6/full1337 floors unchanged."
-        },
-        {
-          "name": "legacy-copy-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_copy_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 6,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice49: exact recursive/self-copy helpers and unchanged actual clipboard-copy caller; all effects/referents scratch-only, no OS clipboard/Trash; native admission stays distinct. Slice50: target-kind/ordered loop now also shared; original worker/empty/strict admission and six actual cases unchanged. Core suite measured8; command6/full1337 floors unchanged."
-        },
-        {
-          "name": "legacy-copy-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-copy-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
           "$note": "Slice49: exact recursive/self-copy helpers and unchanged actual clipboard-copy caller; all effects/referents scratch-only, no OS clipboard/Trash; native admission stays distinct. Slice50: target-kind/ordered loop now also shared; original worker/empty/strict admission and six actual cases unchanged. Core suite measured8; command6/full1337 floors unchanged."
         },
         {
@@ -6087,38 +4224,6 @@
           "$note": "Slice52: exact legacy hex-layout history, ID/error order, metadata/list/prune, snapshot/restore skips and scratch-contained links; native layout stays distinct."
         },
         {
-          "name": "legacy-history-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "local_history::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 12,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice52: frozen8 actual commands/save-consumer cases plus unchanged4 history tests. Env-cleared exact scratch children; no real history, formatter, Trash or home."
-        },
-        {
-          "name": "legacy-history-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-history-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice52:21 exact legacy bodies,2 unchanged workers plus the slice54-delegated save command, equal shared DTO/layout/clock/root and distinct native/host/notebook policy. Source probes complement runtime cases; no extra External method is credited."
-        },
-        {
           "name": "formatter-policy-core-rust",
           "kind": "test",
           "argv": [
@@ -6138,38 +4243,6 @@
           "$note": "Slice53: exact shared DTO/selector/read-only validator and native pre-spawn callback order. Scratch-only referents; no successful formatter execution or general rollback claim."
         },
         {
-          "name": "formatter-policy-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "formatter::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 11,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice53: frozen8 old-behavior cases plus unchanged3 selector tests; actual command pre-spawn refusals, legacy history order/skips/failures and scratch env-cleared exact children. No real formatter/login-shell/Trash."
-        },
-        {
-          "name": "formatter-policy-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/formatter-policy-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice53: exact shared DTO/helper and actual/native/host worker source, thin bindings, frozen old3/actual8/direct5 and isolation. Source controls complement runtime tests; no new External capability."
-        },
-        {
           "name": "legacy-write-core-rust",
           "kind": "test",
           "argv": [
@@ -6187,38 +4260,6 @@
           "minCases": 5,
           "timeoutMs": 900000,
           "$note": "Slice54: direct legacy write composition cases — guard refusals, snapshot-before-write, content vocabulary, snapshot/write failure retention. Scratch-only referents; no formatter/Trash/HOME."
-        },
-        {
-          "name": "legacy-write-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "fs::legacy_write_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 5,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000,
-          "$note": "Slice54: frozen5 actual command cases in env-cleared exact scratch children; refusals before history/write, snapshot-before-write and failure retention. No formatter/Trash/HOME access."
-        },
-        {
-          "name": "legacy-write-ownership",
-          "kind": "gate",
-          "argv": [
-            "node",
-            "scripts/native/legacy-write-invariants.mjs"
-          ],
-          "timeoutMs": 120000,
-          "$note": "Slice54: one core write composition, thin desktop command, unchanged mobile RPC/native writer/registration and frozen actual5/direct5; 5 positive/11 negative source probes."
         },
         {
           "name": "validate-agent-launch-host-rust",
@@ -6360,28 +4401,6 @@
           "minCases": 3,
           "timeoutMs": 900000,
           "$note": "P8-05 slice102: actual CLI subprocesses attach to a memory-secrets host; SQL/CSV/JSON/database-export roundtrip checks rows and file bytes, readonly refusal and malformed/unsupported methods cannot initialize DBX. Never spawn production serve."
-        },
-        {
-          "name": "database-import-export-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "database::import_export_command_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 7,
-          "timeoutMs": 1800000,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "$note": "P8-05 slice102: ten actual desktop adapters with ScriptedHost and no local DbxState; exact wire, host refusal/disconnect and malformed typed/unit replies cannot fall back. Embedded preview and UPDATE refusal need no local state or credentials."
         },
         {
           "name": "database-dbx-core-rust",
@@ -6552,28 +4571,6 @@
           "$note": "P8-05 slice95: real CLI subprocesses call all five authenticated host services and explicit invalid/missing/writer refusals. Library host injected with memory secrets; never spawn production serve for credential tests."
         },
         {
-          "name": "database-dbx-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "database::connection_command_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 5,
-          "timeoutMs": 1800000,
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "$note": "P8-05 slice95: real desktop command adapters with authenticated ScriptedHost; five exact payloads, refusal/disconnect/malformed-list no-fallback, empty Embedded control. No local DbxState installed in External tests, no OS secret-store operations."
-        },
-        {
           "name": "database-transfer-core-rust",
           "kind": "test",
           "argv": [
@@ -6613,25 +4610,6 @@
           "parse": "rust",
           "minCases": 10,
           "$note": "P8-05 slice103: real authenticated UDS over scratch SQLite - sqlite-to-sqlite transfer moving rows with dbx.transfer_progress terminal events, pre-cancelled transfer reporting cancelled without copying, self-target and readonly-target refusals before effects, pure diff/plan faces on a read-only host, real backup round trip, data compare from two scratch connections, legacy db_read_sql_file shapes.",
-          "timeoutMs": 900000
-        },
-        {
-          "name": "database-transfer-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "--",
-            "database::transfer_command_tests::",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 5,
-          "$note": "P8-05 slice103: ten actual command adapters through MockApp + ScriptedHost - wire preservation, refusals never fall back, Embedded pure faces and real backup through a saved connection, unknown-connection start refusal without local state.",
           "timeoutMs": 900000
         },
         {
@@ -6738,28 +4716,6 @@
           "minCases": 4,
           "$note": "P8-05 slice111: real CLI attaches to memory-secret test host; no production serve or installed Conda. Exact result, argument/remote refusal, unavailable and read-only cases.",
           "timeoutMs": 900000
-        },
-        {
-          "name": "conda-command-rust",
-          "kind": "test",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "src-tauri/Cargo.toml",
-            "--locked",
-            "--lib",
-            "conda::",
-            "--",
-            "--test-threads=1"
-          ],
-          "parse": "rust",
-          "minCases": 8,
-          "$note": "P8-05 slice111: seven actual desktop command placement cases plus retained SSH command builder. External success/refusal/bad reply/disconnect/no session never runs the local scratch fake.",
-          "env": {
-            "AERORIC_HOME": "<scratch>"
-          },
-          "timeoutMs": 1800000
         },
         {
           "name": "lsp-session-services-rust",
@@ -6909,6 +4865,323 @@
           "timeoutMs": 1800000
         }
       ]
+    },
+    "session-controls": {
+      "$note": "AP7 / P9-01 会话控制与会话控制契约(MIGRATION_PLAN §D AP7)。地板取实测值(2026-10-13)。用例断言的是**线上字节**:真宿主、真握手、真 UDS 调用;能力来自 core 内钉住的 DSH 方法表,不是测试里手写的字符串。",
+      "cases": [
+        {
+          "name": "session-controls-core-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "adapters::"
+          ],
+          "parse": "rust",
+          "minCases": 42,
+          "$note": "core 适配器 42 用例 = 能力探测(探测不到就 false 并附理由、PTY-only 族不得被广告成结构化、未知 thinking level 保持未知)+ 会话控制策略(未广告即服务端拒绝、入队权限优先于当前 UI、控制命令不得抬权、工作区 revert 需确认预览而会话 revert 不需、公开分享需 endpoint+确认、默认脱敏剥凭据与主目录、未脱敏需确认)。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "session-controls-host-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "ap7_adapters"
+          ],
+          "parse": "rust",
+          "minCases": 6,
+          "$note": "宿主级 6 用例:握手广告只含探测到的能力且带证据;无适配器注入的宿主不广告也不注册(方法未注册与未广告同为 UnsupportedCapability,不假装成功);adapters.capabilities 原样回报探测;已广告能力走通;未广告能力被宿主拒绝;入队权限漂移/抬权被拒。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "session-controls-macos-swift",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "AdapterClientTests"
+          ],
+          "parse": "swift",
+          "minCases": 9,
+          "$note": "macOS 客户端 9 用例:能力如实读取(探不到为 false 且能解释)、UI gating 由报告驱动、老宿主全 false 不给按钮、纯 fork 只带 capability/sessionId、工作区 revert 带路径+预览位、会话 revert 带 session、公开分享带 endpoint+确认、权限模式原样转发由宿主裁决、宿主拒绝原样抛出。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "session-controls-ios-swift",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "ios/AeroricCompanionKit",
+            "--filter",
+            "SessionControlTests"
+          ],
+          "parse": "swift",
+          "minCases": 12,
+          "$note": "iOS 伴生端 12 用例:只提供被广告的控制、控制字面量与宿主 session.* 一致、已广告走通、未广告拒绝且不发帧、未知适配器全拒、工作区 revert 需预览而会话 revert 不需、公开分享需 endpoint+确认、离线不发、宿主探测结果整体替换旧值。",
+          "timeoutMs": 900000
+        }
+      ]
+    },
+    "agent-work-graph": {
+      "$note": "AP7 / P9-02 记忆/检查点/任务树/goal/子代理(MIGRATION_PLAN §D AP7)。地板取实测值(2026-10-13)。断言的是跨会话隔离、终态不可复活、重启后不自动续跑这些**安全语义**。",
+      "cases": [
+        {
+          "name": "agent-work-graph-core-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "adapters::work_graph"
+          ],
+          "parse": "rust",
+          "minCases": 10,
+          "$note": "core 10 用例:两会话同名 T1 不串状态;跨会话更新被拒;终态不被迟到更新复活且留痕;缺外部 id 的映射被拒;内存态节点重启不复活;上游子代理幂等登记且不重复 spawn、同 cwd 并发告警;恢复的 goal 未确认不得 resume、内存态 goal 不复活;过期 revision 不覆盖新状态;checkpoint 写失败不吞。",
+          "timeoutMs": 900000
+        }
+      ]
+    },
+    "workflows": {
+      "$note": "AP7 / P9-03 工作流、有界重试与 Dream/Distill(MIGRATION_PLAN §D AP7)。地板取实测值(2026-10-13)。重点是「脚本变了不许续跑旧 journal」「有副作用不自动重试」「默认关闭」。",
+      "cases": [
+        {
+          "name": "workflows-core-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "adapters::workflow"
+          ],
+          "parse": "rust",
+          "minCases": 8,
+          "$note": "core 8 用例:脚本 hash 变化拒绝续跑旧 journal(但允许明确新建);适配器版本变化同样拒绝;步骤输入变化与未 reconcile 的步骤拒绝续跑(且不依赖调用方列全舞台);读步骤可重放而副作用步骤不可;同舞台重复记录幂等;副作用步骤永不自动重试(结果不明先 reconcile);只读步骤重试到上限转 blocked 且 maxAttempts=0 不是无限重试;Dream 默认关闭、产物只进 staging、重复 accept 报错。",
+          "timeoutMs": 900000
+        }
+      ]
+    },
+    "external-protocols": {
+      "$note": "AP7 / P9-04 外部协议面(MIGRATION_PLAN §D AP7)。地板取实测值(2026-10-13)。共同主题是「没就绪就拒绝,不假装做到了」。",
+      "cases": [
+        {
+          "name": "external-protocols-core-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "adapters::external_protocols"
+          ],
+          "parse": "rust",
+          "minCases": 13,
+          "$note": "core 13 用例:ACP 版本必须取交集且越界目录被拒、ACP 选项不得注入其它族、不支持的音频附件整条拒绝而非静默丢弃;webview 只能读状态不能导出 token、过期状态不可用、迟到登录不覆盖新代次;要求沙箱但未就绪一律 fail closed(写入判定同步为假);工具权限只指路系统设置、签名不稳定走重新授权;语音默认关闭、麦克风被拒/零音频/转写失败/空白草稿都不发空提示、草稿经显式提交才成为 prompt。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "external-protocols-macos-swift",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "AgentToolsWiringTests"
+          ],
+          "parse": "swift",
+          "minCases": 13,
+          "$note": "macOS 面 13 用例:未探测不给控件且不构造请求、只渲染被广告项、每个缺失项都有理由(未实现/未广告)、工作区 revert 无确认预览构造不出请求、公开分享无 endpoint/确认构造不出、权限漂移显式呈现且不替用户改队列值、拒绝原样记录、沙箱未就绪阻断工具执行、语音默认关闭且草稿不等于 prompt、取消不留可发内容、OAuth 只有状态没有 token、权限交接只指路。",
+          "timeoutMs": 900000
+        }
+      ]
+    },
+    "system-parity": {
+      "registeredBy": "AP8",
+      "cases": [
+        {
+          "name": "storage-backup-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "--",
+            "storage::backup"
+          ],
+          "minCases": 7,
+          "$note": "AP8 Action 1 的机制判据:备份**必须**走 rusqlite backup API 而不是复制字节——真 WAL 库里已提交未 checkpoint 的行,普通 `cp` 会得到'表不存在'的静默全损(本机实测:backup API 500 行 vs cp 打开失败)。另五条钉住:租约/凭据/`-wal` 侧车不进备份(恢复一份旧日志等于把 WAL 重放到新库上=malformed)、改过的备份文件被核出来、**恢复拒绝覆盖备份之后的新写入**(rollback.md 规则 4)、恢复的库行数与备份一致、空清单是问题而不是通过(一份什么都没覆盖的清单能让所有检查都成立)。"
+        },
+        {
+          "name": "migration-rehearsal",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/migration-rehearsal.mjs"
+          ],
+          "$note": "P8-05 Action 4 + **AP8 Action 1**:合成数据演练 22 项 check。原 16 项(旧客户端形状目录上启动/读得懂/启动不改任务表;字节保真;SIGKILL 崩溃后冷启动且记录不少;尸体 socket 不挡重启、活宿主的第二个竞争者被拒;数据原位读写)**加上**备份/校验/恢复六项:活宿主上建备份、摘要+integrity_check+行数全对、清单不收录租约/凭据、有更新写入时恢复被拒且新写入原样保留、显式丢弃才回滚、备份被篡改后校验报红。**只用合成数据,不碰真实 ~/.aeroric**。"
+        },
+        {
+          "name": "fault-injection",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/fault-injection.mjs"
+          ],
+          "$note": "AP8 Action 2:P10-01 Action 3 的注入点在**真内核**上落地(单测里 ENOSPC 是伪造的 errno、SIGKILL 是函数调用,两者不能互相顶替)。F1 真 8 MiB RAM disk 填到 0 KB 可用后的 mutation(反事实:文件字节不变、无 .tmp 残留、宿主仍可服务);F2 满盘冷启动明确失败且不留半个数据目录;F3 SIGKILL 打断写后冷启动、记录字节一致;F4 SIGTERM 后 socket 移除+租约释放;F5 第二写者被拒且不抢租约;F6 只读数据目录拒写不改原文件。每条都带**反事实断言**——只断言退出码的测试在'码对了但数据毁了'时照样绿。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "feature-parity-matrix",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/parity.mjs"
+          ],
+          "$note": "AP8 R-AP8-3(原 P10-01 Action 1/6):把 feature-matrix 的 F01-F26 展开为「cli / native-macos / ios-companion / tauri-legacy(历史) × accepted/unsupported/retired + 证据指针」的可对账台账。七条判据,前六条是规则、第七条是**规则的自检**(永远返回通过的对账器与手写清单一样没用):覆盖每一条 Fxx、台账不长出多余条目、**每处证据都指向已注册且有 argv 的 case**(编一个不存在的测试名当场红,已实测)、accepted 必须有载体、retired/unsupported 必须写理由、unsupported 不许与证据矛盾。实施中发现并修掉:F06(DSH 面)此前**无任何门禁**——core 的 47 个 dsh 用例在树里而模块从未注册,现已注册 `dsh` 模块并把 F06 指向它。"
+        },
+        {
+          "name": "stress-headless",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/stress.mjs"
+          ],
+          "$note": "AP8 R-AP8-4(原 P10-01 Action 4/5):固定口径压测——5 MiB 输出的一轮任务、100 次模式切换等价的 RPC、3 并发客户端、10 次重连,记录 p50/p95/p99 与宿主 RSS 增长。预算只认代码里的真实常量(`terminal/history.rs::HISTORY_MAX_BYTES` 8 MiB 等)或本次实测值,测不出来的(renderer 指标)在 docs/native/acceptance-budgets.md 里如实标 not-measured 并写明归属——在无头环境里'测'渲染器指标比不测更糟。含反事实:100 次切换后子进程数必须回到基线(泄漏检测)+ RSS 不得无界增长。",
+          "timeoutMs": 600000
+        }
+      ]
+    },
+    "dsh": {
+      "registeredBy": "P3-05",
+      "cases": [
+        {
+          "name": "dsh-approvals-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "dsh_approvals"
+          ],
+          "minCases": 9,
+          "$note": "P3-05 审批面:带类型的答复无头消费待办项;重复/重放答复不得复活它;缺 `kind` 在**消费之前**被拒且等待态不变。AP8 勘察点名这里是 F06 的证据缺口(此前无门禁)。"
+        },
+        {
+          "name": "dsh-host-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "dsh_host"
+          ],
+          "minCases": 26,
+          "$note": "P3-05 DSH 宿主面:注册表消费一次、`clear()` 把 client_id 与待办一起清(重连是 generation 作用域的);waterfall 臂/事件名映射,未知臂为 None(宿主必须发 stream/error)。"
+        },
+        {
+          "name": "dsh-reconnect-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "dsh_reconnect"
+          ],
+          "minCases": 5,
+          "$note": "P3-05 复连:重连/恢复启动复用会话且**不截断**终端历史(AP5/AP6 的手机重连语义以宿主这一条为准)。"
+        },
+        {
+          "name": "session-dsh-omp-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "session_dsh_omp"
+          ],
+          "minCases": 7,
+          "$note": "P3-04/P3-05 家族会话读取:dsh 与 omp 的会话发现/解析(含 omp 的懒建文件与 cwd 编码规则)。"
+        }
+      ]
+    },
+    "accessibility": {
+      "registeredBy": "AP8",
+      "cases": [
+        {
+          "name": "accessibility-ui-test",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/ui-test.mjs"
+          ],
+          "$note": "AP8 R-AP8-5(原 P10-02 的验收半边):真实窗口上的可访问性与键盘行为。**这条同时是 `native:ui-test` 的第一个门禁**——它此前只是计划里的验收命令,从不是 case,于是 G47(自 2026-10-02 起根本无法编译的 UI 测试文件)与 G48(两个从未被运行的文件)都躲过了所有检查。运行集含 G48 的守卫:任何 `macos/AeroricUITests/*Tests.swift` 未被显式登记即非零退出。覆盖:编译全部 UI 测试文件、每用例独立 xcodebuild 会话(G41)、工作区选择器可从 AX 寻址且选项可读、侧栏键盘可达且选中值可读、外壳与菜单画得出。Stage 01 新增两例 DEBUG 隔离审阅窗测试，逐例集合共 15 例：实际窗口宽高、面板位置/尺寸/间距、浅深色三种尺寸截图与 AX、输入/焦点/滚动及明确标记的辅助功能注入。共享 GlassPanel 被样本真实消费，正式主外壳集成仍未完成；不将样本外观证据冒充产品全工作面、macOS 14 运行、人工 VoiceOver 或像素比对通过。",
+          "timeoutMs": 3000000
+        }
+      ]
     }
   },
   "plannedModules": {
@@ -6919,7 +5192,6 @@
     "agents": "P3-02",
     "terminal-core": "P3-03",
     "sessions": "P3-04",
-    "dsh": "P3-05",
     "cli": "P3-07",
     "native-bootstrap": "P4-01",
     "swift-client": "P4-02",
@@ -6945,12 +5217,6 @@
     "remote": "P8-03",
     "maintenance": "P8-04",
     "cutover": "P8-05",
-    "session-controls": "P9-01",
-    "agent-work-graph": "P9-02",
-    "workflows": "P9-03",
-    "external-protocols": "P9-04",
-    "system-parity": "P10-01",
-    "accessibility": "P10-02",
     "signing-local": "P10-03",
     "release-contract": "P10-04",
     "all": "P10-05"

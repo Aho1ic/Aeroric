@@ -123,7 +123,14 @@ final class CompanionIntegrationTests: XCTestCase {
         XCTAssertEqual(store.terminalBuffer, " Cargo test ok\n")
 
         _ = try store.sendTerminalInput(streamId: 1, text: "ls -la\r")
-        try store.triggerSessionControl(.compact, taskId: task.id)
+        // AP7: the session-control call needs a control the paired adapter
+        // actually advertises — `compact` has no method in the DSH inventory, so
+        // a real host refuses it. The point of this test is offline no-queueing,
+        // not which control is sent.
+        store.updateAdapterCapabilities(
+            CompanionAdapterCapabilities(adapter: "dsh", version: "0.1.5-rc.2", fork: true)
+        )
+        try store.triggerSessionControl(.fork, taskId: task.id)
 
         let logCountWhileOnline = store.sentFramesLog.count
         XCTAssertEqual(logCountWhileOnline, 4)

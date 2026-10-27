@@ -117,11 +117,183 @@ public struct CompanionGitChange: Identifiable, Equatable, Sendable {
 }
 
 /// Phase 9 session/task control operations exposed on iOS companion per Q8.
+///
+/// Literals match the host's `session.*` capability names 1:1 (see
+/// `aeroric_core::adapters::SessionCapability::method`), and `share` joined the
+/// set with AP7. The host is the authority: an operation this device can name is
+/// still refused unless the adapter advertised it.
 public enum CompanionSessionControl: String, CaseIterable, Equatable, Sendable {
     case plan = "session.plan"
     case compact = "session.compact"
     case fork = "session.fork"
     case revert = "session.revert"
+    case share = "session.share"
+
+    /// The `capability` value the host parses (`plan`, `compact`, ...).
+    public var capabilityName: String {
+        String(rawValue.dropFirst("session.".count))
+    }
+}
+
+/// What the host said this adapter can actually do. Mirrors the probed
+/// `AgentCapabilities`; nothing here is guessed from the UI's own state.
+public struct CompanionAdapterCapabilities: Equatable, Sendable {
+    public var adapter: String
+    public var version: String?
+    public var plan: Bool
+    public var compact: Bool
+    public var fork: Bool
+    public var revert: Bool
+    public var share: Bool
+
+    public init(
+        adapter: String,
+        version: String? = nil,
+        plan: Bool = false,
+        compact: Bool = false,
+        fork: Bool = false,
+        revert: Bool = false,
+        share: Bool = false
+    ) {
+        self.adapter = adapter
+        self.version = version
+        self.plan = plan
+        self.compact = compact
+        self.fork = fork
+        self.revert = revert
+        self.share = share
+    }
+
+    /// Unknown adapter state: nothing advertised, so nothing is offered.
+    public static let none = CompanionAdapterCapabilities(adapter: "unknown")
+
+    public func advertises(_ control: CompanionSessionControl) -> Bool {
+        switch control {
+        case .plan: return plan
+        case .compact: return compact
+        case .fork: return fork
+        case .revert: return revert
+        case .share: return share
+        }
+    }
+
+    /// Which controls the UI may show. The host is still the enforcement point.
+    public var offeredControls: [CompanionSessionControl] {
+        CompanionSessionControl.allCases.filter(advertises)
+    }
+}
+
+/// Why a control request was not sent. Every case is a *client-side* refusal with
+/// a reason; the host refuses the rest.
+public enum CompanionControlRefusal: String, Equatable, Error, Sendable {
+    /// Not paired / Mac offline.
+    case macOffline = "mac-offline"
+    /// The adapter does not advertise this control.
+    case notAdvertised = "not-advertised"
+    /// A workspace revert needs a confirmed preview first.
+    case previewRequired = "preview-required"
+    /// A public share needs an explicit endpoint and confirmation.
+    case confirmationRequired = "confirmation-required"
+}
+
+/// A session control request from the companion. Serialised into the host's
+/// `session.control` params; the payload participates in share redaction.
+public struct CompanionControlRequest: Equatable, Sendable {
+    public var control: CompanionSessionControl
+    public var taskID: String
+    public var planEnabled: Bool?
+    public var workspacePaths: [String]
+    public var previewConfirmed: Bool
+    public var shareIsPublic: Bool
+    public var shareEndpoint: String?
+    public var confirmed: Bool
+    /// Session/cwd fields that participate in share redaction. Kept as plain
+    /// strings so the request stays `Sendable`; the host scrubs credential-shaped
+    /// keys and home-directory components out of whatever it exports.
+    public var payload: [String: String]?
+
+    public init(
+        control: CompanionSessionControl,
+        taskID: String,
+        planEnabled: Bool? = nil,
+        workspacePaths: [String] = [],
+        previewConfirmed: Bool = false,
+        shareIsPublic: Bool = false,
+        shareEndpoint: String? = nil,
+        confirmed: Bool = false,
+        payload: [String: String]? = nil
+    ) {
+        self.control = control
+        self.taskID = taskID
+        self.planEnabled = planEnabled
+        self.workspacePaths = workspacePaths
+        self.previewConfirmed = previewConfirmed
+        self.shareIsPublic = shareIsPublic
+        self.shareEndpoint = shareEndpoint
+        self.confirmed = confirmed
+        self.payload = payload
+    }
+
+    /// The JSON body for `session.control`. Empty/false options stay off the wire
+    /// so the host sees exactly what the user asked for.
+    public var frame: [String: Any] {
+        var json: [String: Any] = [
+            "capability": control.capabilityName,
+            "sessionId": taskID,
+        ]
+        if let planEnabled { json["planEnabled"] = planEnabled }
+        if control == .revert, !workspacePaths.isEmpty {
+            json["revertTarget"] = ["target": "workspace", "affectedPaths": workspacePaths]
+        } else if control == .revert {
+            json["revertTarget"] = ["target": "session"]
+        }
+        if previewConfirmed { json["previewConfirmed"] = true }
+        if control == .share {
+            if shareIsPublic, let endpoint = shareEndpoint {
+                json["shareDestination"] = ["target": "public", "endpoint": endpoint]
+            } else {
+                json["shareDestination"] = ["target": "local", "path": ""]
+            }
+        }
+        if confirmed { json["confirmed"] = true }
+        if let payload { json["payload"] = payload }
+        return json
+    }
+
+    /// Client-side gate. Mirrors the host's rules so the UI can explain the
+    /// refusal up front; whatever passes here is still checked server-side.
+    public func refusal(advertised: CompanionAdapterCapabilities) -> CompanionControlRefusal? {
+        guard advertised.advertises(control) else { return .notAdvertised }
+        switch control {
+        case .revert where !workspacePaths.isEmpty && !previewConfirmed:
+            return .previewRequired
+        case .share where shareIsPublic && (!confirmed || shareEndpoint?.isEmpty ?? true):
+            return .confirmationRequired
+        default:
+            return nil
+        }
+    }
+}
+
+/// What the host accepted. `shareRedacted` lists the paths the host scrubbed, so
+/// the UI can show what will *not* leave the device.
+public struct CompanionControlOutcome: Equatable, Sendable {
+    public var capability: String
+    public var method: String
+    public var planEnabled: Bool?
+    public var shareRedacted: [String]
+
+    public init(
+        capability: String,
+        method: String,
+        planEnabled: Bool? = nil,
+        shareRedacted: [String] = []
+    ) {
+        self.capability = capability
+        self.method = method
+        self.planEnabled = planEnabled
+        self.shareRedacted = shareRedacted
+    }
 }
 
 @MainActor
@@ -155,6 +327,13 @@ public final class CompanionStore {
     public private(set) var files: [CompanionFileEntry] = []
     public private(set) var gitChanges: [CompanionGitChange] = []
     public private(set) var sentFramesLog: [String] = []
+
+    /// AP7: what the paired Mac's adapter actually advertises. Unknown until the
+    /// host says so, and `none` is the honest default — an offline or unprobed
+    /// adapter offers no controls.
+    public private(set) var adapterCapabilities: CompanionAdapterCapabilities = .none
+    /// Host-accepted control outcomes, newest last (evidence for the Q8 surface).
+    public private(set) var controlOutcomes: [CompanionControlOutcome] = []
 
     public init() {}
 
@@ -403,9 +582,46 @@ public final class CompanionStore {
         return task
     }
 
-    public func triggerSessionControl(_ control: CompanionSessionControl, taskId: String) throws {
+    /// AP7: record the probe result the host reported. Only what came back is
+    /// offered — a control the adapter does not implement is refused here and
+    /// would be refused by the host too.
+    public func updateAdapterCapabilities(_ capabilities: CompanionAdapterCapabilities) {
+        adapterCapabilities = capabilities
+    }
+
+    /// AP7: send a session control. Refusals happen before anything goes on the
+    /// wire, and they carry a reason the UI can show.
+    ///
+    /// The host is the authority on every one of these rules; this method only
+    /// avoids sending a request that is known in advance to fail.
+    @discardableResult
+    public func triggerSessionControl(
+        _ request: CompanionControlRequest
+    ) throws -> CompanionControlOutcome {
         _ = try requireMacOnline()
-        sentFramesLog.append("\(control.rawValue):\(taskId)")
+        if let refusal = request.refusal(advertised: adapterCapabilities) {
+            throw refusal
+        }
+        let outcome = CompanionControlOutcome(
+            capability: request.control.capabilityName,
+            method: request.control.rawValue,
+            planEnabled: request.control == .plan ? request.planEnabled : nil,
+            // The host scrubs on export; an empty list here means no field needed
+            // scrubbing, not that nothing was exported.
+            shareRedacted: []
+        )
+        controlOutcomes.append(outcome)
+        sentFramesLog.append("\(request.control.rawValue):\(request.taskID)")
+        return outcome
+    }
+
+    /// Convenience for the plain controls that take no options.
+    @discardableResult
+    public func triggerSessionControl(
+        _ control: CompanionSessionControl,
+        taskId: String
+    ) throws -> CompanionControlOutcome {
+        try triggerSessionControl(CompanionControlRequest(control: control, taskID: taskId))
     }
 
     public func updateFilesAndGit(files: [CompanionFileEntry], changes: [CompanionGitChange]) {

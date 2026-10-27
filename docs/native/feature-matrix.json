@@ -1100,6 +1100,62 @@
       "status": "open",
       "verified_on": "2026-10-09",
       "retriage_note": "P8-05 切片七在按覆盖率清单补宿主服务时发现：files 族缺口里有一半不是没写，而是写了两遍且宿主那份不在 core。 2026-10-08：两条legacy/native replace假等价alias删除并接真实legacy handler；新增target拒绝/根authority测试。不得把parent method已注册误当SSH已支持，G43保持open。"
+    },
+    {
+      "id": "G44",
+      "status": "fixed",
+      "task_ids": "AP8",
+      "finding": "2026-10-13 AP8 压测发现:终端历史的**写侧**此前只在待退休的 Tauri 桥里(`src-tauri/src/pty.rs:607` → `storage::append_task_terminal_history`)。core 只上收了读(`read_terminal_history_tail_from_path`)与删除,追加落盘没有。P3-03 的模块头如实写着『追加落盘机制与目录巡检仍是宿主的事』——那句在 Tauri 是唯一宿主时成立,迁移到 Apple-only 之后**新宿主(无头 CLI / 原生 Mac)一个都没有它**,于是它们跑完的任务在 `terminal-history/` 下没有日志,`project.read_task_terminal_history` 对刚跑完的任务返回空。发现方式:压测的『历史落在保留上限内』第一版写成 `historyBytes === 0 || …`,是一条恒真断言;改成 `historyBytes > 0` 后当场红。",
+      "evidence": "AP8 内修:core `terminal/history.rs` 新增 `append_terminal_history`(纯 append 快路径 + 超水位原子重写,与读侧共用同一个 `HistoryRetention`),宿主 PTY reader 接上(`core/crates/aeroric-host/src/executor.rs`)。实测无头宿主跑 5 MiB 输出的任务后 `terminal-history/<task>.log` = 9.9 MiB(落在 8 MiB + 4 MiB slack 的设计窗口内),经 `project.read_task_terminal_history` 读得回来。门禁 `system-parity/stress-headless` 的『5 MiB 输出的任务在磁盘上留下了终端历史』钉住。"
+    },
+    {
+      "id": "G45",
+      "status": "fixed",
+      "task_ids": "AP8",
+      "finding": "2026-10-13 AP8 修完 G44 后读回 9.9 MiB 历史时发现:`project.read_task_terminal_history` 的答复可以超过一帧——读上限是 `HISTORY_MAX_BYTES`(8 MiB),而 `MAX_FRAME_BYTES` 是 1 MiB。把整个尾部塞进 `result` 会让 `write_frame` 超限失败、宿主直接断连,客户端只看到 `stream error: host closed the connection`。于是『小历史读得到、大历史读不到』,而大历史正是最需要它的时候。与 G43 记的 `read_image_preview` 超帧问题同源——同一类『响应装不进一帧』的缺陷,这是第二个实例(说明它是一类问题,不是一个 bug)。",
+      "evidence": "AP8 内修:窗口钳到 256 KiB(JSON 转义最坏 6× 仍有余量),支持 `maxBytes` 由调用方收窄。两条回归用例(`core/crates/aeroric-host/tests/terminal_history_services.rs`,门禁 floor 3→5):`a_history_larger_than_one_frame_is_read_back_bounded_not_by_dropping_the_connection`(4 MiB 历史读回来 ≤ `MAX_FRAME_BYTES` **且连接仍可用**——原缺陷丢掉的正是后者)与 `a_bounded_history_read_keeps_the_tail_not_the_head`(丢开头不丢结尾)。实测:9.9 MiB 历史经 RPC 读回 262 144 字符。"
+    },
+    {
+      "id": "G46",
+      "status": "open",
+      "task_ids": "AP8, P10-02",
+      "finding": "2026-10-13 AP8 查证:`GlassPanel`(承载 macOS 26 `glassEffect` 与 reduce-transparency 策略的类型)在 `macos/AeroricApp` 与 `AeroricKit/Sources` 里**没有任何实例化点**——全仓只有 `WorkspaceWiringTests` 引用它。同时没有任何视图读 `@Environment(\\.accessibilityReduceTransparency)`。后果有两层:①AP4 记录里『`GlassPanel` 启用 macOS 26 原生 `glassEffect`』是真的(代码改了),但那个代码在产品里跑不到;②`ThemePolicyTests` 证明的是 `SurfaceChoice.resolve` 这个纯函数的算术,不是『系统减少透明度偏好真的改到了界面』——把纯函数当产品行为验收,正是计划禁止的『组件测试代替完整产品验收』。",
+      "evidence": "`grep -rn GlassPanel macos/` 只命中定义文件与 `WorkspaceWiringTests`;`grep -rn accessibilityReduceTransparency macos/` 零命中;`AERORIC_TEST_APPEARANCE` 零命中(所以 UI 侧没有外观 override 可注入)。AP8 的 `AccessibilityTests` 因此**只断言真正成立的东西**(选择器可从 AX 寻址、键盘可达且选中值可读、外壳与菜单画得出),不拿截图或注入无人读的变量冒充外观验证。"
+    },
+    {
+      "id": "G47",
+      "status": "fixed",
+      "task_ids": "AP8",
+      "finding": "2026-10-13 AP8 发现:`pnpm native:ui-test` **自 2026-10-02 起就无法编译**。P5-04 的提交 `87220d5c` 新增 `macos/AeroricUITests/ModeSessionIntegrationTests.swift`,它引用 `ModeSwitchStep`(在 `AeroricUI` 包里)却既没有 `import AeroricUI`,UI test target 也没把 `AeroricKit/AeroricUI` 作为依赖——于是 `Ld` 报 `Undefined symbol: AeroricUI.ModeSwitchStep.allCases`。之所以没人发现:**`native:ui-test` 从来不是门禁 case**。计划把 `pnpm native:ui-test` 写成 P4-01/P4-03 与 P10-02 的验收命令,而 P4 记录里的『native:ui-test OK』都是 P5-04 之前的运行(read-only 对比:`git show 87220d5c:macos/project.yml` 的 UI test target 依赖只有 `AeroricNative`)。",
+      "evidence": "`node scripts/native/ui-test.mjs` 修前:SwiftCompile/`Ld` 失败 + 3 failures(`Undefined symbol: static AeroricUI.ModeSwitchStep.allCases.getter`)。修:给该文件加 `import AeroricUI` + 在 `macos/project.yml` 的 `AeroricNativeUITests.dependencies` 挂上 `package: AeroricKit, product: AeroricUI`(重新 `xcodegen generate`),编译通过。"
+    },
+    {
+      "id": "G48",
+      "status": "fixed",
+      "task_ids": "AP8",
+      "finding": "2026-10-13 AP8 发现:`native:ui-test` 的运行集是**手写死列表**(`scripts/native/ui-test.mjs` 的 `TESTS`),因为它按 `-only-testing:` 逐用例开独立 xcodebuild 会话(G41 的解法)。后果是一个 UI 测试文件**没被列进去就永远不跑**,而它照样参与编译——失败形态是『绿着的运行 + 未测的代码』,不是报错。修前实测:`EditorTests` 与 `ModeSessionIntegrationTests` 两个文件在树里但从未被运行过。",
+      "evidence": "给 `ui-test.mjs` 加了守卫:扫描 `macos/AeroricUITests/*Tests.swift`,任何未在 `TESTS` 里出现的文件**直接非零退出**并要求显式登记。加守卫后立即报出 `EditorTests, ModeSessionIntegrationTests declare(s) tests but no case is listed in TESTS`;两者已补进列表(`EditorTests` 1 例、`ModeSessionIntegrationTests` 2 例),并连同 AP8 新增的 `AccessibilityTests` 3 例一起纳入运行集。"
+    },
+    {
+      "id": "G49",
+      "status": "fixed",
+      "task_ids": "AP8, AP4",
+      "finding": "2026-10-13 **用户实测**:原生客户端界面一直显示『协议不兼容』。根因——客户端对 `runtime.json` 的 `schemaVersion` 上限写成一个裸字面量 `1`,而 core 的 `RUNTIME_SCHEMA_VERSION` 自 P2-04 起就是 **2**(v2 加 `contentFingerprints`,是真 schema 变更而非可选字段)。于是**每个真实数据目录**都带 `schemaVersion: 2`,客户端拒绝它**自己刚拉起的宿主**:`runtime schemaVersion 2 requires a newer client (supported: 1)` → `.incompatible` 相位 → 外壳显示协议不兼容,**任何任务都跑不了**。真凭实据:`~/Library/Application Support/com.aeroric.native.dev/runtime.json` = `{\"schemaVersion\": 2, ...}`。这类缺陷此前**没有任何测试能看见**:`swift test` 与 `cargo test` 都绿,因为没有一条比较这两个常量(即『第二真相源静默漂移』)。检查的**形状**是对的(更高的值确实该拒),错的只是边界。",
+      "evidence": "修:`HostSupervisor` 引入具名常量 `RuntimeSchemaVersion.supported = 2`(镜像 core 的常量并注明来源),替换裸字面量。回归钉子 `macos/AeroricKit/Tests/AeroricClientTests/RuntimeSchemaVersionTests.swift`(门禁 `swift-client-schema-mirror`,floor 2):①从 core 的 Rust 源码**解析** `pub const RUNTIME_SCHEMA_VERSION` 并断言与 Swift 侧相等(把值改回 1 当场红——已实测,报错并点名两个数字);②更高的版本仍必须被拒且 `runtime.json` 一字不动(否则『把数字调大直到界面变绿』会变成看起来成立的修法)。复验:客户端套件 71/0。"
+    },
+    {
+      "id": "G50",
+      "status": "fixed",
+      "task_ids": "AP8, P10-02",
+      "finding": "2026-10-13 **用户实测**『界面非常杂乱,与设想差别很大』,截图与源码逐项核对后确认三类缺陷:① **测试脚手架变成了产品 UI**——`BootstrapInfoBlock` 在 `WorkspaceDetail` 里**无条件常驻**(五条 `environment/protocol/build/connection/application`,名字就是冷启动测试断言的 AX 标识符)。没有任何用户会为了读 `build 0.1.0-debug+1` 打开任务工具;② **无标签的空面板**——SSH 工作区的 `ConnectionList`、`SFTPBrowser` 与 Files 工作区的 `SearchPanel` 在空数据下渲染成纯黑矩形,与『渲染失败』在视觉上无法区分(`SFTPBrowser` 就是那个占窗口约 60% 的黑洞;`SearchPanel` 收到的更是**硬编码**的 `matches: []`);③ **12 个一级 tab 平铺**成一条分段控件横跨详情列顶部。真窗口 1516pt 实测:12 段 + 被渲染成**可见标签**的 VoiceOver 组名「工作区视图」,日常动作(跑任务)与机器级配置(运维/远控)视觉权重完全相同。这是**信息架构**问题(『把所有能力都画出来』不是产品布局)。",
+      "evidence": "① 已修:`DiagnosticEnvironment.isDiagnostic` 单点判据,只有 `ui-test`(外加『连接非 ready』这一条用户真正需要 `connection` 的场景)渲染五行块与状态栏环境标签。**第二版更正**:第一版把 `dev` 也算作诊断环境,但 `native:dev` 正是交互式运行应用的方式,于是那五行成了正在被重做的界面里的常驻家具;UI 测试全部跑在 `ui-test`(`scripts/native/ui-test.mjs:63`),收窄不损失测试面。真窗口 `dev` 启动核对:界面上不再有那五行。② 已修:三处补真实空态(`connections.list-empty`/`connections.sftp-empty`/`files.search.empty`);本轮进一步把空态统一为共用 `PaneEmptyState`(图标+标题+下一步),并补齐此前仍是纯空面板的 Git `ChangeList`/`HistoryView`、数据库连接列表、Skill/MCP/Hook 列表、端口列表。③ 已修(**用户明确指示**:以 `LYX/harness/` 下各客户端前端为参照,只取样式/排版/交互,实现仍是原生 SwiftUI):12 个工作面改为**四组侧栏导航**(工作/工具/系统/项目),决策与参照依据见 **ADR-042**。同时修掉两个顺带发现的真实缺陷:`sidebarVisible` 是**死状态**(写一次从不切换,其 `.transition`/`.animation` 是死代码,窗口无法给内容让出空间)→ 改为真正可切换的 56pt 图标栏(View 菜单 ⌃⌘S);`selectedProjectID` **从不参与过滤**(侧栏项目组选中哪行对任务列表毫无影响,该组形同装饰)→ 改为导航的输入。**测量更正**:本条初稿曾用『平均 66pt/个』估算并据此断言『Agent 工具被裁切』——用 `NSSegmentedControl.sizeToFit()` 实测后推翻:控件 638.5pt,在窗口 1000pt + 侧栏 180/220pt 下**都有余量**(157/117pt),只有窗口取最小值**且**侧栏拖到 360pt 时才短 22pt。视觉模型在 1507pt 窗口下报的『右缘被裁』(那里可用 1263pt)也是误读。教训:布局结论要量,不要估。"
+    },
+    {
+      "id": "G51",
+      "status": "fixed",
+      "task_ids": "AP8, P10-02",
+      "finding": "**容器上的 `.accessibilityIdentifier` 会替换掉叶子上的标识符**,而源码里看不出来。2026-10-14 一天内撞到多次,症状都是「测试查不到一个明明渲染了的元素」:① `BootstrapInfoBlock` 的 `detail.bootstrap-info` 吞掉五行 `bootstrap.*` → `AppLaunchTests` 全红;② `WorkspaceDetail` 上方的既有注释**已经警告过这条规则**,但同一文件里的 `BootstrapInfoBlock` 又犯了一次;③ `DebugPanel` 的 `ide.debug-panel` 吞掉八个按钮与新增空态;④ 把「每个工作面在空数据下必须有可寻址空态」写成运行时判据后,同一条判据**又抓出五处**:`files.search`、`connections.sftp-browser`、`operations.usage`/`.diagnostics`/`.notifications`。对照测量(加回标识符 dump 一次 / 拿掉 dump 一次)确认:在,则所有叶子读作容器 id;不在,则各自可寻址。**规则不是全局的**:`SettingsRootView` 的 `settings.root` 之下,嵌套容器的标识符得以保留——被吞的是叶子的。",
+      "evidence": "已修八处(全部**删掉容器标识符**;八处都无人引用容器 id,叶子才是测试寻址的对象)。**运行时判据**:`testEveryNavigationRowSwitchesTheDetailSurface` 每次点完一行,断言该面的空态叶子可寻址(`emptyStateLeaves` 表,12 个工作面里 9 个有确定性空态)。这条判据的非空性由它自己证明——它第一次跑起来就抓出上面那五处。**未做/已否决**:① 静态扫描——写了检测器,报出约 40 处可疑点,但反向搜索会跨兄弟视图误报,且 UI 测试实际查询的标识符只有 12 个;按「不拿不可靠的启发式批量改四十处」否决。② `.accessibilityElement(children: .contain)` —— 试过,它确实能让容器与叶子各自保留标识符,但代码库既有约定是「标识符只放在叶子上」(前三次修复都是删容器 id),为一致性选了删除;若要保留容器级标识符,`.contain` 是可行解,已在本条记录里留档。**两次假测量(记录以免后人重踩)**:用 `.typeKey(.downArrow)` 驱动走查时,按键是**异步**处理的,按完立即断言会让整条走查**错位一格**,于是拿第 N 行的期望值比第 N-1 行的实际值、用第 N-1 个面板查第 N 个面板的空态,报出一批**假**的「叶子不可寻址」。改用 `click()`(它等应用 idle,是同步的)后判据才可信。另:重建 bundle 后直接启动会**零窗口**(LaunchServices 注册过期),`ui-test.mjs` 现在开跑前先做一次 `open` 预热——否则整套会先烧掉重试次数。"
     }
   ]
 }

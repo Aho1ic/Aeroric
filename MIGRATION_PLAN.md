@@ -1,5 +1,10 @@
 # Aeroric Apple-only 迁移执行计划
 
+> **执行通知（2026-10-19）：用户已暂缓本项目全部真实 UI/窗口自动化，并授权退休两台
+> Aeroric 测试 VM。禁止创建、克隆、恢复、启动或自动重建测试 VM；旧任务运行许可不再
+> 授权续跑。允许经审查的无窗口、无输入非 UI 验证，原验收门槛保持不变，UI 记为
+> DEFERRED 而非通过。见 [UI 测试执行策略](docs/native/ui-testing-policy.md)。**
+
 <!-- APPLE_ONLY_BASELINE_BEGIN -->
 
 > **当前有效基线：2026-10-12，grill-me Q1–Q12 与规划总评审已获用户确认。**

@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "date": "2026-10-19",
+  "realUITests": "paused",
+  "vmProvisioning": "forbidden",
+  "resumesOnlyBy": "explicit new user authorization and reviewed policy update"
+}

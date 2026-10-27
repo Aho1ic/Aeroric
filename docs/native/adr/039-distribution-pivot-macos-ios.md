@@ -123,3 +123,26 @@ Q9 原文先要求“mac和ios放大兼容性,最新支持到最新到macos27和
 - [Apple 商店规则](https://developer.apple.com/app-store/review/guidelines/)、[证书类型](https://developer.apple.com/help/account/certificates/certificates-overview/)、[sandbox helper](https://developer.apple.com/documentation/xcode/embedding-a-helper-tool-in-a-sandboxed-app)。
 - [Liquid Glass availability](https://developer.apple.com/documentation/swiftui/view/glasseffect(_:in:))、[Intel 支持上限](https://developer.apple.com/documentation/macos-release-notes/macos-26_4-release-notes#Rosetta)。
 - [APNs 发送端与投递机制](https://developer.apple.com/documentation/usernotifications/setting-up-a-remote-notification-server)。
+
+## 8. 2026-10-23 修订：Mac 分发改为官网优先（取代 §7 Q1=C 的 Mac 部分）
+
+本轮 grill-me（原生功能整合）中，用户对两个问题作了回答：Q10 选 c，Q11 选 a。§7 原表保留，不改写，供追溯。
+
+| 问题 | 用户选择 | 生效含义 |
+|---|---|---|
+| Q10 分发形态 | c | iOS 伴随端以上架 App Store 为目标。macOS 先用 Developer ID 签名、Hardened Runtime 并公证，在官网分发。架构上保留宿主独立进程，以便将来拆分出 MAS 版；MAS 版是否要做，留待功能稳定后再评估。 |
+| Q11 本 ADR 旧记录 | a | §7 Q1=C 中“Mac 上 MAS 是硬目标”这一部分，被 Q10 取代。iOS 上架商店的目标不变。 |
+
+依据：AP0 batch2 实测结果（`.artifacts/native/ap0/batch2/`，见 `.trellis/tasks/10-12-ap0-store-local-feasibility/batch2-results.md`）。在沙盒内，以下操作在内核层直接被拒（EPERM），加上 temporary-exception 也一样：
+
+- 启动用户安装的四族 CLI，以及 node、brew、git、python；
+- 读取 `~/.claude`、`~/.codex`、`~/.omp`、`~/.aeroric`。
+
+如果 Mac 版进入 MAS，就会违背 §7 Q2“Mac 本地 Agent 闭环”的底线。
+
+连带调整：
+
+- §7 Q12 的旧前端删除门槛，从“两端商店审核通过”改为“工程与迁移验收完成、iOS 商店审核通过、Mac 官网版公证通过”。
+- 官网版首发前需要补齐以下几项，目前都还没有做：Hardened Runtime、主 App 的 entitlements、Developer ID 签名与公证脚本。另外，UDS 当前会退到 `/tmp`，这个回退路径要去掉，为以后可能的沙盒拆分留出余地。
+
+仅批准方向，不授权签名/CI 变更、商店提交或发布。

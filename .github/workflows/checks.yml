@@ -8,40 +8,26 @@ on:
   pull_request:
 
 # 同一 ref 的新提交会取消还在跑的旧检查;push(main)不取消,避免误杀发布门禁。
-# pull_request 的 group 天然带 refs/pull/*/merge 前缀,与 push 的组互不干扰。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    # Apple-only product (ADR-039): core, host and the Swift packages are
+    # verified on macOS only.
+    runs-on: macos-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Normalize Windows checkout line endings
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          git config core.autocrlf false
-          git checkout-index --all --force
-
       - name: Checkout dbx dependency
         shell: bash
         run: |
           set -euo pipefail
-          # Pin the dbx path-dependency to a known-good commit for reproducible
-          # builds. `Cargo.toml` uses a `path = "../dbx/..."` dependency whose
-          # source is NOT constrained by Cargo.lock, so without this pin every
-          # run would silently pull dbx's moving main HEAD. The commit lives in
-          # scripts/dbx-ref.txt so the workflows, the release workflow, and
-          # scripts/prepare-dbx.sh cannot drift apart. Bump deliberately.
+          # core 通过 `path = "../../dbx/..."` 依赖 dbx，这条依赖不受 Cargo.lock
+          # 约束；提交号钉在 scripts/dbx-ref.txt，与 scripts/prepare-dbx.sh 共用。
           DBX_REF="$(tr -d '[:space:]' <scripts/dbx-ref.txt)"
           git init ../dbx
           git -C ../dbx fetch --depth 1 https://github.com/t8y2/dbx.git "$DBX_REF"
@@ -50,34 +36,6 @@ jobs:
       - name: Apply Aeroric DBX security patch
         shell: bash
         run: ./scripts/prepare-dbx.sh
-
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev
-
-      # 版本来自 package.json 的 packageManager 字段（pnpm@10.33.0）。
-      # 这里不能再写 `version:`，否则 action 会因为「Multiple versions of pnpm
-      # specified」报错。lockfile 由 pnpm 10 生成，pnpm 9 会以
-      # ERR_PNPM_LOCKFILE_CONFIG_MISMATCH 拒绝 --frozen-lockfile。
-      - name: Setup pnpm
-        # v6
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: |
-            pnpm-lock.yaml
 
       - name: Setup Rust
         # stable
@@ -91,221 +49,46 @@ jobs:
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: |
-            ./src-tauri -> target
+            ./core -> target
             ./remote-protocol -> target
+            ./remote-push -> target
             ./remote-relay -> target
 
-      - name: Install cargo-audit
-        if: runner.os == 'Linux'
-        run: cargo install cargo-audit --version 0.22.1 --locked
-
-      - name: Run cargo audit
-        if: runner.os == 'Linux'
-        working-directory: src-tauri
-        # rkyv 只作为 rust_decimal 的未启用可选依赖躺在 Cargo.lock 里，本构建没有它的
-        # 有效依赖路径，所以 RUSTSEC-2026-0235 不适用。先断言这一点仍然成立：一旦
-        # rkyv 真的被引入，这一步会直接失败，而不是被 --ignore 悄悄放过。
-        run: |
-          if cargo tree --locked --target all -i rkyv 2>/dev/null | grep -q .; then
-            echo "::error::rkyv is now an active dependency; RUSTSEC-2026-0235 must not be ignored."
-            exit 1
-          fi
-          cargo audit --ignore RUSTSEC-2026-0235
-
-      # dbx-core 打开了 openssl 的 `vendored` feature，构建会把一整份 OpenSSL 的 C
-      # 源码（openssl-src）静态链进来。cargo audit / RustSec 只覆盖 Rust crate，
-      # **不覆盖这份 C 代码的 CVE**，所以这条链原本没有任何自动告警：OpenSSL 发了
-      # 公告，本仓库这边一片绿。
-      #
-      # 这一步把版本钉成显式常量。openssl-src 一旦变动（升级、或被别的依赖拉低），
-      # 这步就失败，强迫有人去 https://openssl-library.org/news/vulnerabilities-3.6/
-      # 对一遍公告，然后把下面的复核记录一起更新。
-      #
-      # 最近一次人工复核：2026-08-25，300.6.1+3.6.3（= OpenSSL 3.6.3）。
-      #   - 3.6.3 已修复 CVE-2026-45447（PKCS7_verify UAF，High）等 17 项。
-      #   - 3.6.4 另修 CVE-2026-14456 与 CVE-2026-54876，均为 Low：前者只影响
-      #     OpenSSL QUIC listener，后者需要调用方显式设置
-      #     X509_V_FLAG_OCSP_RESP_CHECK。本应用两者都不涉及，故不阻塞。
-      #
-      # 注意这只监控「版本变了」，不监控「已钉版本新增了 CVE」——后者仍需人工在
-      # 升级 dbx pin 时复核。
-      - name: Assert vendored OpenSSL version
-        if: runner.os == 'Linux'
-        working-directory: src-tauri
-        run: |
-          set -euo pipefail
-          expected="300.6.1+3.6.3"
-          actual="$(cargo tree --locked --target all -i openssl-src 2>/dev/null \
-            | head -n 1 | sed -n 's/^openssl-src v//p')"
-          if [ -z "$actual" ]; then
-            echo "::error::openssl-src is no longer in the dependency graph. If the vendored OpenSSL is genuinely gone, delete this step; otherwise investigate why the query failed."
-            exit 1
-          fi
-          if [ "$actual" != "$expected" ]; then
-            echo "::error::Vendored OpenSSL changed: expected $expected, found $actual. Review https://openssl-library.org/news/vulnerabilities-3.6/ then update the pin and the review note in this workflow."
-            exit 1
-          fi
-          echo "Vendored OpenSSL pinned at $actual (reviewed 2026-08-25)."
-
-      - name: Audit remote protocol
-        if: runner.os == 'Linux'
-        working-directory: remote-protocol
-        run: cargo audit
-
-      - name: Audit remote relay
-        if: runner.os == 'Linux'
-        working-directory: remote-relay
-        run: cargo audit
-
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-
+      # core 是虚拟 workspace，`--manifest-path core/Cargo.toml --check` 会报
+      # "Failed to find targets"；与原生门禁一致，进入 core/ 再检查。
       - name: Check core formatting
-        # `core/Cargo.toml` is a virtual workspace, so `cargo fmt --manifest-path
-        # core/Cargo.toml --check` from the repo root fails with "Failed to find
-        # targets" on every platform — the step never actually checked formatting.
-        # `--all` is also wrong here: core's dbx path dependency pulls in the dbx
-        # workspace (its vendored `wry` is absent locally). Run the same check the
-        # native gate uses (`scripts/native/checks.json` → `core-cargo-fmt`),
-        # from inside `core/`.
+        shell: bash
+        run: cd core && cargo fmt --check
+
+      - name: Check remote crates formatting
         shell: bash
         run: |
-          cd core && cargo fmt --check
-
-      - name: Check remote protocol formatting
-        run: cargo fmt --manifest-path remote-protocol/Cargo.toml -- --check
-
-      - name: Check remote relay formatting
-        run: cargo fmt --manifest-path remote-relay/Cargo.toml -- --check
-
-      # `tauri.macos.conf.json` sets `bundle.externalBin` to `binaries/aeroric-cli`, and
-      # Tauri's build script resolves that path while *compiling* — so `cargo clippy`
-      # and `cargo test` on the macOS runner fail with
-      # `resource path binaries/aeroric-cli-aarch64-apple-darwin doesn't exist`
-      # (exit 101) unless the helper has been produced first. `src-tauri/binaries/` is
-      # gitignored, so a fresh checkout has nothing. Windows/Linux have no
-      # `externalBin` (macOS-only overlay) and need no prepare step.
-      - name: Prepare host helper (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        # The script refuses to guess a runner's CPU on purpose ("CI 的 runner 架构与
-        # 发布目标不是一回事"). This job only needs the sidecar to *exist* so the Tauri
-        # build script can resolve `externalBin`; it never ships this file (bundling,
-        # with its own explicit `matrix.target`, lives in release-desktop.yml). So the
-        # runner's own arch is used deliberately here, via `rustc -vV` rather than
-        # `uname` (the Rust host triple is what Cargo resolved).
-        run: |
-          set -euo pipefail
-          HOST_TRIPLE="$(rustc -vV | awk '/^host: /{print $2}')"
-          echo "preparing host helper for $HOST_TRIPLE"
-          # `AERORIC_TAURI_PROFILE=debug` on purpose: this job only needs a file at the
-          # path Tauri's build script resolves — it is never bundled. A release build of
-          # `aeroric-cli` (the script's default) costs ~20 minutes of runner time for a
-          # binary whose contents this job never uses. Real releases keep the default
-          # (release) in release-desktop.yml.
-          AERORIC_TAURI_TARGET="$HOST_TRIPLE" AERORIC_TAURI_PROFILE=debug \
-            pnpm native:prepare-tauri-host
-          ls -l src-tauri/binaries
-
-      - name: Run Clippy
-        run: >
-          cargo clippy --manifest-path src-tauri/Cargo.toml --locked
-          --all-targets --all-features -- -D warnings
+          for crate in remote-protocol remote-push remote-relay; do
+            cargo fmt --manifest-path "$crate/Cargo.toml" -- --check
+          done
 
       - name: Run core Clippy
-        run: >
-          cargo clippy --manifest-path core/Cargo.toml --locked
-          --all-targets --all-features -- -D warnings
+        run: cargo clippy --manifest-path core/Cargo.toml --locked --all-targets -- -D warnings
 
-      - name: Run remote protocol Clippy
-        run: >
-          cargo clippy --manifest-path remote-protocol/Cargo.toml --locked
-          --all-targets --all-features -- -D warnings
-
-      - name: Run remote relay Clippy
-        run: >
-          cargo clippy --manifest-path remote-relay/Cargo.toml --locked
-          --all-targets --all-features -- -D warnings
-
-      - name: Run Rust tests
-        if: runner.os != 'Windows'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets --all-features
+      - name: Run remote crates Clippy
+        shell: bash
+        run: |
+          for crate in remote-protocol remote-push remote-relay; do
+            cargo clippy --manifest-path "$crate/Cargo.toml" --locked --all-targets -- -D warnings
+          done
 
       - name: Run core tests
-        run: cargo test --manifest-path core/Cargo.toml --locked --all-targets --all-features
+        run: cargo test --manifest-path core/Cargo.toml --locked --all-targets
 
-      # The Tauri test binary cannot be launched by the Windows hosted runner's
-      # native GUI runtime, although it compiles successfully there.
-      - name: Compile Windows Rust tests
-        if: runner.os == 'Windows'
-        run: >
-          cargo test --manifest-path src-tauri/Cargo.toml --locked
-          --all-targets --all-features --no-run
-
-      - name: Run remote protocol tests
-        run: >
-          cargo test --manifest-path remote-protocol/Cargo.toml --locked
-          --all-targets --all-features
-
-      - name: Run remote relay tests
-        run: >
-          cargo test --manifest-path remote-relay/Cargo.toml --locked
-          --all-targets --all-features
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --ignore-scripts
-
-      - name: Check version consistency
-        run: pnpm check:version
-
-      # mobile 是 workspace 成员，依赖解析在根 pnpm-lock.yaml 的 `mobile:`
-      # importer 下，自己没有 lockfile。`pnpm --dir mobile audit` 因此只会报
-      # ERR_PNPM_AUDIT_NO_LOCKFILE；根审计已经覆盖 mobile 的依赖树。
-      - name: Audit JavaScript dependencies
-        if: runner.os == 'Linux'
-        run: pnpm audit --audit-level high
-
-      - name: Run ESLint
-        run: pnpm lint
-
-      - name: Check formatting
-        run: pnpm format:check
-
-      - name: Check generated design tokens
-        run: pnpm check:design-tokens
-
-      - name: Scan CSP hazards
-        run: pnpm check:csp-hazards
-
-      - name: Run tests
-        run: pnpm test
-
-      - name: Run web coverage
-        if: runner.os == 'Linux'
-        run: pnpm test:coverage
-
-      - name: Upload web coverage
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-coverage
-          path: coverage
-          if-no-files-found: error
-
-      - name: Run web build
-        run: pnpm build
-
-      - name: Type-check mobile app
-        run: pnpm --dir mobile typecheck
-
-      - name: Run mobile tests
-        run: pnpm --dir mobile test
-
-      - name: Export mobile bundles for every configured platform
-        if: runner.os == 'Linux'
-        run: pnpm --dir mobile expo export --platform all --output-dir "$RUNNER_TEMP/aeroric-mobile-export"
-
-      - name: Check generated mobile terminal
+      - name: Run remote crates tests
+        shell: bash
         run: |
-          pnpm --dir mobile gen:terminal-html
-          git diff --exit-code -- mobile/src/terminal/terminal-html.generated.ts
+          for crate in remote-protocol remote-push remote-relay; do
+            cargo test --manifest-path "$crate/Cargo.toml" --locked --all-targets
+          done
+
+      - name: Build and test AeroricKit (macOS)
+        run: swift test --package-path macos/AeroricKit
+
+      - name: Build and test AeroricCompanionKit (iOS)
+        run: swift build --package-path ios/AeroricCompanionKit

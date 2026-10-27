@@ -10,27 +10,20 @@
 .git
 .github
 .trellis
-.review-findings
 
 # 文档与静态资产
 docs
-knowledge
-Aeroric_frame
-public
 
-# 前端 / 移动端 / 桌面源码(镜像构建不参与)
-src
-src-tauri
-mobile
-packages
-dist
-coverage
+# 原生端源码(镜像构建不参与)
+core
+macos
+ios
+remote-push
+contracts
 
 # 工具脚本与 workspace 杂项
 scripts
 patches
-pnpm-lock.yaml
-pnpm-workspace.yaml
 
 # Node 与 Rust 构建产物(含 remote-relay/target、remote-protocol/target)
 **/node_modules

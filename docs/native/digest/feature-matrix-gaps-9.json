@@ -1,32 +1,10 @@
 {
   "shard": "feature-matrix-gaps-9.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "bc8d8146a1b3ed528cde1bb5c9c7c446b77ee026a4d1ee41f075a75a47e6750d",
+  "sourceSha256": "a7672870d4d85b54413f6835a3f659b5b509f4f29fff94155168d344ca134d8d",
   "capBytes": 32768,
   "payload": {
     "gaps": [
-      {
-        "id": "G35",
-        "status": "decided-option-2-landed",
-        "decision_item": 24,
-        "task_ids": "P10-05",
-        "finding": "CI 的两条前端腿此前红着：`pnpm lint` rc 1／1 条 warning（`src/test/native-host-protocol.test.ts:36:27` `no-explicit-any`），`pnpm format:check` rc 1／17 个文件，且逐文件对照 `origin/main` 证明没有一条是继承旧债。**2026-09-29 用户答第 24 项＝② 之后两条都已转绿**：`pnpm exec prettier --write` 只跑那 17 个路径（`--check` 由 rc 1 → rc 0），`src/test/native-host-protocol.test.ts` 的 `type Row = Record<string, any>` 整体删除，改为按 `contracts/native/v1/*.json` 实际字段声明 interface ＋ 用协议模块导出的 `Frame` 联合窄化。实测：`pnpm lint` rc 0、`pnpm exec tsc --noEmit` rc 0、该文件 `it(` 21→21、`expect(` 145→145、vitest 21 passed、`native:check protocol` 6／98（`protocol-ts-golden` 地板 21 未动）。",
-        "requirement": "前半（修复范围＝②）已闭合。**仍欠的是第 24 项的附带一问**：`pnpm lint`／`pnpm format:check` 要不要纳入门禁面\n（各一条 case ＋\"0 warning 才算绿\"的地板）——那是门禁面扩张，用户未表态，本轮没有新增任何 case。\n因此今天两条腿靠的是人工执行：任何\"CI 前端腿有守卫\"的说法都不成立（与 `F2` 同族；`G14` 记的 lint glob 止于\n`src packages mobile`、CI 之外没有任何 native case 也原样成立）。",
-        "evidence": "2026-09-29 全部逐条实测（修复前→修复后）：`pnpm lint` rc 1→**0**；`pnpm format:check` rc 1／17 文件→rc **0**；\n`pnpm exec tsc --noEmit` rc **0**；`src/test/native-host-protocol` 拼写更正：真名 `src/test/native-host-protocol.test.ts`，\n`it(` 声明 **21→21**、`expect(` **145→145**（同一条断言都不许多不许少，这是\"收紧类型不得弱化判定\"的机器形状），\nvitest 单文件 **21 passed**、`native:check protocol` **6 case／98 用例**（`protocol-ts-golden` 地板 21 未动）。\n`any` 的消除方式是声明 `EnvelopeContract`／`MethodSurface`／`EventSurface`／`TopicSurface` 等契约 interface +\n复用 `src/lib/nativeHostProtocol.ts` 已导出的 `Frame` 联合做窄化，**零 `any`、零 `as any`、零 `eslint-disable`**；\n`src/`＋`packages/` 全树 `: any` 计数 **0**。prettier 只跑那 17 个路径，`git diff` 里没有第 18 个 src 文件。",
-        "verified_on": "2026-09-29",
-        "retriage_note": "2026-09-29 补记二百三十七：**本条的执行依据是\"待追认\"**——`ask` 的回包在 Agent 可见窗口里被截断，Agent 没有看到用户选项原文，\n因此本轮按三个收法里最彻底的 ②（格式化 17 个路径 ＋ 消除那条 `any`）执行；若用户选的其实是 ①或③，prettier 部分是机械改动可整体回滚，\n类型化部分（`src/test/native-host-protocol.test.ts`）也可单独回滚而不影响别的文件。finding 里\"用户答第 24 项＝②\"这句是 Agent 的代决，不是用户原话。\n另：首句的\"红着\"已被本轮推翻，按不回填规矩保留原话并当场改写；本条保持 open 只因为后半（门禁面）未决，owner 不变。\n2026-09-29 补记二百四十：**追认结案**——用户答追认组＝两处都追认（第 24 项按 ②、污染源用例按 ①），本条 finding 里「用户答第 24 项＝②」从 Agent 代决升格为用户原话的同义复述；剩余开放面仍只有附带一问（lint/format 是否入门禁面），owner 不变。"
-      },
-      {
-        "id": "G36",
-        "status": "open",
-        "decision_item": 25,
-        "task_ids": "P10-05",
-        "finding": "**（先记账：机制本身不是本轮新发现——补记一百二十九（2026-09-28）§九 已经写下「`max_total_bytes` 在 `.trellis/scripts` 下无任何消费者」与「`max_file_bytes` 只在 `task.py validate` 打一条非阻断警告」两条结论。本条的新内容是把**当天体积**与**已腐烂的旧数**钉下来，并把调用链复算到行号。）** 2026-09-29 实测 phase-3 注入载荷：`implement.jsonl`（8 条／79 830 B）＋ `check.jsonl`（**4** 条／49 496 B）＝被引用文件合计 **129 326 B**，对默认 `max_total_bytes = 131072` 是 **98.7%**，余量只剩 **1 746 B**；unique 被引用文件 **12** 个、两份清单无交集、最大单项 `extraction/sessions.md` 25 883 B 仍在 `max_file_bytes = 32768` 之内（所以今天连那条非阻断警告都不会出现）。调用链今天复算到行号：`config.py:286/297/306` 定义并解析三上限，`grep -rn \"max_total_bytes\" .trellis/scripts/` **只命中这三处**；唯一消费者 `task_context.py:252` 只取 `max_file_bytes` ⇒ `max_total_bytes`／`max_artifact_bytes` 在自带脚本内**无实现点**，`config.yaml:146` 注释承诺的「overflow degrades to index lines」在本仓可见代码里落不了地。而 `task_context.py:299-307` 显示单文件超限走 print warning、**不累计 errors** ⇒ `validate` 仍 exit 0、仍打 `✓ (N entries)`。**同时本文 §进度总表 P3-04 那行原写的 173 461 B／132.3% 今天反向腐烂**（`check.jsonl` 6→4 条把总量拉回线内），该句还写着\"本仓没有任何代码消费该总量限制\"，精确说法应是\"**解析了但无消费点**\"。",
-        "requirement": "P3-04 开工自证照 补记一百二十九 §九 已定的路线做，判据用今天的数：① 复测被引用文件合计与余量（今天 129 326 B／98.7%）；② **实测子代理收到的是正文还是索引行**——自带脚本里没有总量执行点，`validate` 绿与载荷是否降级**完全无关**，唯一观测面就是接收端；③ 谁守这一半：(a) 在 `scripts/native/` 加一条 case 核对每个 phase 清单合计（超限即红、≥2 负例）＝**门禁面扩张，须用户点头**；(b) 取消 `.trellis/config.yaml:143-146` 的注释把上限显式化，并写明总量与 artifact 上限在自带脚本里无消费点；(c) 削载荷——**`extraction/*.md` 没有分片机制**（`digest.mjs` 只切 `feature-matrix.json` 与 `command-map.json`），所以只能拆文档后只引用所需那片、或把条目摘掉，**不存在\"改指它的分片\"这个选项**（本文答题纸第 25 项原来那么写了，已同日更正）。",
-        "evidence": "2026-09-29 可复跑：读两个 `.jsonl` 的 `file` 字段逐个 `stat` 求和（口径＝**被引用文件**体积；清单自身只有 1 310 B／728 B，拿它当载荷会得出 1.9% 这种荒谬数）⇒ unique 12 个文件、两份清单无交集、合计 129 326 B、超单文件上限者 0。调用链证据：`grep -rn \"get_context_injection_limits\" .trellis/scripts/` ⇒ 仅 `task_context.py:24` 导入、`:252` 使用且取 `max_file_bytes`；`grep -rn \"max_total_bytes\" .trellis/scripts/` ⇒ 仅 `config.py:286/297/306` 三处（定义与文档串），无读取者；`max_artifact_bytes` 同样只出现在 `config.py:296/305`。`task_context.py:299-307` 源码显示单文件超限走 print warning、不累计 errors。`TRELLIS_CONTEXT_ID=qoder-native-macos-20260921-aeroric python3 .trellis/scripts/task.py validate 09-21-native-phase-3` ⇒ **rc 0，`implement.jsonl ✓ (8 entries)`、`check.jsonl ✓ (4 entries)`**。",
-        "verified_on": "2026-09-30",
-        "retriage_note": "2026-09-30 补记二百四十八：P3-04 的「开工自证」半边已做完（当日 headroom 实测与「正文还是索引行只能由接收端观测」的口径写进评审与 §九）；剩余的接收端观测与总量执行点属交接面，改派 P10-05——与 G37/G38 同批治理。phase-3 注入今日 129 483 B＝98.8%，七片未再增长。"
-      },
       {
         "id": "G37",
         "status": "open",
@@ -48,6 +26,71 @@
         "evidence": "2026-09-29 同日全部可复跑：`rg -n \"for \\(const testCase of entry.cases\\}|await run\\(\" scripts/native/check.mjs` ⇒ 模块内 case 串行（:158／:161）；`python3` 读 `checks.json` 得 cargo 类 case 的 timeoutMs 分布（terminal-* 全是 300 000／600 000，其余 rust 900 000，`src-tauri-lib-tests`／`core-clippy`／`src-tauri-clippy` 1 800 000）。并发实验日志：`storage-core-rust … FAIL (exit 101)` ＋ `1 case(s) failed, 0 test cases executed`；`terminal-pty-bytes-rust … FAIL (exit timeout)` 同时 `cargo test -p aeroric-core` 那侧打印 `a_hundred_mebibytes_through_a_real_pty…`／`replay_memory_does_not_grow_with_total_output … has been running for over 60 seconds`。串行复跑读数：skeleton 22／160、protocol 6／98、projects 5／21、tasks 7／151、runtime 1／5、agents 1／2、storage 5／361、terminal-core 13／107（连续 4 次全等）。**本条登记时未改任何门禁代码，也未抬任何 timeout。**",
         "verified_on": "2026-09-29",
         "retriage_note": "补记二百三十一 登记。登记前按 补记二百二十一 的教训 grep 过本文与台账：`G30`（absent 型门禁有没有\"牙齿\"）、`G31`（评审载体七字段结构）、`G34`（core 零调用公开 API）、`F2`（\"门禁不跑的东西\"）都不覆盖\"跑动了但被杀掉时的报告形状\"，所以不是重复发现；本轮也没有为了自证而去并发跑第二遍（避免再造一次假红）。"
+      },
+      {
+        "id": "G39",
+        "status": "closed",
+        "task_ids": "P3-06",
+        "finding": "把两条污染源用例改成默认 opt-in 之后（**该选择的依据待追认**：`ask` 回包截断，Agent 未看到用户选项原文，本轮按推荐项 ① 执行），**默认门禁不再覆盖宿主 `--lib` 2 465 条与真内核适配器验收 19 条**。这不是假设：2026-09-29 实测 `pnpm native:check tauri-adapter` 现在打 `10 case(s) passed, 42 test cases executed (2 opt-in skip: adapter-acceptance-real-kernel, src-tauri-lib-tests)`，墙钟从 235 s 降到 17 s；同一轮真实 `~/.aeroric` 前后快照 5 个文件＋3 个凭据边车**逐字节相同**、`invite-created` 计数不变（1 982→1 982）⇒ 污染源确实被关掉了。代价是覆盖面：这 2 484 条用例今天在任何默认绿里都不存在，而 P2-05／P3-01／P3-02／P3-03 多条已 accepted 的验收都曾把它们当证据。〔2026-09-29 补记二百四十：**该选择已获追认**（污染源用例默认 opt-in＝①，用户答复「两处都追认」）；覆盖面代价与本条 requirement 均不变，P3-06 出口四步照旧。〕",
+        "requirement": "P3-06 出口必须把这两条**恢复成默认必选**，顺序固定：① 给 `storage::aeroric_dir()` 一个应用自己认的覆盖变量（`AERORIC_HOME` 一类；`HOME=` 重定向实测无效，rustup 会 exit 1），让宿主套件整体落 scratch 根；② 用 `AERORIC_ALLOW_REAL_HOME_TESTS=1` 跑一轮，按**内容**证明隔离成功（`remote-audit.log` 事件计数、`agent-credentials/**` sha256 集合、usage DB 行级读数都不变，见 `G24` 的 28 目标清单）；③ 删掉 `optInEnv` 标记并把 `checks.json` 的 `runner.rules` 第 3 条恢复成无条件成立；④ 同批把 `tauri-adapter` 的期望读数从 10/42 抬回 12/2 526。在此之前，任何引用“门禁全绿”的文字都必须写明这两条是 opt-in 未跑——`extraction` 之外的散文没有机器提醒，靠的是 `gate-runner-unit` 里那条“committed gate exactly the two real-home writers are opt-in”的集合断言（它同时禁止把别的用例标成 opt-in）。",
+        "evidence": "2026-09-29 实测：`rg -c 'skip' scripts/native/check.mjs` 在改动前为 0（默认跑一切）；改动后 `native:check tauri-adapter` rc 0、10/42＋2 SKIP；`native:check skeleton` 22／173（`gate-runner-unit` 29→36、`extraction-unit` 9→15 两条地板同批抬）；前后快照脚本只读，`changed keys: NONE`。新增 6 条 runner 用例含 3 条负例：env 未设⇒跳过且不计数、env=1⇒真跑、env=0/true/空/yes⇒仍跳过；optInEnv 缺 reason 或变量名非法⇒注册被拒；红用例与跳过并存⇒模块仍红。 2026-09-30 P3-06 收口：`storage::aeroric_dir()` 成为唯一根且读序三层——测试 SLOT（install_scratch_home）> `AERORIC_HOME`（runner 每轮注入的 scratch）> 真实家；notification.rs/app_settings 的两份逐字重复实现并一（覆盖只进一份＝止血止一半）。门禁两条（src-tauri-lib-tests 2452、adapter-acceptance-real-kernel 19）从 opt-in 恢复默认必选（check.mjs 的 case.env `<scratch>` 哨兵＝mkdtemp 注入+跑后清理）。当日实测：tauri-adapter 12/2513 全绿；真实家对账——remote-audit.log 行数与哈希不动、agent-credentials 边车哈希不动、terminal-history 文件数不动（usage DB 行级 +9 经核为在跑客户端的正常采集，非测试签名——签名判据全零）。事故如实记：修复窗口内一次未隔离的 `cargo test --lib` 直跑写了真实家（audit +3 伪造 invite 事件、usage +25 行）——正是 G19/G20 描述的污染形态的活体复现，此后所有宿主套件跑批一律走 runner 注入或 HOME=mktemp 隔离。补记二百八十。",
+        "verified_on": "2026-09-30"
+      },
+      {
+        "id": "G40",
+        "finding": "['用户硬边界（2026-10-01）：pnpm native:ui-test 触发 Xcode XCUITest 键盘合成机制向系统新建测试专用输入源（XCTest input method）。用户先两轮明令禁止；同日用户在知悉根因后明确同意该副作用并指示继续运行 UI 测试——G40 由\"禁跑\"改记为\"知情同意，Agent 可运行 native:ui-test\"（本条保留作审计痕迹）。']",
+        "requirement": [
+          "native:ui-test 可由 Agent 正常执行；若用户再次明令禁止，立即停跑并把本条改回禁跑口径。"
+        ],
+        "task_ids": [
+          "P4-04"
+        ],
+        "owner": "user",
+        "status": "resolved"
+      },
+      {
+        "id": "G41",
+        "finding": [
+          "XCUITest 环境故障（2026-10-01/02 两日排查）。已根修两层：①applicationWillTerminate 信号量等 MainActor Task＝主线程自锁死锁，每次退出都孤儿化 serve（其持数据目录写锁，后续启动全部抢锁秒败）→改为 LiveChildSlot+nonisolated terminateChildForProcessExit 同步直达；②GUI app 的并发工作线程阻塞 SIGTERM，posix_spawn 子进程继承阻塞掩码→SIGTERM 永远 pending、serve 杀不死（spawn 脚本+阻塞掩码对照实验实锤）→spawnattr SETSIGMASK 清空+SETSIGDEF 重置 SIGTERM/SIGINT/SIGHUP/SIGQUIT。修复后 launchservices 探针实证退出即杀 serve（slot trace：store→processExit terminate→死亡）。**剩余第三层**：testmanagerd 管辖启动下 serve 偶发起停后卡在 ready 行之前（钩子日志：connecting 15s→reconnecting attempt 1→give up），且场景装配间歇缺失随开机内累计启动数加剧（约 10-15 次预算）、重启复位。serve stderr 落盘已自动接线（launchApp 设 AERORIC_SERVE_STDERR_LOG=数据目录/serve-stderr.log），下次新开机会话一轮单测即得死因。"
+        ],
+        "requirement": [
+          "下次会话（必须先重启系统复位 testmanagerd 场景装配状态——每轮开机预算约 15-25 次 XCUITest 启动）：直接跑一次 `pnpm native:ui-test`（已改逐测试独立会话＋失败换新会话重试，全套约 12-18 次启动）。全绿→grill-me [shell]→三处同步申报 Phase 4 Gate。链路已全部实证：钩子 2s 开两项目＋projects.json 持久化（r8）；侧栏键盘选择/值断言/两窗口独立各自在 r6/r9/r10 分别通过；最佳轮 5/6（r9）。实现与三层根修全部入库（bcebf59/6e771f6/b5dd0b9/14a286a）。"
+        ],
+        "task_ids": [
+          [
+            "P4-04"
+          ]
+        ],
+        "owner": [
+          "P4-04"
+        ],
+        "status": "accepted",
+        "accepted_by": "user",
+        "accepted_note": "用户裁定(2026-10-02 Q96):UI 6/6 验收跳过,残余风险用户自担;测试资产全保留,重开路径=P10-02 或随时重跑 pnpm native:ui-test。三层根修与全部诊断已入库。"
+      },
+      {
+        "id": "G42",
+        "finding": "宿主 lib 的三条 remote 用例不是并行安全的：默认多线程跑 `cargo test --locked --lib` 稳定失败 `remote::lan_roundtrip_tests::{lan_pairing_rpc_push_and_revoke_roundtrip,m3_task_rpcs_input_respond_and_event_bridge,m5_event_watermark_and_readonly_rpc_guards}`，而 `--test-threads=1` 下 1231/0 全绿；`--skip` 掉本轮新增的两个测试模块仍然失败，且在 HEAD（P8-05 切片五提交 60899068）上同样复现，故不是本轮引入。根因方向：三条用例走 `tauri::test::mock_app()` 加真实数据根（`crate::storage::load_projects` 经 `aeroric_dir()`），彼此以及与真机应用的写入窗口相互干扰——断言拿到的是一次 `ok=false` 与不同的错误文案，不是超时。",
+        "evidence": "2026-10-07 实测：`cargo test --locked --lib` 默认线程 FAILED 1229 passed / 3 failed；`-- --test-threads=1` 1231 passed / 0 failed；`--skip host_dispatch_tests` 仍 3 failed（同期还多出一条 app_settings::agent_scripts 的并行失败）；`git checkout -- .` 回到 HEAD 60899068 后默认并行同样 3 failed。门禁 `src-tauri-lib-tests` 的 argv 自带 `--test-threads=1` 且注入 `AERORIC_HOME=<scratch>`，所以门禁不受影响。",
+        "requirement": "给这三条用例一个可注入的隔离根（与 G19/G20/G21 同一个根法：AERORIC_HOME 或测试 SLOT），或把它们显式声明为只允许串行并在文件头写明原因；退出判据是默认并行跑 --lib 也全绿，不接受把并行安全当成门禁串行所以无所谓。",
+        "task_ids": "P10-05",
+        "owner": "desktop-tests",
+        "test": "默认多线程 `cargo test --locked --lib` 全绿；负控＝去掉隔离根后该用例必须红（否则等于没隔离）",
+        "status": "open",
+        "verified_on": "2026-10-07",
+        "retriage_note": "P8-05 切片六在回归全量 --lib 时发现。先如实入台账：不阻塞门禁（门禁本来串行），出口挂 P10-05 的完整矩阵。"
+      },
+      {
+        "id": "G43",
+        "finding": "2026-10-07发现search双实现且headless不服务。2026-10-08 P8-05切片十四已上收旧search全套算法/DTO/18测试，只留一个根感知parser；本地search四方法及文件名list/search在host接core，原生single-file replace也经同一引擎。G43尚未关闭：headless SSH executor/凭据owner缺失，remote twin按ADR-006送父方法+target后明确UnsupportedCapability，不计作远端支持；files族其它未服务方法仍须补齐。",
+        "evidence": "切片十四：node scripts/native/host-coverage.mjs --floor=60 --quiet＝60/641、22处dispatch全部指向真实注册方法；files剩6条（四条remote search/replace目标能力＋files.read_image_preview＋files.read_clipboard_file_paths）；search-invariants钉全仓唯一parser。core search 8/0＋迁入18/0、project_files 11/0、host UDS search_services 12/0（新增native regex拒绝/legacy captures一致性回归）；最终复验以MIGRATION_PLAN.md切片十四为准。详见docs/native/extraction/search.md；原生wire三条回归先红后绿。 切片十六前置侦察更正方法名并记录未决边界：read_image_preview旧上限10MiB（Base64 13,981,016B）超过v1 MAX_FRAME_BYTES=1MiB；旧reader明确允许根内叶子symlink指向根外，而core path policy默认拒绝。不得假注册、偷偷调大帧或降低旧图片上限/更改读取授权；仍未服务。 P8-05 slice32 (2026-10-09): eight existing hosted file mutations now recheck the current writer before project/root IO; real UDS4/10 behavioral red to14/0, including replaced lock inode and isolated trash; original batch2 4/0 and search12/0 retained. files10/93, cutover54/316, skeleton24/188 passed; coverage75/641 unchanged. This does not close target routing/search-apply/remaining files coverage. Evidence: docs/native/extraction/file-write-authority.md and /tmp/aeroric-file-authority-integration-_na_dbj_/. P8-05 slice33: both hosted search apply wires now check current writer after pure target rejection and before registry/root IO; real UDS4/5 red to9/0, original search12/file14 retained, six read-only operations preserved. files11/102, cutover56/325 and skeleton24/188 pass; coverage75/641 unchanged. /tmp/aeroric-search-authority-integration-b_mfn3o4/; core search is byte-identical to pre-slice source. G43 remains open. P8-05 slice34: existing project-scoped copy moved from host to core; nearest-existing-ancestor containment and any-existing-leaf refusal fix directory/ancestor/dangling-link writes. Real UDS3/3 red to6/0; core4 plus files13 and prior batch2/file14/search9 pass; current CLI, files13/112, cutover58/335, skeleton24/188 pass. Original alias reply spelling/modes/nested destinations/partial progress retained; no transaction/TOCTOU or legacy absolute-copy claim. Coverage75/641 unchanged; docs/native/extraction/project-copy.md and /tmp/aeroric-project-copy-integration-u4n83f7w/. G43 remains open. P8-05 slice35: core write now resolves existing leaves inside the root and refuses unresolved links; create_file reserves a new entry exclusively. Real UDS3/4 red to7/0, core6, valid aliases/bytes/modes/parent/readonly controls and old suites pass. Current CLI, files15/125, cutover60/348, skeleton24/188 pass; coverage75/641 unchanged. Host and legacy Tauri IO unchanged; not a general TOCTOU fix. docs/native/extraction/file-write-paths.md; /tmp/aeroric-file-leaf-integration-ut_ncu_h/. P8-05 slice36: twelve existing non-search file methods now refuse explicit SSH/WSL/malformed targets before writer/registry IO and enforce canonical Local equality after authoritative projectId-root lookup. Real UDS3/14 red to17/0; all96 refusal and48 poison/read-only combinations plus controls, prior73 tests/scoped clippy pass. Rebuilt CLI, files16/142, cutover61/365, skeleton24/188 pass; adapter only inherited launch WIP fmt/clippy failures (1345 tests, Tauri1284 green). Coverage75/641 unchanged; stored-record remote inference and actual transport remain separate. docs/native/extraction/file-targets.md; /tmp/aeroric-file-target-integration-gcbdvc6w/. G43 remains open. P8-05 slice37: both non-search file project-root scans reuse core is_addressable then resolve_location; saved remote/malformed location cannot select a local shadow path or be overridden by explicit Local. Typed resolver errors retain UnsupportedCapability/InvalidArgument and closed location detail; Local raw-path contract unchanged. Real UDS18/15 red to33/0 (prior17 unchanged),192 saved-shape/target pairs; old73/scoped clippy, rebuilt CLI, files16/158, cutover61/381, skeleton24/188 pass. Adapter only inherited launch WIP fmt/clippy failures; coverage75/641 unchanged. Inline reviewed scoped delta,32 negative source controls. docs/native/extraction/file-project-records.md; /tmp/aeroric-file-record-integration-goxt82y8/. Search stored-record admission remains separate; G43 open. P8-05 slice38: search now reuses the same saved-record admission for selected ids and skips ineligible path/worktree candidates before raw-root/task reads; independent vault authority and local raw paths remain. Real UDS10/12 red to22/0,160 selector/location pairs,40 old apply mutations and40 fake-Git invocations; prior97 tests/scoped clippy pass. Rebuilt CLI, files16/171, cutover61/394, skeleton24/188 pass; adapter only inherited launch WIP fmt/clippy failures. Inline exact-delta review and12 negative source controls; coverage75/641 unchanged. docs/native/extraction/search-records.md; /tmp/aeroric-search-record-integration-889y8nq6/. G43 remains open.",
+        "requirement": "把 search 家族整体上收 core（根感知解析、rg 参数构造、结构化查询、fallback、replace 预览收集、remote 变体），宿主注册对应方法，Tauri 侧改薄壳并接 host_dispatch；退出判据＝host-coverage 里 files 族归零，且全仓 `fn parse_rg_json_lines` 只剩一处。",
+        "task_ids": "P8-05",
+        "owner": "core:files",
+        "test": "host-coverage files 族缺失为 0；全仓 `fn parse_rg_json_lines` 只有一处；search 行为用例在 core 侧（rg JSON 语料＋root 归属＋截断＋fallback）",
+        "status": "open",
+        "verified_on": "2026-10-09",
+        "retriage_note": "P8-05 切片七在按覆盖率清单补宿主服务时发现：files 族缺口里有一半不是没写，而是写了两遍且宿主那份不在 core。 2026-10-08：两条legacy/native replace假等价alias删除并接真实legacy handler；新增target拒绝/根authority测试。不得把parent method已注册误当SSH已支持，G43保持open。"
       }
     ]
   }

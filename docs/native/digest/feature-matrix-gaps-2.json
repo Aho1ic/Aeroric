@@ -1,22 +1,10 @@
 {
   "shard": "feature-matrix-gaps-2.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "bc8d8146a1b3ed528cde1bb5c9c7c446b77ee026a4d1ee41f075a75a47e6750d",
+  "sourceSha256": "a7672870d4d85b54413f6835a3f659b5b509f4f29fff94155168d344ca134d8d",
   "capBytes": 32768,
   "payload": {
     "gaps": [
-      {
-        "id": "G05",
-        "finding": "React 仍持有后端不知道的权威状态，2026-09-28 逐条核对后剩三处：`pendingTaskStartsRef`（App.tsx:201，延迟启动闭包，:1086 消费）→ P3-07 的无头入口必须能复现；`manuallyCompletedDshTasksRef`（App.tsx:204，抑制后端状态事件，:376 作为 isManuallyCompletedDsh 注入）→ P3-05；`remoteTaskMutationQueuesRef`（App.tsx:202 的串行 Promise 队列）→ P8-03。原列五项中的两项**不是缺陷**：`taskId.ts` 铸 ID 正是 ADR-013 定的「调用方给 uuidv7」；`projectMutations` 合成 project id 与 orderIndex 的权威已在 P2-03 的 core reorder/group 里。",
-        "evidence": "App.tsx:201/202/204/376/1086（当天 grep 计数 14 处引用）；taskId.ts:5 uuidv7、:10 兜底串；projectMutations.ts:87/93/121/127 orderIndex 仍在客户端合成 2026-09-29 逐行复跑：`App.tsx:201`＝`const pendingTaskStartsRef = useRef<Record<string, () => void>>({})`、`:202`＝`remoteTaskMutationQueuesRef = useRef(new Map<string, Promise<void>>())`、`:204`＝`manuallyCompletedDshTasksRef = useRef<Set<string>>(new Set())`；`:1086` 仍是 `const startTask = pendingTaskStartsRef.current[taskId]`、`:376` 仍以 `isManuallyCompletedDsh: (taskId) => …has(taskId)` 注入。三处权威状态与行号一字未漂。 2026-10-04 P8-03 刀二：remoteTaskMutationQueuesRef 半边闭合——RemoteState.task_queues（per-project tokio Mutex）＋execute_task_request 串行队列锁（host 侧等价判决），React hook 退役。G05 三处全部闭合（P3-07 pendingTaskStartsRef＋P3-05 manuallyCompleted＋P8-03 队列）。",
-        "requirement": "这三处必须变成 host 侧状态或有 host 侧等价判决，否则无头入口语义不完整",
-        "task_ids": "P3-07, P3-05, P8-03",
-        "owner": "core:tasks (headless launch) + core:dsh (manual-complete) + core:remote (mutation queue)",
-        "test": "tests/task_idempotency.rs；无 listener 场景下 pending start 不得丢失",
-        "status": "closed",
-        "retriage_note": "原判 `task_ids: P2-02~P2-05` 是一条区间，而区间无法回答「谁还欠这笔」——四个 Task 现已全部 accepted，gap 却仍 open。按当天 grep 结果改成显式三点名，并记下两项关闭及其决定出处（ADR-013 / P2-03）。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。 2026-10-01 P3-07 ⑦ 分片落判：pendingTaskStartsRef 片闭合——无头 `task.run` 一次 RPC 建+启动＝无 pending 窗口（smoke-headless 全程无 listener run→done＋executor_pty 3/0）；G05 整条仍 open（P3-05 片在其小节无分片落判记录、P8-03 片未开工），owner 不变。",
-        "verified_on": "2026-10-04"
-      },
       {
         "id": "G06",
         "finding": "后端的行为仍由 React 决定，2026-09-28 逐条回源后剩三处：`src/taskFlush.ts:4` 的 `TASK_FLUSH_TIMEOUT_MS = 10_000`、`src/state/app/useAppMaintenance.ts:92` 的 `window.setInterval(…, 30 * 60 * 1000)` 自动清理、以及 DSH 宿主事件订阅的开关由 React 判——`src/state/app/useAppStartup.ts:90-105` 的 `useDshHostEventsSubscription(tasks, agentOptionsRef)`（`src/App.tsx:333` 调用）每次 `tasks` 变化都判一次『有没有活跃 dsh 任务』，据此 invoke `DSH_TASK_COMMANDS.startHostEvents` 或 `stopHostEvents`。**已闭合：原列的第一项「350ms per-project 去抖持久化」不复存在**——载体 `src/taskPersistence.ts` 由 P2-05 §12 接线删除，`src/taskIntentQueue.ts:4` 明写「不做 350 ms 快照合并」、`:237` 把微任务窗口称为旧防抖的意图版",
@@ -88,6 +76,30 @@
         "status": "closed",
         "verified_on": "2026-10-02",
         "retriage_note": "主张与行号全部复算命中（原记 326-330 与实际过滤器 :328 同处一段）。两处精度补充：evidence 此前没给文件全路径；『AppSettingsDialog 是唯一消费者』要限定为『唯一非测试消费者』，registry 另有一个测试导入方。 2026-09-29 复跑成立并钉死判据。"
+      },
+      {
+        "id": "G12",
+        "finding": "get_active_task_ids 的真实来源是 Tauri 进程内 TaskManager；external host 模式下旧客户端不得读到空 map",
+        "evidence": "2026-09-28 复核：`pty::get_active_task_ids` 仍注册在 `lib.rs:488`，来源仍是进程内 `TaskManager`。本条的真正闭合点在 P8-05 的 external host 模式（Action 3 要求 snapshot 从 host 来，而不是空的旧 TaskManager）  2026-09-29 复跑定义点：`get_active_task_ids` 今天不在 `remote/`，而在 **`src-tauri/src/pty.rs:2060`** `pub async fn get_active_task_ids(task_manager: State<'_, TaskManager>, …)`——第二行参数就是进程内 `TaskManager`，与本条\"真实来源是 Tauri 进程内 TaskManager\"逐字吻合 ⇒ external host 模式下它必然读到空 map 的推理仍成立（P8-05 的四派租约入口要解决的就是这个）。",
+        "requirement": "cutover 后 snapshot 必须来自 host",
+        "task_ids": "P8-05",
+        "owner": "host+desktop",
+        "test": "tests/host_cutover.rs：三客户端同时改任务不丢更新",
+        "status": "closed",
+        "verified_on": "2026-10-10",
+        "retriage_note": "2026-10-10（切片十九与切片五十九）：pty::get_active_task_ids 已接入 host_dispatch 并在 External 模式下经 UDS 从宿主 terminal.get_active_task_ids 获取活跃任务快照，不读取本地 TaskManager；单命令测试 active-task-command-rust（6/6）与门禁 active-task-command-ownership（active-task-invariants.mjs）严格守卫，满足 cutover 后 snapshot 必须来自 host 要求。G12 闭环。"
+      },
+      {
+        "id": "G13",
+        "finding": "omp_session_allowed_roots 放行 ~/.aeroric/agent-homes/*/sessions 全部托管档案，而函数注释承诺「Phase 7 接入时按 agent 校验」，两者不一致",
+        "evidence": "2026-09-28 复核：不一致**仍然存在且成因写在代码里**。`omp_session_allowed_roots` 在 `session_omp.rs:118`，函数注释 :116-117 承诺「自定义 omp 档案…Phase 7 接入时按 agent 校验」，而 :123-129 直接 `read_dir(~/.aeroric/agent-homes)` 放行全部托管档案的 sessions；:124-125 给的现实理由是「校验只拿到 family 拿不到档案 id」。原记 :110-128 已漂到 :114-129  2026-09-29 复跑，并把三处行号钉准：`omp_session_allowed_roots` 在 `src-tauri/src/session_omp.rs:118`；**文档注释 :114-117** 仍写着\"自定义 omp 档案…Phase 7 接入时按 agent 校验\"；而**函数体 :127-134 实际是遍历 `~/.aeroric/agent-homes/*` 并把每个档案的 `sessions` 全放行**，其旁边的**行内注释 :124-126 给了一个真实理由**（\"校验只拿到 family 拿不到档案 id，放行全部 Aeroric 托管 home\"）⇒ 精确形状是**同一个函数里两份互相矛盾的自述**（文档注释承诺收紧、行内注释为放宽辩护），而不是单纯\"没实现\"；另外 **:136-139 还追加了非托管根 `~/.omp/agent/sessions` 与 `~/.omp/profiles/*/agent/sessions`**，这一支正是 `AGENTS.md`／ADR-001 §5 规定\"留在宿主、core 不得继承\"的读根。本条主张与出处今日全部成立，行号未漂。",
+        "requirement": "迁移到 core 时按 task 持久化的 agent id 精确取根，取消全量放行；ADR-001 §5.5 已登记为待收口项",
+        "task_ids": "P5-04",
+        "owner": "core:agents::managed_home::omp + sessions",
+        "test": "tests/omp_invariants.rs：两个不同 omp 档案的会话文件互相不可见；越出所属档案目录的路径必须被 allowed-roots 拒绝",
+        "status": "closed",
+        "retriage_note": "2026-09-30 补记二百四十八：P3-02/P3-04 均 accepted 而本条未闭合——P3-04 七片按手写约束 2 只做了 managed/external 根的拆分＋capability 门，agent id 精确取根没做（legacy 全量放行是其现存行为，迁移不借道收紧也不删）。真正的欠方是新增的 core 读取消费者：P5-04 原生会话消息/轨迹上收时按 task 持久化的 agent id 取根，正是该收口点。已写进 P5-04 小节具名前置。",
+        "verified_on": "2026-10-02"
       }
     ]
   }

@@ -8,6 +8,7 @@
 // this command), prints PID + data dir, then exits 0 leaving the app running.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
@@ -16,7 +17,11 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const ARTIFACTS = path.join(repoRoot, ".artifacts/native");
 const APP = path.join(ARTIFACTS, "DerivedData/Build/Products/Debug/AeroricNative.app");
 const EXECUTABLE = path.join(APP, "Contents/MacOS/AeroricNative");
-const DEV_DATA = path.join(ARTIFACTS, "dev-data");
+// Outside the repo on purpose — same reason as `ui-test.mjs`: the repo sits in
+// ~/Downloads, which is TCC-protected, and an ad-hoc rebuild voids the grant
+// every time. The app then blocks on the consent sheet and the host never
+// reaches ready. `~/Library/Caches` needs no consent.
+const DEV_DATA = path.join(os.homedir(), "Library/Caches/aeroric-native/dev-data");
 
 function fail(message) {
   console.error(`native:dev: ${message}`);

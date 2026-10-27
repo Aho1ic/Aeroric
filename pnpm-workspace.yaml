@@ -1,7 +1,0 @@
-packages:
-  - "."
-  - "mobile"
-  - "packages/*"
-
-allowBuilds:
-  esbuild: true
