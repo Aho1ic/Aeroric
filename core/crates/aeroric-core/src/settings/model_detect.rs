@@ -326,6 +326,11 @@ pub struct ConnectionProbe {
 /// Send one minimal request (`ping`, a token or so of output) to a connection
 /// over `protocol` (`responses` | `messages` | `chat_completions`). Costs a
 /// tiny amount of quota; the UI says so before the user clicks (G2).
+/// Output budget for a connection test: enough for a reasoning model to get
+/// past its thinking and answer, still only a few tokens of credit.
+pub const PROBE_MAX_TOKENS: u32 = 64;
+const PROBE_PROMPT: &str = "Reply with the single word: pong";
+
 pub async fn probe_connection(
     base_url: &str,
     api_key: &str,
@@ -349,26 +354,30 @@ pub async fn probe_connection(
     let client = build_detect_client(&base_url, &proxy_settings, policy, &[])?;
     let root = base_url.as_str().trim_end_matches('/');
     let api_key = api_key.trim();
+    // A 1-token budget is all thinking on a reasoning model, and relays such
+    // as cline answer an empty reply with 500 "empty response content"
+    // (2026-10-26). PROBE_MAX_TOKENS leaves room for a visible "pong".
     let request = match protocol {
         "messages" => client
             .post(format!("{root}/messages"))
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&serde_json::json!({
-                "model": model, "max_tokens": 1,
-                "messages": [{"role": "user", "content": "ping"}]
+                "model": model, "max_tokens": PROBE_MAX_TOKENS,
+                "messages": [{"role": "user", "content": PROBE_PROMPT}]
             })),
         "responses" => client
             .post(format!("{root}/responses"))
             .bearer_auth(api_key)
-            // OpenAI refuses fewer than 16 output tokens on Responses.
-            .json(&serde_json::json!({"model": model, "input": "ping", "max_output_tokens": 16})),
+            .json(&serde_json::json!({
+                "model": model, "input": PROBE_PROMPT, "max_output_tokens": PROBE_MAX_TOKENS
+            })),
         _ => client
             .post(format!("{root}/chat/completions"))
             .bearer_auth(api_key)
             .json(&serde_json::json!({
-                "model": model, "max_tokens": 1, "stream": false,
-                "messages": [{"role": "user", "content": "ping"}]
+                "model": model, "max_tokens": PROBE_MAX_TOKENS, "stream": false,
+                "messages": [{"role": "user", "content": PROBE_PROMPT}]
             })),
     };
     let started = std::time::Instant::now();
@@ -383,6 +392,8 @@ pub async fn probe_connection(
     let text = value.as_ref().and_then(|value| {
         value
             .pointer("/choices/0/message/content")
+            // cline wraps the OpenAI shape in `data`.
+            .or_else(|| value.pointer("/data/choices/0/message/content"))
             .or_else(|| value.pointer("/content/0/text"))
             .or_else(|| value.pointer("/output_text"))
             .or_else(|| value.pointer("/error/message"))

@@ -236,9 +236,10 @@ fn candidates(request: Request, context: Arc<CoreContext>) -> Frame {
         Ok(doc) => doc,
         Err(e) => return failure(request.id.clone(), ErrorCode::IoError, &e),
     };
-    let Some(config) = doc.configs.iter().find(|c| c.id == config_id) else {
+    let Some(config) = doc.config(&config_id) else {
         return failure(request.id.clone(), ErrorCode::NotFound, "config not found");
     };
+    let config = &config;
     let models = routing::offered_models(&doc, config);
     let model = optional_str(&request, "model").unwrap_or_else(|| config.default_model.clone());
     let (available, excluded) = if model.trim().is_empty() {
@@ -263,6 +264,9 @@ fn fetch_models_handler(context: &Arc<CoreContext>) -> Handler {
     Arc::new(move |request: Request, _call| {
         let context = Arc::clone(&context);
         Box::pin(async move {
+            if request.params.get("connection").is_some() {
+                return fetch_models_for_draft(&context, &request).await;
+            }
             let id: String = match param(&request, "connectionId") {
                 Ok(id) => id,
                 Err(e) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &e),
@@ -318,6 +322,56 @@ fn fetch_models_handler(context: &Arc<CoreContext>) -> Handler {
             }
         })
     })
+}
+
+/// The editor's unsaved connection (cc-switch `fetch_models_for_config`):
+/// fetch with the typed base URL and key, merge into the draft and hand it
+/// back. Nothing is saved — the user still clicks 保存. An empty key falls
+/// back to the one stored for this connection id.
+async fn fetch_models_for_draft(context: &Arc<CoreContext>, request: &Request) -> Frame {
+    let mut draft: Connection = match param(request, "connection") {
+        Ok(draft) => draft,
+        Err(e) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &e),
+    };
+    let typed = optional_str(request, "credential").filter(|key| !key.trim().is_empty());
+    let key = match typed {
+        Some(key) => key,
+        None => {
+            let ctx = Arc::clone(context);
+            let id = draft.id.clone();
+            match tokio::task::spawn_blocking(move || {
+                store::get_credential(ctx.secrets.as_ref(), &id)
+            })
+            .await
+            {
+                Ok(Ok(Some(key))) => key,
+                Ok(Ok(None)) => {
+                    return failure(
+                        request.id.clone(),
+                        ErrorCode::InvalidArgument,
+                        "先填 API Key",
+                    )
+                }
+                Ok(Err(e)) => return failure(request.id.clone(), ErrorCode::IoError, &e),
+                Err(e) => return failure(request.id.clone(), ErrorCode::IoError, &e.to_string()),
+            }
+        }
+    };
+    let fetched = match fetch::fetch_models(&draft, &key).await {
+        Ok(models) => models,
+        Err(e) => return failure(request.id.clone(), ErrorCode::IoError, &e),
+    };
+    let (added, kept) = service::merge_fetched_models(&mut draft, &fetched);
+    ok(
+        request,
+        json!({
+            "connection": draft,
+            "models": fetched,
+            "fetched": fetched.len(),
+            "added": added,
+            "kept": kept,
+        }),
+    )
 }
 
 /// G: live cooldowns from the gateway (same process), for the pool page; R8:

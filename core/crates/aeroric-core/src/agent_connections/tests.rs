@@ -477,3 +477,56 @@ mod routing_r6_r10 {
         ));
     }
 }
+
+/// 2026-10-27: saved connections are offered in the new-session picker as
+/// derived `via-<harness>-<id>` configurations, never stored.
+#[test]
+fn every_saved_connection_is_offered_per_gateway_harness() {
+    let mut doc = deepseek_doc();
+    let derived = doc.connection_configs();
+    let via = ConnectionsDocument::via_id;
+    let ids: Vec<String> = derived.iter().map(|c| c.id.clone()).collect();
+    let expected: Vec<String> = ["a", "b", "c"]
+        .iter()
+        .flat_map(|id| [via(Harness::Codex, id), via(Harness::Claude, id)])
+        .collect();
+    assert_eq!(ids, expected);
+    for id in &ids {
+        // `via-<harness>-<16 hex>`: the connection id itself is not exposed.
+        let hash = id.rsplit('-').next().unwrap();
+        assert!(
+            hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "{id}"
+        );
+    }
+    let codex_a = doc
+        .config(&via(Harness::Codex, "a"))
+        .expect("resolvable by id");
+    assert_eq!(codex_a.harness, Harness::Codex);
+    assert_eq!(codex_a.label, "a");
+    assert_eq!(codex_a.default_model, "deepseek-v4.1-flash");
+    assert_eq!(
+        codex_a.target,
+        ConfigTarget::Connection {
+            connection_id: "a".into()
+        }
+    );
+    assert!(doc.configs.is_empty(), "nothing is written");
+
+    // Gone with the connection, never for omp/dsh, never for a typo.
+    doc.connections[0].enabled = false;
+    assert!(doc.config(&via(Harness::Codex, "a")).is_none());
+    assert!(doc.config(&via(Harness::Omp, "b")).is_none());
+    assert!(doc.config("via-codex-missing").is_none());
+    assert!(doc.config("via-").is_none());
+    // A connection without a routable model offers nothing.
+    doc.connections[1].models.clear();
+    assert!(doc.config(&via(Harness::Claude, "b")).is_none());
+    // A stored configuration still wins over the derived namespace.
+    doc.configs.push(AgentConfig {
+        id: via(Harness::Codex, "c"),
+        label: "mine".into(),
+        ..route_config(Harness::Codex, None)
+    });
+    assert_eq!(doc.config(&via(Harness::Codex, "c")).unwrap().label, "mine");
+}

@@ -192,11 +192,12 @@ pub fn resolve(
     let Some(config_id) = grant.agent_config_id.as_deref() else {
         return Resolution::Unavailable("task token carries no agent configuration".into());
     };
-    let Some(config) = doc.configs.iter().find(|c| c.id == config_id) else {
+    let Some(config) = doc.config(config_id) else {
         return Resolution::Unavailable(format!(
             "agent configuration `{config_id}` no longer exists"
         ));
     };
+    let config = &config;
     let model = if model.trim().is_empty() {
         config.default_model.as_str()
     } else {
@@ -861,6 +862,21 @@ mod tests {
         assert_eq!(map.rewrite("low"), None, "no matching label: drop");
         let undeclared = EffortMap::new(&[tier("高", "high")], &[]);
         assert_eq!(undeclared.rewrite("high").as_deref(), Some("high"));
+    }
+
+    /// 2026-10-27: a task started from a saved connection in the picker
+    /// carries the derived `via-` id; the gateway resolves it to that
+    /// connection alone.
+    #[test]
+    fn a_picked_connection_routes_to_that_connection_only() {
+        let doc = doc_with(Harness::Codex, "via");
+        let id = ConnectionsDocument::via_id(Harness::Codex, "via-b");
+        let grant = TaskGrant {
+            task_id: "via-t".into(),
+            agent_config_id: Some(id),
+        };
+        let got = ids(resolve(&doc, &grant, "", &MemorySecrets::default()));
+        assert_eq!(got, ["conn:via-b"]);
     }
 
     #[test]

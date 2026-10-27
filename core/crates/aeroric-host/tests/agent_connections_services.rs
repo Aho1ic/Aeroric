@@ -349,6 +349,77 @@ async fn fetch_without_credential_fails_and_keeps_the_catalog() {
     assert_eq!(rig.document(), before);
 }
 
+/// A one-shot model catalog: answers the first request with two models and
+/// reports the request it saw.
+async fn one_shot_models() -> (String, tokio::task::JoinHandle<String>) {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/v1", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request = String::from_utf8_lossy(&buf[..n]).to_string();
+        let body = r#"{"data":[{"id":"m-a"},{"id":"m-b"}]}"#;
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(reply.as_bytes()).await.unwrap();
+        request
+    });
+    (base, task)
+}
+
+/// 2026-10-26: the list can be fetched from what is typed, before saving
+/// (cc-switch `fetch_models_for_config`); nothing is written.
+#[tokio::test]
+async fn models_are_fetched_for_an_unsaved_draft_without_saving_it() {
+    let rig = Rig::start("draft-fetch").await;
+    let before = rig.document();
+    let (base, upstream) = one_shot_models().await;
+    let mut draft = connection("new", "chat_completions", "kept-model");
+    draft["base_url"] = json!(base);
+    let missing = rig
+        .call(
+            "agentConnections.fetchModels",
+            json!({ "connection": draft.clone() }),
+        )
+        .await;
+    assert!(
+        missing.is_err(),
+        "no typed key and none stored: {missing:?}"
+    );
+
+    let reply = rig
+        .call(
+            "agentConnections.fetchModels",
+            json!({ "connection": draft, "credential": "sk-typed" }),
+        )
+        .await
+        .expect("fetch");
+    assert_eq!(reply["fetched"], 2);
+    assert_eq!(
+        reply["models"],
+        json!(["m-a", "m-b"]),
+        "the raw list, for the picker"
+    );
+    let ids: Vec<&str> = reply["connection"]["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["upstream_id"].as_str().unwrap())
+        .collect();
+    assert!(
+        ids.contains(&"kept-model") && ids.contains(&"m-a") && ids.contains(&"m-b"),
+        "{ids:?}"
+    );
+    let request = upstream.await.unwrap().to_ascii_lowercase();
+    assert!(request.contains("/v1/models"), "{request}");
+    assert!(request.contains("sk-typed"));
+    assert_eq!(rig.document(), before, "a draft fetch never saves");
+}
+
 /// A one-shot Chat Completions upstream: answers the first request with
 /// "pong" and reports the Authorization header it saw.
 async fn one_shot_chat() -> (String, tokio::task::JoinHandle<String>) {
@@ -398,7 +469,7 @@ async fn a_test_message_goes_through_the_connection_with_its_key() {
     assert!(request
         .to_ascii_lowercase()
         .contains("authorization: bearer sk-probe"));
-    assert!(request.contains("\"max_tokens\":1"));
+    assert!(request.contains("\"max_tokens\":64"), "room for a reasoning model to answer");
 }
 
 #[tokio::test]

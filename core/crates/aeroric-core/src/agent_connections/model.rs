@@ -296,3 +296,92 @@ pub struct ConnectionsDocument {
 }
 
 pub const DOCUMENT_VERSION: u32 = 1;
+
+/// 2026-10-27: the new-session picker offers every saved connection directly,
+/// per harness that can reach it through the gateway. Each is an Agent
+/// configuration derived on the fly — `via-<harness>-<hash of the connection
+/// id>` (the catalog never exposes connection ids), single connection target —
+/// never stored, so deleting the connection removes it.
+pub const VIA_PREFIX: &str = "via-";
+
+impl Harness {
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Omp => "omp",
+            Self::Dsh => "dsh",
+        }
+    }
+
+    fn from_slug(slug: &str) -> Option<Self> {
+        [Self::Claude, Self::Codex, Self::Omp, Self::Dsh]
+            .into_iter()
+            .find(|h| h.slug() == slug)
+    }
+}
+
+impl ConnectionsDocument {
+    /// The derived configuration id for `connection_id` under `harness`.
+    pub fn via_id(harness: Harness, connection_id: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(connection_id.as_bytes());
+        format!(
+            "{VIA_PREFIX}{}-{}",
+            harness.slug(),
+            hex::encode(&digest[..8])
+        )
+    }
+
+    /// A stored configuration, or the derived one a `via-` id names.
+    pub fn config(&self, id: &str) -> Option<AgentConfig> {
+        if let Some(config) = self.configs.iter().find(|c| c.id == id) {
+            return Some(config.clone());
+        }
+        let (slug, _) = id.strip_prefix(VIA_PREFIX)?.split_once('-')?;
+        let harness = Harness::from_slug(slug)?;
+        let connection = self
+            .connections
+            .iter()
+            .find(|c| Self::via_id(harness, &c.id) == id)?;
+        self.derived_config(harness, connection)
+    }
+
+    /// One derived configuration per enabled connection and gateway harness
+    /// that can reach at least one of its models, in connection order.
+    pub fn connection_configs(&self) -> Vec<AgentConfig> {
+        let mut out = Vec::new();
+        for connection in self.connections.iter().filter(|c| c.enabled) {
+            for harness in [Harness::Codex, Harness::Claude] {
+                if let Some(config) = self.derived_config(harness, connection) {
+                    out.push(config);
+                }
+            }
+        }
+        out
+    }
+
+    fn derived_config(&self, harness: Harness, connection: &Connection) -> Option<AgentConfig> {
+        if !harness.gateway_supported() || !connection.enabled {
+            return None;
+        }
+        let mut config = AgentConfig {
+            id: Self::via_id(harness, &connection.id),
+            label: connection.label.clone(),
+            harness,
+            target: ConfigTarget::Connection {
+                connection_id: connection.id.clone(),
+            },
+            default_model: String::new(),
+            default_reasoning: String::new(),
+            fallback_models: Vec::new(),
+        };
+        let offered = super::routing::offered_models(self, &config);
+        // The connection's own order picks the default, not the sorted list.
+        config.default_model = connection
+            .routable_models()
+            .map(|m| m.routing_name().to_string())
+            .find(|name| offered.contains(name))?;
+        Some(config)
+    }
+}

@@ -106,9 +106,7 @@ fn resolve_in(
     config_id: &str,
 ) -> Result<ConfigLaunch, String> {
     let config = document
-        .configs
-        .iter()
-        .find(|config| config.id == config_id)
+        .config(config_id)
         .ok_or_else(|| format!("agent configuration `{config_id}` no longer exists"))?;
     if !config.harness.gateway_supported() {
         return Err(format!(

@@ -267,7 +267,10 @@ fn agent_config_entries(
         .map(|model| model.routing_name().to_string())
         .filter(|name| !name.trim().is_empty())
         .collect();
-    for config in &document.configs {
+    // Saved connections first (2026-10-27: the picker offers them directly),
+    // then the user's own configurations (pools, routes, fallbacks).
+    let derived = document.connection_configs();
+    for config in derived.iter().chain(&document.configs) {
         let agent = harness_agent(config.harness);
         let mut blocked = Vec::new();
         if !config.harness.gateway_supported() {
