@@ -14,10 +14,19 @@ public final class ImportBook {
     public private(set) var estimates: [String: ImportsClient.Estimate] = [:]
     public private(set) var busyAgents: Set<String> = []
     public private(set) var lastError: String?
+    /// The open import picker (nil when closed or still loading).
+    public var pick: ImportPick?
+    public private(set) var pickLoading = false
+    /// The last picker run, for the settings page's one-line summary.
+    public private(set) var lastApply: ImportsClient.ApplyResult?
     @ObservationIgnored private var client: ImportsClient?
+    /// Set by the App: re-read projects after the picker added some.
+    @ObservationIgnored public var onProjectsChanged: (@MainActor () async -> Void)?
 
     /// Agents this build can import (D5: DSH / omp later).
     nonisolated public static let importableAgents = ["claude", "codex"]
+    /// History pages read per session (≈ 640 KB each).
+    nonisolated static let maxHistoryPages = 24
 
     public init() {}
 
@@ -66,7 +75,17 @@ public final class ImportBook {
 
     public func messages(id: String) async throws -> [SessionMessage] {
         guard let client else { throw ImportsClient.MalformedReply.malformed("imports unavailable") }
-        return try await client.history(id: id).messages.map(SessionBlockMapping.message)
+        // The host pages long sessions so each reply fits one frame; walk the
+        // cursor back to the start (bounded, a few MB at most).
+        var page = try await client.history(id: id)
+        var messages = page.messages
+        var pages = 1
+        while page.hasMore, let cursor = page.nextCursor, pages < Self.maxHistoryPages {
+            page = try await client.history(id: id, before: cursor)
+            messages.insert(contentsOf: page.messages, at: 0)
+            pages += 1
+        }
+        return messages.map(SessionBlockMapping.message)
     }
 
     public func session(id: String) -> ImportsClient.ImportedSession? {
@@ -74,11 +93,58 @@ public final class ImportBook {
     }
 
     public func sessions(inProject projectID: String) -> [ImportsClient.ImportedSession] {
-        sessions.filter { $0.projectId == projectID }
+        sessions.filter { $0.projectId == projectID && !$0.archived }
     }
 
     public var unassigned: [ImportsClient.ImportedSession] {
-        sessions.filter { $0.projectId == nil }
+        sessions.filter { $0.projectId == nil && !$0.archived }
+    }
+
+    public var archivedSessions: [ImportsClient.ImportedSession] {
+        sessions.filter(\.archived)
+    }
+
+    public func setArchived(_ id: String, _ archived: Bool) async {
+        if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].archived = archived }
+        await run("archive") { try await $0.archive(id: id, archived: archived) }
+    }
+
+    /// Hides the session in Aeroric; the agent's file stays where it is.
+    public func remove(_ id: String) async {
+        sessions.removeAll { $0.id == id }
+        await run("remove") { try await $0.remove(id: id) }
+    }
+
+    // MARK: Import picker
+
+    /// Reads every session on disk into `pick`; nothing is saved.
+    public func openPicker() async {
+        guard let client else { return }
+        pickLoading = true
+        defer { pickLoading = false }
+        do {
+            pick = ImportPick(rows: try await client.preview())
+            lastError = nil
+        } catch {
+            lastError = String(describing: error)
+        }
+    }
+
+    /// Imports the ticked sessions and adds their missing projects.
+    public func applyPick() async {
+        guard let client, let pick else { return }
+        busyAgents.insert("apply")
+        defer { busyAgents.remove("apply") }
+        do {
+            lastApply = try await client.apply(selected: Array(pick.selected))
+            self.pick = nil
+            lastError = lastApply?.failedProjects.isEmpty == false
+                ? "以下目录没能添加为项目：" + (lastApply?.failedProjects.joined(separator: "；") ?? "") : nil
+        } catch {
+            lastError = String(describing: error)
+        }
+        await onProjectsChanged?()
+        await refresh()
     }
 
     public func agentStatus(_ agent: String) -> ImportsClient.AgentStatus? {

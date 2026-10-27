@@ -21,6 +21,10 @@ public struct ProjectSidebar: View {
     private let onOpenFolder: () -> Void
     private let onOpenSettings: () -> Void
     private let onAddProject: (String) -> Void
+    private let onSessionAction: (String, SessionRowAction) -> Void
+    /// The imported session waiting for 移除 to be confirmed.
+    @State private var removing: SidebarItem?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Window-local status filter. Presentation only; never a host query.
     @State private var filter: SidebarStatusFilter = .all
 
@@ -38,7 +42,8 @@ public struct ProjectSidebar: View {
         onMoveSelection: @escaping (MoveCommandDirection) -> Void = { _ in },
         onOpenFolder: @escaping () -> Void = {},
         onOpenSettings: @escaping () -> Void = {},
-        onAddProject: @escaping (String) -> Void = { _ in }
+        onAddProject: @escaping (String) -> Void = { _ in },
+        onSessionAction: @escaping (String, SessionRowAction) -> Void = { _, _ in }
     ) {
         self._selection = selection
         self.items = items
@@ -52,6 +57,7 @@ public struct ProjectSidebar: View {
         self.onOpenFolder = onOpenFolder
         self.onOpenSettings = onOpenSettings
         self.onAddProject = onAddProject
+        self.onSessionAction = onSessionAction
     }
 
     private var workItems: [SidebarItem] {
@@ -60,6 +66,8 @@ public struct ProjectSidebar: View {
     private var projectItems: [SidebarItem] { items.filter { $0.group == .projects } }
     private var importItems: [SidebarItem] { items.filter { $0.group == .imports } }
     @State private var importsExpanded = true
+    private var archivedItems: [SidebarItem] { items.filter { $0.group == .archived } }
+    @State private var archivedExpanded = false
     private var shell: NativePanelGeometry.MainShell { NativePanelGeometry.mainShell }
 
     public var body: some View {
@@ -74,6 +82,14 @@ public struct ProjectSidebar: View {
         .frame(maxHeight: .infinity)
         .foregroundStyle(AeroricColor.text)
         .background(Color.clear.glassSurface(.sidebar).ignoresSafeArea())
+        .confirmationDialog("从 Aeroric 移除这个会话？", isPresented: Binding(
+            get: { removing != nil }, set: { if !$0 { removing = nil } }
+        ), presenting: removing) { item in
+            Button("移除", role: .destructive) { onSessionAction(item.id, .remove) }
+            Button("取消", role: .cancel) {}
+        } message: { item in
+            Text("“\(item.title)”将不再出现在 Aeroric 中。Agent 自己的会话文件不会被删除，以后可在 设置 → 导入 中重新勾选导入。")
+        }
     }
 
     // MARK: Expanded
@@ -102,6 +118,7 @@ public struct ProjectSidebar: View {
                             projectGroup(project)
                         }
                         if !importItems.isEmpty { importsGroup }
+                        if !archivedItems.isEmpty { archivedGroup }
                     }
                     .padding(.horizontal, AeroricSpace.m)
                     .padding(.bottom, AeroricSpace.m)
@@ -180,6 +197,7 @@ public struct ProjectSidebar: View {
                                 action: { selection = child.id }) {
                     SessionRow(item: child)
                 }
+                .contextMenu { sessionMenu(child) }
                 .padding(.leading, AeroricSpace.l)
                 .accessibilityIdentifier("sidebar.item.\(child.id)")
             }
@@ -196,21 +214,8 @@ public struct ProjectSidebar: View {
     /// Imported sessions whose cwd matches no open project. Each row can turn
     /// its directory into a project, which moves the sessions under it.
     @ViewBuilder private var importsGroup: some View {
-        Button { importsExpanded.toggle() } label: {
-            HStack(spacing: AeroricSpace.xs) {
-                SectionHeader("未归类导入 · \(importItems.count)")
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(AeroricColor.textTertiary)
-                    .rotationEffect(.degrees(importsExpanded ? 90 : 0))
-                    .padding(.trailing, AeroricSpace.m)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.top, AeroricSpace.l)
-        .accessibilityIdentifier("sidebar.group.imports")
+        collapsibleHeader("未归类导入 · \(importItems.count)", expanded: $importsExpanded,
+                          identifier: "sidebar.group.imports")
         if importsExpanded {
             ForEach(importItems) { item in
                 HoverCapsuleRow(selected: selection == item.id, height: shell.sessionRowHeight,
@@ -220,11 +225,63 @@ public struct ProjectSidebar: View {
                 .contextMenu {
                     if let path = item.path {
                         Button("将 \(URL(fileURLWithPath: path).lastPathComponent) 添加为项目") { onAddProject(path) }
+                        Divider()
                     }
+                    sessionMenu(item)
                 }
                 .help(item.path.map { "\(item.title)\n\($0)" } ?? item.title)
                 .accessibilityIdentifier("sidebar.item.\(item.id)")
             }
+        }
+    }
+
+    /// Archived sessions, collapsed by default; 取消归档 puts a row back.
+    @ViewBuilder private var archivedGroup: some View {
+        collapsibleHeader("已归档 · \(archivedItems.count)", expanded: $archivedExpanded,
+                          identifier: "sidebar.group.archived")
+        if archivedExpanded {
+            ForEach(archivedItems) { item in
+                HoverCapsuleRow(selected: selection == item.id, height: shell.sessionRowHeight,
+                                action: { selection = item.id }) {
+                    SessionRow(item: item)
+                }
+                .opacity(0.75)
+                .contextMenu { sessionMenu(item, archived: true) }
+                .accessibilityIdentifier("sidebar.item.\(item.id)")
+            }
+        }
+    }
+
+    private func collapsibleHeader(_ title: String, expanded: Binding<Bool>, identifier: String) -> some View {
+        Button { withAnimation(.easeOut(duration: AeroricMotion.duration(AeroricMotion.standard, reduceMotion: reduceMotion))) { expanded.wrappedValue.toggle() } } label: {
+            HStack(spacing: AeroricSpace.xs) {
+                SectionHeader(title)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                    .padding(.trailing, AeroricSpace.m)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, AeroricSpace.l)
+        .accessibilityIdentifier(identifier)
+    }
+
+    /// 归档 / 取消归档 for every session; 从 Aeroric 移除… only for imports.
+    /// A task the host is still running cannot be archived (the core keeps
+    /// pending and running tasks out of the archive).
+    @ViewBuilder private func sessionMenu(_ item: SidebarItem, archived: Bool = false) -> some View {
+        if archived {
+            Button("取消归档") { onSessionAction(item.id, .unarchive) }
+        } else {
+            Button("归档") { onSessionAction(item.id, .archive) }
+                .disabled(["pending", "running"].contains(item.status ?? ""))
+        }
+        if item.imported {
+            Button("从 Aeroric 移除…", role: .destructive) { removing = item }
         }
     }
 

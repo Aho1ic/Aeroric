@@ -220,6 +220,8 @@ final class AppServices {
                         client: ImportsClient(connection: connection),
                         capabilityEnabled: advertised[ImportsClient.capability] == true
                     )
+                    // The import picker may add projects; show them at once.
+                    self.importBook.onProjectsChanged = { [weak self] in await self?.refreshWorkspace() }
                     self.canvasBook.attach(
                         client: CanvasClient(connection: connection),
                         capabilityEnabled: advertised[CanvasClient.capability] == true
@@ -488,11 +490,32 @@ final class AppServices {
         }
     }
 
+    /// 2026-10-27：归档写到宿主（task.archive → 任务行的 archivedAt），不再只是窗口内镜像。
     func toggleArchived(taskId: String) {
-        if let index = taskStore.tasks.firstIndex(where: { $0.id == taskId }) {
-            var entry = taskStore.tasks[index]
-            entry.archived.toggle()
-            taskStore.upsertTask(entry)
+        guard let index = taskStore.tasks.firstIndex(where: { $0.id == taskId }) else { return }
+        var entry = taskStore.tasks[index]
+        entry.archived.toggle()
+        taskStore.upsertTask(entry)
+        let archived = entry.archived
+        Task { @MainActor in
+            try? await workspaceClient?.archiveTask(taskId: taskId, archived: archived)
+            await refreshWorkspace()
+        }
+    }
+
+    /// Sidebar context menu: 归档 / 取消归档 for tasks and imports, 移除 for imports.
+    func sessionAction(_ id: String, _ action: SessionRowAction) {
+        if let taskID = SessionNavigation.taskID(id) {
+            let archived = taskStore.tasks.first { $0.id == taskID }?.archived ?? false
+            if (action == .archive) != archived { toggleArchived(taskId: taskID) }
+        } else if let importedID = SessionNavigation.importedID(id) {
+            Task { @MainActor in
+                switch action {
+                case .archive: await importBook.setArchived(importedID, true)
+                case .unarchive: await importBook.setArchived(importedID, false)
+                case .remove: await importBook.remove(importedID)
+                }
+            }
         }
     }
 
@@ -853,8 +876,21 @@ extension AppServices: WorkspaceStateProviding {
             item.group = .imports
             return item
         }
+        let archivedTasks = taskStore.tasks.filter(\.archived).map { task in
+            SidebarItem(id: SessionNavigation.task(task.id), title: task.title,
+                        systemImage: "bubble.left", group: .archived,
+                        status: task.status, agent: task.agent,
+                        updatedAt: task.updatedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) })
+        }
+        let archivedImports = importBook.archivedSessions.map(Self.importedItem).map { item -> SidebarItem in
+            var item = item
+            item.group = .archived
+            return item
+        }
+        let archived = (archivedTasks + archivedImports)
+            .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
         return [SidebarItem(id: SessionNavigation.globalDraft, title: "新建会话",
-                            systemImage: "plus", group: .work)] + sections + projects + unassigned
+                            systemImage: "plus", group: .work)] + sections + projects + unassigned + archived
     }
 
     /// B1 Git page (read-only): status, branches and history of `projectPath`.

@@ -47,7 +47,9 @@ public struct ProjectResourceInspector: View {
         scene.changes.first { $0.id == scene.expandedChange }?.path
     }
     private var scene: ProjectResourceScene { book.scene(projectID) }
-    static var rowHeight: CGFloat { 26 }
+    /// 2026-10-27: the tree reads as a compact outline (was 26pt plus the
+    /// sidebar list's own medium-row padding, which spread files far apart).
+    static var rowHeight: CGFloat { 22 }
     static var indent: CGFloat { 14 }
 
     public var body: some View {
@@ -138,7 +140,7 @@ public struct ProjectResourceInspector: View {
                                         .rotationEffect(.degrees(scene.expandedPaths.contains(row.id) ? 90 : 0))
                                         .frame(width: 10)
                                     resourceName(row.node.name, symbol: row.node.isSymlink ? "link" : "folder.fill",
-                                                 tint: AeroricColor.accent.opacity(0.75))
+                                                 tint: AeroricColor.accent.opacity(0.75), folder: true)
                                 }
                                 .contentShape(Rectangle())
                             }
@@ -153,21 +155,24 @@ public struct ProjectResourceInspector: View {
                                     Text("空目录")
                                         .font(.system(size: AeroricType.caption))
                                         .foregroundStyle(AeroricColor.textTertiary)
-                                        .padding(.leading, Self.indent + 10)
+                                        .padding(.leading, Self.indent + 14)
+                                        .frame(height: Self.rowHeight)
                                 }
                             }
                         }
+                        .modifier(TreeIndent(depth: row.depth, indent: Self.indent))
                         .tag(Optional<String>.none)
-                        .listRowInsets(insets(row.depth))
+                        .listRowInsets(insets)
                     } else {
                         resourceName(row.node.name,
                                      symbol: row.node.isSymlink ? "link" : FileSymbol.symbol(forFile: row.node.name),
-                                     tint: AeroricColor.textSecondary)
+                                     tint: AeroricColor.textTertiary)
                             .padding(.leading, 14)
+                            .modifier(TreeIndent(depth: row.depth, indent: Self.indent))
                             .tag(Optional(row.id))
                             .help(row.node.path)
                             .accessibilityLabel("\(row.node.name)，只读预览，\(row.node.path)")
-                            .listRowInsets(insets(row.depth))
+                            .listRowInsets(insets)
                     }
                 }
                 .listRowSeparator(.hidden)
@@ -182,6 +187,7 @@ public struct ProjectResourceInspector: View {
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, Self.rowHeight)
+            .environment(\.sidebarRowSize, .small)
             .accessibilityIdentifier("resources.files")
         }
     }
@@ -322,22 +328,24 @@ public struct ProjectResourceInspector: View {
 
     // MARK: - Shared
 
-    private func resourceName(_ name: String, symbol: String, tint: Color) -> some View {
-        HStack(spacing: AeroricSpace.s) {
+    private func resourceName(_ name: String, symbol: String, tint: Color, folder: Bool = false) -> some View {
+        HStack(spacing: AeroricSpace.s - 2) {
             Image(systemName: symbol)
-                .font(.system(size: 12))
-                .frame(width: 16)
+                .font(.system(size: 11))
+                .frame(width: 14)
                 .foregroundStyle(tint)
             Text(name)
-                .font(.system(size: AeroricType.secondary))
-                .foregroundStyle(AeroricColor.text)
+                .font(.system(size: AeroricType.secondary, weight: folder ? .medium : .regular))
+                .foregroundStyle(folder ? AeroricColor.text : AeroricColor.textSecondary)
                 .lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 0)
         }
-        .frame(minHeight: Self.rowHeight)
+        .frame(height: Self.rowHeight)
     }
-    private func insets(_ depth: Int) -> EdgeInsets {
-        EdgeInsets(top: 0, leading: CGFloat(depth) * Self.indent + AeroricSpace.s, bottom: 0, trailing: AeroricSpace.s)
+    /// Depth is drawn by `TreeIndent` inside the row, so every row starts at
+    /// the same inset and the guides line up.
+    private var insets: EdgeInsets {
+        EdgeInsets(top: 0, leading: AeroricSpace.xs, bottom: 0, trailing: AeroricSpace.s)
     }
     @ViewBuilder private func readNotice(_ status: ResourceReadStatus, hasCache: Bool) -> some View {
         if let notice = status.notice {
@@ -471,5 +479,25 @@ public struct CentralResourcePreview: View {
             .font(AeroricType.mono(AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)
             .frame(minWidth: 32, alignment: .trailing)
             .accessibilityHidden(true)
+    }
+}
+
+/// Outline indentation with faint guide lines, one per ancestor directory
+/// (VS Code / Finder list style), so deep trees stay readable at 22pt rows.
+private struct TreeIndent: ViewModifier {
+    let depth: Int
+    let indent: CGFloat
+
+    func body(content: Content) -> some View {
+        HStack(spacing: 0) {
+            ForEach(0..<depth, id: \.self) { _ in
+                Rectangle()
+                    .fill(AeroricColor.separator1)
+                    .frame(width: 1)
+                    .frame(width: indent, alignment: .center)
+                    .frame(maxHeight: .infinity)
+            }
+            content
+        }
     }
 }

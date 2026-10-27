@@ -52,9 +52,11 @@ public struct ImportsClient: Sendable {
         public var lastAtMs: UInt64
         public var projectId: String?
         public var tooLarge: Bool
+        /// Hidden from the projects and 未归类, listed under 已归档.
+        public var archived: Bool
 
         public init(id: String, agent: String, cwd: String?, title: String, lastAtMs: UInt64,
-                    projectId: String?, tooLarge: Bool) {
+                    projectId: String?, tooLarge: Bool, archived: Bool = false) {
             self.id = id
             self.agent = agent
             self.cwd = cwd
@@ -62,7 +64,27 @@ public struct ImportsClient: Sendable {
             self.lastAtMs = lastAtMs
             self.projectId = projectId
             self.tooLarge = tooLarge
+            self.archived = archived
         }
+    }
+
+    /// One row of the import picker: a session on disk and whether it starts
+    /// ticked (everything not left out last time).
+    public struct PreviewSession: Sendable, Equatable, Identifiable {
+        public var session: ImportedSession
+        public var selected: Bool
+        public var id: String { session.id }
+
+        public init(session: ImportedSession, selected: Bool) {
+            self.session = session
+            self.selected = selected
+        }
+    }
+
+    public struct ApplyResult: Sendable, Equatable {
+        public var imported: Int
+        public var createdProjects: [String]
+        public var failedProjects: [String]
     }
 
     public struct DetectedAgent: Sendable, Equatable, Identifiable {
@@ -104,8 +126,37 @@ public struct ImportsClient: Sendable {
         Self.decodeSessions(try await connection.request("imports.list", params: .object([:])).result)
     }
 
-    public func history(id: String) async throws -> SessionPage {
-        let frame = try await connection.request("imports.history", params: .object(["id": .string(id)]))
+    /// Every session on disk for the import picker; saves nothing.
+    public func preview() async throws -> [PreviewSession] {
+        Self.decodePreview(try await connection.request("imports.preview", params: .object([:])).result)
+    }
+
+    /// The picker's answer: imports `selected`, adds their missing projects.
+    public func apply(selected: [String]) async throws -> ApplyResult {
+        let frame = try await connection.request(
+            "imports.apply", params: .object(["selected": .array(selected.map(JSONValue.string))]))
+        let fields = frame.result.fields
+        return ApplyResult(imported: Int(Self.number(fields["imported"]) ?? 0),
+                           createdProjects: (fields["createdProjects"]?.arrayValue ?? []).compactMap(\.stringValue),
+                           failedProjects: (fields["failedProjects"]?.arrayValue ?? []).compactMap(\.stringValue))
+    }
+
+    public func archive(id: String, archived: Bool) async throws {
+        _ = try await connection.request(
+            "imports.archive", params: .object(["id": .string(id), "archived": .bool(archived)]))
+    }
+
+    /// Hides the session in Aeroric; the agent's own file is never touched.
+    public func remove(id: String) async throws {
+        _ = try await connection.request("imports.remove", params: .object(["id": .string(id)]))
+    }
+
+    /// One page of history, newest first: the messages before `before`
+    /// (the previous page's `nextCursor`); nil asks for the latest page.
+    public func history(id: String, before: String? = nil) async throws -> SessionPage {
+        var params: [String: JSONValue] = ["id": .string(id)]
+        if let before { params["before"] = .string(before) }
+        let frame = try await connection.request("imports.history", params: .object(params))
         guard let page = SessionPage.decode(frame.result) else { throw MalformedReply.malformed("imports.history") }
         return page
     }
@@ -143,13 +194,23 @@ public struct ImportsClient: Sendable {
     }
 
     public static func decodeSessions(_ value: JSONValue) -> [ImportedSession] {
+        (value.fields["sessions"]?.arrayValue ?? []).compactMap(decodeSession)
+    }
+
+    static func decodeSession(_ item: JSONValue) -> ImportedSession? {
+        let row = item.fields
+        guard let id = row["id"]?.stringValue, let agent = row["agent"]?.stringValue else { return nil }
+        return ImportedSession(id: id, agent: agent, cwd: row["cwd"]?.stringValue,
+                               title: row["title"]?.stringValue ?? id, lastAtMs: number(row["lastAtMs"]) ?? 0,
+                               projectId: row["projectId"]?.stringValue,
+                               tooLarge: row["tooLarge"]?.boolValue ?? false,
+                               archived: row["archived"]?.boolValue ?? false)
+    }
+
+    /// `PreviewSession` is the session flattened plus `selected`.
+    public static func decodePreview(_ value: JSONValue) -> [PreviewSession] {
         (value.fields["sessions"]?.arrayValue ?? []).compactMap { item in
-            let row = item.fields
-            guard let id = row["id"]?.stringValue, let agent = row["agent"]?.stringValue else { return nil }
-            return ImportedSession(id: id, agent: agent, cwd: row["cwd"]?.stringValue,
-                                   title: row["title"]?.stringValue ?? id, lastAtMs: number(row["lastAtMs"]) ?? 0,
-                                   projectId: row["projectId"]?.stringValue,
-                                   tooLarge: row["tooLarge"]?.boolValue ?? false)
+            decodeSession(item).map { PreviewSession(session: $0, selected: item.fields["selected"]?.boolValue ?? true) }
         }
     }
 

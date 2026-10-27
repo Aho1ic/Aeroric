@@ -101,7 +101,8 @@ public struct WorkspaceClient: Sendable {
             createdAtMs: record["createdAt"]?.numberText.flatMap(UInt64.init),
             updatedAtMs: record["updatedAt"]?.numberText.flatMap(UInt64.init)
                 ?? record["completedAt"]?.numberText.flatMap(UInt64.init),
-            archived: record["archived"]?.boolValue ?? false,
+            // The core keeps `archivedAt` (ms); older rows carried a bool.
+            archived: record["archivedAt"]?.numberText != nil || (record["archived"]?.boolValue ?? false),
             starred: record["starred"]?.boolValue ?? false,
             sessionId: record["sessionId"]?.stringValue,
             generation: record["generation"]?.numberText.flatMap(UInt64.init),
@@ -205,6 +206,14 @@ public struct WorkspaceClient: Sendable {
             throw MalformedReply("task.run reply missing taskId")
         }
         return taskId
+    }
+
+    /// Archives (or restores) a finished task on the host.
+    public func archiveTask(taskId: String, archived: Bool) async throws {
+        _ = try await connection.request(
+            "task.archive",
+            params: .object(["taskId": .string(taskId), "archived": .bool(archived)])
+        )
     }
 
     public func cancelTask(taskId: String) async throws {

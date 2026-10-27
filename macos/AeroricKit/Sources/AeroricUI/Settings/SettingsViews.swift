@@ -416,9 +416,18 @@ struct DiagnosticsExportCard: View {
 struct ImportsSettingsPane: View {
     let book: ImportBook
     @State private var revoking: String?
+    @State private var picking = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.xl) {
+            SettingsCard {
+                SettingsRow("选择要导入的会话", detail: pickDetail) {
+                    Button("选择会话…") { openPicker() }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
+                        .disabled(book.busyAgents.contains("apply"))
+                        .accessibilityIdentifier("settings.imports.pick")
+                }
+            }
             SettingsCard("已有会话") {
                 ForEach(ImportBook.importableAgents, id: \.self) { agent in
                     row(agent)
@@ -446,6 +455,7 @@ struct ImportsSettingsPane: View {
             await book.refresh()
             for agent in ImportBook.importableAgents { await book.estimate(agent) }
         }
+        .sheet(isPresented: $picking, onDismiss: { book.pick = nil }) { ImportPickerSheet(book: book) }
         .confirmationDialog("撤销导入授权？", isPresented: Binding(
             get: { revoking != nil }, set: { if !$0 { revoking = nil } }
         ), presenting: revoking) { agent in
@@ -455,6 +465,19 @@ struct ImportsSettingsPane: View {
             Text("\(ImportPresentation.agentTitle(agent)) 的已导入会话会从 Aeroric 中移除，原文件不受影响。")
         }
         .accessibilityIdentifier("settings.imports")
+    }
+
+    private var pickDetail: String {
+        if let last = book.lastApply {
+            let projects = last.createdProjects.isEmpty ? "" : "，新建 \(last.createdProjects.count) 个项目"
+            return "上次导入了 \(last.imported) 个会话\(projects)。"
+        }
+        return "按项目列出 Claude Code 与 Codex 的全部会话，勾选后导入；新目录会自动添加为项目。"
+    }
+
+    private func openPicker() {
+        book.pick = nil
+        picking = true
     }
 
     private var scanDetail: String {
@@ -476,7 +499,7 @@ struct ImportsSettingsPane: View {
                     .buttonStyle(AeroricCapsuleButtonStyle(.destructive, compact: true))
                     .accessibilityIdentifier("settings.imports.revoke.\(agent)")
             } else {
-                Button("导入") { Task { await book.grant(agent) } }
+                Button("导入…") { openPicker() }
                     .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
                     .disabled(book.busyAgents.contains(agent) || book.estimates[agent]?.rootExists == false)
                     .accessibilityIdentifier("settings.imports.grant.\(agent)")

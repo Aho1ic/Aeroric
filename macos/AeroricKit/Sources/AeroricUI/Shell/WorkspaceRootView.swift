@@ -98,7 +98,8 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                     onMoveSelection: moveSidebarSelection,
                     onOpenFolder: { onCommand(PaletteCommand(id: "project.open", title: "打开项目…")) },
                     onOpenSettings: { onCommand(PaletteCommand(id: "settings.show", title: "设置…")) },
-                    onAddProject: { state.addProject(path: $0) }
+                    onAddProject: { state.addProject(path: $0) },
+                    onSessionAction: { state.sessionAction($0, $1) }
                 )
                 Group {
                     if railShown {
@@ -121,36 +122,41 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                 if !narrow { inspectorOverlay = false }
             }
         }
+        // 2026-10-27 (user review): toolbar buttons are bare icons, each on
+        // its own with no shared glass capsule behind it.
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 NativeIconButton(systemImage: "sidebar.left", label: "切换侧栏",
                                  identifier: "workspace.toggle-sidebar") { sidebarCollapsed.toggle() }
             }
-            ToolbarItemGroup(placement: .primaryAction) {
-                moreToolsMenu
-                Toggle(isOn: inspectorToggle) { Image(systemName: "sidebar.right") }
-                    .toggleStyle(.button)
-                    .help("辅助面板（详情 / 文件 / 改动 / Git 日志）")
-                    .accessibilityLabel("辅助面板")
-                    .accessibilityIdentifier("workspace.toggle-inspector")
+            .bareToolbarItem()
+            ToolbarItem(placement: .primaryAction) { moreToolsMenu }
+                .bareToolbarItem()
+            ToolbarItem(placement: .primaryAction) {
+                NativeIconButton(systemImage: "sidebar.right", label: "辅助面板",
+                                 identifier: "workspace.toggle-inspector",
+                                 help: "辅助面板（详情 / 文件 / 改动 / Git 日志）") {
+                    inspectorToggle.wrappedValue.toggle()
+                }
+                .foregroundStyle(inspectorToggle.wrappedValue ? AeroricColor.accent : AeroricColor.textSecondary)
+                .accessibilityAddTraits(inspectorToggle.wrappedValue ? .isSelected : [])
+            }
+            .bareToolbarItem()
+            ToolbarItem(placement: .primaryAction) {
                 NativeIconButton(systemImage: "magnifyingglass", label: "搜索与命令 ⌘K",
                                  identifier: "workspace.search") { palettePresented = true }
+            }
+            .bareToolbarItem()
+            ToolbarItem(placement: .primaryAction) {
                 NativeIconButton(systemImage: "square.and.pencil", label: "新建会话 ⌘N",
                                  identifier: "workspace.new-session") { openDraft() }
             }
+            .bareToolbarItem()
         }
         .background(alignment: .topLeading) { selectionProbe }
         .modifier(HiddenWindowTitle())
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            StatusBar(
-                phase: state.phaseSnapshot,
-                phaseText: state.phaseText,
-                environmentLabel: state.environmentLabel,
-                context: state.statusContext,
-                counts: state.activityCounts,
-                keepingAwake: state.keepingAwake
-            )
-        }
+        // 2026-10-27: no status bar (Ready / 运行中 / 待回应). The connection
+        // state stays in the sidebar footer and the counts in the menu bar.
         .background(AeroricColor.canvas.ignoresSafeArea())
         .foregroundStyle(AeroricColor.text)
         .environment(\.legacySurfacePreview,
@@ -232,8 +238,13 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
             }
         } label: {
             Image(systemName: "square.grid.2x2")
+                .foregroundStyle(AeroricColor.textSecondary)
+                .frame(width: NativePanelGeometry.iconButtonSize, height: NativePanelGeometry.iconButtonSize)
+                .contentShape(Rectangle())
         }
+        .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .fixedSize()
         .help("工具与服务（也可用 ⌘K）")
         .accessibilityLabel("工具与服务")
         .accessibilityIdentifier("workspace.more-tools")
@@ -406,5 +417,17 @@ public extension FocusedValues {
 private struct HiddenWindowTitle: ViewModifier {
     func body(content: Content) -> some View {
         content.navigationTitle("")
+    }
+}
+
+private extension ToolbarContent {
+    /// One bare icon: on macOS 26+ the toolbar would otherwise put the items
+    /// in a shared glass capsule, which read as a border.
+    @ToolbarContentBuilder func bareToolbarItem() -> some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            sharedBackgroundVisibility(.hidden)
+        } else {
+            self
+        }
     }
 }

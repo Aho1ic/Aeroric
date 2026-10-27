@@ -30,6 +30,8 @@ public enum SidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable
     case projects
     /// Imported sessions whose cwd matches no open project (M4).
     case imports
+    /// Archived sessions, tasks and imports alike (2026-10-27).
+    case archived
     /// Tools scoped to the open project.
     case tools
     /// Machine- and agent-level configuration surfaces.
@@ -42,6 +44,7 @@ public enum SidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable
         case .work: "工作"
         case .projects: "项目"
         case .imports: "未归类导入"
+        case .archived: "已归档"
         case .tools: "工具"
         case .system: "系统"
         }
@@ -49,7 +52,7 @@ public enum SidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable
 
     /// Render order of the groups. Fixed, so a row can never float to a
     /// surprising place by arriving in a different order.
-    static let renderOrder: [SidebarGroup] = [.work, .projects, .imports, .tools, .system]
+    static let renderOrder: [SidebarGroup] = [.work, .projects, .imports, .archived, .tools, .system]
 }
 
 /// The one place that decides the order rows appear in.
@@ -198,12 +201,23 @@ public protocol WorkspaceStateProviding: AnyObject {
     var keepingAwake: Bool { get }
     /// Open `path` as a project (from "添加为项目…" on an unassigned import).
     func addProject(path: String)
+    /// A session row's context-menu action (`id` is the row's sidebar id).
+    func sessionAction(_ id: String, _ action: SessionRowAction)
+}
+
+/// What a session row's context menu can do. 移除 only exists for imported
+/// sessions and only hides them in Aeroric; the agent's file stays.
+public enum SessionRowAction: Sendable, Equatable {
+    case archive
+    case unarchive
+    case remove
 }
 
 public extension WorkspaceStateProviding {
     var activityCounts: ActivityCounts? { nil }
     var keepingAwake: Bool { false }
     func addProject(path: String) {}
+    func sessionAction(_ id: String, _ action: SessionRowAction) {}
 }
 
 /// Running / waiting-for-you counts shown in the status bar.
