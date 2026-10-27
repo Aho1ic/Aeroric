@@ -13,7 +13,7 @@
 
 - 托管 home：`~/.aeroric/agent-homes/<family>`。omp 经 `PI_CODING_AGENT_DIR` 注入（`core/crates/aeroric-core/src/settings/omp_home.rs`），环境组合后清掉 `PI_PROFILE`/`OMP_PROFILE`；绝不读写用户的 `~/.omp`。
 - 家族字段：任务记录钉死 `launchFamily`、`sessionFamily`、`resumeFamily`，见 [Agent 家族](../../.agents/notes/implemented/architecture/2026-09-23-agent-families.md)。
-- 已结构化的族不安装 hook；宿主启动时清理旧版装下的 omp hook。
+- 已结构化的族不安装 hook。旧版装下的 hook 由两处清理：omp 托管 home 在每次准备时移除旧脚本（`settings/omp_home.rs`）；Claude/Codex 的用户配置注入与 `~/.aeroric/hooks/` 在宿主启动时移除（`agents/managed_home/legacy_cleanup.rs`，见 [清理旧 hook](../../.agents/notes/implemented/simplification/2026-10-27-remove-legacy-hook-pipeline.md)）。
 
 ## 会话事件
 

@@ -31,4 +31,4 @@ Claude Code、Codex、omp 跑在真 PTY 里时，原生界面只能事后读会�
 ## Consequences
 
 - **收益**：会话页实时化——流式消息、工具卡、内嵌审批（批准一次 / 本会话总是允许 / 拒绝）、中断当前一轮、会话中途切换模型与权限。
-- **代价与已知上限**：`codex app-server` 是实验性接口，升级时要更新 Schema 快照；Claude 控制协议无公开规范，靠假 claude（`scripts/native/fake-claude.py`）覆盖已知消息、真 Agent 冒烟兜底。PTY 终端子系统（SwiftTerm 渲染、[终端回放与租约](2026-10-02-terminal-replay-and-lease.md)）暂留；Claude/Codex hook 管线已无生产消费方，移除方案见 [移除 hook 管线](../../proposed/simplification/2026-10-27-remove-legacy-hook-pipeline.md)。
+- **代价与已知上限**：`codex app-server` 是实验性接口，升级时要更新 Schema 快照；Claude 控制协议无公开规范，靠假 claude（`scripts/native/fake-claude.py`）覆盖已知消息、真 Agent 冒烟兜底。PTY 终端子系统（SwiftTerm 渲染、[终端回放与租约](2026-10-02-terminal-replay-and-lease.md)）暂留；宿主启动时清理旧版装下的 Claude/Codex hook，见 [清理旧 hook](../simplification/2026-10-27-remove-legacy-hook-pipeline.md)。

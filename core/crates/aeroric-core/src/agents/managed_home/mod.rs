@@ -7,6 +7,7 @@
 
 pub mod claude_hooks;
 pub mod codex_hooks;
+pub mod legacy_cleanup;
 pub mod resources;
 
 pub use claude_hooks::{
@@ -17,4 +18,5 @@ pub use codex_hooks::{
     build_codex_block, inject_codex_text, toml_quote, uninject_codex_text, CODEX_BEGIN, CODEX_END,
     CODEX_EVENTS,
 };
+pub use legacy_cleanup::{remove_legacy_agent_hooks, LegacyHookCleanup};
 pub use resources::AERORIC_HOOK_SCRIPT;

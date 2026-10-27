@@ -226,6 +226,7 @@ async fn run_startup_with_secrets_inner(
         aeroric_core::agent_connections::migration::migrate_legacy_agent_settings(&context)
             .map_err(StartupError::DataCompat)?;
         migrate_omp_plaintext_keys(options.paths.data_dir());
+        remove_legacy_agent_hooks(options.paths.user_home());
     }
 
     // 3.5 token —— 握手判据的载体在 listener 之前落位：绑上端口却没有 token，
@@ -289,6 +290,24 @@ fn migrate_omp_plaintext_keys(data_dir: &std::path::Path) {
                 home.join("models.yml").display()
             ),
         }
+    }
+}
+
+/// 旧版 Aeroric 给 Claude/Codex 装过 hook（用户 settings 注入、`~/.aeroric/hooks/`）；
+/// 结构化驱动之后它们只会让 agent 白跑一个 Node 脚本。尽力而为：失败只记日志，不挡启动。
+fn remove_legacy_agent_hooks(home: &std::path::Path) {
+    let report = aeroric_core::agents::managed_home::remove_legacy_agent_hooks(home);
+    for path in &report.changed {
+        eprintln!(
+            "aeroric-host: removed legacy agent hook from {}",
+            path.display()
+        );
+    }
+    for (path, reason) in &report.skipped {
+        eprintln!(
+            "aeroric-host: left legacy agent hook in {}: {reason}",
+            path.display()
+        );
     }
 }
 

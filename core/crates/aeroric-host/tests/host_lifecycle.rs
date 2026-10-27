@@ -271,3 +271,39 @@ async fn production_startup_migrates_legacy_agent_settings_before_ready() {
     drop(started);
     std::fs::remove_dir_all(root).ok();
 }
+
+#[tokio::test]
+async fn production_startup_removes_hooks_older_builds_installed() {
+    let root = fresh_root("legacy-hooks");
+    let home = root.join("home");
+    let paths = AppPaths::from_user_home(&home);
+    std::fs::create_dir_all(paths.data_dir()).expect("data dir");
+    let codex = home.join(".codex/config.toml");
+    std::fs::create_dir_all(codex.parent().unwrap()).unwrap();
+    let block = aeroric_core::agents::managed_home::build_codex_block("node", "aeroric-hook.mjs");
+    std::fs::write(&codex, format!("model = \"o3\"\n\n{block}")).unwrap();
+    let hooks = home.join(".aeroric/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("aeroric-hook.mjs"), "// old").unwrap();
+
+    let started = aeroric_host::startup::run_startup_with_secrets_and_legacy_agent_migration(
+        &HostOptions {
+            socket_path: paths.data_dir().join("host.sock"),
+            paths: paths.clone(),
+            ready_fd: None,
+        },
+        Arc::new(SystemClock),
+        &owner(),
+        &LocalProbe,
+        "bh",
+        "ph",
+        Arc::new(aeroric_core::context::MemorySecrets::default()),
+    )
+    .await
+    .expect("production startup");
+
+    assert_eq!(std::fs::read_to_string(&codex).unwrap(), "model = \"o3\"\n");
+    assert!(!hooks.exists(), "the emptied hooks dir is removed");
+    drop(started);
+    std::fs::remove_dir_all(root).ok();
+}
