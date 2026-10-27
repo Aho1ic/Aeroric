@@ -55,6 +55,30 @@ pub fn version_command(program: &str) -> String {
     login_shell(&format!("exec {} --version", quote(program)))
 }
 
+/// One line per agent, `<name>\t<first line of --version or empty>`.
+pub fn probe_agents_command() -> String {
+    login_shell(
+        "for a in claude codex omp; do v=''; if command -v \"$a\" >/dev/null 2>&1; then \
+         v=$(\"$a\" --version 2>/dev/null | head -n 1); fi; printf '%s\\t%s\\n' \"$a\" \"$v\"; done",
+    )
+}
+
+/// `<name>\t<version>` lines → (agent, version or None).
+pub fn parse_agent_probe(stdout: &str) -> Vec<(String, Option<String>)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let (name, version) = line.split_once('\t')?;
+            let version = version.trim();
+            Some((
+                name.trim().to_string(),
+                (!version.is_empty()).then(|| version.to_string()),
+            ))
+        })
+        .filter(|(name, _)| matches!(name.as_str(), "claude" | "codex" | "omp"))
+        .collect()
+}
+
 /// Print a remote file, at most its last `max_bytes` (history, B4).
 pub fn read_command(path: &str, max_bytes: u64) -> String {
     let file = remote_path(path);
@@ -197,6 +221,29 @@ mod tests {
         assert!(read.contains("tail -c 1024"));
         assert!(read.contains("\"$HOME\"/"));
         assert!(version_command("omp").ends_with("'exec '\\''omp'\\'' --version'"));
+    }
+
+    #[test]
+    fn the_agent_probe_runs_in_a_shell_and_parses() {
+        let out = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(
+                probe_agents_command().replace("exec \"${SHELL:-/bin/sh}\" -lc", "exec /bin/sh -c"),
+            )
+            .output()
+            .unwrap();
+        let agents = parse_agent_probe(&String::from_utf8_lossy(&out.stdout));
+        assert_eq!(
+            agents.iter().map(|(a, _)| a.as_str()).collect::<Vec<_>>(),
+            ["claude", "codex", "omp"]
+        );
+        assert_eq!(
+            parse_agent_probe("claude\t2.1.311 (Claude Code)\ncodex\t\nother\t1\n"),
+            vec![
+                ("claude".into(), Some("2.1.311 (Claude Code)".into())),
+                ("codex".into(), None)
+            ]
+        );
     }
 
     #[test]

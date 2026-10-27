@@ -401,6 +401,16 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     {
         let context = Arc::clone(&context);
         set.register(
+            "project.open_ssh",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { project_open_ssh(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
             "project.open",
             Arc::new(move |request, _call| {
                 let context = Arc::clone(&context);
@@ -533,6 +543,63 @@ fn project_open(request: Request, context: Arc<CoreContext>) -> Frame {
             request.id,
             ErrorCode::IoError,
             &format!("cannot open the project: {e}"),
+        ),
+    }
+}
+
+/// A project on an SSH host (connection + remote directory), 2026-10-27.
+fn project_open_ssh(request: Request, context: Arc<CoreContext>) -> Frame {
+    let text = |key: &str| {
+        request
+            .params
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let (Some(connection_id), Some(remote_path), Some(new_id)) =
+        (text("connectionId"), text("remotePath"), text("newId"))
+    else {
+        return failure(
+            request.id,
+            ErrorCode::InvalidArgument,
+            "project.open_ssh requires params.connectionId, remotePath and newId",
+        );
+    };
+    if let Err(reason) = aeroric_core::connections::ssh::validate_remote_path(&remote_path) {
+        return failure(
+            request.id,
+            ErrorCode::InvalidArgument,
+            &format!("远程目录无效：{reason}"),
+        );
+    }
+    if let Err(reason) = crate::remote_sessions::load_connection(&context, &connection_id) {
+        return failure(request.id, ErrorCode::NotFound, &reason);
+    }
+    let name = text("name").unwrap_or_else(|| {
+        remote_path
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty() && *s != "~")
+            .unwrap_or("远程项目")
+            .to_string()
+    });
+    let now = context.clock.now_ms() as i64;
+    match ProjectService::new(context).open_ssh(&name, &connection_id, &remote_path, &new_id, now) {
+        Ok((upserted, applied)) => ok(
+            &request,
+            json!({
+                "project": upserted.project,
+                "reused": upserted.reused,
+                "revision": applied.revision,
+            }),
+        ),
+        Err(e) => failure(
+            request.id,
+            ErrorCode::IoError,
+            &format!("cannot open the remote project: {e}"),
         ),
     }
 }
@@ -4324,7 +4391,17 @@ fn session_history(
     let agent = mutations::text(&record, "agent").unwrap_or_default();
     let family = families.session_family(agent);
     let session_id = recorded_id.unwrap_or_else(|| task_id.to_string());
-    let page = session_page(session_id, family, parse_messages(&lines, family));
+    // Paged like imports: one reply must fit the 1 MiB frame, or the client
+    // sees `disconnected`. `cursor` = how many older messages remain.
+    let before = request
+        .params
+        .get("cursor")
+        .and_then(Value::as_str)
+        .and_then(|cursor| cursor.parse::<usize>().ok());
+    let page = crate::imports_services::history_page(
+        session_page(session_id, family, parse_messages(&lines, family)),
+        before,
+    );
     let mut reply = serde_json::to_value(page).unwrap_or_default();
     reply["path"] = json!(path);
     ok(&request, reply)

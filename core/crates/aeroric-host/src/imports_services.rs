@@ -439,7 +439,7 @@ const HISTORY_PAGE_BYTES: usize = 640 * 1024;
 const BLOCK_MAX_CHARS: usize = 24 * 1024;
 const BLOCK_MIN_CHARS: usize = 1024;
 
-fn history_page(
+pub(crate) fn history_page(
     mut page: aeroric_protocol::session::SessionPage,
     before: Option<usize>,
 ) -> aeroric_protocol::session::SessionPage {

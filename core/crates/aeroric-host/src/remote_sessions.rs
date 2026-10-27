@@ -23,6 +23,7 @@ use crate::dispatcher::{failure, Handler, ServiceSet};
 use crate::services::ok;
 
 pub const ASKPASS_METHOD: &str = "ssh.askpass";
+pub const TEST_METHOD: &str = "connections.test_ssh_connection";
 pub const TICKET_ENV: &str = "AERORIC_ASKPASS_TICKET";
 pub const DATA_DIR_ENV: &str = "AERORIC_ASKPASS_DATA_DIR";
 const TICKET_TTL: Duration = Duration::from_secs(60);
@@ -74,6 +75,9 @@ fn redeem(ticket: &str) -> Option<String> {
 }
 
 pub fn register_remote_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
+    let test_context = Arc::clone(&context);
+    let groups_context = Arc::clone(&context);
+    let save_context = Arc::clone(&context);
     let handler: Handler = Arc::new(move |request: Request, _call| {
         let context = Arc::clone(&context);
         Box::pin(async move {
@@ -85,6 +89,173 @@ pub fn register_remote_services(set: &mut ServiceSet, context: Arc<CoreContext>)
         })
     });
     set.register(ASKPASS_METHOD, handler);
+    let test: Handler = Arc::new(move |request: Request, _call| {
+        let context = Arc::clone(&test_context);
+        Box::pin(async move {
+            let id = request.id.clone();
+            let Some(connection_id) = request
+                .params
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            else {
+                return failure(
+                    id,
+                    ErrorCode::InvalidArgument,
+                    "connections.test_ssh_connection requires params.id",
+                );
+            };
+            match tokio::task::spawn_blocking(move || test_connection(&context, &connection_id))
+                .await
+            {
+                Ok(Ok(result)) => ok(&request, result),
+                Ok(Err(message)) => failure(id, ErrorCode::NotFound, &message),
+                Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+            }
+        })
+    });
+    set.register(TEST_METHOD, test);
+    set.register(
+        "connections.load_ssh_groups",
+        Arc::new(move |request: Request, _call| {
+            let context = Arc::clone(&groups_context);
+            Box::pin(async move { ok(&request, json!({ "groups": load_groups(&context) })) })
+        }),
+    );
+    set.register(
+        "connections.save_ssh_groups",
+        Arc::new(move |request: Request, _call| {
+            let context = Arc::clone(&save_context);
+            Box::pin(async move {
+                if let Err(error) = context.require_write() {
+                    return failure(request.id.clone(), ErrorCode::IoError, &error.to_string());
+                }
+                let Some(list) = request.params.get("groups").and_then(Value::as_array) else {
+                    return failure(
+                        request.id.clone(),
+                        ErrorCode::InvalidArgument,
+                        "connections.save_ssh_groups requires params.groups",
+                    );
+                };
+                let groups = normalize_groups(list.iter().filter_map(Value::as_str));
+                match save_groups(&context, &groups) {
+                    Ok(()) => ok(&request, json!({ "groups": groups })),
+                    Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+                }
+            })
+        }),
+    );
+}
+
+/// SSH host groups the user created (2026-10-27): kept apart from the hosts so a
+/// group can exist before any host is in it. `<data>/ssh-groups.json`.
+fn groups_file(context: &CoreContext) -> std::path::PathBuf {
+    context.paths.data_dir().join("ssh-groups.json")
+}
+
+/// Trimmed, non-empty, unique, in the given order.
+pub fn normalize_groups<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in names {
+        let name = name.trim();
+        if !name.is_empty() && !out.iter().any(|known| known == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+pub fn load_groups(context: &CoreContext) -> Vec<String> {
+    std::fs::read(groups_file(context))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<String>>(&bytes).ok())
+        .map(|list| normalize_groups(list.iter().map(String::as_str)))
+        .unwrap_or_default()
+}
+
+fn save_groups(context: &CoreContext, groups: &[String]) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(groups).map_err(|e| e.to_string())?;
+    aeroric_core::storage::atomic::write_atomic(
+        &groups_file(context),
+        &bytes,
+        aeroric_core::storage::atomic::FileMode::Private,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// `connections.test_ssh_connection`: scan the host key; when neither the
+/// user's nor Aeroric's known_hosts knows the host, answer `untrusted` with
+/// the keys to confirm (never trust here). Else log in and list the agents.
+pub fn test_connection(context: &CoreContext, connection_id: &str) -> Result<Value, String> {
+    let connection = load_connection(context, connection_id)?;
+    let scan = std::process::Command::new("ssh-keyscan")
+        .args([
+            "-T",
+            "5",
+            "-p",
+            &connection.port.to_string(),
+            &connection.host,
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("无法运行 ssh-keyscan：{e}"))?;
+    let keys =
+        aeroric_core::connections::ssh::parse_scan_output(&String::from_utf8_lossy(&scan.stdout));
+    if keys.is_empty() {
+        return Ok(
+            json!({"state": "unreachable", "message": format!("连不上 {}:{}", connection.host, connection.port)}),
+        );
+    }
+    let target = if connection.port == 22 {
+        connection.host.clone()
+    } else {
+        format!("[{}]:{}", connection.host, connection.port)
+    };
+    let home = std::env::var("HOME").unwrap_or_default();
+    let known = [
+        format!("{home}/.ssh/known_hosts"),
+        context
+            .paths
+            .data_dir()
+            .join("known_hosts")
+            .to_string_lossy()
+            .into_owned(),
+    ]
+    .iter()
+    .any(|file| {
+        std::path::Path::new(file).is_file()
+            && std::process::Command::new("ssh-keygen")
+                .args(["-F", &target, "-f", file])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+    });
+    if !known {
+        return Ok(json!({"state": "untrusted", "keys": keys}));
+    }
+    let (spec, ticket) = ssh_spec(
+        &ssh_program(context),
+        context.paths.data_dir(),
+        &connection,
+        &remote::probe_agents_command(),
+    );
+    let output = command(&spec).output();
+    if let Some(ticket) = &ticket {
+        revoke_ticket(ticket);
+    }
+    let output = output.map_err(|e| format!("无法运行 ssh：{e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Ok(
+            json!({"state": "failed", "message": explain(&stderr).unwrap_or_else(|| stderr.trim().to_string())}),
+        );
+    }
+    let agents: Vec<Value> = remote::parse_agent_probe(&String::from_utf8_lossy(&output.stdout))
+        .into_iter()
+        .map(|(agent, version)| json!({"agent": agent, "version": version}))
+        .collect();
+    Ok(json!({"state": "ok", "agents": agents}))
 }
 
 fn askpass(request: &Request, context: &CoreContext) -> Frame {
@@ -441,6 +612,14 @@ mod tests {
         .unwrap();
         assert!(error.contains("远程机器上"), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_names_are_trimmed_unique_and_ordered() {
+        assert_eq!(
+            normalize_groups(["公司", " 个人 ", "", "公司", "测试环境"].into_iter()),
+            ["公司", "个人", "测试环境"]
+        );
     }
 
     #[test]
