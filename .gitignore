@@ -33,27 +33,9 @@ local_change.md
 plan.md
 superpowers/
 .superpowers/
-skills/
-.skills/
-docs/
-!docs/
-docs/*
-!docs/images/
-!docs/images/*
-# remote-relay/src/main.rs 直接指向这份部署/安全指南，所以它必须随仓库分发。
-# 新增被引用的文档时一并放行。
-!docs/remote-public-access.md
-# 原生迁移的规划工件（矩阵/命令清单/ADR/评审证据）必须随仓库分发：
-# MIGRATION_PLAN 的每个 Phase Gate 都拿它们当可比对的已提交清单，
-# 被忽略就等于清单只存在于某一台机器上，Gate 无法复核。
-!docs/native/
-docs/native/**
-# 按扩展名放行而不是枚举子目录：`extraction/` 曾被漏掉一次，让一份 28 KB 的
-# 规划工件只存在于本机。Phase 4+ 还会新建工件目录，不该再依赖手动枚举。
-# 末尾带 `/` 的规则必须先解除目录本身的忽略，git 才会进入该目录找被放行的文件。
-!docs/native/**/
-!docs/native/**/*.md
-!docs/native/**/*.json
+/skills/
+/.skills/
+# docs/ 全部入库：其中的文档与门禁机读工件都必须随仓库分发。
 # Native migration build output and generated Xcode project. `project.yml` and
 # the shared scheme are the committed sources; the .xcodeproj is derived.
 .artifacts/native/

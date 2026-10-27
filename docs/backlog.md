@@ -1,12 +1,14 @@
 # Aeroric 原生能力候选库（v2，2026-10-23 重写）
 
+> 调研底稿（`docs/research/`）从未入库，已于 2026-10-27 删除；文中指向它的引用已失效。旧版候选库 `e3836e62:docs/native/archive/…` 可用 `git show` 查看。
+>
 > 状态：**整合方案草案，待 grill-me 逐项确认**。本文不是实施授权；真实 UI 一律 NOT RUN，直到用户打开 App 验收。
-> 旧版（10-22，1900 行，含 Q13–Q140 决策流水）原样归档于 `docs/native/archive/harness-feature-candidates-2026-10-22.md`，**其中已确认的决定继续有效**（见 §2.3），本文只在明确标注处修正它。
+> 旧版（10-22，1900 行，含 Q13–Q140 决策流水）原样归档于 `e3836e62:docs/native/archive/harness-feature-candidates-2026-10-22.md`，**其中已确认的决定继续有效**（见 §2.3），本文只在明确标注处修正它。
 > 逐条证据（`path:line`）不在本文重复，见四份调研底稿：
-> - G1 codeg / 1flowbase / LiveAgent / MiMo-Code：`docs/research/harness-full-review-2026-10-23-g1.md`
-> - G2 paperclip / ZCode / orca / runner / kloop：`docs/research/harness-full-review-2026-10-23-g2.md`
-> - G3 deepseek-harness / opencode / minimax-code / CometixCode / ponytail：`docs/research/harness-full-review-2026-10-23-g3.md`
-> - G4 Agents-Anywhere / herdr / magpie / cc-switch / CLIProxyAPI：`docs/research/harness-full-review-2026-10-23-g4.md`
+> - G1 codeg / 1flowbase / LiveAgent / MiMo-Code：`e3836e62:docs/research/harness-full-review-2026-10-23-g1.md`
+> - G2 paperclip / ZCode / orca / runner / kloop：`e3836e62:docs/research/harness-full-review-2026-10-23-g2.md`
+> - G3 deepseek-harness / opencode / minimax-code / CometixCode / ponytail：`e3836e62:docs/research/harness-full-review-2026-10-23-g3.md`
+> - G4 Agents-Anywhere / herdr / magpie / cc-switch / CLIProxyAPI：`e3836e62:docs/research/harness-full-review-2026-10-23-g4.md`
 >
 > 全部结论来自静态读码，**没有运行任何来源项目**。
 
@@ -165,7 +167,7 @@
 
 ## 4.5 Agent 配置、模型路由与号池（Q23–Q32，2026-10-23）
 
-证据：`docs/research/agent-config-review-2026-10-23.md`（cc-switch / magpie / CLIProxyAPI）、`docs/research/agent-config-aeroric-state-2026-10-23.md`（Aeroric 现状）。Q128–Q140 的连接界面决定继续有效。
+证据：`e3836e62:docs/research/agent-config-review-2026-10-23.md`（cc-switch / magpie / CLIProxyAPI）、`e3836e62:docs/research/agent-config-aeroric-state-2026-10-23.md`（Aeroric 现状）。Q128–Q140 的连接界面决定继续有效。
 
 **五层对象**
 1. **连接**：一个账号或一个 API 端点。来源：官方 OAuth、本机识别后关联（Q132）、手填 key＋base URL。协议类型三选一：**Responses / Messages / Chat Completions**。凭据只进 Keychain，settings 只存引用（Q28：首次启动迁移现有明文后清除）。
@@ -293,7 +295,7 @@
 8. **U01 三角色**：启用"任务工具进化"时，主执行 / 阶段反思（只读、模型独立）/ 治理（独立进程）分离，监督不可关闭（Q13–Q26 原样保留）；上面 1–7 是三角色的工具链。
 9. 四族差异如实呈现：Claude 可经 hook additionalContext 注入提醒，其他族降级为 UI 提示，靠能力三元组表达。
 
-**补充：Xiaomi MiMo 桌面版三角色实现的借鉴**（`docs/research/xiaomi-mimo-self-evolution.md`，静态核验，未运行）：
+**补充：Xiaomi MiMo 桌面版三角色实现的借鉴**（`e3836e62:docs/research/xiaomi-mimo-self-evolution.md`，静态核验，未运行）：
 10. **代码与状态分离**（germline / soma）：托管物版本库与运行状态分目录；每次进化在任务专属克隆里进行，克隆先建在临时目录、配置完成后原子 rename。
 11. **反思者只看宿主采样的有界证据**：git status、最近提交、错误日志尾部、规格检查摘要，各有字符上限；无工具；输出固定 `criticize / praise / quiet`，每次最多一个主问题，`quiet` 不打断主执行。
 12. **反馈投递链**：待投递 → 注入 → 送达标记，并明确"送达 ≠ 采纳 ≠ 修复"，与 Q14 的投递状态一致。
@@ -372,7 +374,7 @@
 
 ## 7.1 上游复查后的补充决定（2026-10-26，R1–R12）
 
-证据：`docs/research/agent-config-upstream-recheck-2026-10-26-{cc-switch,cliproxyapi,magpie}.md`（对照 cc-switch e8e1cfbf、CLIProxyAPI 30780351、magpie c158b043）。§4.5 主体不变，以下为补充；实现见 Trellis `10-26-gateway-pool-fixes`（H）。
+证据：`e3836e62:docs/research/agent-config-upstream-recheck-2026-10-26-{cc-switch,cliproxyapi,magpie}.md`（对照 cc-switch e8e1cfbf、CLIProxyAPI 30780351、magpie c158b043）。§4.5 主体不变，以下为补充；实现见 Trellis `10-26-gateway-pool-fixes`（H）。
 
 | 编号 | 决定 |
 |---|---|

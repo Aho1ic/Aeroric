@@ -1,6 +1,6 @@
 # Reference provenance and licensing gate
 
-> Required by `MIGRATION_PLAN.md` §7 final paragraph: before any reference code is copied,
+> Rule: before any reference code is copied,
 > its `LICENSE` / `NOTICE` / usage limits and contribution origin must be registered here.
 > This is a **provenance governance gate, not a legal opinion**. If a case is not clearly
 > covered below, the answer is "implement independently", not "copy and hope".
@@ -53,13 +53,13 @@ written for this repository. Append a row **before** the copy lands, not after.
 
 | Artefact | Source | Licence | Where it lives | Provenance evidence |
 |---|---|---|---|---|
-| `grill-me` skill text | `mattpocock/skills` @ `c55ee46073ed923f86ce59a5eb3b6d895095d1b7`, `skills/productivity/grill-me/` | **MIT** | `<project>/.claude/skills/grill-me/` and `~/.mirasim/skills/grill-me/` (symlinked via `~/.claude/skills`) | sha256 + byte sizes in `docs/native/tooling.md` §2; licence confirmed via GitHub API |
-| `grilling` skill text | same repo/revision, `skills/productivity/grilling/` | **MIT** | as above | as above; delegation chain recorded in `tooling.md` §3 |
+| `grill-me` skill text | `mattpocock/skills` @ `c55ee46073ed923f86ce59a5eb3b6d895095d1b7`, `skills/productivity/grill-me/` | **MIT** | `<project>/.claude/skills/grill-me/` and `~/.mirasim/skills/grill-me/` (symlinked via `~/.claude/skills`) | sha256 + byte sizes via the recipe below; licence confirmed via GitHub API |
+| `grilling` skill text | same repo/revision, `skills/productivity/grilling/` | **MIT** | as above | as above; see recipe below |
 
 Only the two skill texts were taken, at a pinned revision, fetched with `curl -fsS` rather than
 transcribed. No code was copied from that repository.
 
-**Pin re-verified byte-for-byte 2026-09-29 (补记二百二十四).** The nine `docs/native/reviews/*.md` carriers all
+**Pin re-verified byte-for-byte 2026-09-29 (补记二百二十四).** The nine `e3836e62:docs/native/reviews/*.md` carriers all
 answer §4.2's "tool 来源/revision" field with *the same* handle `c55ee46073ed923f86ce59a5eb3b6d895095d1b7` pointing
 back here; **7 of 9** then add "当时未记" (all but `skeleton.md` and `terminal-core.md` — `grep -c "当时未记"` per
 carrier gives 1/1/1/1/0/1/1/1/0), so this row is the only place that claim can be checked. Re-runnable
@@ -109,7 +109,7 @@ enters a manifest.
 
 The `.trellis/.../research/reference-map.md` table lists upstream behaviours that constrain
 Phase 9 (`G20`–`G23`). Those lines were inherited from the plan's earlier review, not measured
-by this migration. `MIGRATION_PLAN.md` §1.1 requires each research pass to record repository
+by this migration. The project requires each research pass to record repository
 HEAD, file, symbol, behaviour, adoption point **and unverified items**, and to note whether the
 reference worktree is dirty — a HEAD alone does not prove the working content matches it. Both
 gaps are closed here.

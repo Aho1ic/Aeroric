@@ -1,6 +1,6 @@
 # 外部 Agent 适配器契约(AP7 / P9-01)
 
-MIGRATION_PLAN §D AP7 的第一条要求是「每个 advertised 能力绑定具体 adapter/版本/边界,
+外部 Agent 适配的基本要求是「每个 advertised 能力绑定具体 adapter/版本/边界,
 抓 TUI 文本伪造协议被明确禁止」。本文是那条契约的落点。
 
 ## 1. 能力从哪来:探测,不是猜测
@@ -56,7 +56,7 @@ UI 隐藏只是体验层。**安全边界在宿主**:
 | `fork` | `session.fork` | 已接(`session.control` → 宿主) |
 | `revert` | 无方法;策略层已实现(会话/工作区分流 + 预览门槛) | 策略可用,上游调用待适配器 |
 | `share` | 无方法;脱敏导出已实现 | 本地脱敏可用,公开上传需 endpoint+确认 |
-| 子代理 | `subagents.list` / `subagents.prompt` / `subagents.interruptByParent` | core API 已存在;宿主面按 ADR-041 逐步接 |
+| 子代理 | `subagents.list` / `subagents.prompt` / `subagents.interruptByParent` | core API 已存在;宿主面逐步接 |
 | goal | `goals.create|edit|pause|resume|complete|clear|get` | 同上 |
 
 未广告的项**不从清单里删除、也不放占位按钮**:它们在
