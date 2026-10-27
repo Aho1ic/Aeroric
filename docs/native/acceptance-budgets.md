@@ -1,7 +1,7 @@
 # 验收预算与实测（AP8 R-AP8-4 / 原 P10-01 Action 4/5）
 
 > 载体:`scripts/native/stress.mjs`(固定口径压测)、门禁 `system-parity` 的 `stress-headless`。
-> 需求源:`MIGRATION_PLAN.md` §Task P10-01 Action 4(负载量与机器口径)与 Action 5(初始预算)。
+> 需求源:`e3836e62:MIGRATION_PLAN.md` §Task P10-01 Action 4(负载量与机器口径)与 Action 5(初始预算)。
 
 ## 1. 固定口径
 

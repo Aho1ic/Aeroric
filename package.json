@@ -15,6 +15,7 @@
     "native:contracts": "node scripts/native/contracts.mjs",
     "native:ui-test": "node scripts/native/ui-test.mjs",
     "verify-notes": "node .agents/skills/write-notes-like-deepseek/scripts/verify-agent-note-tree.ts && node .agents/skills/write-notes-like-deepseek/scripts/verify-agent-note-format.ts && node .agents/skills/write-notes-like-deepseek/scripts/verify-archived-agent-notes.ts",
-    "archive-agent-note": "node .agents/skills/write-notes-like-deepseek/scripts/archive-agent-note.ts"
+    "archive-agent-note": "node .agents/skills/write-notes-like-deepseek/scripts/archive-agent-note.ts",
+    "verify-docs": "node scripts/native/verify-docs.mjs"
   }
 }

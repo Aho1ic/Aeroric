@@ -13,6 +13,31 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  docs-and-notes:
+    # 笔记与文档门禁：只需 Node 内置模块，跑在便宜的 Linux 上。
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Verify agent notes
+        env:
+          # 归档封印的 append-only 要与变更前的提交比对；新分支 push 的 before 为全 0 时脚本跳过该项。
+          AGENT_NOTE_ARCHIVE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: npm run verify-notes
+
+      - name: Verify docs
+        run: |
+          npm run verify-docs
+          node --test scripts/native/verify-docs.test.mjs
+
   checks:
     # Apple-only product (ADR-039): core, host and the Swift packages are
     # verified on macOS only.

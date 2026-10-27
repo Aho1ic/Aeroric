@@ -26,8 +26,8 @@ test-results
 .aeroric
 .husky
 .local_docs
-AGENTS.md
-CLAUDE.md
+/AGENTS.md
+/CLAUDE.md
 local_change.md
 .workbuddy-ai
 plan.md

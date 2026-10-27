@@ -1,6 +1,6 @@
 # 迁移演练（Task P8-05 Action 4/5）
 
-> 建立时间：2026-10-07。对应计划：`MIGRATION_PLAN.md` §Task P8-05 Action 4（合成数据演练）
+> 建立时间：2026-10-07。对应计划：`e3836e62:MIGRATION_PLAN.md` §Task P8-05 Action 4（合成数据演练）
 > 与 Action 5（生产数据，**需用户同意**）。脚本：`scripts/native/migration-rehearsal.mjs`。
 
 ## 1. 这个脚本回答什么
