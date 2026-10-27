@@ -303,7 +303,9 @@ pub(crate) fn dsh_api_key_for(agent: &str) -> Option<String> {
             .custom_agents
             .iter()
             .find(|profile| profile.id == agent)
-            .map(|profile| profile.api_key.clone())
+            .and_then(|profile| {
+                secret_fields::resolve_custom_agent_secret(&profile.id, "api_key", &profile.api_key)
+            })
     };
     key.map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())

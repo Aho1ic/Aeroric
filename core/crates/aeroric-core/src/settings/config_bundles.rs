@@ -287,7 +287,12 @@ pub(super) fn collect_agent_config_bundle_agent(
         config_content,
         config_present,
         base_url: profile.base_url.clone(),
-        api_key: profile.api_key.clone(),
+        api_key: crate::settings::secret_fields::resolve_custom_agent_secret(
+            &profile.id,
+            "api_key",
+            &profile.api_key,
+        )
+        .unwrap_or_default(),
         models: profile.models.clone(),
         enable_1m_context: profile.enable_1m_context,
         disable_artifact_tool: profile.disable_artifact_tool,

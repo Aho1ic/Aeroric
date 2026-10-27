@@ -160,12 +160,19 @@ pub fn split_for_disk(
     Ok(())
 }
 
+/// Custom agents' credentials stay as markers after reading and are fetched
+/// only when that agent needs them ([`resolve_custom_agent_secret`]). Settings
+/// are read all the time; the native App keeps launching through Agent 配置, so
+/// reading every legacy profile's key on each read only made macOS ask for
+/// dozens of keychain items (2026-10-27).
+const LAZY_PREFIX: &str = "agent-config:custom:";
+
 /// Put credentials back after reading. A missing or unreadable entry keeps the
 /// marker (see module docs) and is reported, never treated as "cleared".
 pub fn hydrate_from_store(fields: &mut Map<String, Value>, store: &dyn SecretStore) -> Vec<String> {
     let mut failures = Vec::new();
     let _ = for_each_secret(fields, &mut |account, value| {
-        if value.as_str() != Some(KEYCHAIN_MARKER) {
+        if value.as_str() != Some(KEYCHAIN_MARKER) || account.starts_with(LAZY_PREFIX) {
             return Ok(());
         }
         match store.get(&SecretKey(account.to_string())) {
@@ -176,6 +183,21 @@ pub fn hydrate_from_store(fields: &mut Map<String, Value>, store: &dyn SecretSto
         Ok(())
     });
     failures
+}
+
+/// A custom agent's `api_key` / `password` as stored in settings: the value
+/// itself, or — still a keychain marker — the credential read now. `None` when
+/// empty or unreadable.
+pub fn resolve_custom_agent_secret(agent_id: &str, name: &str, value: &str) -> Option<String> {
+    let resolved = if value == KEYCHAIN_MARKER {
+        secret_store()?
+            .get(&SecretKey(format!("{LAZY_PREFIX}{agent_id}:{name}")))
+            .ok()
+            .flatten()?
+    } else {
+        value.to_string()
+    };
+    Some(resolved).filter(|value| !value.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -219,7 +241,34 @@ mod tests {
 
         let mut loaded = disk.clone();
         assert!(hydrate_from_store(&mut loaded, &store).is_empty());
-        assert_eq!(loaded, original);
+        // Custom agents' credentials stay markers until that agent needs them.
+        let agent = &loaded["custom_agents"][0];
+        assert_eq!(
+            (agent["api_key"].as_str(), agent["password"].as_str()),
+            (Some(KEYCHAIN_MARKER), Some(KEYCHAIN_MARKER))
+        );
+        let mut expected = original.clone();
+        expected["custom_agents"][0]["api_key"] = json!(KEYCHAIN_MARKER);
+        expected["custom_agents"][0]["password"] = json!(KEYCHAIN_MARKER);
+        assert_eq!(loaded, expected);
+        assert_eq!(
+            store
+                .get(&SecretKey("agent-config:custom:ds:api_key".into()))
+                .unwrap()
+                .as_deref(),
+            Some("sk-ds"),
+            "the key itself is in the store, read on demand"
+        );
+        // Saving again leaves markers alone: nothing is rewritten or deleted.
+        let mut again = loaded.clone();
+        split_for_disk(&mut again, &marked_accounts(&mut disk.clone()), &store).unwrap();
+        assert_eq!(
+            store
+                .get(&SecretKey("agent-config:custom:ds:password".into()))
+                .unwrap()
+                .as_deref(),
+            Some("pw")
+        );
     }
 
     #[test]

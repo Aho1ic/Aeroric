@@ -96,47 +96,49 @@ fn read_clipboard_file_paths_sync() -> Result<Vec<String>, String> {
     Ok(Vec::new())
 }
 
-/// 宿主进程的 OS 钥匙串实现（core `SecretStore` 端口）。service 与 account
-/// 方案**与 Tauri 适配层逐字一致**（`com.aeroric.desktop` ＋
-/// `ssh-password:`/`dbx-connection-secrets:`/`notebook:` 前缀的 account）——
-/// 两个进程写同一台机器的同一把钥匙串，Embedded 与 External 交接时凭据不换家。
+/// 宿主进程的 OS 钥匙串实现（core `SecretStore` 端口）。2026-10-27 起所有凭据
+/// 存在同一个钥匙串条目里（[`crate::secret_vault`]），每个宿主进程只读一次；旧的
+/// 按条目存放（`com.aeroric.desktop` ＋ `ssh-password:`/`dbx-connection-secrets:`/
+/// `agent-config:` 等 account）在第一次用到时搬进去，原条目不删。
 /// Linux 上 key 存在会话 keyring、重启后要重填的代价与 `secrets.rs` 模块注释
 /// 同源（本机平台能力，不是宿主化引入的）。
 pub struct KeyringSecrets;
 
-impl aeroric_core::context::SecretStore for KeyringSecrets {
-    fn get(&self, key: &aeroric_core::context::SecretKey) -> Result<Option<String>, String> {
-        let entry = keyring::Entry::new("com.aeroric.desktop", &key.0)
-            .map_err(|error| error.to_string())?;
+struct OsKeychain;
+
+impl crate::secret_vault::Keychain for OsKeychain {
+    fn get(&self, service: &str, account: &str) -> Result<Option<String>, String> {
+        let entry = keyring::Entry::new(service, account).map_err(|error| error.to_string())?;
         match entry.get_password() {
-            Ok(value) => Ok(Some(value).filter(|value| !value.is_empty())),
+            Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(error) => Err(error.to_string()),
         }
     }
 
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<(), String> {
+        let entry = keyring::Entry::new(service, account).map_err(|error| error.to_string())?;
+        entry.set_password(value).map_err(|error| error.to_string())
+    }
+}
+
+fn vault() -> &'static crate::secret_vault::SecretVault<OsKeychain> {
+    static VAULT: std::sync::OnceLock<crate::secret_vault::SecretVault<OsKeychain>> =
+        std::sync::OnceLock::new();
+    VAULT.get_or_init(|| crate::secret_vault::SecretVault::new(OsKeychain))
+}
+
+impl aeroric_core::context::SecretStore for KeyringSecrets {
+    fn get(&self, key: &aeroric_core::context::SecretKey) -> Result<Option<String>, String> {
+        vault().get(&key.0)
+    }
+
     fn set(&self, key: &aeroric_core::context::SecretKey, value: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new("com.aeroric.desktop", &key.0)
-            .map_err(|error| error.to_string())?;
-        if value.is_empty() {
-            match entry.delete_credential() {
-                Ok(()) => Ok(()),
-                Err(keyring::Error::NoEntry) => Ok(()),
-                Err(error) => Err(error.to_string()),
-            }
-        } else {
-            entry.set_password(value).map_err(|error| error.to_string())
-        }
+        vault().set(&key.0, value)
     }
 
     fn delete(&self, key: &aeroric_core::context::SecretKey) -> Result<(), String> {
-        let entry = keyring::Entry::new("com.aeroric.desktop", &key.0)
-            .map_err(|error| error.to_string())?;
-        match entry.delete_credential() {
-            Ok(()) => Ok(()),
-            Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(error.to_string()),
-        }
+        vault().delete(&key.0)
     }
 }
 

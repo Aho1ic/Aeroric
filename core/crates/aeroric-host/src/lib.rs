@@ -31,6 +31,7 @@ pub mod platform_adapter;
 pub mod push_host;
 pub mod remote_headless;
 pub mod search_services;
+pub mod secret_vault;
 pub mod services;
 pub mod session_live_services;
 pub mod settings_services;

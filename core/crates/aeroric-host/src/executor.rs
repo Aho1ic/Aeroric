@@ -319,8 +319,14 @@ pub(crate) fn omp_agent_env_for(
             .and_then(|fields| fields.get("custom_agents"))
             .and_then(Value::as_array)
             .and_then(|list| list.iter().find(|p| p["id"].as_str() == Some(agent)))
-            .and_then(|profile| profile["api_key"].as_str())
-            .map(str::trim)
+            .and_then(|profile| {
+                aeroric_core::settings::secret_fields::resolve_custom_agent_secret(
+                    agent,
+                    "api_key",
+                    profile["api_key"].as_str().unwrap_or_default(),
+                )
+            })
+            .map(|key| key.trim().to_string())
             .filter(|key| !key.is_empty())
             .ok_or_else(|| format!("读不到 omp 档案 {agent} 的 API Key（钥匙串被锁或条目丢失）"))?;
         env.push((OMP_API_KEY_ENV.to_string(), key.to_string()));

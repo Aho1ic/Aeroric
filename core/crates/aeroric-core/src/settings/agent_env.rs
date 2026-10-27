@@ -9,13 +9,30 @@
 use super::*;
 
 pub(super) fn migrate_legacy_proxy_settings(settings: &AppSettings) -> ProxySettings {
+    // A password matters only beside a username; only those are read.
+    let credentials: Vec<(String, String)> = settings
+        .custom_agents
+        .iter()
+        .map(|profile| {
+            let password = if profile.username.trim().is_empty() {
+                String::new()
+            } else {
+                crate::settings::secret_fields::resolve_custom_agent_secret(
+                    &profile.id,
+                    "password",
+                    &profile.password,
+                )
+                .unwrap_or_default()
+            };
+            (profile.username.clone(), password)
+        })
+        .collect();
     migrate_legacy_proxy_fields(
         &settings.proxy_settings,
         &settings.agent_proxy_overrides,
-        settings
-            .custom_agents
+        credentials
             .iter()
-            .map(|profile| (profile.username.as_str(), profile.password.as_str())),
+            .map(|(username, password)| (username.as_str(), password.as_str())),
     )
 }
 

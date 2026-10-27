@@ -9,6 +9,18 @@ pub(super) fn upsert_custom_agent_profile_unlocked(
 ) -> Result<AgentFileTransaction, String> {
     let mut profile = normalize_custom_agent_profile(profile)
         .ok_or_else(|| "Invalid custom agent profile".to_string())?;
+    // A profile read from settings carries its key as a marker (read lazily);
+    // the files below need the key itself, never the marker.
+    let id = profile.id.clone();
+    for (name, value) in [
+        ("api_key", &mut profile.api_key),
+        ("password", &mut profile.password),
+    ] {
+        if value.as_str() == crate::settings::secret_fields::KEYCHAIN_MARKER {
+            *value = crate::settings::secret_fields::resolve_custom_agent_secret(&id, name, value)
+                .ok_or_else(|| format!("读不到 Agent {id} 的凭据（钥匙串被拒绝或条目丢失）"))?;
+        }
+    }
     let clear_sidecar = profile.api_key.trim().is_empty();
     let existing = settings
         .custom_agents
