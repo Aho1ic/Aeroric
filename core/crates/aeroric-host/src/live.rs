@@ -27,7 +27,10 @@ use aeroric_core::sessions::live::claude::map::{
 use aeroric_core::sessions::live::codex::server::{
     process_launcher, spawn_checked, Launcher, ProcessSpec,
 };
-use aeroric_core::sessions::live::executor::{ClaudeKey, Route, Routing, ServerKey};
+use aeroric_core::sessions::live::executor::{ClaudeKey, OmpKey, Route, Routing, ServerKey};
+use aeroric_core::sessions::live::omp::driver::{
+    version_supported as omp_version_supported, OmpLauncher, OmpStart,
+};
 use aeroric_core::sessions::live::LiveStatusSink;
 use aeroric_core::settings::get_login_shell_env;
 use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
@@ -140,6 +143,17 @@ impl Routing for HostRouting {
         agent: &str,
         agent_config_id: Option<&str>,
     ) -> Option<Route> {
+        if family == ProtocolFamily::Omp {
+            // ADR-043 phase two: local omp sessions (built-in or a custom omp
+            // profile) are native; a pinned Agent configuration keeps the PTY
+            // path, which owns its gateway wiring.
+            if agent_config_id.is_some_and(|id| !id.trim().is_empty()) {
+                return None;
+            }
+            return Some(Route::Omp(OmpKey {
+                agent: agent.to_string(),
+            }));
+        }
         if !matches!(family, ProtocolFamily::Codex | ProtocolFamily::Claude) {
             return None;
         }
@@ -188,6 +202,50 @@ impl Routing for HostRouting {
     fn claude_config_dir(&self, key: &ClaudeKey) -> Option<std::path::PathBuf> {
         claude_config_dir(&self.context, key, get_login_shell_env())
     }
+
+    fn omp_launcher(&self, key: &OmpKey) -> OmpLauncher {
+        omp_launcher(Arc::clone(&self.context), key.clone())
+    }
+}
+
+/// `omp --mode rpc` with the managed home (`PI_CODING_AGENT_DIR`), never the
+/// user's `~/.omp`. No `AERORIC_TASK_ID`/`AERORIC_EVENT_DIR`, so the managed
+/// hook stays inert: status comes from the protocol.
+fn omp_launcher(context: Arc<CoreContext>, key: OmpKey) -> OmpLauncher {
+    Arc::new(move |start: &OmpStart| {
+        let input = if key.agent == "omp" {
+            harness_path(&context, "omp")
+                .map(LaunchInput::new)
+                .unwrap_or_else(|| LaunchInput::new("omp"))
+        } else {
+            resolve_launch_input(&context, &key.agent)
+        };
+        let mut spec = spec_with_login_env(input);
+        spec.cwd = Some(start.cwd.clone());
+        let settings = aeroric_core::storage::load_settings(&context)
+            .ok()
+            .and_then(|outcome| outcome.found());
+        for (name, value) in crate::executor::omp_agent_env_for(
+            context.paths.data_dir(),
+            &key.agent,
+            settings.as_ref(),
+        )? {
+            spec.env.retain(|(existing, _)| existing != &name);
+            spec.env.push((name, value));
+        }
+        for name in aeroric_core::agents::environment::OMP_PROFILE_KEYS {
+            spec.env.retain(|(existing, _)| existing != name);
+            spec.unset_env.push((*name).to_string());
+        }
+        let args = aeroric_core::agents::launch::omp_rpc_args(
+            &start.permission,
+            &start.cwd,
+            start.model.as_deref(),
+            start.effort.as_deref(),
+            start.resume.as_deref(),
+        );
+        spawn_checked(&spec, omp_version_supported, &args, "omp")
+    })
 }
 
 /// Mirrors the launcher's environment: a configuration gets its managed home;

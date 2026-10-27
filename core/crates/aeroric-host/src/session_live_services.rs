@@ -11,7 +11,7 @@ use aeroric_core::sessions::live::auto_check::{AutoCheckPolicy, AutoCheckSelecti
 use aeroric_core::sessions::live::executor::StructuredExecutor;
 use aeroric_core::sessions::live::update::Replay;
 use aeroric_core::sessions::live::{
-    ConfigChange, Decision, DriverError, SessionDriver, SlashCommand,
+    Answer, ConfigChange, Decision, DriverError, SessionDriver, SlashCommand,
 };
 use aeroric_core::settings::preferences;
 use aeroric_core::storage::Record;
@@ -21,8 +21,9 @@ use aeroric_core::tasks::{AgentFamilies, TaskService};
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
 use aeroric_protocol::session_live::{
-    self as wire, CommandParams, ConfigureParams, LiveCommand, LiveDecision, PromptParams,
-    RespondParams, SessionState, TaskParams, UpdatesBatch, UpdatesGap, UpdatesParams,
+    self as wire, AnswerParams, CommandParams, ConfigureParams, LiveCommand, LiveDecision,
+    PromptParams, RespondParams, RevokeGrantParams, SessionState, TaskParams, UpdatesBatch,
+    UpdatesGap, UpdatesParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -76,10 +77,12 @@ pub fn register_session_live_services(
         .set_auto_check_policy(Arc::new(SettingsAutoChecks(Arc::clone(&live.context))));
     // Before any session method can answer: the previous host's drivers are gone.
     live.settle_orphaned();
-    let methods: [(&str, Run); 8] = [
+    let methods: [(&str, Run); 10] = [
         (wire::PROMPT_METHOD, prompt),
         (wire::INTERRUPT_METHOD, interrupt),
         (wire::RESPOND_METHOD, respond),
+        (wire::ANSWER_METHOD, answer),
+        (wire::REVOKE_GRANT_METHOD, revoke_grant),
         (wire::CONFIGURE_METHOD, configure),
         (wire::COMMAND_METHOD, command),
         (wire::CLOSE_METHOD, close),
@@ -399,6 +402,36 @@ fn respond(live: &Live, request: &Request) -> Frame {
     with_driver(live, request, &p.task_id, |d| {
         d.respond(&p.request_id, decision)
     })
+}
+
+fn answer(live: &Live, request: &Request) -> Frame {
+    let p: AnswerParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let answer = match (p.cancelled, p.value, p.confirmed) {
+        (true, _, _) => Answer::Cancelled,
+        (false, Some(value), None) => Answer::Value(value),
+        (false, None, Some(confirmed)) => Answer::Confirmed(confirmed),
+        _ => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::InvalidArgument,
+                "session.answer takes exactly one of value, confirmed or cancelled",
+            )
+        }
+    };
+    with_driver(live, request, &p.task_id, |d| {
+        d.answer(&p.question_id, answer)
+    })
+}
+
+fn revoke_grant(live: &Live, request: &Request) -> Frame {
+    let p: RevokeGrantParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    with_driver(live, request, &p.task_id, |d| d.revoke_grant(&p.subject))
 }
 
 fn configure(live: &Live, request: &Request) -> Frame {

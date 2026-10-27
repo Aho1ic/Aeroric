@@ -21,10 +21,16 @@ pub const COMMAND_METHOD: &str = "session.command";
 pub const CLOSE_METHOD: &str = "session.close";
 pub const STATE_METHOD: &str = "session.state";
 pub const UPDATES_METHOD: &str = "session.updates";
+/// Answer an agent's question card (omp extension dialogs).
+pub const ANSWER_METHOD: &str = "session.answer";
+/// Forget a remembered "always allow in this session" grant.
+pub const REVOKE_GRANT_METHOD: &str = "session.revokeGrant";
 pub const METHODS: &[&str] = &[
     PROMPT_METHOD,
     INTERRUPT_METHOD,
     RESPOND_METHOD,
+    ANSWER_METHOD,
+    REVOKE_GRANT_METHOD,
     CONFIGURE_METHOD,
     COMMAND_METHOD,
     CLOSE_METHOD,
@@ -174,6 +180,46 @@ pub enum SessionUpdateKind {
         id: String,
         title: String,
         status: String,
+        /// The subagent's latest activity, one line.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    /// An approval answered on the user's behalf from a grant they gave
+    /// earlier in this session ("always allow"), after the agent restarted.
+    AutoApproved {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        kind: String,
+        summary: String,
+        /// What the grant covers (revocable with `session.revokeGrant`).
+        subject: String,
+    },
+    /// The agent asks the user something that is not a tool approval.
+    Question {
+        id: String,
+        /// `select` | `confirm` | `input` | `editor`.
+        style: String,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<u64>,
+    },
+    QuestionResolved {
+        id: String,
+        /// `answered` | `cancelled` | `timedOut`.
+        outcome: String,
+    },
+    /// An informational line from the agent (compaction, retries, …).
+    Notice {
+        /// `info` | `warning` | `error`.
+        level: String,
+        message: String,
     },
     Usage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -249,6 +295,26 @@ pub struct PendingPermission {
     pub options: Vec<String>,
 }
 
+/// A question card still waiting for the user.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQuestion {
+    pub id: String,
+    pub style: String,
+    pub title: String,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub placeholder: Option<String>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// When the question was asked, for the countdown.
+    #[serde(default)]
+    pub asked_at_ms: u64,
+}
+
 /// `session.state`: what a client that just (re)connected needs besides updates.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -277,6 +343,12 @@ pub struct SessionState {
     /// paginated session): the page shows this instead of the composer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_blocked: Option<String>,
+    /// Question cards waiting for the user.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<PendingQuestion>,
+    /// The permission tier is fixed for this session (omp takes it at start).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub permission_locked: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,6 +421,28 @@ pub struct RespondParams {
     pub decision: LiveDecision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// `session.answer`: exactly one of `value` (select / input / editor),
+/// `confirmed` (confirm) or `cancelled` (skip).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnswerParams {
+    pub task_id: String,
+    pub question_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmed: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancelled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RevokeGrantParams {
+    pub task_id: String,
+    pub subject: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -441,6 +535,31 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
             id: "s1".into(),
             title: "检索".into(),
             status: "running".into(),
+            detail: Some("读取 src/main.rs".into()),
+        },
+        K::AutoApproved {
+            id: "8".into(),
+            tool_call_id: Some("c2".into()),
+            kind: "bash".into(),
+            summary: "npm run lint".into(),
+            subject: "bash".into(),
+        },
+        K::Question {
+            id: "q1".into(),
+            style: "select".into(),
+            title: "用哪个测试框架？".into(),
+            message: None,
+            options: vec!["vitest".into(), "jest".into()],
+            placeholder: None,
+            timeout_ms: Some(30_000),
+        },
+        K::QuestionResolved {
+            id: "q1".into(),
+            outcome: "answered".into(),
+        },
+        K::Notice {
+            level: "info".into(),
+            message: "上下文已自动压缩".into(),
         },
         K::Usage {
             context_used: Some(1200),
@@ -542,6 +661,8 @@ pub fn fixture_state() -> SessionState {
         output_tokens: Some(300),
         latest_seq: 16,
         resume_blocked: None,
+        questions: vec![],
+        permission_locked: false,
     }
 }
 
@@ -578,6 +699,8 @@ pub fn fixture_requests() -> Value {
         PROMPT_METHOD: task(json!({"text": "继续"})),
         INTERRUPT_METHOD: task(json!({})),
         RESPOND_METHOD: task(json!({"requestId": "7", "decision": "deny", "reason": "别删"})),
+        ANSWER_METHOD: task(json!({"questionId": "q1", "value": "vitest"})),
+        REVOKE_GRANT_METHOD: task(json!({"subject": "bash"})),
         CONFIGURE_METHOD: task(json!({"model": "gpt-5", "permission": "full_access", "effort": "high"})),
         COMMAND_METHOD: task(json!({"command": "compact"})),
         CLOSE_METHOD: task(json!({})),
@@ -614,6 +737,135 @@ pub fn schema() -> Value {
         "properties": {"kind": {"enum": ["tests", "diagnostics"]}, "profile": s, "label": s,
             "state": {"enum": ["passed", "failed", "error", "timedOut", "cancelled"]},
             "summary": s, "failures": {"type": "array", "items": s}, "outputTail": s}});
+    let state_def = json!({"type": "object", "required": ["taskId", "live", "structured", "turnActive", "pending", "plan", "latestSeq"], "properties": {
+                "taskId": s, "live": {"type": "boolean"}, "structured": {"type": "boolean"}, "family": {"enum": ["claude", "codex", "dsh", "omp", null]},
+                "sessionId": opt_string, "turnActive": {"type": "boolean"},
+                "pending": {"type": "array", "items": {"type": "object", "required": ["id", "kind", "summary"], "properties": {
+                    "id": s, "kind": s, "summary": s, "toolCallId": opt_string,
+                    "options": {"type": "array", "items": {"enum": ["allowOnce", "allowForSession", "deny"]}}}}},
+                "plan": {"type": "array", "items": {"$ref": "#/$defs/planEntry"}},
+                "model": opt_string, "permission": opt_string, "effort": opt_string,
+                "contextUsed": opt_u64, "contextLimit": opt_u64, "inputTokens": opt_u64, "outputTokens": opt_u64,
+                "latestSeq": {"type": "integer", "minimum": 0}, "resumeBlocked": s,
+                "questions": {"type": "array", "items": {"type": "object", "required": ["id", "style", "title"], "properties": {
+                    "id": s, "style": s, "title": s, "message": opt_string, "options": {"type": "array", "items": s},
+                    "placeholder": opt_string, "timeoutMs": opt_u64, "askedAtMs": {"type": "integer"}}}},
+                "permissionLocked": {"type": "boolean"}}});
+    // Its own value: the update list inline exceeds `json!`'s recursion limit.
+    let update_variants: Vec<Value> = vec![
+        update_variant("turnStarted", json!(["turnId"]), json!({"turnId": s})),
+        update_variant(
+            "turnEnded",
+            json!(["turnId", "reason"]),
+            json!({"turnId": s, "reason": {"enum": ["completed", "interrupted", "failed"]}, "error": s}),
+        ),
+        update_variant(
+            "messageChunk",
+            json!(["messageId", "role", "text"]),
+            json!({"messageId": s, "role": s, "text": s}),
+        ),
+        update_variant(
+            "messageCompleted",
+            json!(["messageId"]),
+            json!({"messageId": s, "text": s}),
+        ),
+        update_variant(
+            "thoughtChunk",
+            json!(["id", "text", "summary"]),
+            json!({"id": s, "text": s, "summary": {"type": "boolean"}}),
+        ),
+        update_variant(
+            "toolCall",
+            json!(["id", "kind", "title", "input"]),
+            json!({"id": s,
+            "kind": {"enum": ["command", "fileChange", "mcp", "webSearch", "subagent", "other"]}, "title": s, "input": {}}),
+        ),
+        update_variant(
+            "toolCallUpdate",
+            json!(["id", "status"]),
+            json!({"id": s,
+            "status": {"enum": ["running", "completed", "failed", "declined"]}, "outputDelta": s, "result": {}}),
+        ),
+        update_variant(
+            "plan",
+            json!(["entries"]),
+            json!({"entries": {"type": "array", "items": {"$ref": "#/$defs/planEntry"}}}),
+        ),
+        update_variant(
+            "permissionRequest",
+            json!(["id", "kind", "summary", "options"]),
+            json!({"id": s, "toolCallId": s, "kind": s, "summary": s,
+            "options": {"type": "array", "items": s}}),
+        ),
+        update_variant(
+            "permissionResolved",
+            json!(["id", "decision"]),
+            json!({"id": s, "decision": s}),
+        ),
+        update_variant(
+            "subagent",
+            json!(["id", "title", "status"]),
+            json!({"id": s, "title": s, "status": s, "detail": s}),
+        ),
+        update_variant(
+            "autoApproved",
+            json!(["id", "kind", "summary", "subject"]),
+            json!({"id": s, "toolCallId": s, "kind": s, "summary": s, "subject": s}),
+        ),
+        update_variant(
+            "question",
+            json!(["id", "style", "title"]),
+            json!({"id": s, "style": {"enum": ["select", "confirm", "input", "editor"]},
+            "title": s, "message": s, "options": {"type": "array", "items": s}, "placeholder": s, "timeoutMs": {"type": "integer"}}),
+        ),
+        update_variant(
+            "questionResolved",
+            json!(["id", "outcome"]),
+            json!({"id": s, "outcome": {"enum": ["answered", "cancelled", "timedOut"]}}),
+        ),
+        update_variant(
+            "notice",
+            json!(["level", "message"]),
+            json!({"level": {"enum": ["info", "warning", "error"]}, "message": s}),
+        ),
+        update_variant(
+            "usage",
+            json!([]),
+            json!({"contextUsed": {"type": "integer"}, "contextLimit": {"type": "integer"},
+            "inputTokens": {"type": "integer"}, "outputTokens": {"type": "integer"}}),
+        ),
+        update_variant(
+            "configChanged",
+            json!([]),
+            json!({"model": s, "permission": s, "effort": s}),
+        ),
+        update_variant(
+            "turnChanges",
+            json!(["turnId", "files", "additions", "deletions"]),
+            json!({"turnId": s,
+            "files": {"type": "array", "items": {"type": "object", "required": ["path"],
+                "properties": {"path": s, "additions": {"type": "integer"}, "deletions": {"type": "integer"}}}},
+            "additions": {"type": "integer", "minimum": 0}, "deletions": {"type": "integer", "minimum": 0},
+            "truncated": {"type": "boolean"}}),
+        ),
+        update_variant(
+            "autoCheck",
+            json!(["turnId", "state"]),
+            json!({"turnId": s,
+            "state": {"enum": ["running", "passed", "failed", "cancelled", "skipped"]},
+            "items": {"type": "array", "items": auto_check_item}}),
+        ),
+        update_variant(
+            "error",
+            json!(["message", "recoverable"]),
+            json!({"message": s, "recoverable": {"type": "boolean"}}),
+        ),
+        update_variant(
+            "unknown",
+            json!(["kind", "payload"]),
+            json!({"kind": s, "payload": {}}),
+        ),
+    ];
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "aeroric-native-session-live-v1",
@@ -629,6 +881,9 @@ pub fn schema() -> Value {
             INTERRUPT_METHOD: {"mutating": true, "params": params(json!(["taskId"]), json!({})), "result": empty},
             RESPOND_METHOD: {"mutating": true, "params": params(json!(["taskId", "requestId", "decision"]), json!({
                 "requestId": s, "decision": {"enum": ["allowOnce", "allowForSession", "deny"]}, "reason": opt_string})), "result": empty},
+            ANSWER_METHOD: {"mutating": true, "params": params(json!(["taskId", "questionId"]), json!({
+                "questionId": s, "value": opt_string, "confirmed": {"type": ["boolean", "null"]}, "cancelled": {"type": "boolean"}})), "result": empty},
+            REVOKE_GRANT_METHOD: {"mutating": true, "params": params(json!(["taskId", "subject"]), json!({"subject": s})), "result": empty},
             CONFIGURE_METHOD: {"mutating": true, "params": params(json!(["taskId"]), json!({
                 "model": opt_string, "permission": {"enum": ["ask", "auto_edit", "full_access", null]}, "effort": opt_string})), "result": empty},
             COMMAND_METHOD: {"mutating": true, "params": params(json!(["taskId", "command"]), json!({"command": {"enum": ["compact", "review"]}})), "result": empty},
@@ -643,49 +898,12 @@ pub fn schema() -> Value {
                 "updates": {"type": "array", "items": {"$ref": "#/$defs/update"}},
                 "latestSeq": {"type": "integer", "minimum": 0},
                 "gap": {"type": "object", "required": ["oldestAvailable"], "properties": {"oldestAvailable": {"type": "integer"}}}}},
-            "state": {"type": "object", "required": ["taskId", "live", "structured", "turnActive", "pending", "plan", "latestSeq"], "properties": {
-                "taskId": s, "live": {"type": "boolean"}, "structured": {"type": "boolean"}, "family": {"enum": ["claude", "codex", "dsh", "omp", null]},
-                "sessionId": opt_string, "turnActive": {"type": "boolean"},
-                "pending": {"type": "array", "items": {"type": "object", "required": ["id", "kind", "summary"], "properties": {
-                    "id": s, "kind": s, "summary": s, "toolCallId": opt_string,
-                    "options": {"type": "array", "items": {"enum": ["allowOnce", "allowForSession", "deny"]}}}}},
-                "plan": {"type": "array", "items": {"$ref": "#/$defs/planEntry"}},
-                "model": opt_string, "permission": opt_string, "effort": opt_string,
-                "contextUsed": opt_u64, "contextLimit": opt_u64, "inputTokens": opt_u64, "outputTokens": opt_u64,
-                "latestSeq": {"type": "integer", "minimum": 0}, "resumeBlocked": s}},
+            "state": state_def,
             "planEntry": {"type": "object", "required": ["text", "status"], "properties": {"text": s, "status": s}},
             "update": {"allOf": [
                 {"type": "object", "required": ["taskId", "seq", "atMs", "type"], "properties": {
                     "taskId": s, "seq": {"type": "integer", "minimum": 1}, "atMs": {"type": "integer"}, "type": s}},
-                {"oneOf": [
-                    update_variant("turnStarted", json!(["turnId"]), json!({"turnId": s})),
-                    update_variant("turnEnded", json!(["turnId", "reason"]), json!({"turnId": s, "reason": {"enum": ["completed", "interrupted", "failed"]}, "error": s})),
-                    update_variant("messageChunk", json!(["messageId", "role", "text"]), json!({"messageId": s, "role": s, "text": s})),
-                    update_variant("messageCompleted", json!(["messageId"]), json!({"messageId": s, "text": s})),
-                    update_variant("thoughtChunk", json!(["id", "text", "summary"]), json!({"id": s, "text": s, "summary": {"type": "boolean"}})),
-                    update_variant("toolCall", json!(["id", "kind", "title", "input"]), json!({"id": s,
-                        "kind": {"enum": ["command", "fileChange", "mcp", "webSearch", "subagent", "other"]}, "title": s, "input": {}})),
-                    update_variant("toolCallUpdate", json!(["id", "status"]), json!({"id": s,
-                        "status": {"enum": ["running", "completed", "failed", "declined"]}, "outputDelta": s, "result": {}})),
-                    update_variant("plan", json!(["entries"]), json!({"entries": {"type": "array", "items": {"$ref": "#/$defs/planEntry"}}})),
-                    update_variant("permissionRequest", json!(["id", "kind", "summary", "options"]), json!({"id": s, "toolCallId": s, "kind": s, "summary": s,
-                        "options": {"type": "array", "items": s}})),
-                    update_variant("permissionResolved", json!(["id", "decision"]), json!({"id": s, "decision": s})),
-                    update_variant("subagent", json!(["id", "title", "status"]), json!({"id": s, "title": s, "status": s})),
-                    update_variant("usage", json!([]), json!({"contextUsed": {"type": "integer"}, "contextLimit": {"type": "integer"},
-                        "inputTokens": {"type": "integer"}, "outputTokens": {"type": "integer"}})),
-                    update_variant("configChanged", json!([]), json!({"model": s, "permission": s, "effort": s})),
-                    update_variant("turnChanges", json!(["turnId", "files", "additions", "deletions"]), json!({"turnId": s,
-                        "files": {"type": "array", "items": {"type": "object", "required": ["path"],
-                            "properties": {"path": s, "additions": {"type": "integer"}, "deletions": {"type": "integer"}}}},
-                        "additions": {"type": "integer", "minimum": 0}, "deletions": {"type": "integer", "minimum": 0},
-                        "truncated": {"type": "boolean"}})),
-                    update_variant("autoCheck", json!(["turnId", "state"]), json!({"turnId": s,
-                        "state": {"enum": ["running", "passed", "failed", "cancelled", "skipped"]},
-                        "items": {"type": "array", "items": auto_check_item}})),
-                    update_variant("error", json!(["message", "recoverable"]), json!({"message": s, "recoverable": {"type": "boolean"}})),
-                    update_variant("unknown", json!(["kind", "payload"]), json!({"kind": s, "payload": {}}))
-                ]}
+                {"oneOf": update_variants}
             ]}
         }
     })
@@ -737,6 +955,10 @@ mod tests {
             "permissionRequest",
             "permissionResolved",
             "subagent",
+            "autoApproved",
+            "question",
+            "questionResolved",
+            "notice",
             "usage",
             "configChanged",
             "turnChanges",
@@ -782,6 +1004,10 @@ mod tests {
                 .after,
             12
         );
+        let answer: AnswerParams = serde_json::from_value(get(ANSWER_METHOD)).unwrap();
+        assert_eq!(answer.value.as_deref(), Some("vitest"));
+        let revoke: RevokeGrantParams = serde_json::from_value(get(REVOKE_GRANT_METHOD)).unwrap();
+        assert_eq!(revoke.subject, "bash");
         for method in [INTERRUPT_METHOD, CLOSE_METHOD, STATE_METHOD] {
             serde_json::from_value::<TaskParams>(get(method)).unwrap();
         }

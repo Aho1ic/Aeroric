@@ -8,6 +8,11 @@
     "updates": []
   },
   "requests": {
+    "session.answer": {
+      "questionId": "q1",
+      "taskId": "task-1",
+      "value": "vitest"
+    },
     "session.close": {
       "taskId": "task-1"
     },
@@ -32,6 +37,10 @@
       "decision": "deny",
       "reason": "别删",
       "requestId": "7",
+      "taskId": "task-1"
+    },
+    "session.revokeGrant": {
+      "subject": "bash",
       "taskId": "task-1"
     },
     "session.state": {
@@ -79,7 +88,7 @@
     "turnActive": true
   },
   "updates": {
-    "latestSeq": 18,
+    "latestSeq": 22,
     "updates": [
       {
         "atMs": 1761350400000,
@@ -180,6 +189,7 @@
       },
       {
         "atMs": 1761350400009,
+        "detail": "读取 src/main.rs",
         "id": "s1",
         "seq": 10,
         "status": "running",
@@ -189,33 +199,74 @@
       },
       {
         "atMs": 1761350400010,
+        "id": "8",
+        "kind": "bash",
+        "seq": 11,
+        "subject": "bash",
+        "summary": "npm run lint",
+        "taskId": "task-1",
+        "toolCallId": "c2",
+        "type": "autoApproved"
+      },
+      {
+        "atMs": 1761350400011,
+        "id": "q1",
+        "options": [
+          "vitest",
+          "jest"
+        ],
+        "seq": 12,
+        "style": "select",
+        "taskId": "task-1",
+        "timeoutMs": 30000,
+        "title": "用哪个测试框架？",
+        "type": "question"
+      },
+      {
+        "atMs": 1761350400012,
+        "id": "q1",
+        "outcome": "answered",
+        "seq": 13,
+        "taskId": "task-1",
+        "type": "questionResolved"
+      },
+      {
+        "atMs": 1761350400013,
+        "level": "info",
+        "message": "上下文已自动压缩",
+        "seq": 14,
+        "taskId": "task-1",
+        "type": "notice"
+      },
+      {
+        "atMs": 1761350400014,
         "contextLimit": 200000,
         "contextUsed": 1200,
         "inputTokens": 1500,
         "outputTokens": 300,
-        "seq": 11,
+        "seq": 15,
         "taskId": "task-1",
         "type": "usage"
       },
       {
-        "atMs": 1761350400011,
+        "atMs": 1761350400015,
         "model": "gpt-5",
         "permission": "auto_edit",
-        "seq": 12,
+        "seq": 16,
         "taskId": "task-1",
         "type": "configChanged"
       },
       {
-        "atMs": 1761350400012,
+        "atMs": 1761350400016,
         "message": "上下文已压缩",
         "recoverable": true,
-        "seq": 13,
+        "seq": 17,
         "taskId": "task-1",
         "type": "error"
       },
       {
         "additions": 3,
-        "atMs": 1761350400013,
+        "atMs": 1761350400017,
         "deletions": 1,
         "files": [
           {
@@ -227,13 +278,13 @@
             "path": "docs/diagram.png"
           }
         ],
-        "seq": 14,
+        "seq": 18,
         "taskId": "task-1",
         "turnId": "u1",
         "type": "turnChanges"
       },
       {
-        "atMs": 1761350400014,
+        "atMs": 1761350400018,
         "items": [
           {
             "failures": [
@@ -247,34 +298,34 @@
             "summary": "2 项中 1 项失败"
           }
         ],
-        "seq": 15,
+        "seq": 19,
         "state": "failed",
         "taskId": "task-1",
         "turnId": "u1",
         "type": "autoCheck"
       },
       {
-        "atMs": 1761350400015,
+        "atMs": 1761350400019,
         "kind": "item/futureThing",
         "payload": {
           "x": 1
         },
-        "seq": 16,
+        "seq": 20,
         "taskId": "task-1",
         "type": "unknown"
       },
       {
-        "atMs": 1761350400016,
+        "atMs": 1761350400020,
         "messageId": "m1",
-        "seq": 17,
+        "seq": 21,
         "taskId": "task-1",
         "text": "我来看看",
         "type": "messageCompleted"
       },
       {
-        "atMs": 1761350400017,
+        "atMs": 1761350400021,
         "reason": "completed",
-        "seq": 18,
+        "seq": 22,
         "taskId": "task-1",
         "turnId": "u1",
         "type": "turnEnded"

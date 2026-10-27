@@ -7,6 +7,7 @@ pub mod auto_check;
 pub mod claude;
 pub mod codex;
 pub mod executor;
+pub mod omp;
 pub mod turn_changes;
 pub mod update;
 
@@ -81,6 +82,24 @@ pub trait SessionDriver: Send + Sync {
     fn suspend(&self);
     /// A resume gave the task a new generation; later statuses carry it.
     fn rebind(&self, generation: u64);
+    /// Answer a question card (only agents that ask questions support it).
+    fn answer(&self, question_id: &str, _answer: Answer) -> Result<(), DriverError> {
+        Err(DriverError::UnknownRequest(question_id.to_string()))
+    }
+    /// Forget a remembered "always allow in this session" grant.
+    fn revoke_grant(&self, _subject: &str) -> Result<(), DriverError> {
+        Err(DriverError::Unsupported(
+            "这个 Agent 没有可撤销的本会话授权".into(),
+        ))
+    }
+}
+
+/// The user's answer to a question card.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Answer {
+    Value(String),
+    Confirmed(bool),
+    Cancelled,
 }
 
 /// Where drivers report task status and session facts. The host implements it

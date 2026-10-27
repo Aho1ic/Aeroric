@@ -4,8 +4,9 @@
 //! 1. hook 扩展名只认 `.js`/`.ts`——`.mjs` 会被上游 `isExtensionFile` 静默丢弃,
 //!    任务永远停在 running(1.4.7 开发期真踩过,见宿主 omp_home.rs 的删除注释);
 //! 2. `agent_end.willContinue === true` 不是终态,hook 必须对它短路;
-//! 3. omp 计划函数**绝不**产出 `--mode`(上游以 `mode === undefined` 判定交互
-//!    TUI,任何 --mode 值都会把 omp 打回非交互通道)。
+//! 3. omp 的 PTY 计划函数**绝不**产出 `--mode`(上游以 `mode === undefined` 判定交互
+//!    TUI,任何 --mode 值都会把 omp 打回非交互通道);反过来,原生会话(ADR-043
+//!    二期)的 `omp_rpc_args` **必须**以 `--mode rpc` 开头,且不带位置参数提示词。
 
 /// 托管 hook 的安装名:装在 `<PI_CODING_AGENT_DIR>/hooks/post/` 下,`*` 是 omp
 /// 的 tool 通配(`discovery/builtin.ts:707` 按 basename 解析);实际的事件订阅
@@ -31,7 +32,7 @@ pub fn omp_hook_source_guards_will_continue(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::launch::{omp_plan, LaunchInput};
+    use crate::agents::launch::{omp_plan, omp_rpc_args, LaunchInput};
 
     #[test]
     fn only_js_and_ts_hook_files_load() {
@@ -93,5 +94,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// 原生会话:永远 `--mode rpc` 打头,提示词不进 argv。
+    #[test]
+    fn the_rpc_args_always_start_with_mode_rpc_and_carry_no_prompt() {
+        let args = omp_rpc_args(
+            "ask",
+            "/work/proj",
+            Some("fake/fake-1"),
+            Some("high"),
+            Some("/h/s.jsonl"),
+        );
+        assert_eq!(
+            args,
+            [
+                "--mode",
+                "rpc",
+                "--approval-mode",
+                "always-ask",
+                "--cwd",
+                "/work/proj",
+                "--model",
+                "fake/fake-1",
+                "--thinking",
+                "high",
+                "--resume",
+                "/h/s.jsonl"
+            ]
+        );
+        let bare = omp_rpc_args("unknown", "/w", None, None, None);
+        assert_eq!(bare, ["--mode", "rpc", "--cwd", "/w"]);
     }
 }

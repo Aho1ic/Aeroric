@@ -12,8 +12,8 @@ use serde_json::Value;
 pub const UPDATE_LOG_CAPACITY: usize = 2000;
 
 pub use aeroric_protocol::session_live::{
-    AutoCheckItem, PlanEntry, SessionUpdate, SessionUpdateKind, ToolKind, ToolStatus,
-    TurnEndReason, TurnFileChange,
+    AutoCheckItem, PendingQuestion, PlanEntry, SessionUpdate, SessionUpdateKind, ToolKind,
+    ToolStatus, TurnEndReason, TurnFileChange,
 };
 use aeroric_protocol::session_live::{MAX_BATCH_BYTES, MAX_ITEM_BYTES, TRUNCATION_MARKER};
 

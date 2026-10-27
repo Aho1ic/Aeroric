@@ -158,7 +158,8 @@ fn subagent_tasks_and_their_inner_stream() {
         vec![SessionUpdateKind::Subagent {
             id: "k1".into(),
             title: "检索代码".into(),
-            status: "running".into()
+            status: "running".into(),
+            detail: None,
         }]
     );
     let (done, _) = m.map(&json!({"type": "system", "subtype": "task_notification", "task_id": "k1", "status": "completed", "summary": "找到 3 处"}));

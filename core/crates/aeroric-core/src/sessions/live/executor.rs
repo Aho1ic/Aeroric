@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use super::claude::driver::{ClaudeLauncher, ClaudeSession, ClaudeSessionSpec};
 use super::codex::driver::{CodexSession, CodexSessionSpec};
 use super::codex::server::{CodexServer, Launcher};
+use super::omp::driver::{OmpLauncher, OmpSession, OmpSessionSpec};
 use super::{now_ms, DriverRegistry, LiveStatusSink, SessionDriver, SharedLog};
 use crate::tasks::executor::{
     CancelTarget, Execution, ExecutorFailure, LaunchRequest, ResetOutcome, ResumeRequest,
@@ -42,10 +43,16 @@ pub struct ClaudeKey {
 }
 
 /// Where a structured run goes.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct OmpKey {
+    pub agent: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Route {
     Codex(ServerKey),
     Claude(ClaudeKey),
+    Omp(OmpKey),
 }
 
 /// What the host decides per run: whether `(family, agent, agent configuration)`
@@ -64,6 +71,9 @@ pub trait Routing: Send + Sync {
     /// (`<dir>/projects/<encoded cwd>/<session id>.jsonl`); `None` records no path.
     fn claude_config_dir(&self, _key: &ClaudeKey) -> Option<std::path::PathBuf> {
         None
+    }
+    fn omp_launcher(&self, _key: &OmpKey) -> OmpLauncher {
+        std::sync::Arc::new(|_| Err("这个宿主不支持 omp 原生会话".to_string()))
     }
 }
 
@@ -164,8 +174,10 @@ impl StructuredExecutor {
         config: Option<&str>,
         cwd: &WorkingDirectory,
     ) -> Option<Route> {
-        if !matches!(family, ProtocolFamily::Codex | ProtocolFamily::Claude)
-            || !matches!(cwd, WorkingDirectory::Local { .. })
+        if !matches!(
+            family,
+            ProtocolFamily::Codex | ProtocolFamily::Claude | ProtocolFamily::Omp
+        ) || !matches!(cwd, WorkingDirectory::Local { .. })
         {
             return None;
         }
@@ -224,6 +236,23 @@ impl StructuredExecutor {
                     config_dir: self.routing.claude_config_dir(key),
                 },
                 self.claude_launcher(key),
+                Arc::clone(&self.sink),
+                log.clone(),
+                &self.runtime,
+            ),
+            Route::Omp(key) => OmpSession::start(
+                OmpSessionSpec {
+                    task_id: spec.task_id.clone(),
+                    project_id: spec.project_id.clone(),
+                    generation: spec.generation,
+                    agent: spec.agent.clone(),
+                    cwd: spec.cwd.clone(),
+                    permission: spec.permission.clone(),
+                    model: spec.model.clone(),
+                    effort: spec.effort.clone(),
+                    session: spec.thread_id.clone(),
+                },
+                self.routing.omp_launcher(key),
                 Arc::clone(&self.sink),
                 log.clone(),
                 &self.runtime,

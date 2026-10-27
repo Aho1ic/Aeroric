@@ -18,7 +18,7 @@ use aeroric_core::location::{StorageLocation, StorageLocationProbe, VolumeKind};
 use aeroric_core::paths::AppPaths;
 use aeroric_core::sessions::live::codex::server::{CodexServer, SERVER_IDLE_MS};
 use aeroric_core::sessions::live::executor::{
-    ClaudeKey, Route, Routing, ServerKey, StructuredExecutor,
+    ClaudeKey, OmpKey, Route, Routing, ServerKey, StructuredExecutor,
 };
 use aeroric_core::sessions::live::LiveStatusSink;
 use aeroric_core::storage_lock::LeaseOwner;
@@ -202,7 +202,18 @@ fn codex_configurations_get_their_own_server_and_everything_else_stays_put() {
         })),
         "Claude configurations run natively per session (N5)"
     );
-    assert_eq!(route(ProtocolFamily::Omp, "omp", None), None);
+    assert_eq!(
+        route(ProtocolFamily::Omp, "omp", None),
+        Some(Route::Omp(OmpKey {
+            agent: "omp".into()
+        })),
+        "local omp runs natively (ADR-043 phase two)"
+    );
+    assert_eq!(
+        route(ProtocolFamily::Omp, "omp", Some("cfg-codex")),
+        None,
+        "a pinned configuration keeps omp on the PTY"
+    );
     assert_eq!(
         route(ProtocolFamily::Codex, "my-wrapper", None),
         None,

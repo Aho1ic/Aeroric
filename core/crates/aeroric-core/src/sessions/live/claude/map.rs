@@ -158,6 +158,7 @@ impl ClaudeMapper {
                 .unwrap_or("子 Agent")
                 .to_string(),
             status: status.to_string(),
+            detail: None,
         };
         match s(message, "subtype") {
             Some("init") => {

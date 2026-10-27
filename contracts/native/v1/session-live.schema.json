@@ -147,9 +147,62 @@
             "null"
           ]
         },
+        "permissionLocked": {
+          "type": "boolean"
+        },
         "plan": {
           "items": {
             "$ref": "#/$defs/planEntry"
+          },
+          "type": "array"
+        },
+        "questions": {
+          "items": {
+            "properties": {
+              "askedAtMs": {
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "message": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "options": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "placeholder": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "style": {
+                "type": "string"
+              },
+              "timeoutMs": {
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "style",
+              "title"
+            ],
+            "type": "object"
           },
           "type": "array"
         },
@@ -448,6 +501,9 @@
             },
             {
               "properties": {
+                "detail": {
+                  "type": "string"
+                },
                 "id": {
                   "type": "string"
                 },
@@ -466,6 +522,125 @@
                 "id",
                 "title",
                 "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "toolCallId": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "autoApproved"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "kind",
+                "summary",
+                "subject"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "options": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "placeholder": {
+                  "type": "string"
+                },
+                "style": {
+                  "enum": [
+                    "select",
+                    "confirm",
+                    "input",
+                    "editor"
+                  ]
+                },
+                "timeoutMs": {
+                  "type": "integer"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "question"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "style",
+                "title"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "outcome": {
+                  "enum": [
+                    "answered",
+                    "cancelled",
+                    "timedOut"
+                  ]
+                },
+                "type": {
+                  "const": "questionResolved"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "outcome"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "level": {
+                  "enum": [
+                    "info",
+                    "warning",
+                    "error"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "notice"
+                }
+              },
+              "required": [
+                "type",
+                "level",
+                "message"
               ],
               "type": "object"
             },
@@ -687,6 +862,46 @@
     "truncationMarker": "…（已截断，完整内容见会话文件）"
   },
   "methods": {
+    "session.answer": {
+      "mutating": true,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          },
+          "confirmed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "questionId": {
+            "type": "string"
+          },
+          "taskId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "taskId",
+          "questionId"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
     "session.close": {
       "mutating": true,
       "params": {
@@ -852,6 +1067,31 @@
           "taskId",
           "requestId",
           "decision"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "session.revokeGrant": {
+      "mutating": true,
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "subject": {
+            "type": "string"
+          },
+          "taskId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "subject"
         ],
         "type": "object"
       },

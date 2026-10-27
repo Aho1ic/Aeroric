@@ -151,6 +151,33 @@ impl LaunchInput {
     }
 }
 
+/// `omp --mode rpc` (ADR-043 phase two): the structured driver's argv. Unlike
+/// [`omp_plan`] it takes no positional prompt (prompts go over the protocol)
+/// and always passes `--mode rpc`; environment is the launcher's.
+pub fn omp_rpc_args(
+    permission_mode: &str,
+    project_path: &str,
+    model: Option<&str>,
+    thinking: Option<&str>,
+    resume: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec!["--mode".to_string(), "rpc".to_string()];
+    if let Some(flag) = omp_permission_flag(permission_mode) {
+        args.extend(["--approval-mode".to_string(), flag.to_string()]);
+    }
+    args.extend(["--cwd".to_string(), project_path.to_string()]);
+    if let Some(model) = normalize_selected(model) {
+        args.extend(["--model".to_string(), model]);
+    }
+    if let Some(level) = normalize_selected(thinking).and_then(|level| omp_thinking_level(&level)) {
+        args.extend(["--thinking".to_string(), level.to_string()]);
+    }
+    if let Some(resume) = normalize_selected(resume) {
+        args.extend(["--resume".to_string(), resume]);
+    }
+    args
+}
+
 fn normalize_selected(model: Option<&str>) -> Option<String> {
     model
         .map(str::trim)
