@@ -36,6 +36,9 @@ public final class TaskStore {
         public var worktreeBranch: String?
         public var additions: UInt64?
         public var deletions: UInt64?
+        /// The prompt the task was started with (the session page shows it as
+        /// the first user message until history has one).
+        public var prompt: String?
 
         public init(
             id: String,
@@ -50,8 +53,10 @@ public final class TaskStore {
             worktreePath: String? = nil,
             worktreeBranch: String? = nil,
             additions: UInt64? = nil,
-            deletions: UInt64? = nil
+            deletions: UInt64? = nil,
+            prompt: String? = nil
         ) {
+            self.prompt = prompt
             self.worktreePath = worktreePath
             self.worktreeBranch = worktreeBranch
             self.additions = additions

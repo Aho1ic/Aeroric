@@ -27,11 +27,6 @@ public struct AgentConfigPage: View {
             }
             .padding(.horizontal, AeroricSpace.xl)
             .padding(.vertical, AeroricSpace.m)
-            if let error = store.errorText {
-                banner(error, tint: AeroricColor.danger) { store.errorText = nil }
-            } else if let notice = store.notice {
-                banner(notice, tint: AeroricColor.textSecondary) { store.notice = nil }
-            }
             HairlineDivider()
             Group {
                 switch store.tab {
@@ -43,6 +38,9 @@ public struct AgentConfigPage: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // 2026-10-27: no message row under the tabs. Errors and notices float
+        // up as a capsule over the bottom and fade on their own.
+        .overlay(alignment: .bottom) { toast }
         .background(AeroricColor.canvas)
         .task { await store.refresh() }
         .task {
@@ -55,89 +53,75 @@ public struct AgentConfigPage: View {
         .accessibilityIdentifier("agent-config.page")
     }
 
-    private func banner(_ text: String, tint: Color, dismiss: @escaping () -> Void) -> some View {
-        HStack {
-            Text(text).font(.system(size: AeroricType.secondary)).foregroundStyle(tint).textSelection(.enabled)
-            Spacer()
-            Button(action: dismiss) { Image(systemName: "xmark") }.buttonStyle(.borderless)
+    @ViewBuilder private var toast: some View {
+        let message = store.errorText ?? store.notice
+        ZStack {
+            if let message {
+                HStack(spacing: AeroricSpace.m) {
+                    Image(systemName: store.errorText != nil ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(store.errorText != nil ? AeroricColor.danger : AeroricColor.success)
+                    Text(message).font(.system(size: AeroricType.secondary)).textSelection(.enabled).lineLimit(2)
+                    Button { store.errorText = nil; store.notice = nil } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.borderless)
+                }
+                .padding(.horizontal, AeroricSpace.xl)
+                .padding(.vertical, AeroricSpace.s + 2)
+                .glassSurface(.floatingCard, in: Capsule(style: .continuous))
+                .shadow(color: AeroricColor.shadow, radius: 14, y: 5)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .task(id: message) {
+                    try? await Task.sleep(for: .seconds(store.errorText != nil ? 8 : 4))
+                    if store.errorText == message { store.errorText = nil }
+                    if store.notice == message { store.notice = nil }
+                }
+            }
         }
-        .padding(.horizontal, AeroricSpace.xl)
-        .padding(.bottom, AeroricSpace.s)
+        // Above the floating save bar.
+        .padding(.bottom, 76)
+        .animation(.easeOut(duration: AeroricMotion.standard), value: message)
     }
 }
 
-/// Left list + right editor, shared by the four tabs.
-struct MasterDetail<List: View, Detail: View>: View {
+/// Left list + right editor, shared by the four tabs. `overlay` floats over
+/// the bottom of the editor (the save bar) without scrolling with it.
+struct MasterDetail<List: View, Detail: View, Overlay: View>: View {
     let list: List
     let detail: Detail
+    let overlay: Overlay
 
-    init(@ViewBuilder list: () -> List, @ViewBuilder detail: () -> Detail) {
+    init(@ViewBuilder list: () -> List, @ViewBuilder detail: () -> Detail,
+         @ViewBuilder overlay: () -> Overlay) {
         self.list = list()
         self.detail = detail()
+        self.overlay = overlay()
     }
 
     var body: some View {
         HStack(spacing: 0) {
+            // One surface colour across the list and the editor: a lighter
+            // list column made the window's 6pt sidebar strip read as a dark
+            // seam in dark mode (2026-10-26).
             list
-                .frame(width: 240)
-                .frame(maxHeight: .infinity)
-                .background(AeroricColor.layer1)
+                .frame(width: 260)
+                .frame(maxHeight: .infinity, alignment: .top)
             HairlineDivider(.vertical)
             ScrollView {
+                // Centred, so the margins either side are even rather than a
+                // wide dark band on the right.
                 detail
-                    .frame(maxWidth: 760, alignment: .leading)
-                    .padding(AeroricSpace.xl)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: 820, alignment: .leading)
+                    .padding(.horizontal, AeroricSpace.huge)
+                    .padding(.vertical, AeroricSpace.xxxl)
+                    .frame(maxWidth: .infinity)
             }
+            .scrollIndicators(.hidden)
+            .overlay(alignment: .bottom) { overlay }
         }
     }
 }
 
-/// Save / delete row at the bottom of an editor.
-struct EditorActions: View {
-    let dirty: Bool
-    let canDelete: Bool
-    let onSave: () -> Void
-    let onRevert: () -> Void
-    let onDelete: () -> Void
-
-    var body: some View {
-        HStack(spacing: AeroricSpace.m) {
-            Button("保存", action: onSave)
-                .keyboardShortcut("s")
-                .disabled(!dirty)
-                .accessibilityIdentifier("agent-config.save")
-            Button("还原", action: onRevert).disabled(!dirty)
-            if dirty {
-                Text("有未保存的修改").font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.warning)
-            }
-            Spacer()
-            if canDelete {
-                Button("删除", role: .destructive, action: onDelete)
-                    .accessibilityIdentifier("agent-config.delete")
-            }
-        }
-        .padding(.top, AeroricSpace.m)
-    }
-}
-
-/// Tick boxes for the three wire protocols.
-struct ProtocolPicker: View {
-    @Binding var selection: [String]
-    var allowEmpty = false
-
-    var body: some View {
-        HStack(spacing: AeroricSpace.l) {
-            ForEach(AgentConfigText.protocols, id: \.self) { raw in
-                Toggle(AgentConnectionsClient.protocolTitle(raw), isOn: Binding(
-                    get: { selection.contains(raw) },
-                    set: { on in
-                        if on { if !selection.contains(raw) { selection.append(raw) } }
-                        else if allowEmpty || selection.count > 1 { selection.removeAll { $0 == raw } }
-                    }
-                ))
-                .toggleStyle(.checkbox)
-            }
-        }
+extension MasterDetail where Overlay == EmptyView {
+    init(@ViewBuilder list: () -> List, @ViewBuilder detail: () -> Detail) {
+        self.init(list: list, detail: detail, overlay: { EmptyView() })
     }
 }

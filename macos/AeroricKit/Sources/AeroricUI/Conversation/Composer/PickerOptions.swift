@@ -75,13 +75,18 @@ public enum ComposerPickerOptions {
                              selected: configuration == selected, disabledReason: configuration.blockedReasons.first)
             }
             let builtIn = rows.filter { !NewSessionLayout.isAgentConfig($0) }.map { option($0, "使用本机 CLI 自己的登录") }
-            let configs = rows.filter(NewSessionLayout.isAgentConfig).map { option($0, "经本机网关") }
+            // 2026-10-27: the harness is the slider's; this menu picks the
+            // saved connection (and, below, any configuration of your own).
+            let connections = rows.filter(NewSessionLayout.isConnection).map { option($0, "经本机网关") }
+            let configs = rows.filter { NewSessionLayout.isAgentConfig($0) && !NewSessionLayout.isConnection($0) }
+                .map { option($0, "经本机网关 · 自定义配置") }
             return PickerMenu(
                 sections: [
                     PickerSection(id: "builtin", title: "本机登录", options: builtIn),
+                    PickerSection(id: "connections", title: "我的连接", options: connections),
                     PickerSection(id: "configs", title: "Agent 配置", options: configs),
                 ].filter { !$0.options.isEmpty },
-                note: rows.isEmpty ? "\(AgentGlyph.displayName(for: harness)) 还没有可用配置：安装并登录它，或在侧栏“Agent 配置”里新建。" : nil
+                note: rows.isEmpty ? "\(AgentGlyph.displayName(for: harness)) 还没有可用的登录或连接：安装并登录它，或在侧栏“Agent 配置 → 连接”里新建连接。" : nil
             )
         }
         let known = NativeHarnessPicker.harnesses.map(\.id)

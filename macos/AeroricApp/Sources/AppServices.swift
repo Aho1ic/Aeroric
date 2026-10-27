@@ -87,6 +87,9 @@ final class AppServices {
     var approvalFocus: [String: String] = [:]
     /// R8: task id → the fallback model the gateway last answered it with.
     var downgrades: [String: AgentConnectionsClient.Downgrade] = [:]
+    /// Bumped when connections or Agent configs change; the new-session
+    /// picker reloads its catalogue on it.
+    var agentCatalogEpoch = UUID()
     /// A05 → A19: task id → its latest auto-check run, when that run failed.
     var checkFailures: [String: AttentionQueue.CheckFailure] = [:]
     @ObservationIgnored var statusPumpTask: Task<Void, Never>?
@@ -361,7 +364,8 @@ final class AppServices {
                     worktreePath: task.worktreePath,
                     worktreeBranch: task.worktreeBranch,
                     additions: task.additions,
-                    deletions: task.deletions
+                    deletions: task.deletions,
+                    prompt: task.prompt
                 ))
                 if let generation = task.generation {
                     pendingGenerations[task.id] = generation
@@ -400,7 +404,8 @@ final class AppServices {
             projectID: projectID,
             title: draft.prompt.split(separator: "\n").first.map(String.init) ?? returned,
             status: "pending",
-            agent: draft.agent
+            agent: draft.agent,
+            prompt: draft.prompt
         ))
         return returned
     }
@@ -574,6 +579,7 @@ final class AppServices {
     var agentConfigStore: AgentConfigStore {
         if let store = agentConfigStoreStorage { return store }
         let store = AgentConfigStore(backend: HostAgentConfigBackend(services: self))
+        store.onDocumentChange = { [weak self] in self?.agentCatalogEpoch = UUID() }
         agentConfigStoreStorage = store
         return store
     }

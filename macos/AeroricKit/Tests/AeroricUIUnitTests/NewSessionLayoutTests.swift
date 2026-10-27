@@ -38,12 +38,15 @@ final class NewSessionLayoutTests: XCTestCase {
     func testThePickerSplitsLoginsFromGatewayConfigs() {
         let catalogue = [
             config("codex", harness: "codex"),
+            config("agent-config:via-codex-0123456789abcdef", harness: "codex"),
             config("agent-config:ds", harness: "codex"),
             config("claude", harness: "claude"),
         ]
         let menu = ComposerPickerOptions.configurations(catalogue, draft: NewSessionDraft(), harness: "codex")
-        XCTAssertEqual(menu.sections.map(\.title), ["本机登录", "Agent 配置"])
+        XCTAssertEqual(menu.sections.map(\.title), ["本机登录", "我的连接", "Agent 配置"],
+                       "2026-10-27: saved connections are offered directly")
         XCTAssertEqual(menu.sections[1].options.first?.detail, "经本机网关")
+        XCTAssertEqual(menu.sections[2].options.first?.detail, "经本机网关 · 自定义配置")
         let empty = ComposerPickerOptions.configurations(catalogue, draft: NewSessionDraft(), harness: "omp")
         XCTAssertTrue(empty.isEmpty)
         XCTAssertNotNil(empty.note)
@@ -53,5 +56,24 @@ final class NewSessionLayoutTests: XCTestCase {
         XCTAssertEqual(BranchSwitch.decision(changedFiles: 0), .allowed)
         guard case let .blocked(reason) = BranchSwitch.decision(changedFiles: 3) else { return XCTFail() }
         XCTAssertTrue(reason.contains("3"))
+    }
+
+    // MARK: - Sliding capsule picker (2026-10-27)
+
+    func testTheSlidingPickerShowsTitlesAndSkipsDisabledNeighbours() {
+        typealias Picker = SlidingCapsulePicker<String>
+        let segments: [Picker.Segment] = [
+            .init(value: "codex", title: "Codex", asset: "HarnessCodex"),
+            .init(value: "claude", title: "Claude Code", asset: "HarnessClaude"),
+            .init(value: "dsh", title: "DSH", asset: "HarnessDSH", isEnabled: false),
+            .init(value: "omp", title: "oh-my-pi", asset: "HarnessOMP"),
+            .init(value: "plain", title: "纯文字"),
+        ]
+        XCTAssertTrue(Picker.showsTitle(segments[0], selection: "codex", mode: .selectedOnly))
+        XCTAssertFalse(Picker.showsTitle(segments[1], selection: "codex", mode: .selectedOnly))
+        XCTAssertTrue(Picker.showsTitle(segments[4], selection: "codex", mode: .selectedOnly), "no icon: keep the title")
+        XCTAssertTrue(Picker.showsTitle(segments[1], selection: "codex", mode: .always))
+        XCTAssertEqual(Picker.neighbour(of: "claude", step: 1, in: segments), "omp", "a disabled choice is skipped")
+        XCTAssertEqual(Picker.neighbour(of: "codex", step: -1, in: segments), nil)
     }
 }

@@ -395,7 +395,7 @@ struct TaskWorkspaceView: View {
         VStack(spacing: 0) {
             // v3: icon tabs across the top (codeg aux panel header).
             HStack(spacing: 0) {
-                CapsuleSlider(selection: $auxiliaryTab, groupTitle: "辅助面板", mode: .iconsWithSelectedTitle,
+                CapsuleSlider(selection: $auxiliaryTab, groupTitle: "辅助面板",
                               identifier: "auxiliary.tab-slider", segments: [
                     .init(value: .details, title: "详情", systemImage: "info.circle"),
                     .init(value: .files, title: "文件", systemImage: "folder"),
@@ -855,7 +855,8 @@ struct TaskWorkspaceView: View {
             },
             preferredHarness: defaultHarness
         )
-        .task(id: [scope.projectID ?? "", services.configurationEpoch.uuidString]) {
+        .task(id: [scope.projectID ?? "", services.configurationEpoch.uuidString,
+                   services.agentCatalogEpoch.uuidString]) {
             if let projectID = scope.projectID {
                 await services.loadSessionConfigurations(projectID: projectID)
                 await services.loadBranches(projectID: projectID)

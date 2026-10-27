@@ -292,8 +292,13 @@ struct AgentsSettingsPane: View {
             }
             SettingsCard("新会话") {
                 SettingsRow("默认 Harness", detail: "新建会话时右上角滑块默认选中的一项；它不可用时选第一个可用的。") {
-                    CapsuleSlider(selection: $defaultHarness, groupTitle: "默认 Harness", identifier: "settings.agents.default-harness",
-                                  segments: NewSessionLayout.harnessOrder.map { .init(value: $0, title: AgentConfigText.harnessTitle($0)) })
+                    // A harness slider: icons, only the selected one named (as on the new-session page).
+                    CapsuleSlider(selection: $defaultHarness, groupTitle: "默认 Harness", mode: .iconsWithSelectedTitle,
+                                  identifier: "settings.agents.default-harness",
+                                  segments: NewSessionLayout.harnessOrder.map { id in
+                                      .init(value: id, title: AgentConfigText.harnessTitle(id),
+                                            asset: NativeHarnessPicker.harnesses.first { $0.id == id }?.asset)
+                                  })
                         .fixedSize()
                 }
             }

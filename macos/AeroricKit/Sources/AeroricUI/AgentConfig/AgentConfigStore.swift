@@ -22,6 +22,8 @@ public protocol AgentConfigBackend {
     func testConnection(connectionId: String, model: String) async throws -> ACC.Probe
     /// R7: connections the gateway strips replayed thinking for.
     func reasoningStripped() async throws -> [String]
+    /// Fetch the model list for the unsaved editor draft.
+    func fetchModels(draft: ACC.Connection, credential: String?) async throws -> ACC.DraftFetch
 }
 
 public extension AgentConfigBackend {
@@ -220,11 +222,26 @@ public final class AgentConfigStore {
 
     // MARK: Loading
 
-    public func refresh() async {
-        await run("读取 Agent 配置失败") { [self] in
-            apply(try await backend.load())
-            cooldowns = (try? await backend.status()) ?? []
-            reasoningStripped = Set((try? await backend.reasoningStripped()) ?? [])
+    /// The App can reopen straight onto this page before the host connection
+    /// is up (2026-10-26: "ConnectionError error 4"). Not being connected yet
+    /// is waited out quietly; only a real failure reaches the banner.
+    public func refresh(retryWhileConnecting attempts: Int = 20,
+                        every interval: Duration = .milliseconds(500)) async {
+        for attempt in 0..<max(1, attempts) {
+            do {
+                let snapshot = try await backend.load()
+                apply(snapshot)
+                errorText = nil
+                cooldowns = (try? await backend.status()) ?? []
+                reasoningStripped = Set((try? await backend.reasoningStripped()) ?? [])
+                return
+            } catch ConnectionError.notConnected where attempt + 1 < attempts {
+                try? await Task.sleep(for: interval)
+                if Task.isCancelled { return }
+            } catch {
+                errorText = "读取 Agent 配置失败：\(Self.describe(error))"
+                return
+            }
         }
     }
 
@@ -237,8 +254,15 @@ public final class AgentConfigStore {
         await run("检测本机官方配置失败") { [self] in official = try await backend.officialStatus() }
     }
 
+    /// Called when the stored document changed (a save, delete or a refresh
+    /// that found edits): the App reloads the new-session picker so a new
+    /// connection shows up at once (2026-10-27).
+    @ObservationIgnored public var onDocumentChange: (() -> Void)?
+
     private func apply(_ snapshot: ACC.Snapshot) {
+        let changed = self.snapshot != nil && self.snapshot?.document != snapshot.document
         self.snapshot = snapshot
+        if changed { onDocumentChange?() }
         // Keep drafts that are being edited; refresh clean ones.
         if let id = selectedConnection, !connectionDirty {
             connectionDraft = snapshot.document.connections.first { $0.id == id }
@@ -254,7 +278,18 @@ public final class AgentConfigStore {
             try await body()
             errorText = nil
         } catch {
-            errorText = "\(failure)：\(error.localizedDescription)"
+            errorText = "\(failure)：\(Self.describe(error))"
+        }
+    }
+
+    /// Plain words instead of "ConnectionError error 4".
+    static func describe(_ error: Error) -> String {
+        switch error as? ConnectionError {
+        case .refused(let frame)?: frame.error.message
+        case .notConnected?, .disconnected?: "还没连上 Aeroric 宿主，稍后点右上角刷新"
+        case .timedOut?: "宿主没有及时回应"
+        case .io(let message)?: message
+        default: error.localizedDescription
         }
     }
 
@@ -289,7 +324,8 @@ public final class AgentConfigStore {
 
     public func newConnection() {
         selectedConnection = nil
-        var draft = ACC.Connection(id: AgentConfigText.newID("conn"), label: "新连接")
+        // The name starts empty: the user names it (2026-10-26).
+        var draft = ACC.Connection(id: AgentConfigText.newID("conn"), label: "")
         draft.protocols = ["chat_completions"]
         connectionDraft = draft
         credentialDraft = ""
@@ -300,8 +336,12 @@ public final class AgentConfigStore {
         guard var draft = connectionDraft else { return }
         draft.label = draft.label.trimmingCharacters(in: .whitespaces)
         draft.baseUrl = draft.baseUrl.trimmingCharacters(in: .whitespaces)
-        guard !draft.label.isEmpty, !draft.protocols.isEmpty else {
-            errorText = "名称和至少一个协议不能为空"
+        guard !draft.label.isEmpty else {
+            errorText = "先给连接起个名字"
+            return
+        }
+        guard !draft.protocols.isEmpty else {
+            errorText = "至少选一个协议"
             return
         }
         let credential = credentialDraft.isEmpty ? nil : credentialDraft
@@ -309,7 +349,10 @@ public final class AgentConfigStore {
             let snapshot = try await backend.putConnection(draft, credential: credential)
             credentialDraft = ""
             selectedConnection = draft.id
-            connectionDraft = draft
+            // Adopt what the host stored: it bumps `catalog_revision` when the
+            // models change, so the pre-save copy never equals the saved one and
+            // the save bar stayed up forever (2026-10-26).
+            connectionDraft = snapshot.document.connections.first { $0.id == draft.id } ?? draft
             apply(snapshot)
             notice = "已保存“\(draft.label)”"
         }
@@ -329,18 +372,73 @@ public final class AgentConfigStore {
         }
     }
 
+    /// Ready once a base URL and a key (typed, or already stored) are there;
+    /// saving first is not needed (cc-switch / magpie fetch from the form).
+    public var canFetchModels: Bool {
+        guard !busy, let draft = connectionDraft,
+              !draft.baseUrl.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        let typed = !credentialDraft.trimmingCharacters(in: .whitespaces).isEmpty
+        let stored = selectedConnection.flatMap { snapshot?.credentials[$0] } == "stored"
+        return typed || stored
+    }
+
+    /// The fetched list waiting for the user to pick from (2026-10-26).
+    public struct ModelPick: Equatable, Sendable {
+        public var available: [String]
+        /// Already in the draft: shown ticked, not added twice.
+        public var existing: Set<String>
+        public var selected: Set<String> = []
+        public var query = ""
+
+        public init(available: [String], existing: Set<String>) {
+            var seen = Set<String>()
+            self.available = available.filter { !$0.isEmpty && seen.insert($0).inserted }
+            self.existing = existing
+        }
+
+        /// What the search shows, in the endpoint's order.
+        public var visible: [String] { available.filter { AgentConfigText.fuzzyMatch(query, $0) } }
+        public var addable: [String] { visible.filter { !existing.contains($0) } }
+
+        /// 全选 / 全不选 act on what the search shows.
+        public mutating func selectAllVisible() { selected.formUnion(addable) }
+        public mutating func selectNoneVisible() { selected.subtract(visible) }
+        public mutating func toggle(_ id: String) {
+            guard !existing.contains(id) else { return }
+            if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
+        }
+    }
+
+    public var modelPick: ModelPick?
+
+    /// Fetch with what is typed (no save needed), then let the user pick.
     public func fetchModels() async {
-        guard let id = selectedConnection else {
-            errorText = "先保存连接，再拉取模型列表"
+        guard canFetchModels, let draft = connectionDraft else {
+            errorText = "先填 Base URL 和 API Key"
             return
         }
+        let key = credentialDraft.trimmingCharacters(in: .whitespaces)
         await run("拉取模型列表失败") { [self] in
-            let result = try await backend.fetchModels(connectionId: id)
-            connectionDraft = nil
-            apply(result.snapshot)
-            connectionDraft = result.snapshot.document.connections.first { $0.id == id }
-            notice = "拉取到 \(result.fetched) 个模型，新增 \(result.added) 个，保留 \(result.kept) 个"
+            let result = try await backend.fetchModels(draft: draft, credential: key.isEmpty ? nil : key)
+            let ids = result.models.isEmpty ? result.connection.models.map(\.upstreamId) : result.models
+            modelPick = ModelPick(available: ids,
+                                  existing: Set(connectionDraft?.models.map(\.upstreamId) ?? []))
         }
+    }
+
+    /// Add the picked models to the draft (an unsaved edit; the save bar shows).
+    public func applyModelPick() {
+        guard let pick = modelPick else { return }
+        modelPick = nil
+        let new = pick.available.filter { pick.selected.contains($0) && !pick.existing.contains($0) }
+        guard !new.isEmpty, connectionDraft != nil else { return }
+        let entries = new.map { id -> ACC.ModelEntry in
+            var entry = ACC.ModelEntry(upstreamId: id)
+            entry.source = "fetched"
+            return entry
+        }
+        connectionDraft?.models.append(contentsOf: entries)
+        notice = "已添加 \(new.count) 个模型；记得保存"
     }
 
     public func testConnection(model: String) async {
@@ -375,11 +473,15 @@ public final class AgentConfigStore {
 
     public func newPool() {
         selectedPool = nil
-        poolDraft = ACC.Pool(id: AgentConfigText.newID("pool"), label: "新号池")
+        poolDraft = ACC.Pool(id: AgentConfigText.newID("pool"), label: "")
     }
 
     public func savePool() async {
         guard var draft = poolDraft else { return }
+        guard !draft.label.trimmingCharacters(in: .whitespaces).isEmpty else {
+            errorText = "先给号池起个名字"
+            return
+        }
         draft.label = draft.label.trimmingCharacters(in: .whitespaces)
         for index in draft.members.indices {
             draft.members[index].weight = min(max(draft.members[index].weight, 1), 100)
@@ -387,7 +489,7 @@ public final class AgentConfigStore {
         await run("保存号池失败") { [self] in
             let snapshot = try await backend.putPool(draft)
             selectedPool = draft.id
-            poolDraft = draft
+            poolDraft = snapshot.document.pools.first { $0.id == draft.id } ?? draft
             apply(snapshot)
             notice = "已保存“\(draft.label)”"
         }
@@ -426,12 +528,16 @@ public final class AgentConfigStore {
     public func newConfig() {
         selectedConfig = nil
         candidates = nil
-        configDraft = ACC.AgentConfig(id: AgentConfigText.newID("cfg"), label: "新 Agent 配置",
+        configDraft = ACC.AgentConfig(id: AgentConfigText.newID("cfg"), label: "",
                                       harness: "codex", target: .init(kind: "route"))
     }
 
     public func saveConfig() async {
         guard var draft = configDraft else { return }
+        guard !draft.label.trimmingCharacters(in: .whitespaces).isEmpty else {
+            errorText = "先给配置起个名字"
+            return
+        }
         draft.label = draft.label.trimmingCharacters(in: .whitespaces)
         switch draft.target.kind {
         case "connection": draft.target.poolId = nil
@@ -441,7 +547,7 @@ public final class AgentConfigStore {
         await run("保存 Agent 配置失败") { [self] in
             let snapshot = try await backend.putConfig(draft)
             selectedConfig = draft.id
-            configDraft = draft
+            configDraft = snapshot.document.configs.first { $0.id == draft.id } ?? draft
             apply(snapshot)
             candidates = try? await backend.candidates(configId: draft.id, model: nil)
             notice = "已保存“\(draft.label)”"

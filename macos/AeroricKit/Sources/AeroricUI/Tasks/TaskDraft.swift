@@ -54,12 +54,16 @@ public struct TaskDraft: Equatable, Sendable {
         self.worktree = worktree
     }
 
+    /// The empty-prompt reason. The send button already says it by being
+    /// disabled, so the new-session page does not print it (2026-10-27).
+    public static let emptyPromptMessage = "提示词不能为空"
+
     /// 草稿校验：prompt 非空、agent 非空且在宿主提供的选项内、model/effort
     /// 若给值也须在选项内。错误按字段返回（逐字段提示，不合并）。
     public func validate(against options: Options) -> [String: String] {
         var errors: [String: String] = [:]
         if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            errors["prompt"] = "提示词不能为空"
+            errors["prompt"] = Self.emptyPromptMessage
         }
         if agent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             errors["agent"] = "Agent 不能为空"

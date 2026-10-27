@@ -62,7 +62,8 @@ public struct ComposerCard<Footer: View>: View {
         }
         .padding(.horizontal, AeroricSpace.l)
         .padding(.top, AeroricSpace.l)
-        .padding(.bottom, AeroricSpace.m)
+        // 2026-10-27: the Agent / 模型 / 权限 row sits close to the bottom edge.
+        .padding(.bottom, AeroricSpace.xs)
         .glassSurface(.floatingCard, in: shape)
         .overlay {
             shape.strokeBorder(focused ? AeroricColor.accent.opacity(0.55) : .clear,

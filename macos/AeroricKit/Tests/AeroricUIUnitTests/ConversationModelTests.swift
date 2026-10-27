@@ -58,7 +58,7 @@ final class ConversationModelTests: XCTestCase {
         XCTAssertEqual(edit.state.activity, .idle)
     }
 
-    func testThreeFinishedCallsFoldIntoOneGroup() {
+    func testFinishedCallsInARowFoldIntoOneGroup() {
         let calls = (0..<3).flatMap { index -> [SessionContent] in
             [.toolUse(id: "t\(index)", name: "Grep", input: #"{"pattern":"x"}"#), .toolResult(id: "t\(index)", output: "")]
         }
@@ -68,7 +68,12 @@ final class ConversationModelTests: XCTestCase {
         XCTAssertEqual(grouped.count, 3)
         let two = Array(calls.prefix(4))
         XCTAssertEqual(TranscriptBuilder.items(from: [AeroricUI.SessionMessage(role: "assistant", content: two)],
-                                               taskRunning: false).count, 2, "two stay separate")
+                                               taskRunning: false).count, 1, "2026-10-27: two in a row fold too")
+        let one = Array(calls.prefix(2))
+        XCTAssertEqual(TranscriptBuilder.items(from: [AeroricUI.SessionMessage(role: "assistant", content: one)],
+                                               taskRunning: false).count, 1)
+        guard case .tool = TranscriptBuilder.items(from: [AeroricUI.SessionMessage(role: "assistant", content: one)],
+                                                   taskRunning: false)[0] else { return XCTFail("one stays a line") }
     }
 
     func testOrphanResultStaysVisible() {
@@ -161,5 +166,37 @@ final class ConversationModelTests: XCTestCase {
         XCTAssertEqual(ScenarioCatalog.merged("旧", with: recipe, as: .replace), recipe.template)
         XCTAssertEqual(ScenarioCatalog.merged(" 旧 \n", with: recipe, as: .append), "旧\n\n" + recipe.template)
         XCTAssertEqual(ScenarioCatalog.merged("  ", with: recipe, as: .append), recipe.template)
+    }
+
+    // MARK: - Live command groups (2026-10-27)
+
+    private func liveTool(_ id: String, _ status: LiveToolStatus, kind: LiveToolKind = .command) -> LiveItem {
+        .tool(LiveTool(id: id, kind: kind, title: "ls \(id)", input: .null, output: "", status: status, result: nil))
+    }
+
+    func testConsecutiveLiveToolsFoldIntoOneCollapsedGroup() {
+        let rows = LiveRowGrouping.rows([
+            .userEcho(id: "u", text: "hi"),
+            liveTool("a", .completed), liveTool("b", .completed), liveTool("c", .running),
+            .message(id: "m", text: "done"),
+            liveTool("d", .failed),
+        ])
+        XCTAssertEqual(rows.count, 4)
+        guard case let .tools(_, group) = rows[1] else { return XCTFail("grouped") }
+        XCTAssertEqual(group.map(\.id), ["a", "b", "c"])
+        XCTAssertEqual(LiveRowGrouping.title(group), "正在执行第 3 / 3 个指令")
+        guard case .item(.tool) = rows[3] else { return XCTFail("a single call stays a line") }
+        let done = [LiveTool](repeating: LiveTool(id: "x", kind: .command, title: "", input: .null, output: "",
+                                                  status: .completed, result: nil), count: 2)
+        XCTAssertEqual(LiveRowGrouping.title(done), "已执行 2 个指令")
+        var mixed = done
+        mixed[1].kind = .mcp
+        XCTAssertEqual(LiveRowGrouping.title(mixed), "已调用 2 个工具")
+    }
+
+    func testCodexFallbackMetadataWarningIsRecognised() {
+        let warning = "Model metadata for `cline-pass/deepseek-v4.1-flash` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+        XCTAssertEqual(LiveNoticeRow.fallbackModel(in: warning), "cline-pass/deepseek-v4.1-flash")
+        XCTAssertNil(LiveNoticeRow.fallbackModel(in: "Something else went wrong"))
     }
 }

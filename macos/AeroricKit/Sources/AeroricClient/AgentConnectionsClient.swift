@@ -227,6 +227,21 @@ public struct AgentConnectionsClient: Sendable {
         }
     }
 
+    /// A fetch for the editor's unsaved connection: the draft with the
+    /// fetched models merged in; nothing was saved.
+    public struct DraftFetch: Equatable, Sendable {
+        public var connection: Connection
+        /// Every upstream id the endpoint listed, in its order.
+        public var models: [String]
+        public var fetched: Int
+        public var added: Int
+        public var kept: Int
+        public init(connection: Connection, models: [String] = [], fetched: Int, added: Int, kept: Int) {
+            self.connection = connection; self.models = models
+            self.fetched = fetched; self.added = added; self.kept = kept
+        }
+    }
+
     public struct Channel: Equatable, Sendable, Hashable {
         public var connectionId: String
         public var upstreamModel: String
@@ -291,6 +306,19 @@ public struct AgentConnectionsClient: Sendable {
 
     public func deleteConfig(id: String) async throws -> Snapshot {
         try await mutate("agentConnections.deleteConfig", ["id": .string(id)])
+    }
+
+    /// Fetch with what the editor holds (base URL, protocols and the typed key;
+    /// an empty key uses the stored one). The host saves nothing.
+    public func fetchModels(draft: Connection, credential: String?) async throws -> DraftFetch {
+        var params: [String: JSONValue] = ["connection": try Self.encode(draft)]
+        if let credential, !credential.isEmpty { params["credential"] = .string(credential) }
+        let reply = try await connection.request("agentConnections.fetchModels", params: .object(params)).result
+        guard let merged = reply["connection"] else { throw MalformedReply.malformedReply("fetchModels needs connection") }
+        func count(_ key: String) -> Int { reply[key]?.numberText.flatMap { Int($0) } ?? 0 }
+        return DraftFetch(connection: try Self.decode(Connection.self, merged, snake: true),
+                          models: (reply["models"]?.arrayValue ?? []).compactMap(\.stringValue),
+                          fetched: count("fetched"), added: count("added"), kept: count("kept"))
     }
 
     public func fetchModels(connectionId: String) async throws -> FetchResult {

@@ -37,6 +37,19 @@ public struct LiveSessionView: View {
     }
 
     private var liveItems: [LiveItem] { store.model?.items ?? [] }
+
+    /// 2026-10-27: the prompt the task was started with, shown as the first
+    /// user bubble until history or a live echo carries a user message.
+    private var openingPrompt: String? {
+        guard let prompt = facts.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty else { return nil }
+        let historyHasUser = historyItems.contains {
+            if case let .message(_, role, _) = $0 { return role == "user" }
+            return false
+        }
+        let liveHasUser = liveItems.contains { if case .userEcho = $0 { return true }; return false }
+        return historyHasUser || liveHasUser ? nil : prompt
+    }
     private var codex: Bool { store.family == "codex" }
 
     public var body: some View {
@@ -129,7 +142,7 @@ public struct LiveSessionView: View {
             ScrollViewReader { scroller in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: AeroricSpace.l) {
-                        if historyItems.isEmpty && liveItems.isEmpty && store.pending.isEmpty {
+                        if historyItems.isEmpty && liveItems.isEmpty && store.pending.isEmpty && openingPrompt == nil {
                             AeroricEmptyState(systemImage: store.loading ? "hourglass" : "text.bubble",
                                               title: store.loading ? "正在打开会话…" : "发一条消息开始",
                                               message: nil)
@@ -138,7 +151,15 @@ public struct LiveSessionView: View {
                         ForEach(Array(historyItems.enumerated()), id: \.element.id) { offset, item in
                             historyRow(item, offset: offset, column: column)
                         }
-                        ForEach(liveItems) { item in liveRow(item, column: column) }
+                        if let opening = openingPrompt {
+                            MessageBubble(role: "user", content: [.text(text: opening)], columnWidth: column)
+                        }
+                        ForEach(LiveRowGrouping.rows(liveItems)) { row in
+                            switch row {
+                            case let .item(item): liveRow(item, column: column)
+                            case let .tools(id, tools): LiveToolGroup(id: id, tools: tools)
+                            }
+                        }
                         ForEach(store.pending, id: \.id) { request in
                             approvalCard(request).id("approval.\(request.id)")
                         }
@@ -187,7 +208,7 @@ public struct LiveSessionView: View {
         case let .thought(id, text, summary):
             LiveThoughtRow(id: id, text: text, summary: summary)
         case let .tool(tool):
-            LiveToolCard(tool: tool)
+            LiveToolLine(tool: tool)
         case let .notice(_, message, recoverable):
             LiveNoticeRow(message: message, recoverable: recoverable)
         case let .unknown(_, kind):

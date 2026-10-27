@@ -177,7 +177,8 @@ public enum TranscriptItem: Identifiable, Equatable, Sendable {
 }
 
 public enum TranscriptBuilder {
-    public static let groupThreshold = 3
+    /// Two or more finished calls in a row fold into one line (2026-10-27).
+    public static let groupThreshold = 2
 
     /// Pairs tool_use with tool_result by id. Result-only messages are absorbed
     /// into their call instead of rendering as empty user bubbles.

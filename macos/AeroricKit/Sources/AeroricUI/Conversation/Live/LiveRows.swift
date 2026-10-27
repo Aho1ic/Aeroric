@@ -20,15 +20,51 @@ struct LiveThoughtRow: View {
     }
 }
 
-/// A tool call with its output streaming in (Q25: no terminal below).
-struct LiveToolCard: View {
-    let tool: LiveTool
-    @State private var expanded = false
+/// Live rows with consecutive tool calls folded into one group (2026-10-27:
+/// "已执行 n 个指令", collapsed by default; expand for the list, expand a
+/// line for its output).
+enum LiveRowGrouping {
+    enum Row: Identifiable, Equatable {
+        case item(LiveItem)
+        case tools(id: String, [LiveTool])
 
-    static let collapsedLines = 12
+        var id: String {
+            switch self {
+            case let .item(item): item.id
+            case let .tools(id, _): "tools:\(id)"
+            }
+        }
+    }
 
-    private var activity: ActivityState {
-        switch tool.status {
+    static func rows(_ items: [LiveItem]) -> [Row] {
+        var rows: [Row] = []
+        var run: [LiveTool] = []
+        func flush() {
+            if run.count == 1 { rows.append(.item(.tool(run[0]))) }
+            else if !run.isEmpty { rows.append(.tools(id: run[0].id, run)) }
+            run = []
+        }
+        for item in items {
+            if case let .tool(tool) = item { run.append(tool) } else { flush(); rows.append(.item(item)) }
+        }
+        flush()
+        return rows
+    }
+
+    /// "已执行 3 个指令" when every call is a command, else "已调用 3 个工具";
+    /// while one still runs, "正在执行第 2 / 3 个".
+    static func title(_ tools: [LiveTool]) -> String {
+        let commands = tools.allSatisfy { $0.kind == .command }
+        if let running = tools.firstIndex(where: { $0.status == .running }) {
+            return "正在执行第 \(running + 1) / \(tools.count) 个\(commands ? "指令" : "工具")"
+        }
+        return commands ? "已执行 \(tools.count) 个指令" : "已调用 \(tools.count) 个工具"
+    }
+}
+
+extension LiveTool {
+    var activity: ActivityState {
+        switch status {
         case .running: .running
         case .completed: .done
         case .failed: .failed
@@ -36,8 +72,8 @@ struct LiveToolCard: View {
         }
     }
 
-    private var statusText: String {
-        switch tool.status {
+    var statusText: String {
+        switch status {
         case .running: "运行中"
         case .completed: "完成"
         case .failed: "失败"
@@ -45,8 +81,8 @@ struct LiveToolCard: View {
         }
     }
 
-    private var symbol: String {
-        switch tool.kind {
+    var symbol: String {
+        switch kind {
         case .command: "terminal"
         case .fileChange: "pencil"
         case .mcp: "puzzlepiece.extension"
@@ -55,44 +91,131 @@ struct LiveToolCard: View {
         case .other: "wrench.and.screwdriver"
         }
     }
+}
+
+/// One tool call as a quiet grey line (no border), collapsed by default;
+/// expanded it shows the output, streaming in while it runs (Q25).
+struct LiveToolLine: View {
+    let tool: LiveTool
+    @State private var expanded = false
+    @State private var showAll = false
+    @State private var hovered = false
+
+    static let collapsedLines = 12
 
     private var lines: [Substring] { tool.output.split(separator: "\n", omittingEmptySubsequences: false) }
 
     var body: some View {
-        let shape = AeroricRadius.shape(AeroricRadius.m)
-        VStack(alignment: .leading, spacing: AeroricSpace.s) {
-            HStack(spacing: AeroricSpace.s) {
-                Image(systemName: symbol).foregroundStyle(AeroricColor.textSecondary)
-                Text(tool.title.isEmpty ? "工具" : tool.title)
-                    .font(AeroricType.mono(AeroricType.code))
-                    .lineLimit(1).truncationMode(.middle)
-                    .textSelection(.enabled)
-                Spacer(minLength: AeroricSpace.s)
-                StatusDot(activity, label: statusText)
-                Text(statusText)
-                    .font(.system(size: AeroricType.caption))
-                    .foregroundStyle(AeroricColor.textTertiary)
+        VStack(alignment: .leading, spacing: AeroricSpace.xs) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: AeroricSpace.m) {
+                    StatusDot(tool.activity, label: tool.statusText)
+                    Image(systemName: tool.symbol)
+                        .font(.system(size: 11))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .frame(width: 14)
+                    Text(tool.title.isEmpty ? "工具" : tool.title)
+                        .font(AeroricType.mono(AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.textSecondary)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: AeroricSpace.s)
+                    if tool.status != .completed {
+                        Text(tool.statusText)
+                            .font(.system(size: AeroricType.caption))
+                            .foregroundStyle(tool.status == .failed ? AeroricColor.danger : AeroricColor.textTertiary)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                }
+                .padding(.horizontal, AeroricSpace.m)
+                .frame(height: 26)
+                .background(Capsule(style: .continuous).fill(hovered ? AeroricColor.hover : .clear))
+                .contentShape(Capsule(style: .continuous))
             }
-            if !tool.output.isEmpty {
-                let shown = expanded ? tool.output
-                    : lines.suffix(Self.collapsedLines).joined(separator: "\n")
-                Text(shown)
-                    .font(AeroricType.mono(AeroricType.code))
-                    .foregroundStyle(AeroricColor.textSecondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if lines.count > Self.collapsedLines {
-                    Button(expanded ? "收起" : "显示全部 \(lines.count) 行") { expanded.toggle() }
-                        .buttonStyle(.link)
-                        .font(.system(size: AeroricType.caption))
+            .buttonStyle(.plain)
+            .onHover { hovered = $0 }
+            if expanded {
+                VStack(alignment: .leading, spacing: AeroricSpace.xs) {
+                    Text(tool.title)
+                        .font(AeroricType.mono(AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textSecondary)
+                        .textSelection(.enabled)
+                    if !tool.output.isEmpty {
+                        Text(showAll ? tool.output : lines.suffix(Self.collapsedLines).joined(separator: "\n"))
+                            .font(AeroricType.mono(AeroricType.caption))
+                            .foregroundStyle(AeroricColor.textTertiary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if lines.count > Self.collapsedLines {
+                            Button(showAll ? "收起" : "显示全部 \(lines.count) 行") { showAll.toggle() }
+                                .buttonStyle(.link)
+                                .font(.system(size: AeroricType.caption))
+                        }
+                    } else if tool.status == .running {
+                        Text("等待输出…").font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)
+                    }
+                }
+                .padding(.leading, AeroricSpace.xxxl + AeroricSpace.s)
+                .padding(.trailing, AeroricSpace.m)
+                .padding(.bottom, AeroricSpace.xs)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("session.live.tool.\(tool.id)")
+    }
+}
+
+/// Consecutive calls folded into one grey line until expanded.
+struct LiveToolGroup: View {
+    let id: String
+    let tools: [LiveTool]
+    @State private var expanded = false
+    @State private var hovered = false
+
+    private var activity: ActivityState {
+        if tools.contains(where: { $0.status == .running }) { return .running }
+        if tools.contains(where: { $0.status == .failed }) { return .failed }
+        return .done
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.xxs) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: AeroricSpace.m) {
+                    StatusDot(activity, label: LiveRowGrouping.title(tools))
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .frame(width: 14)
+                    Text(LiveRowGrouping.title(tools))
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.textSecondary)
+                    let failed = tools.filter { $0.status == .failed }.count
+                    if failed > 0 {
+                        Text("\(failed) 个失败").font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.danger)
+                    }
+                    Spacer(minLength: AeroricSpace.s)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                }
+                .padding(.horizontal, AeroricSpace.m)
+                .frame(height: 26)
+                .background(Capsule(style: .continuous).fill(hovered ? AeroricColor.hover : .clear))
+                .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .onHover { hovered = $0 }
+            .accessibilityIdentifier("session.live.tool-group.\(id)")
+            if expanded {
+                ForEach(tools, id: \.id) { tool in
+                    LiveToolLine(tool: tool).padding(.leading, AeroricSpace.l)
                 }
             }
         }
-        .padding(AeroricSpace.m)
-        .background(AeroricColor.layer1, in: shape)
-        .overlay { shape.strokeBorder(AeroricColor.separator2, lineWidth: 1) }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("session.live.tool.\(tool.id)")
     }
 }
 
@@ -100,12 +223,31 @@ struct LiveNoticeRow: View {
     let message: String
     let recoverable: Bool
 
+    /// Codex's "Model metadata for `x` not found. Defaulting to fallback
+    /// metadata…" fires for every model it does not ship (any third-party
+    /// one). Codex's own TUI keeps it as a quiet footer note; here it becomes
+    /// one grey line in plain words (2026-10-27).
+    static func fallbackModel(in message: String) -> String? {
+        let prefix = "Model metadata for `"
+        guard message.hasPrefix(prefix), message.contains("Defaulting to fallback metadata"),
+              let end = message.dropFirst(prefix.count).firstIndex(of: "`") else { return nil }
+        return String(message[message.index(message.startIndex, offsetBy: prefix.count)..<end])
+    }
+
     var body: some View {
-        Label(message, systemImage: recoverable ? "info.circle" : "exclamationmark.triangle")
-            .font(.system(size: AeroricType.secondary))
-            .foregroundStyle(recoverable ? AeroricColor.textSecondary : AeroricColor.danger)
-            .textSelection(.enabled)
-            .accessibilityIdentifier("session.live.notice")
+        if let model = Self.fallbackModel(in: message) {
+            Label("Codex 不认识 \(model) 的参数，按通用默认值运行", systemImage: "info.circle")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+                .help(message)
+                .accessibilityIdentifier("session.live.notice")
+        } else {
+            Label(message, systemImage: recoverable ? "info.circle" : "exclamationmark.triangle")
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(recoverable ? AeroricColor.textSecondary : AeroricColor.danger)
+                .textSelection(.enabled)
+                .accessibilityIdentifier("session.live.notice")
+        }
     }
 }
 

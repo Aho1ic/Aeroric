@@ -121,7 +121,8 @@ extension AppServices {
             startedAt: task.createdAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) },
             additions: task.additions, deletions: task.deletions, models: models, efforts: efforts,
             downgradeBadge: downgrades[task.id].map(AgentConfigText.downgradeBadge),
-            downgradeHelp: downgrades[task.id].map(AgentConfigText.downgradeHelp)
+            downgradeHelp: downgrades[task.id].map(AgentConfigText.downgradeHelp),
+            initialPrompt: task.prompt
         )
     }
 

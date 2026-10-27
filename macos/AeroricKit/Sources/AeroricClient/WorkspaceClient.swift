@@ -77,6 +77,7 @@ public struct WorkspaceClient: Sendable {
         public var worktreeBranch: String? = nil
         public var additions: UInt64? = nil
         public var deletions: UInt64? = nil
+        public var prompt: String? = nil
     }
 
     /// 展示标题：记录无 title 字段时取 prompt 首行（展示推导，非业务推断）。
@@ -107,7 +108,8 @@ public struct WorkspaceClient: Sendable {
             worktreePath: record["worktreePath"]?.stringValue,
             worktreeBranch: record["worktreeBranch"]?.stringValue,
             additions: record["additions"]?.numberText.flatMap(UInt64.init),
-            deletions: record["deletions"]?.numberText.flatMap(UInt64.init)
+            deletions: record["deletions"]?.numberText.flatMap(UInt64.init),
+            prompt: record["prompt"]?.stringValue
         )
     }
 

@@ -252,13 +252,19 @@ public struct NewSessionHome: View {
 
     // MARK: - Status
 
+    /// 2026-10-27: an empty prompt is shown by the disabled send button, not
+    /// spelled out under the composer.
+    private var shownReasons: [String] {
+        blockingReasons.filter { $0 != TaskDraft.emptyPromptMessage }
+    }
+
     @ViewBuilder private var status: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.xs) {
-            if let reason = blockingReasons.first {
-                Label(blockingReasons.count > 1 ? "\(reason)（另有 \(blockingReasons.count - 1) 项）" : reason,
+            if let reason = shownReasons.first {
+                Label(shownReasons.count > 1 ? "\(reason)（另有 \(shownReasons.count - 1) 项）" : reason,
                       systemImage: "info.circle")
                     .foregroundStyle(AeroricColor.textSecondary)
-                    .help(blockingReasons.joined(separator: "\n"))
+                    .help(shownReasons.joined(separator: "\n"))
                     .accessibilityIdentifier("new-session.blocking-reason")
             }
             switch draft.submission {
@@ -272,10 +278,6 @@ public struct NewSessionHome: View {
                 Button("核对原交办", action: onCheckSubmission)
                     .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
                     .accessibilityIdentifier("new-session.check-submission")
-            }
-            if draft.task.permissionMode == "full_access" {
-                Text("完全访问不会关闭监督、受保护规则、停止或技能变更的人为同意。")
-                    .foregroundStyle(AeroricColor.warning)
             }
         }
         .font(.system(size: AeroricType.secondary))

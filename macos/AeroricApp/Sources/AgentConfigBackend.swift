@@ -22,6 +22,9 @@ struct HostAgentConfigBackend: AgentConfigBackend {
     func deletePool(id: String) async throws -> ACC.Snapshot { try await client().deletePool(id: id) }
     func putConfig(_ value: ACC.AgentConfig) async throws -> ACC.Snapshot { try await client().putConfig(value) }
     func deleteConfig(id: String) async throws -> ACC.Snapshot { try await client().deleteConfig(id: id) }
+    func fetchModels(draft: ACC.Connection, credential: String?) async throws -> ACC.DraftFetch {
+        try await client().fetchModels(draft: draft, credential: credential)
+    }
     func fetchModels(connectionId: String) async throws -> ACC.FetchResult {
         try await client().fetchModels(connectionId: connectionId)
     }

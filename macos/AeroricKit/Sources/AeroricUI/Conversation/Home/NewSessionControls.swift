@@ -8,9 +8,11 @@ struct HarnessSlider: View {
     let onSelect: (String) -> Void
 
     var body: some View {
-        CapsuleSlider(
+        // 2026-10-27: the sliding pill (codeg agent-selector); only the
+        // selected harness shows its name.
+        SlidingCapsulePicker(
             selection: Binding(get: { selection }, set: onSelect),
-            groupTitle: "Harness", mode: .iconsWithSelectedTitle, identifier: "new-session.harness",
+            groupTitle: "Harness", titleMode: .selectedOnly, identifier: "new-session.harness",
             segments: NewSessionLayout.harnessOrder.map { id in
                 let title = AgentConfigText.harnessTitle(id)
                 let usable = availability[id] ?? false

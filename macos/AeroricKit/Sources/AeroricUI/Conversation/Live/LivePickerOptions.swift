@@ -16,11 +16,13 @@ public struct LiveSessionFacts: Equatable, Sendable {
     /// R8: set while the gateway answers this task with a fallback model.
     public var downgradeBadge: String?
     public var downgradeHelp: String?
+    /// The prompt the task started with (shown until history has it).
+    public var initialPrompt: String?
 
     public init(agent: String?, configurationTitle: String? = nil, workingDirectory: String? = nil,
                 branch: String? = nil, startedAt: Date? = nil, additions: UInt64? = nil, deletions: UInt64? = nil,
                 models: [String] = [], efforts: [String] = [],
-                downgradeBadge: String? = nil, downgradeHelp: String? = nil) {
+                downgradeBadge: String? = nil, downgradeHelp: String? = nil, initialPrompt: String? = nil) {
         self.agent = agent
         self.configurationTitle = configurationTitle
         self.workingDirectory = workingDirectory
@@ -32,6 +34,7 @@ public struct LiveSessionFacts: Equatable, Sendable {
         self.efforts = efforts
         self.downgradeBadge = downgradeBadge
         self.downgradeHelp = downgradeHelp
+        self.initialPrompt = initialPrompt
     }
 
     /// N4 D9: lines, not files — the record only knows lines.

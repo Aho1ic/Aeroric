@@ -150,11 +150,12 @@ public struct NativeSegmentedControl<Option: Hashable>: NSViewRepresentable {
 }
 
 /// The app's one capsule slider for adjacent mutually-exclusive choices
-/// (2026-10-26 UI review, Q5/Q46-a). A system `NSSegmentedControl` in its
-/// capsule style: on macOS 26+ AppKit draws it as Liquid Glass with a
-/// sliding selection, on 14–25 as the classic capsule. Nothing here paints
-/// a selection of its own (ADR-001 §2); only labels, images and size vary.
-public struct CapsuleSlider<Option: Hashable>: NSViewRepresentable {
+/// (2026-10-26 UI review, Q5/Q46-a). Since 2026-10-27 it draws the sliding
+/// pill of `SlidingCapsulePicker` (user request: a visible slide from A to B;
+/// the system segmented control cannot animate that), keeping this API so
+/// every caller follows. Titles always show, except `.iconsWithSelectedTitle`
+/// (the harness sliders), where only the selected choice keeps its name.
+public struct CapsuleSlider<Option: Hashable>: View {
     public enum LabelMode: Sendable {
         case iconAndTitle
         case titleOnly
@@ -202,8 +203,6 @@ public struct CapsuleSlider<Option: Hashable>: NSViewRepresentable {
     private let mode: LabelMode
     private let size: Size
     private let identifier: String?
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(selection: Binding<Option>, groupTitle: String, mode: LabelMode = .iconAndTitle,
                 size: Size = .regular, identifier: String? = nil, segments: [Segment]) {
@@ -232,70 +231,20 @@ public struct CapsuleSlider<Option: Hashable>: NSViewRepresentable {
         }
     }
 
-    public func makeCoordinator() -> Coordinator { Coordinator(selection: $selection, segments: segments) }
-
-    public func makeNSView(context: Context) -> NSSegmentedControl {
-        let control = NSSegmentedControl()
-        control.trackingMode = .selectOne
-        control.segmentStyle = .capsule
-        control.segmentDistribution = .fit
-        control.target = context.coordinator
-        control.action = #selector(Coordinator.select(_:))
-        return control
-    }
-
-    public func updateNSView(_ control: NSSegmentedControl, context: Context) {
-        context.coordinator.selection = $selection
-        context.coordinator.segments = segments
-        control.controlSize = size == .large ? .large : .regular
-        control.setAccessibilityLabel(groupTitle)
-        if let identifier { control.setAccessibilityIdentifier(identifier) }
-        if control.segmentCount != segments.count { control.segmentCount = segments.count }
-        let faces = Self.faces(segments, selection: selection, mode: mode)
-        let side: CGFloat = size == .large ? 16 : 14
-        NSAnimationContext.beginGrouping()
-        if reduceMotion { NSAnimationContext.current.duration = 0 }
-        for (index, segment) in segments.enumerated() {
-            let face = faces[index]
-            var image: NSImage?
-            if face.showsImage {
-                if let asset = segment.asset {
-                    image = NSImage(named: asset)?.copy() as? NSImage
-                    image?.size = NSSize(width: side, height: side)
-                } else if let symbol = segment.systemImage {
-                    image = NSImage(systemSymbolName: symbol, accessibilityDescription: segment.title)
-                }
-                // Public SDK contract for icon-only segments' accessible names.
-                image?.accessibilityDescription = segment.title
+    public var body: some View {
+        SlidingCapsulePicker(
+            selection: $selection, groupTitle: groupTitle,
+            titleMode: mode == .iconsWithSelectedTitle ? .selectedOnly : .always,
+            size: size == .large ? .large : .regular,
+            identifier: identifier,
+            segments: segments.map { segment in
+                let images = mode != .titleOnly
+                return .init(value: segment.value, title: segment.title,
+                             systemImage: images ? segment.systemImage : nil,
+                             asset: images ? segment.asset : nil,
+                             isEnabled: segment.isEnabled, help: segment.help)
             }
-            control.setImage(image, forSegment: index)
-            control.setImageScaling(.scaleProportionallyDown, forSegment: index)
-            control.setLabel(face.title, forSegment: index)
-            control.setToolTip(segment.help ?? segment.title, forSegment: index)
-            control.setEnabled(segment.isEnabled, forSegment: index)
-            control.setWidth(0, forSegment: index)
-        }
-        control.selectedSegment = segments.firstIndex { $0.value == selection } ?? -1
-        control.isEnabled = isEnabled
-        control.invalidateIntrinsicContentSize()
-        NSAnimationContext.endGrouping()
-    }
-
-    public final class Coordinator: NSObject {
-        var selection: Binding<Option>
-        var segments: [Segment]
-
-        init(selection: Binding<Option>, segments: [Segment]) {
-            self.selection = selection
-            self.segments = segments
-        }
-
-        @MainActor @objc func select(_ sender: NSSegmentedControl) {
-            guard segments.indices.contains(sender.selectedSegment) else { return }
-            let segment = segments[sender.selectedSegment]
-            guard segment.isEnabled else { return }
-            selection.wrappedValue = segment.value
-        }
+        )
     }
 }
 

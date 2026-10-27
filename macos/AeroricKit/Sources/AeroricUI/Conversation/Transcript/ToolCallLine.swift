@@ -102,7 +102,7 @@ struct ToolCallLine: View {
     }
 }
 
-/// Three or more finished calls folded into "n 个工具调用".
+/// Two or more finished calls folded into "已执行 n 个指令" / "已调用 n 个工具".
 struct ToolGroupLine: View {
     let calls: [ToolCall]
     let firstIndex: Int
@@ -120,7 +120,7 @@ struct ToolGroupLine: View {
                         }
                     }
                     .foregroundStyle(AeroricColor.textSecondary)
-                    Text("\(calls.count) 个工具调用")
+                    Text(calls.allSatisfy { $0.symbol == "terminal" } ? "已执行 \(calls.count) 个指令" : "已调用 \(calls.count) 个工具")
                         .font(.system(size: AeroricType.secondary))
                         .foregroundStyle(AeroricColor.textSecondary)
                     Spacer(minLength: AeroricSpace.s)

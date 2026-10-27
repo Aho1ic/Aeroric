@@ -101,6 +101,12 @@ struct GlassSurfaceModifier<S: InsettableShape>: ViewModifier {
                 content.background(opaqueFill, in: shape)
             case .material:
                 content.background { materialBackground }
+            case .liquidGlass where role == .sidebar:
+                // 2026-10-27: a full-height glass column draws a dark rim and
+                // shadow along its edge (user report, twice). The system's
+                // sidebar material is what macOS 26 sidebars use themselves —
+                // the new look, without that seam.
+                content.background { materialBackground }
             case .liquidGlass:
                 if #available(macOS 26, *) {
                     content.glassEffect(.regular.tint(tint), in: shape)

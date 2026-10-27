@@ -16,6 +16,14 @@ public enum NewSessionLayout {
         configuration.id.hasPrefix(agentConfigPrefix)
     }
 
+    /// A saved connection offered directly (2026-10-27): the host derives an
+    /// Agent configuration `via-<harness>-<hash>` per connection and harness.
+    public static let connectionPrefix = agentConfigPrefix + "via-"
+
+    public static func isConnection(_ configuration: SessionConfiguration) -> Bool {
+        configuration.id.hasPrefix(connectionPrefix)
+    }
+
     /// Whether each harness has at least one usable entry in the catalogue.
     public static func availability(_ configurations: [SessionConfiguration]) -> [String: Bool] {
         Dictionary(uniqueKeysWithValues: harnessOrder.map { harness in
