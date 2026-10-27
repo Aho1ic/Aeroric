@@ -63,9 +63,6 @@ final class AppServices {
     /// AP7:外部协议只读状态(OAuth/沙箱/工具/媒体/语音)。
     let externalProtocolStore = ExternalProtocolStore()
     /// P5-01/P5-02：模式控制器（迁移默认按旧客户端存在性）。
-    let interactionModeController = InteractionModeController(
-        tauriClientPresent: InteractionModeController.tauriClientPresent
-    )
     /// P5-03：类型化 workspace 调用（连接附着后创建）。
     private(set) var workspaceClient: WorkspaceClient?
     private(set) var taskSnapshotReadState: WorkspaceReadState = .notLoaded
@@ -1027,7 +1024,6 @@ extension AppServices: WorkspaceStateProviding {
 
 extension AppServices: SettingsStateProviding {
     var legacyCleanup: LegacyCleanupStore? { legacyCleanupStore }
-    var settingsInteractionMode: InteractionModeController? { interactionModeController }
     var connectionPhaseText: String? { phaseText }
     var settingsImportBook: ImportBook? { importBook }
     var settingsKeepAwake: KeepAwakeStore? { keepAwakeStore }

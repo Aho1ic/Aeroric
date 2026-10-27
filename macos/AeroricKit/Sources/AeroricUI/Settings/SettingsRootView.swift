@@ -5,10 +5,6 @@ import SwiftUI
 /// accessibility identifier here: it would replace every descendant's own.
 public struct SettingsRootView<State: SettingsStateProviding>: View {
     let state: State
-    /// Fallbacks for previews/tests without an `InteractionModeController`.
-    let interactionMode: Binding<InteractionMode>?
-    let onInteractionModeSave: ((InteractionMode) -> Void)?
-    let interactionModeSaveError: String?
     /// Selected by `id`, like the task list: `List(data, selection:)` tags rows
     /// with their `id` (a `String`), so a `SettingsPane?` binding never matched
     /// and no row could be selected.
@@ -16,16 +12,8 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
 
     private var pane: SettingsPane? { paneID.flatMap(SettingsPane.init(rawValue:)) }
 
-    public init(
-        state: State,
-        interactionMode: Binding<InteractionMode>? = nil,
-        onInteractionModeSave: ((InteractionMode) -> Void)? = nil,
-        interactionModeSaveError: String? = nil
-    ) {
+    public init(state: State) {
         self.state = state
-        self.interactionMode = interactionMode
-        self.onInteractionModeSave = onInteractionModeSave
-        self.interactionModeSaveError = interactionModeSaveError
     }
 
     private var panes: [SettingsPane] {
@@ -67,8 +55,7 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
     @ViewBuilder private func content(_ pane: SettingsPane) -> some View {
         switch pane {
         case .general:
-            GeneralSettingsPane(controller: state.settingsInteractionMode, fallbackMode: interactionMode,
-                                onFallbackSave: onInteractionModeSave, fallbackError: interactionModeSaveError)
+            GeneralSettingsPane()
             if let keepAwake = state.settingsKeepAwake, keepAwake.isAvailable {
                 KeepAwakeSettingsCard(store: keepAwake)
             }

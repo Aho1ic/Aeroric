@@ -40,7 +40,6 @@ public protocol SettingsStateProviding: AnyObject {
     /// Legacy custom Agent cleanup; nil hides the entry (previews, tests).
     var legacyCleanup: LegacyCleanupStore? { get }
     /// The app's interaction-mode owner; nil in previews and tests.
-    var settingsInteractionMode: InteractionModeController? { get }
     /// Host connection phase for the 连接 pane; nil shows "未知".
     var connectionPhaseText: String? { get }
     /// Imported sessions (M4); nil or unavailable hides the 导入 pane.
@@ -55,7 +54,6 @@ public protocol SettingsStateProviding: AnyObject {
 
 public extension SettingsStateProviding {
     var legacyCleanup: LegacyCleanupStore? { nil }
-    var settingsInteractionMode: InteractionModeController? { nil }
     var connectionPhaseText: String? { nil }
     var settingsImportBook: ImportBook? { nil }
     var settingsKeepAwake: KeepAwakeStore? { nil }

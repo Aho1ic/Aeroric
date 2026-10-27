@@ -75,11 +75,7 @@ final class WorkspaceWiringTests: XCTestCase {
 
     func testSettingsRootViewWiresAllSections() {
         let state = StubSettingsState()
-        var mode: InteractionMode = .native
-        let root = SettingsRootView(
-            state: state,
-            interactionMode: Binding(get: { mode }, set: { mode = $0 })
-        )
+        let root = SettingsRootView(state: state)
         XCTAssertNotNil(root.body)
         XCTAssertEqual(SettingsSection.allCases, [.application, .agents, .about])
     }

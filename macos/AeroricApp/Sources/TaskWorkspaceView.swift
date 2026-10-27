@@ -5,8 +5,7 @@ import SwiftUI
 
 /// P5-03 App 场景接线：宿主 ready 后，详情列从 shell 占位切到任务工作区
 /// 视图——左侧任务列表（窗口局部过滤）＋右侧详情头；选中运行中任务挂
-/// P5-01 终端（`SessionPresentation.resolve` 决定呈现：advanced 模式或
-/// native 下能力已验证才直接呈现终端，否则显示状态卡与切换按钮）。
+/// 原生会话页（宿主以结构化方式运行的任务），或 P5-01 终端（未迁移的自定义包装 Agent）。
 /// 任务生命周期调用全部走 `AppServices`（类型化 workspace client），
 /// 本视图不触碰 wire 格式（INV-02 归属不变）。
 /// The workspace's surfaces, as navigation rows rather than a tab strip.
@@ -165,7 +164,6 @@ struct TaskWorkspaceView: View {
     @State private var sqlDraft = "SELECT 1;"
     /// native 模式下能力未验证会话的用户主动切换（不自动改全局偏好，
     /// P5-02 语义）。
-    @State private var forcedTerminalTaskIDs: Set<String> = []
     /// Q25: bottom terminal dock. Expanded by default at 28% of the column.
     @State private var terminalExpanded = true
     @SceneStorage("session.terminal-fraction") private var terminalFraction =
@@ -451,8 +449,8 @@ struct TaskWorkspaceView: View {
                     detailRow("项目", services.taskStore.projects.first { $0.id == task.projectID }?.name ?? "原项目不可用")
                     if let created = task.createdAtMs { detailRow("创建", Self.timestamp(created)) }
                     if let updated = task.updatedAtMs { detailRow("更新", Self.timestamp(updated)) }
-                    detailRow("显示", forcedTerminalTaskIDs.contains(task.id)
-                              || services.interactionModeController.mode == .advanced ? "终端" : "对话")
+                    detailRow("显示", services.liveStructured[task.id] == true ? "原生会话"
+                              : services.structuredCapabilitiesVerified(task) ? "对话" : "终端")
                 } else if let scope = draftScope {
                     detailRow("草稿", scope.projectID == nil ? "全局（未选择项目）" : "项目草稿")
                     detailRow("项目", resourceProject?.name ?? "未选择")
@@ -1143,9 +1141,6 @@ struct TaskWorkspaceView: View {
         }
     }
 
-    /// P5-02 SessionPresentation 接线落点：由模式＋能力验证状态决定
-    /// 呈现；`forcedTerminal` 只影响本窗口本次选择（用户触发，不自动改
-    /// 全局偏好）。
     /// N4: a task the host runs as a structured session gets the live page —
     /// the whole column is the conversation, no terminal (Q25). Anything else
     /// keeps the presentation below.
@@ -1171,14 +1166,10 @@ struct TaskWorkspaceView: View {
 
     @ViewBuilder
     private func legacyTaskBody(_ task: TaskStore.TaskEntry) -> some View {
-        let presentation = SessionPresentation.resolve(
-            // N6 D5: the global mode is fixed native; only this window's explicit
-            // "switch to terminal" for a task still picks the terminal.
-            mode: forcedTerminalTaskIDs.contains(task.id) ? .advanced : .native,
-            structuredCapabilitiesVerified: services.structuredCapabilitiesVerified(task)
-        )
-        switch presentation {
-        case .native:
+        // ADR-043: no terminal/native mode switch. A task the host does not run
+        // structurally is DSH (conversation over its own PTY) or an unmigrated
+        // custom wrapper (terminal only).
+        if services.structuredCapabilitiesVerified(task) {
             // Q15-b: conversation on top, the Agent's own PTY docked below.
             ConversationTerminalSplit(
                 terminalExpanded: $terminalExpanded,
@@ -1190,10 +1181,7 @@ struct TaskWorkspaceView: View {
             } terminal: {
                 terminalSurface(task)
             }
-        case .terminal:
-            // 终端档（interactionMode = advanced）: terminal at full height.
-            terminalSurface(task)
-        case .requiresAdvanced:
+        } else {
             // Q26-a: no structured history → terminal full height, labelled.
             VStack(spacing: 0) {
                 Label("此会话仅终端可读：宿主未提供结构化历史", systemImage: "terminal")

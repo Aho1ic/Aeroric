@@ -135,14 +135,6 @@ public struct SettingsRow<Control: View>: View {
 // MARK: - Panes
 
 struct GeneralSettingsPane: View {
-    let controller: InteractionModeController?
-    let fallbackMode: Binding<InteractionMode>?
-    let onFallbackSave: ((InteractionMode) -> Void)?
-    let fallbackError: String?
-
-    private var mode: InteractionMode { controller?.mode ?? fallbackMode?.wrappedValue ?? .native }
-    private var saveError: String? { controller?.lastSaveError ?? fallbackError }
-
     @AppStorage(OnboardingFlow.completedKey) private var onboardingCompleted = false
 
     var body: some View {
@@ -158,26 +150,17 @@ struct GeneralSettingsPane: View {
         }
     }
 
-    /// N6 D5 (Q6): Claude and Codex always run as native sessions now; the
-    /// old "advanced terminal mode" switch is retired to a read-only note.
+    /// ADR-043 (2026-10-27): every Claude Code, Codex and omp session — local
+    /// or over SSH — is native; there is no terminal mode to switch to.
     private var interaction: some View {
         SettingsCard("交互") {
             SettingsRow("会话呈现",
-                        detail: "Claude 与 Codex 始终使用原生会话（对话、审批卡、工具卡），不再提供终端模式开关。远程 SSH 工作区、未迁移的自定义 Agent 与 omp 仍在终端中运行。") {
+                        detail: "Claude Code、Codex 与 omp 在本机和 SSH 远程都使用原生会话（对话、审批卡、工具卡）。只有尚未迁移的自定义包装 Agent 仍在终端中运行。") {
                 Text("原生")
                     .font(.system(size: AeroricType.secondary))
                     .foregroundStyle(AeroricColor.textSecondary)
                     .accessibilityIdentifier("settings.general.interaction-mode")
             }
-        }
-    }
-
-    private func save(_ newMode: InteractionMode) {
-        if let controller {
-            controller.setMode(newMode)
-        } else {
-            fallbackMode?.wrappedValue = newMode
-            onFallbackSave?(newMode)
         }
     }
 }
