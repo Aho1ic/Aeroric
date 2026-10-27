@@ -240,7 +240,10 @@ fn oversized_sessions_are_listed_but_not_read() {
     store.scan(&projects()).unwrap();
     let entry = store.index()[0].clone();
     assert!(entry.too_large);
-    assert_eq!(entry.title, "big");
+    assert_eq!(
+        entry.title, "修复登录页",
+        "the head is still read for the title; only the history is refused"
+    );
     assert_eq!(
         store.messages(&entry.id).unwrap_err(),
         ImportError::TooLarge
@@ -324,4 +327,121 @@ fn project_assignment_prefers_the_longest_match() {
         "path-component match, not string prefix"
     );
     assert_eq!(assign_project(None, &projects), None);
+}
+
+/// 2026-10-27: the picker previews without saving; the choice decides what
+/// Aeroric shows; archive and remove only change Aeroric's view.
+#[test]
+fn the_picker_previews_then_chooses_archives_and_removes() {
+    let scratch = Scratch::new("picker");
+    let app = scratch.write(".claude/projects/-work-app/s1.jsonl", CLAUDE);
+    scratch.write(".codex/sessions/2026/10/02/rollout-a.jsonl", CODEX);
+    let store = scratch.store();
+    let roots = [
+        (
+            ImportAgent::Claude,
+            ImportAgent::Claude.default_root(&scratch.home()),
+        ),
+        (
+            ImportAgent::Codex,
+            ImportAgent::Codex.default_root(&scratch.home()),
+        ),
+    ];
+    let preview = store.preview(&roots, &projects());
+    assert_eq!(preview.len(), 2);
+    assert!(
+        preview.iter().all(|p| p.selected),
+        "everything is ticked at first"
+    );
+    assert!(store.index().is_empty(), "a preview saves nothing");
+
+    let claude_id = session_id(ImportAgent::Claude, &app);
+    let offered: Vec<String> = preview.iter().map(|p| p.session.id.clone()).collect();
+    store
+        .choose(&offered, std::slice::from_ref(&claude_id))
+        .unwrap();
+    for (agent, root) in &roots {
+        store.grant(*agent, root.clone(), 1).unwrap();
+    }
+    store.scan(&projects()).unwrap();
+    let visible: Vec<String> = store.visible().into_iter().map(|s| s.id).collect();
+    assert_eq!(
+        visible,
+        std::slice::from_ref(&claude_id),
+        "the unticked session is left out"
+    );
+    let again = store.preview(&roots, &projects());
+    assert_eq!(
+        again.iter().filter(|p| p.selected).count(),
+        1,
+        "the choice is remembered"
+    );
+
+    store.set_archived(&claude_id, true).unwrap();
+    assert!(store.visible()[0].archived);
+    store.set_archived(&claude_id, false).unwrap();
+    assert!(!store.visible()[0].archived);
+    store.remove(&claude_id).unwrap();
+    assert!(store.visible().is_empty());
+    assert!(app.exists(), "removing never touches the agent's own file");
+    assert!(store.remove("imp_unknown").is_err());
+}
+
+/// 2026-10-27: new Codex rollouts put developer instructions, AGENTS.md and a
+/// large world_state before the first real prompt (often past 64 KB), and the
+/// AGENTS.md message is a "user" message. The title is the real prompt.
+#[test]
+fn codex_titles_skip_agents_md_and_reach_past_a_large_preamble() {
+    let scratch = Scratch::new("codex-title");
+    let filler = "x".repeat(120 * 1024);
+    let text = [
+        r#"{"timestamp":"2026-10-02T09:00:00Z","type":"session_meta","payload":{"cwd":"/work/other"}}"#.to_string(),
+        r##"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /work/other\n\n<INSTRUCTIONS>规则</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>x</environment_context>"}]}}"##.to_string(),
+        format!(r#"{{"type":"world_state","payload":{{"blob":"{filler}"}}}}"#),
+        // The prompt line carries a pasted screenshot that runs past the head window.
+        format!(
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"给项目加 OBB 支持"}},{{"type":"input_image","image_url":"data:image/png;base64,{}"}}]}}}}"#,
+            "A".repeat(1536 * 1024)
+        ),
+        String::new(),
+    ]
+    .join("\n");
+    scratch.write(".codex/sessions/2026/10/02/rollout-b.jsonl", &text);
+    let store = scratch.store();
+    store
+        .grant(
+            ImportAgent::Codex,
+            ImportAgent::Codex.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    store.scan(&projects()).unwrap();
+    let entry = store.index().into_iter().next().unwrap();
+    assert_eq!(entry.title, "给项目加 OBB 支持");
+    let (_, messages) = store.messages(&entry.id).unwrap();
+    let users: Vec<_> = messages.iter().filter(|m| m.role == "user").collect();
+    assert_eq!(
+        users.len(),
+        1,
+        "the AGENTS.md / environment block is not a user bubble"
+    );
+}
+
+#[test]
+fn a_session_without_a_prompt_is_named_by_agent_and_time() {
+    let scratch = Scratch::new("codex-untitled");
+    scratch.write(
+        ".codex/sessions/2026/08/01/rollout-2026-08-01T21-20-22-0198.jsonl",
+        "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/work/app\"}}\n",
+    );
+    let store = scratch.store();
+    store
+        .grant(
+            ImportAgent::Codex,
+            ImportAgent::Codex.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    store.scan(&projects()).unwrap();
+    assert_eq!(store.index()[0].title, "Codex 会话 · 2026-08-01 21:20");
 }

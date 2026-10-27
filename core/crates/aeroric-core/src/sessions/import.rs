@@ -16,6 +16,7 @@ use std::time::UNIX_EPOCH;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::sessions::codex::is_injected_context;
 use crate::sessions::discovery::{collect_jsonl_files, collect_session_files};
 use crate::sessions::parser::parse_session_lines;
 use crate::sessions::SessionMessage;
@@ -23,8 +24,14 @@ use crate::storage::atomic::{write_atomic, FileMode};
 
 /// 单个会话文件的读取上限：超过即标 `too_large`，不读内容。
 pub const MAX_SESSION_BYTES: u64 = 32 * 1024 * 1024;
-/// 取 cwd / 标题时最多读的头部字节数。
-const HEAD_BYTES: u64 = 64 * 1024;
+/// 取 cwd / 标题时最多读的头部字节数。新版 Codex 在首条真提示词之前先写
+/// session_meta、developer 指令、AGENTS.md 与 world_state，常过 100 KB，
+/// 所以窗口放到 1 MiB；读到标题即停。
+const HEAD_BYTES: u64 = 1024 * 1024;
+/// 标题算法的版本。索引里旧版本的条目即便文件未变也重算一次标题。
+const TITLE_REV: u32 = 2;
+/// 头部单行上限：更长的行（超大附件）跳过不解析。
+const HEAD_LINE_BYTES: u64 = 16 * 1024 * 1024;
 const TITLE_CHARS: usize = 80;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -101,6 +108,34 @@ pub struct ImportedSession {
     pub project_id: Option<String>,
     #[serde(default)]
     pub too_large: bool,
+    /// Archived by the user: off the project list, under 已归档 (2026-10-27).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
+    /// Which title algorithm produced `title` (see `TITLE_REV`).
+    #[serde(default)]
+    pub title_rev: u32,
+}
+
+/// The user's choices over the index (2026-10-27): sessions left out of the
+/// import or removed from Aeroric, and archived ones. Source files are never
+/// touched; this only decides what Aeroric shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPrefs {
+    #[serde(default)]
+    pub excluded: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    pub archived: std::collections::BTreeSet<String>,
+}
+
+/// One session found on disk for the import picker.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewSession {
+    #[serde(flatten)]
+    pub session: ImportedSession,
+    /// Ticked by default: not left out before.
+    pub selected: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +190,111 @@ impl ImportStore {
         self.dir.join("index.json")
     }
 
+    fn prefs_path(&self) -> PathBuf {
+        self.dir.join("prefs.json")
+    }
+
+    pub fn prefs(&self) -> ImportPrefs {
+        read_json(&self.prefs_path()).unwrap_or_default()
+    }
+
+    fn save_prefs(&self, prefs: &ImportPrefs) -> Result<(), ImportError> {
+        write_json(&self.prefs_path(), prefs)
+    }
+
+    /// What Aeroric shows: the index without left-out or removed sessions,
+    /// archived ones flagged.
+    pub fn visible(&self) -> Vec<ImportedSession> {
+        let prefs = self.prefs();
+        self.index()
+            .into_iter()
+            .filter(|session| !prefs.excluded.contains(&session.id))
+            .map(|mut session| {
+                session.archived = prefs.archived.contains(&session.id);
+                session
+            })
+            .collect()
+    }
+
+    pub fn set_archived(&self, id: &str, archived: bool) -> Result<(), ImportError> {
+        if !self.index().iter().any(|session| session.id == id) {
+            return Err(ImportError::UnknownSession(id.to_string()));
+        }
+        let mut prefs = self.prefs();
+        if archived {
+            prefs.archived.insert(id.to_string());
+        } else {
+            prefs.archived.remove(id);
+        }
+        self.save_prefs(&prefs)
+    }
+
+    /// Take a session out of Aeroric (its file stays where the agent keeps it).
+    pub fn remove(&self, id: &str) -> Result<(), ImportError> {
+        if !self.index().iter().any(|session| session.id == id) {
+            return Err(ImportError::UnknownSession(id.to_string()));
+        }
+        let mut prefs = self.prefs();
+        prefs.archived.remove(id);
+        prefs.excluded.insert(id.to_string());
+        self.save_prefs(&prefs)
+    }
+
+    /// Every session under `roots` for the picker, without saving anything.
+    /// Known, unchanged files are not re-read.
+    pub fn preview(
+        &self,
+        roots: &[(ImportAgent, PathBuf)],
+        projects: &[(String, String)],
+    ) -> Vec<PreviewSession> {
+        let previous = self.index();
+        let prefs = self.prefs();
+        let mut out = Vec::new();
+        for (agent, root) in roots {
+            for path in collect_sources(*agent, root) {
+                let Some(marker) = marker_of(&path) else {
+                    continue;
+                };
+                let id = session_id(*agent, &path);
+                let session = match previous
+                    .iter()
+                    .find(|s| s.id == id && s.marker == marker && s.title_rev == TITLE_REV)
+                {
+                    Some(known) => {
+                        let mut known = known.clone();
+                        known.project_id = assign_project(known.cwd.as_deref(), projects);
+                        known
+                    }
+                    None => match describe(*agent, &path, id, marker, projects) {
+                        Ok(session) => session,
+                        Err(_) => continue,
+                    },
+                };
+                out.push(PreviewSession {
+                    selected: !prefs.excluded.contains(&session.id),
+                    session,
+                });
+            }
+        }
+        out.sort_by(|a, b| b.session.last_at_ms.cmp(&a.session.last_at_ms));
+        out
+    }
+
+    /// The picker's answer: `selected` are imported, every other `offered` id
+    /// is left out (until picked again).
+    pub fn choose(&self, offered: &[String], selected: &[String]) -> Result<(), ImportError> {
+        let mut prefs = self.prefs();
+        for id in offered {
+            if selected.contains(id) {
+                prefs.excluded.remove(id);
+            } else {
+                prefs.excluded.insert(id.clone());
+                prefs.archived.remove(id);
+            }
+        }
+        self.save_prefs(&prefs)
+    }
+
     pub fn grants(&self) -> Vec<ImportGrant> {
         read_json(&self.grants_path()).unwrap_or_default()
     }
@@ -206,7 +346,7 @@ impl ImportStore {
                 };
                 let id = session_id(grant.agent, &path);
                 match previous.iter().find(|session| session.id == id) {
-                    Some(old) if old.marker == marker => {
+                    Some(old) if old.marker == marker && old.title_rev == TITLE_REV => {
                         let mut kept = old.clone();
                         kept.project_id = assign_project(kept.cwd.as_deref(), projects);
                         next.push(kept);
@@ -348,13 +488,11 @@ fn describe(
 ) -> Result<ImportedSession, String> {
     let fallback_title = path
         .file_stem()
-        .map(|stem| stem.to_string_lossy().to_string())
+        .map(|stem| fallback_title(agent, &stem.to_string_lossy()))
         .unwrap_or_else(|| id.clone());
-    let head = if marker.size > MAX_SESSION_BYTES {
-        Head::default()
-    } else {
-        read_head(agent, path)?
-    };
+    // The head is read even for an oversized file: its title and cwd are in
+    // the first lines, only the full history is off limits.
+    let head = read_head(agent, path)?;
     Ok(ImportedSession {
         project_id: assign_project(head.cwd.as_deref(), projects),
         id,
@@ -366,6 +504,8 @@ fn describe(
         last_at_ms: marker.mtime_ms,
         marker,
         too_large: marker.size > MAX_SESSION_BYTES,
+        archived: false,
+        title_rev: TITLE_REV,
     })
 }
 
@@ -376,14 +516,41 @@ struct Head {
     first_at: Option<String>,
 }
 
-/// 读头部（≤ 64 KB）取 cwd、首条用户文本与首个时间戳。
+/// 读头部取 cwd、首条用户文本与首个时间戳：只在前 `HEAD_BYTES` 内**开始**
+/// 的行，但每行读完整（≤ `HEAD_LINE_BYTES`）——首条提示词里贴了截图时，这一行
+/// 常有几 MB，截断就解析不了（2026-10-27）。
 fn read_head(agent: ImportAgent, path: &Path) -> Result<Head, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
-    let reader = BufReader::new(file.take(HEAD_BYTES));
+    let mut reader = BufReader::new(file);
     let mut head = Head::default();
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+    let mut consumed: u64 = 0;
+    let mut buf = Vec::new();
+    while consumed < HEAD_BYTES {
+        buf.clear();
+        let read = (&mut reader)
+            .take(HEAD_LINE_BYTES)
+            .read_until(b'\n', &mut buf)
+            .map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
+        }
+        consumed += read as u64;
+        if !buf.ends_with(b"\n") && read as u64 == HEAD_LINE_BYTES {
+            // A line past the cap cannot be parsed; skip the rest of it.
+            loop {
+                buf.clear();
+                let more = (&mut reader)
+                    .take(HEAD_LINE_BYTES)
+                    .read_until(b'\n', &mut buf)
+                    .map_err(|e| e.to_string())?;
+                consumed += more as u64;
+                if more == 0 || buf.ends_with(b"\n") {
+                    break;
+                }
+            }
+            continue;
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&buf) else {
             continue;
         };
         if head.first_at.is_none() {
@@ -443,7 +610,27 @@ fn read_head(agent: ImportAgent, path: &Path) -> Result<Head, String> {
     Ok(head)
 }
 
-/// 用户文本的首行；跳过以 `<` 开头的注入块（命令包装、环境上下文）。
+/// A session with no prompt of its own (a sub-agent thread, an aborted
+/// start): "Codex 会话 · 2026-08-01 21:20" from `rollout-2026-08-01T21-20-22-<uuid>`
+/// rather than the raw file name.
+fn fallback_title(agent: ImportAgent, stem: &str) -> String {
+    let name = match agent {
+        ImportAgent::Claude => "Claude Code 会话",
+        ImportAgent::Codex => "Codex 会话",
+    };
+    let stamp = stem.strip_prefix("rollout-").and_then(|rest| {
+        let date = rest.get(0..10)?;
+        let time = rest.get(11..16)?.replace('-', ":");
+        (rest.as_bytes().get(10) == Some(&b'T')).then(|| format!("{date} {time}"))
+    });
+    match stamp {
+        Some(stamp) => format!("{name} · {stamp}"),
+        None => name.to_string(),
+    }
+}
+
+/// 用户文本的首行；跳过 agent 注入的上下文块（命令包装、环境上下文、
+/// AGENTS.md 指令，见 `is_injected_context`）。
 fn user_text(content: &serde_json::Value) -> Option<String> {
     let candidates: Vec<&str> = match content {
         serde_json::Value::String(text) => vec![text.as_str()],
@@ -456,7 +643,7 @@ fn user_text(content: &serde_json::Value) -> Option<String> {
     candidates
         .into_iter()
         .map(str::trim)
-        .find(|text| !text.is_empty() && !text.starts_with('<'))
+        .find(|text| !text.is_empty() && !is_injected_context(text))
         .and_then(|text| text.lines().next())
         .map(|line| line.chars().take(TITLE_CHARS).collect())
 }

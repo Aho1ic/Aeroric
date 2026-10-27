@@ -3093,6 +3093,18 @@ pub fn register_task_services(
         );
     }
     {
+        let service = std::sync::Arc::clone(&service);
+        let context = std::sync::Arc::clone(&context);
+        set.register(
+            "task.archive",
+            std::sync::Arc::new(move |request, _call| {
+                let service = std::sync::Arc::clone(&service);
+                let context = std::sync::Arc::clone(&context);
+                Box::pin(async move { task_archive(request, service, context) })
+            }),
+        );
+    }
+    {
         let registry = std::sync::Arc::clone(&registry);
         set.register(
             "terminal.get_active_task_ids",
@@ -3516,6 +3528,53 @@ fn task_settle_verdict(
             ErrorCode::IoError,
             &format!("the settle verdict failed: {e}"),
         ),
+    }
+}
+
+/// `task.archive {taskId, archived?}`: puts a finished task in (or takes it out of) the
+/// archive. The row keeps its `archivedAt`; running and pending tasks are left as they are.
+fn task_archive(
+    request: Request,
+    service: std::sync::Arc<TaskService>,
+    context: std::sync::Arc<aeroric_core::context::CoreContext>,
+) -> Frame {
+    let id = request.id.clone();
+    let Some(task_id) = request
+        .params
+        .get("taskId")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+    else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "task.archive requires params.taskId",
+        );
+    };
+    let archived = request
+        .params
+        .get("archived")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let Some(project) = find_project_of_task(&context, task_id) else {
+        return failure(
+            id,
+            ErrorCode::NotFound,
+            "no task with that id in any known project",
+        );
+    };
+    let Some(project_id) = mutations::id_of(&project) else {
+        return failure(id, ErrorCode::NotFound, "the task's project has no id");
+    };
+    let ids = [task_id.to_string()];
+    let outcome = if archived {
+        service.archive(project_id, &ids)
+    } else {
+        service.unarchive(project_id, &ids)
+    };
+    match outcome {
+        Ok(applied) => ok(&request, json!({ "changed": applied.changed })),
+        Err(e) => failure(id, ErrorCode::IoError, &format!("task.archive failed: {e}")),
     }
 }
 

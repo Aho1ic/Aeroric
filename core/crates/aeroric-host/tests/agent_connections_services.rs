@@ -469,7 +469,10 @@ async fn a_test_message_goes_through_the_connection_with_its_key() {
     assert!(request
         .to_ascii_lowercase()
         .contains("authorization: bearer sk-probe"));
-    assert!(request.contains("\"max_tokens\":64"), "room for a reasoning model to answer");
+    assert!(
+        request.contains("\"max_tokens\":64"),
+        "room for a reasoning model to answer"
+    );
 }
 
 #[tokio::test]

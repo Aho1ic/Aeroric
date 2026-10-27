@@ -10,8 +10,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use aeroric_core::agents::detect::detect_agents;
 use aeroric_core::context::CoreContext;
-use aeroric_core::projects::mutations;
-use aeroric_core::sessions::import::{estimate, ImportAgent, ImportError, ImportStore, ScanReport};
+use aeroric_core::projects::{mutations, ProjectService};
+use aeroric_core::sessions::import::{
+    assign_project, estimate, ImportAgent, ImportError, ImportStore, ScanReport,
+};
 use aeroric_core::storage::projects::load_projects;
 use aeroric_core::tasks::ProtocolFamily;
 use aeroric_protocol::envelope::{Frame, Request};
@@ -64,6 +66,10 @@ pub fn register_import_services(
     set.register("imports.rescan", blocking(&env, rescan));
     set.register("imports.list", blocking(&env, list));
     set.register("imports.history", blocking(&env, history));
+    set.register("imports.preview", blocking(&env, preview));
+    set.register("imports.apply", blocking(&env, apply));
+    set.register("imports.archive", blocking(&env, archive));
+    set.register("imports.remove", blocking(&env, remove));
     set.register("agents.detect", blocking(&env, detect));
 }
 
@@ -244,12 +250,147 @@ fn list(request: Request, env: Arc<Env>) -> Frame {
     let project = request.params.get("projectId").and_then(Value::as_str);
     let unassigned = request.params.get("unassigned").and_then(Value::as_bool) == Some(true);
     let sessions: Vec<_> = store(context)
-        .index()
+        .visible()
         .into_iter()
         .filter(|s| project.is_none_or(|id| s.project_id.as_deref() == Some(id)))
         .filter(|s| !unassigned || s.project_id.is_none())
         .collect();
     ok(&request, json!({ "sessions": sessions }))
+}
+
+/// The agents whose session roots exist under the user's home.
+fn import_roots(env: &Env) -> Vec<(ImportAgent, PathBuf)> {
+    [ImportAgent::Claude, ImportAgent::Codex]
+        .into_iter()
+        .map(|agent| (agent, agent.default_root(&env.home)))
+        .filter(|(_, root)| root.is_dir())
+        .collect()
+}
+
+/// 2026-10-27 import picker: every session on disk, grouped later by its
+/// working directory; nothing is saved. Opening the picker is the consent to
+/// read the default roots (the same roots `imports.grant` reads).
+fn preview(request: Request, env: Arc<Env>) -> Frame {
+    let sessions = store(&env.context).preview(&import_roots(&env), &projects(&env.context));
+    ok(&request, json!({ "sessions": sessions }))
+}
+
+/// The picker's answer (`params.selected`: session ids). Grants the agents
+/// whose sessions were picked, adds a project for each picked working
+/// directory that is not one yet (and still exists), remembers what was left
+/// out, then rescans so the sessions land under their projects.
+fn apply(request: Request, env: Arc<Env>) -> Frame {
+    let context = &env.context;
+    let selected: Vec<String> = request
+        .params
+        .get("selected")
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let roots = import_roots(&env);
+    let store = store(context);
+    let offered = store.preview(&roots, &projects(context));
+    let picked: Vec<_> = offered
+        .iter()
+        .filter(|p| selected.contains(&p.session.id))
+        .collect();
+    let offered_ids: Vec<String> = offered.iter().map(|p| p.session.id.clone()).collect();
+    if let Err(error) = store.choose(&offered_ids, &selected) {
+        return io_failure(&request, error);
+    }
+    for (agent, root) in &roots {
+        if picked.iter().any(|p| p.session.agent == *agent) {
+            if let Err(error) = store.grant(*agent, root.clone(), now_ms()) {
+                return io_failure(&request, error);
+            }
+        }
+    }
+    let mut created = Vec::new();
+    let mut failed = Vec::new();
+    let mut known = projects(context);
+    let mut dirs: Vec<String> = picked
+        .iter()
+        .filter_map(|p| p.session.cwd.clone())
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    for dir in dirs {
+        if assign_project(Some(&dir), &known).is_some() || !std::path::Path::new(&dir).is_dir() {
+            continue;
+        }
+        let new_id = uuid::Uuid::new_v4().to_string();
+        match ProjectService::new(Arc::clone(context)).open_local(&dir, &new_id, now_ms() as i64) {
+            Ok((upserted, _)) => {
+                created.push(dir.clone());
+                if let Some(id) = mutations::text(&upserted.project, "id") {
+                    known.push((id.to_string(), dir));
+                }
+            }
+            Err(error) => failed.push(format!("{dir}: {error}")),
+        }
+    }
+    match scan(context, true) {
+        Ok(report) => ok(
+            &request,
+            json!({
+                "imported": picked.len(),
+                "createdProjects": created,
+                "failedProjects": failed,
+                "report": report,
+            }),
+        ),
+        Err(error) => io_failure(&request, error),
+    }
+}
+
+fn session_id_param(request: &Request) -> Result<&str, Box<Frame>> {
+    request
+        .params
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            Box::new(failure(
+                request.id.clone(),
+                ErrorCode::InvalidArgument,
+                &format!("{} requires params.id", request.method),
+            ))
+        })
+}
+
+/// `params.archived` (default true): off the project list, under 已归档.
+fn archive(request: Request, env: Arc<Env>) -> Frame {
+    let id = match session_id_param(&request) {
+        Ok(id) => id.to_string(),
+        Err(frame) => return *frame,
+    };
+    let archived = request
+        .params
+        .get("archived")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let _guard = STATE.lock();
+    match store(&env.context).set_archived(&id, archived) {
+        Ok(()) => ok(&request, json!({ "id": id, "archived": archived })),
+        Err(error) => io_failure(&request, error),
+    }
+}
+
+/// Take a session out of Aeroric; the agent's own file is never touched.
+fn remove(request: Request, env: Arc<Env>) -> Frame {
+    let id = match session_id_param(&request) {
+        Ok(id) => id.to_string(),
+        Err(frame) => return *frame,
+    };
+    let _guard = STATE.lock();
+    match store(&env.context).remove(&id) {
+        Ok(()) => ok(&request, json!({ "id": id, "removed": true })),
+        Err(error) => io_failure(&request, error),
+    }
 }
 
 fn history(request: Request, env: Arc<Env>) -> Frame {
@@ -261,14 +402,19 @@ fn history(request: Request, env: Arc<Env>) -> Frame {
             "imports.history requires params.id",
         );
     };
+    let before = request
+        .params
+        .get("before")
+        .and_then(Value::as_str)
+        .and_then(|cursor| cursor.parse::<usize>().ok());
     match store(context).messages(id) {
         Ok((session, messages)) => {
             let family = match session.agent {
                 ImportAgent::Claude => ProtocolFamily::Claude,
                 ImportAgent::Codex => ProtocolFamily::Codex,
             };
-            let mut page = serde_json::to_value(session_page(session.id.clone(), family, messages))
-                .unwrap_or_default();
+            let page = history_page(session_page(session.id.clone(), family, messages), before);
+            let mut page = serde_json::to_value(page).unwrap_or_default();
             page["origin"] = json!("imported");
             page["title"] = json!(session.title);
             ok(&request, page)
@@ -282,6 +428,86 @@ fn history(request: Request, env: Arc<Env>) -> Frame {
     }
 }
 
+/// A history reply must fit one frame (`MAX_FRAME_BYTES`, 1 MiB): a whole
+/// long session in one reply made the host drop the connection and the App
+/// showed "读取历史失败：disconnected" (2026-10-27). So the reply is the
+/// newest messages before `before` (a message index; default the end) that
+/// fit `HISTORY_PAGE_BYTES`, with `nextCursor` pointing at the older rest.
+const HISTORY_PAGE_BYTES: usize = 640 * 1024;
+/// Longest string kept in one block (tool output, pasted files); the rest is
+/// cut with a note. A message still over the page budget is cut harder.
+const BLOCK_MAX_CHARS: usize = 24 * 1024;
+const BLOCK_MIN_CHARS: usize = 1024;
+
+fn history_page(
+    mut page: aeroric_protocol::session::SessionPage,
+    before: Option<usize>,
+) -> aeroric_protocol::session::SessionPage {
+    let mut messages = std::mem::take(&mut page.messages);
+    let end = before.unwrap_or(messages.len()).min(messages.len());
+    messages.truncate(end);
+    let mut picked = Vec::new();
+    let mut bytes = 0;
+    while let Some(mut message) = messages.pop() {
+        clip_message(&mut message, BLOCK_MAX_CHARS);
+        let mut size = encoded_len(&message);
+        if size > HISTORY_PAGE_BYTES {
+            clip_message(&mut message, BLOCK_MIN_CHARS);
+            size = encoded_len(&message);
+        }
+        if !picked.is_empty() && bytes + size > HISTORY_PAGE_BYTES {
+            messages.push(message);
+            break;
+        }
+        bytes += size;
+        picked.push(message);
+    }
+    picked.reverse();
+    page.has_more = !messages.is_empty();
+    page.next_cursor = page.has_more.then(|| messages.len().to_string());
+    page.messages = picked;
+    page
+}
+
+fn encoded_len(message: &aeroric_protocol::session::SessionMessage) -> usize {
+    serde_json::to_vec(message).map_or(0, |bytes| bytes.len())
+}
+
+fn clip_message(message: &mut aeroric_protocol::session::SessionMessage, max_chars: usize) {
+    use aeroric_protocol::session::ContentBlock;
+    for block in &mut message.blocks {
+        match block {
+            ContentBlock::Text { text, .. } => clip_text(text, max_chars),
+            ContentBlock::Unknown(opaque) => clip_value(&mut opaque.payload, max_chars),
+        }
+    }
+}
+
+fn clip_value(value: &mut Value, max_chars: usize) {
+    match value {
+        Value::String(text) => clip_text(text, max_chars),
+        Value::Array(items) => items.iter_mut().for_each(|v| clip_value(v, max_chars)),
+        Value::Object(fields) => fields.values_mut().for_each(|v| clip_value(v, max_chars)),
+        _ => {}
+    }
+}
+
+fn clip_text(text: &mut String, max_chars: usize) {
+    if text.len() <= max_chars {
+        return;
+    }
+    let total = text.chars().count();
+    if total <= max_chars {
+        return;
+    }
+    let cut = text
+        .char_indices()
+        .nth(max_chars)
+        .map_or(text.len(), |(i, _)| i);
+    text.truncate(cut);
+    text.push_str(&format!("\n…（内容过长，已截断；共 {total} 字）"));
+}
+
 fn detect(request: Request, env: Arc<Env>) -> Frame {
     let path = std::env::var("PATH").ok();
     let agents = detect_agents(path.as_deref(), &env.home);
@@ -291,6 +517,60 @@ fn detect(request: Request, env: Arc<Env>) -> Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_history_is_paged_to_fit_one_frame() {
+        use aeroric_protocol::session::{ContentBlock, MessageRole, SessionMessage, SessionPage};
+        let big = "字".repeat(100_000);
+        let messages: Vec<SessionMessage> = (0..60)
+            .map(|i| SessionMessage {
+                id: format!("m{i}"),
+                role: MessageRole::Assistant,
+                blocks: vec![ContentBlock::Text {
+                    kind: "text".into(),
+                    text: big.clone(),
+                }],
+                created_at: None,
+            })
+            .collect();
+        let page = SessionPage {
+            session_id: "s".into(),
+            family: ProtocolFamily::Codex,
+            messages,
+            next_cursor: None,
+            has_more: false,
+        };
+        let first = history_page(page.clone(), None);
+        let bytes = serde_json::to_vec(&first).unwrap().len();
+        assert!(
+            bytes < aeroric_protocol::envelope::MAX_FRAME_BYTES,
+            "{bytes}"
+        );
+        assert!(first.has_more);
+        assert_eq!(
+            first.messages.last().unwrap().id,
+            "m59",
+            "newest first page"
+        );
+        let cursor: usize = first.next_cursor.as_deref().unwrap().parse().unwrap();
+        assert_eq!(cursor + first.messages.len(), 60);
+        // Walking the cursor back reaches the first message exactly once.
+        let mut seen = first.messages.len();
+        let mut before = Some(cursor);
+        while let Some(at) = before {
+            let older = history_page(page.clone(), Some(at));
+            seen += older.messages.len();
+            before = older.next_cursor.as_deref().map(|c| c.parse().unwrap());
+            if before.is_none() {
+                assert_eq!(older.messages.first().unwrap().id, "m0");
+            }
+        }
+        assert_eq!(seen, 60);
+        match &first.messages[0].blocks[0] {
+            ContentBlock::Text { text, .. } => assert!(text.contains("已截断")),
+            other => panic!("{other:?}"),
+        }
+    }
     use aeroric_core::location::{StorageLocation, StorageLocationProbe, VolumeKind};
     use aeroric_core::paths::AppPaths;
     use aeroric_core::storage_lock::LeaseOwner;
@@ -451,6 +731,80 @@ mod tests {
             Arc::clone(&context),
         ));
         assert_eq!(detected["agents"].as_array().unwrap().len(), 4);
+
+        // 2026-10-27 picker: a session in a folder that is no project yet.
+        let fresh = root.join("work-new");
+        std::fs::create_dir_all(&fresh).unwrap();
+        let other = root.join("home/.claude/projects/-work-new/s2.jsonl");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(
+            &other,
+            format!(
+                "{}\n",
+                json!({"type":"user","cwd": fresh.to_string_lossy(),
+                       "message":{"role":"user","content":"新项目里的会话"}})
+            ),
+        )
+        .unwrap();
+        let preview = result(super::preview(
+            request("imports.preview", json!({})),
+            Arc::clone(&context),
+        ));
+        let rows = preview["sessions"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r["selected"] == true));
+        let new_id = rows
+            .iter()
+            .find(|r| r["title"] == "新项目里的会话")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let applied = result(apply(
+            request("imports.apply", json!({"selected": [new_id.clone()]})),
+            Arc::clone(&context),
+        ));
+        assert_eq!(applied["imported"], 1);
+        assert_eq!(
+            applied["createdProjects"].as_array().unwrap().len(),
+            1,
+            "{applied}"
+        );
+        let listed = result(list(
+            request("imports.list", json!({})),
+            Arc::clone(&context),
+        ));
+        let listed = listed["sessions"].as_array().unwrap();
+        assert_eq!(
+            listed.len(),
+            1,
+            "the unticked session is left out: {listed:?}"
+        );
+        assert!(
+            listed[0]["projectId"].is_string(),
+            "filed under the new project"
+        );
+
+        let archived = result(super::archive(
+            request("imports.archive", json!({"id": new_id.clone()})),
+            Arc::clone(&context),
+        ));
+        assert_eq!(archived["archived"], true);
+        let listed = result(list(
+            request("imports.list", json!({})),
+            Arc::clone(&context),
+        ));
+        assert_eq!(listed["sessions"][0]["archived"], true);
+        result(super::remove(
+            request("imports.remove", json!({"id": new_id})),
+            Arc::clone(&context),
+        ));
+        let listed = result(list(
+            request("imports.list", json!({})),
+            Arc::clone(&context),
+        ));
+        assert!(listed["sessions"].as_array().unwrap().is_empty());
+        assert!(other.exists(), "the agent's own file is untouched");
         std::fs::remove_dir_all(&root).ok();
     }
 }

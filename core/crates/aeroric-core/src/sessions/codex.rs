@@ -73,6 +73,11 @@ pub fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) 
                                     let t = b.get("type").and_then(|v| v.as_str())?;
                                     if matches!(t, "output_text" | "input_text" | "text") {
                                         let text = b.get("text").and_then(|v| v.as_str())?;
+                                        // AGENTS.md / environment context arrive as the
+                                        // first "user" message; they are not the prompt.
+                                        if role == "user" && is_injected_context(text) {
+                                            return None;
+                                        }
                                         if !text.trim().is_empty() {
                                             return Some(SessionContent::Text {
                                                 text: text.to_string(),
@@ -215,6 +220,14 @@ pub fn append_assistant_content(messages: &mut Vec<SessionMessage>, part: Sessio
             message_id: None,
         });
     }
+}
+
+/// Text the agent injects as a "user" message rather than the user typing it:
+/// wrapped blocks (`<environment_context>`, command wrappers) and Codex's
+/// `# AGENTS.md instructions for …` project instructions.
+pub fn is_injected_context(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with('<') || text.starts_with("# AGENTS.md instructions")
 }
 
 pub fn append_codex_user_message(
