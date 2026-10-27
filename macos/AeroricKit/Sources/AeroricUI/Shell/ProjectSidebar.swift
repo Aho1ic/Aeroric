@@ -19,6 +19,7 @@ public struct ProjectSidebar: View {
     private let onNewProjectTask: (String) -> Void
     private let onMoveSelection: (MoveCommandDirection) -> Void
     private let onOpenFolder: () -> Void
+    private let onOpenRemote: () -> Void
     private let onOpenSettings: () -> Void
     private let onAddProject: (String) -> Void
     private let onSessionAction: (String, SessionRowAction) -> Void
@@ -41,6 +42,7 @@ public struct ProjectSidebar: View {
         onNewProjectTask: @escaping (String) -> Void = { _ in },
         onMoveSelection: @escaping (MoveCommandDirection) -> Void = { _ in },
         onOpenFolder: @escaping () -> Void = {},
+        onOpenRemote: @escaping () -> Void = {},
         onOpenSettings: @escaping () -> Void = {},
         onAddProject: @escaping (String) -> Void = { _ in },
         onSessionAction: @escaping (String, SessionRowAction) -> Void = { _, _ in }
@@ -55,6 +57,7 @@ public struct ProjectSidebar: View {
         self.onNewProjectTask = onNewProjectTask
         self.onMoveSelection = onMoveSelection
         self.onOpenFolder = onOpenFolder
+        self.onOpenRemote = onOpenRemote
         self.onOpenSettings = onOpenSettings
         self.onAddProject = onAddProject
         self.onSessionAction = onSessionAction
@@ -285,15 +288,22 @@ public struct ProjectSidebar: View {
         }
     }
 
-    /// Folder picker → open (or re-open) as a project and select it.
+    /// First choose: a local folder, or a directory on an SSH host (2026-10-27).
     private var openFolderButton: some View {
-        Button(action: onOpenFolder) {
+        Menu {
+            Button("打开本地项目…", systemImage: "folder", action: onOpenFolder)
+                .accessibilityIdentifier("sidebar.open-local")
+            Button("打开远程项目…", systemImage: "globe", action: onOpenRemote)
+                .accessibilityIdentifier("sidebar.open-remote")
+        } label: {
             Image(systemName: "folder.badge.plus")
                 .foregroundStyle(AeroricColor.textTertiary)
         }
-        .buttonStyle(.borderless)
-        .help("打开文件夹为项目…")
-        .accessibilityLabel("打开文件夹为项目")
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("打开项目…")
+        .accessibilityLabel("打开项目")
         .accessibilityIdentifier("sidebar.open-folder")
     }
 

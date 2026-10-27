@@ -15,6 +15,7 @@ enum WorkspaceActions {
             switch command.id {
             // The shell handles task.new using its window-local selection.
             case "project.open": openProjectPanel(services: services)
+            case "project.open_remote": services.openRemoteRequested = true
             case "settings.show": SettingsWindowController.shared.show(state: services)
             default:
                 break

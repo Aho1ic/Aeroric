@@ -97,6 +97,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                     onNewProjectTask: { navigationSelection.wrappedValue = SessionNavigation.draft(projectID: $0) },
                     onMoveSelection: moveSidebarSelection,
                     onOpenFolder: { onCommand(PaletteCommand(id: "project.open", title: "打开项目…")) },
+                    onOpenRemote: { onCommand(PaletteCommand(id: "project.open_remote", title: "打开远程项目…")) },
                     onOpenSettings: { onCommand(PaletteCommand(id: "settings.show", title: "设置…")) },
                     onAddProject: { state.addProject(path: $0) },
                     onSessionAction: { state.sessionAction($0, $1) }

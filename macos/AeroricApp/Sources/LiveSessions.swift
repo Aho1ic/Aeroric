@@ -27,7 +27,7 @@ struct HostLiveSessionActions: LiveSessionActions {
     }
 
     func history(taskID: String) async throws -> [AeroricUI.SessionMessage] {
-        let page = try await client().historyPage(taskId: taskID, cursor: nil)
+        let page = try await client().fullHistory(taskId: taskID)
         return page.messages.map(SessionBlockMapping.message)
     }
 

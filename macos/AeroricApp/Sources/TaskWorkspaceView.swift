@@ -105,7 +105,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .files: .partial("只读：浏览当前项目的目录，点文件预览。新建、重命名、删除与编辑下一批接入。")
         case .git: .partial("只读：查看当前项目的更改、逐文件 diff、分支与历史。暂存、提交、推送等写操作下一批接入。")
         case .ide: .comingSoon("问题列表、符号大纲与调试会话。")
-        case .connections: .comingSoon("SSH 主机、主机密钥确认与 SFTP 文件传输。")
+        case .connections: .wired
         case .infrastructure: .comingSoon("Docker 容器与镜像、端口占用、Conda 环境。")
         case .database: .comingSoon("SQLite、Redis、MongoDB 的浏览与查询。")
         case .notebook: .comingSoon("项目笔记、同步与知识检索。")
@@ -182,6 +182,22 @@ struct TaskWorkspaceView: View {
     var body: some View {
         // Split so the type checker sees three small chains, not one large one.
         navigationHandlers(sessionHandlers(layout))
+            .sheet(isPresented: Binding(
+                get: { services.openRemoteRequested },
+                set: { services.openRemoteRequested = $0 }
+            )) {
+                OpenRemoteProjectSheet(
+                    store: services.sshHostsStore,
+                    onOpened: { id in
+                        services.openRemoteRequested = false
+                        Task { @MainActor in
+                            await services.refreshWorkspace()
+                            selection = id
+                        }
+                    },
+                    onCancel: { services.openRemoteRequested = false }
+                )
+            }
             .alert("原交办核对", isPresented: Binding(
                 get: { submissionCheck != nil },
                 set: { if !$0 { submissionCheck = nil } }
@@ -568,6 +584,13 @@ struct TaskWorkspaceView: View {
                 .accessibilityHidden(previewActive)
             } else if activeSection == .agentConfigs {
                 AgentConfigPage(store: services.agentConfigStore)
+                    .opacity(previewActive ? 0 : 1)
+                    .allowsHitTesting(!previewActive)
+                    .accessibilityHidden(previewActive)
+            } else if activeSection == .connections {
+                // A global page with its own header (design v3): no project
+                // breadcrumb, no "返回：…" to the last task.
+                SshHostsPage(store: services.sshHostsStore)
                     .opacity(previewActive ? 0 : 1)
                     .allowsHitTesting(!previewActive)
                     .accessibilityHidden(previewActive)
@@ -1000,7 +1023,7 @@ struct TaskWorkspaceView: View {
     @ViewBuilder
     private var sectionContent: some View {
         switch activeSection {
-        case .tasks, .attention, .canvas, .agentConfigs:
+        case .tasks, .attention, .canvas, .agentConfigs, .connections:
             EmptyView() // Mounted directly by centralContent.
         case .files:
             if let projectID = projectContextID, gitProjectPath != nil {
@@ -1038,28 +1061,6 @@ struct TaskWorkspaceView: View {
                     debugId: "default"
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        case .connections:
-            HSplitView {
-                VStack(spacing: 8) {
-                    ConnectionList(store: services.sshConnectionStore)
-                    SSHConnectionEditor { name, host, port, username, _ in
-                        var current = services.sshConnectionStore.connections
-                        current.append(
-                            AeroricUI.ConnectionStore.Connection(
-                                id: UUID().uuidString,
-                                name: name,
-                                host: host,
-                                port: port,
-                                username: username
-                            )
-                        )
-                        services.sshConnectionStore.ingest(current)
-                    }
-                }
-                .frame(minWidth: 260, maxWidth: 380, maxHeight: .infinity)
-                SFTPBrowser(store: services.sshConnectionStore, entries: [])
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         case .infrastructure:
             HSplitView {
@@ -1233,7 +1234,7 @@ struct HostSessionRouteActions: SessionRouteActions {
 
     func loadHistory(taskID: String) async throws -> [AeroricUI.SessionMessage] {
         guard let sessions = services.sessionsClient else { throw AppServices.ProjectError.notConnected }
-        let page = try await sessions.historyPage(taskId: taskID, cursor: nil)
+        let page = try await sessions.fullHistory(taskId: taskID)
         return page.messages.map(SessionBlockMapping.message)
     }
 

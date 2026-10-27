@@ -74,6 +74,21 @@ public struct SessionsClient: Sendable {
         return page
     }
 
+    /// Every page of `session.history`, oldest first (the host pages to fit one
+    /// frame). Stops after `maxPages`, keeping the newest.
+    public func fullHistory(taskId: String, maxPages: Int = 24) async throws -> SessionPage {
+        var page = try await historyPage(taskId: taskId, cursor: nil)
+        var messages = page.messages
+        var pages = 1
+        while page.hasMore, let cursor = page.nextCursor, pages < maxPages {
+            page = try await historyPage(taskId: taskId, cursor: cursor)
+            messages = page.messages + messages
+            pages += 1
+        }
+        page.messages = messages
+        return page
+    }
+
     // MARK: - session.export
 
     /// session.export：taskId + out（输出路径由用户指定，宿主校验输出路径）。

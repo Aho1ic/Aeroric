@@ -57,6 +57,10 @@ final class AppServices {
     /// Imported Claude/Codex sessions (M4); gated on the host's `imports` capability.
     let importBook = ImportBook()
     let agentUpgradeBook = AgentUpgradeBook()
+    /// SSH hosts (连接 page, open-remote-project sheet), 2026-10-27.
+    let sshHostsStore = SshHostsStore()
+    /// The sidebar's "打开远程项目…" asks the workspace to show its sheet.
+    var openRemoteRequested = false
     let keepAwakeStore = KeepAwakeStore()
     /// Canvas boards and node layout (M5); gated on the host's `canvas` capability.
     let canvasBook = CanvasBook()
@@ -220,6 +224,7 @@ final class AppServices {
                     )
                     // The import picker may add projects; show them at once.
                     self.importBook.onProjectsChanged = { [weak self] in await self?.refreshWorkspace() }
+                    self.sshHostsStore.attach(client: SshClient(connection: connection))
                     self.agentUpgradeBook.attach(
                         client: AgentUpgradeClient(connection: connection),
                         capabilityEnabled: advertised[AgentUpgradeClient.capability] == true
