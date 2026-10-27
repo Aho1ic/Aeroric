@@ -389,6 +389,8 @@ impl HostServices {
             since: Some(1),
             note: Some("Host-local read-only import of existing Claude/Codex sessions".into()),
         });
+        // 2026-10-27：SSH 远程原生会话的 askpass 票据兑换；仅本机 UDS。
+        crate::remote_sessions::register_remote_services(&mut set, Arc::clone(&context));
         // 2026-10-27：Agent 升级与新版本提醒；仅本机 UDS，升级只在用户点击时执行。
         crate::agent_upgrade_services::register_agent_upgrade_services(
             &mut set,

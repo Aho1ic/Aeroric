@@ -17,4 +17,4 @@ pub use codex_hooks::{
     build_codex_block, inject_codex_text, toml_quote, uninject_codex_text, CODEX_BEGIN, CODEX_END,
     CODEX_EVENTS,
 };
-pub use resources::{AERORIC_HOOK_SCRIPT, AERORIC_OMP_HOOK_SCRIPT};
+pub use resources::AERORIC_HOOK_SCRIPT;

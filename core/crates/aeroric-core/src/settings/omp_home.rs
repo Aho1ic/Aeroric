@@ -36,18 +36,6 @@ pub(crate) fn omp_home_for(agent: &str) -> Result<PathBuf, String> {
     crate::settings::custom_agent_home(agent)
 }
 
-/// 装进托管 home 的 omp hook(`hooks/post/*.js`)。
-///
-/// 扩展名**必须**是 `.js` 或 `.ts`:hook 路径经 `loadCapability<Hook>` 拿到后,
-/// 还要过 `extensibility/extensions/loader.ts:702` 的 `isExtensionFile`,而它只
-/// 认这两个后缀(:511-513)。`.mjs` 会被静默丢弃 —— 目录扫描能看到文件、hook 却
-/// 永远不加载,任务因此永远停在 running。
-///
-/// 文件名的 `*` 是 omp 的 tool 通配(`discovery/builtin.ts:707` 按 basename 去
-/// 扩展名解析);实际的事件订阅走 `pi.on`,与文件名里的 tool 无关。
-// hook 脚本的单一资源来源在 core(切片四);宿主只别名消费。
-use crate::agents::managed_home::AERORIC_OMP_HOOK_SCRIPT as OMP_HOOK_SCRIPT;
-
 /// 托管 config.yml 的受管内容。只写已核实的 omp settings 键:
 /// - `compaction.asyncEnabled: false`:关闭后台投机压缩,避免非预期的 token 消耗。
 ///
@@ -111,22 +99,13 @@ pub(crate) fn ensure_omp_home_for(agent: &str) -> Result<OmpHomePaths, String> {
     if !mcp_path.is_file() {
         crate::settings::atomic_write_private(&mcp_path, "{\n}\n")?;
     }
-    // omp 的 hook 发现路径:`<PI_CODING_AGENT_DIR>/hooks/{pre,post}/`
-    // (`discovery/builtin.ts::loadHooks`)。装在 post/ 下,文件名 `*` 表示对所有
-    // tool 生效;真正的事件订阅在脚本里用 `pi.on` 完成。
-    // hook_dir 已由 ensure_managed_home_dirs 以 owner-only 权限建好。
-    // 切片三:文件名以 core 的 OMP 不变量为唯一来源;写盘前断言 willContinue
-    // 短路在脚本里(INV-07)——没有短路的 hook 会让角标在自动续跑前闪灭。
-    let hook_path = hook_dir.join(crate::agents::omp::OMP_HOOK_FILE_NAME);
-    if !crate::agents::omp::omp_hook_source_guards_will_continue(OMP_HOOK_SCRIPT) {
-        return Err("aeroric-omp-hook.js lost its willContinue guard; refusing to install".into());
+    // 2026-10-27: omp runs only as a native session; status comes from the
+    // RPC protocol. Remove the hook earlier builds installed (ours only: it
+    // reads AERORIC_EVENT_DIR), and the `*.mjs` a 1.4.7 dev build left.
+    let hook_path = hook_dir.join("*.js");
+    if fs::read_to_string(&hook_path).is_ok_and(|content| content.contains("AERORIC_EVENT_DIR")) {
+        let _ = fs::remove_file(&hook_path);
     }
-    let hook_current = fs::read_to_string(&hook_path).ok();
-    if hook_current.as_deref() != Some(OMP_HOOK_SCRIPT) {
-        crate::settings::atomic_write_private(&hook_path, OMP_HOOK_SCRIPT)?;
-    }
-    // 1.4.7 开发期短暂装过 `*.mjs`;它过不了 isExtensionFile 但会留在目录里,
-    // 删掉免得日后排查时误以为 hook 已生效。
     let _ = fs::remove_file(hook_dir.join("*.mjs"));
     Ok(OmpHomePaths {
         home,
@@ -417,46 +396,6 @@ mod tests {
     }
 
     /// hook 是状态机的唯一来源:没有它任务会永远停在 running。
-    #[test]
-    fn bundled_hook_subscribes_agent_lifecycle_and_guards_on_task_env() {
-        assert!(OMP_HOOK_SCRIPT.contains("export default"));
-        assert!(OMP_HOOK_SCRIPT.contains("pi.on(\"agent_start\""));
-        assert!(OMP_HOOK_SCRIPT.contains("pi.on(\"agent_end\""));
-        assert!(OMP_HOOK_SCRIPT.contains("AERORIC_TASK_ID"));
-        assert!(OMP_HOOK_SCRIPT.contains("AERORIC_EVENT_DIR"));
-        // willContinue 是自动续跑,不是用户可见终态。
-        assert!(OMP_HOOK_SCRIPT.contains("willContinue"));
-    }
-
-    /// 子代理继承父的 extension 并重新注册 handler,它们的 agent_end 若也写 Stop,
-    /// 主任务会在还在跑的时候被标成 input_required(黄叹号)。ctx.hasUI 是唯一能
-    /// 分辨主交互会话的判别式:子代理创建时写死 false。删掉这道门 bug 立刻复发,
-    /// 而其余断言在带 bug 的脚本上照样通过,所以必须单独钉住。
-    #[test]
-    fn bundled_hook_reports_only_for_the_interactive_session() {
-        assert!(
-            OMP_HOOK_SCRIPT.contains("ctx?.hasUI !== true"),
-            "少了 hasUI 门,子代理终态会把主任务错标成等待输入"
-        );
-        assert_eq!(
-            OMP_HOOK_SCRIPT.matches("ctx?.hasUI !== true").count(),
-            3,
-            "三个 handler 都必须过 hasUI 门"
-        );
-        // 压缩的 deferredHandoff 分支会在主会话上发出 willContinue 未设的
-        // agent_end,hasUI 门挡不住;工具重新跑起来是唯一的复位信号。
-        assert!(
-            OMP_HOOK_SCRIPT.contains("pi.on(\"tool_execution_start\""),
-            "少了复位信号,压缩后粘住的 input_required 无法自愈"
-        );
-        assert!(OMP_HOOK_SCRIPT.contains("PostToolUse"));
-        // tool_call 是 fail-closed 控制钩子,超时/抛错会被转成 { block: true }。
-        assert!(
-            !OMP_HOOK_SCRIPT.contains("pi.on(\"tool_call\""),
-            "tool_call 会掐掉工具执行,观测用 tool_execution_start"
-        );
-    }
-
     #[test]
     fn omp_thinking_level_validation_rejects_unknown_levels() {
         assert!(is_valid_omp_thinking_level("off"));

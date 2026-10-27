@@ -30,6 +30,7 @@ pub mod notebook_services;
 pub mod platform_adapter;
 pub mod push_host;
 pub mod remote_headless;
+pub mod remote_sessions;
 pub mod search_services;
 pub mod secret_vault;
 pub mod services;

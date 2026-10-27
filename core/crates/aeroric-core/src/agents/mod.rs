@@ -18,9 +18,6 @@ pub mod upgrade;
 pub use environment::{
     aeroric_guard_ops, combined_omp_env_ops, omp_env_ops, terminal_env_ops, EnvOp,
 };
-pub use omp::{
-    omp_hook_extension_is_loadable, omp_hook_source_guards_will_continue, OMP_HOOK_FILE_NAME,
-};
 
 pub use launch::{
     claude_permission_args, claude_plan, codex_permission_args, codex_plan, dsh_permission_mode,

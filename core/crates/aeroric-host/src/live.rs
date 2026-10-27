@@ -27,7 +27,9 @@ use aeroric_core::sessions::live::claude::map::{
 use aeroric_core::sessions::live::codex::server::{
     process_launcher, spawn_checked, Launcher, ProcessSpec,
 };
-use aeroric_core::sessions::live::executor::{ClaudeKey, OmpKey, Route, Routing, ServerKey};
+use aeroric_core::sessions::live::executor::{
+    ClaudeKey, OmpKey, RemoteKey, Route, Routing, ServerKey,
+};
 use aeroric_core::sessions::live::omp::driver::{
     version_supported as omp_version_supported, OmpLauncher, OmpStart,
 };
@@ -200,6 +202,7 @@ impl Routing for HostRouting {
         match key {
             ServerKey::Agent(agent) => agent_launcher(&self.context, agent),
             ServerKey::Config(id) => config_launcher(Arc::clone(&self.context), id.clone()),
+            ServerKey::Remote(key) => remote_codex_launcher(Arc::clone(&self.context), key.clone()),
         }
     }
 
@@ -214,6 +217,84 @@ impl Routing for HostRouting {
     fn omp_launcher(&self, key: &OmpKey) -> OmpLauncher {
         omp_launcher(Arc::clone(&self.context), key.clone())
     }
+
+    /// SSH workspaces (2026-10-27): the three structured families of a
+    /// built-in agent, with the remote machine's own login and configuration.
+    /// An Agent configuration needs this Mac's loopback gateway, so it stays
+    /// refused (PTY path), as do custom wrappers that may not take the flags.
+    fn route_remote(
+        &self,
+        family: ProtocolFamily,
+        agent: &str,
+        agent_config_id: Option<&str>,
+        connection_id: &str,
+    ) -> Option<Route> {
+        if agent_config_id.is_some_and(|id| !id.trim().is_empty()) || !is_builtin(agent) {
+            return None;
+        }
+        let key = RemoteKey {
+            connection_id: connection_id.to_string(),
+            agent: agent.to_string(),
+        };
+        match family {
+            ProtocolFamily::Claude => Some(Route::RemoteClaude(key)),
+            ProtocolFamily::Codex => Some(Route::Codex(ServerKey::Remote(key))),
+            ProtocolFamily::Omp => Some(Route::RemoteOmp(key)),
+            _ => None,
+        }
+    }
+
+    fn remote_claude_launcher(&self, key: &RemoteKey) -> ClaudeLauncher {
+        let context = Arc::clone(&self.context);
+        let key = key.clone();
+        Arc::new(move |start: &ClaudeStart| {
+            crate::remote_sessions::spawn_remote(
+                &context,
+                &key.connection_id,
+                &start.cwd,
+                "claude",
+                &claude_args(start, true),
+                claude_version_supported,
+            )
+        })
+    }
+
+    fn remote_omp_launcher(&self, key: &RemoteKey) -> OmpLauncher {
+        let context = Arc::clone(&self.context);
+        let key = key.clone();
+        Arc::new(move |start: &OmpStart| {
+            let args = aeroric_core::agents::launch::omp_rpc_args(
+                &start.permission,
+                &start.cwd,
+                start.model.as_deref(),
+                start.effort.as_deref(),
+                start.resume.as_deref(),
+            );
+            crate::remote_sessions::spawn_remote(
+                &context,
+                &key.connection_id,
+                &start.cwd,
+                "omp",
+                &args,
+                omp_version_supported,
+            )
+        })
+    }
+}
+
+/// A remote `codex app-server` over one SSH connection.
+fn remote_codex_launcher(context: Arc<CoreContext>, key: RemoteKey) -> Launcher {
+    Arc::new(move || {
+        let cwd = "~".to_string();
+        crate::remote_sessions::spawn_remote(
+            &context,
+            &key.connection_id,
+            &cwd,
+            "codex",
+            &["app-server".to_string()],
+            aeroric_core::sessions::live::codex::map::version_supported,
+        )
+    })
 }
 
 /// `omp --mode rpc` with the managed home (`PI_CODING_AGENT_DIR`), never the

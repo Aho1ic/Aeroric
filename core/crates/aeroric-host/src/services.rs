@@ -4257,6 +4257,9 @@ fn session_list(
     ok(&request, json!({ "sessions": sessions }))
 }
 
+/// B4: at most this much of a remote transcript is read (its tail).
+const REMOTE_HISTORY_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
 fn session_history(
     request: Request,
     _service: std::sync::Arc<TaskService>,
@@ -4276,7 +4279,7 @@ fn session_history(
             "session.history requires params.taskId",
         );
     };
-    let Some((record, _project)) = find_task_record(&context, task_id) else {
+    let Some((record, project)) = find_task_record(&context, task_id) else {
         return failure(id, ErrorCode::NotFound, "no task with that id");
     };
     let (recorded_id, recorded_path) = aeroric_core::tasks::session_owner::current_session(&record);
@@ -4287,7 +4290,25 @@ fn session_history(
             "this task has no session transcript on disk yet",
         );
     };
-    let raw = match std::fs::read_to_string(&path) {
+    // B4: a remote session's transcript lives on that machine; read its tail over SSH.
+    let remote = match aeroric_core::tasks::launch_plan::working_directory(&record, &project) {
+        Some(aeroric_core::tasks::WorkingDirectory::Ssh { connection_id, .. }) => {
+            Some(connection_id)
+        }
+        _ => None,
+    };
+    let read = match &remote {
+        Some(connection_id) => crate::remote_sessions::read_remote_file(
+            &context,
+            connection_id,
+            &path,
+            REMOTE_HISTORY_MAX_BYTES,
+        )
+        .map(Option::unwrap_or_default)
+        .map_err(std::io::Error::other),
+        None => std::fs::read_to_string(&path),
+    };
+    let raw = match read {
         Ok(raw) => raw,
         // A new session's transcript appears with its first message (N6a D3).
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),

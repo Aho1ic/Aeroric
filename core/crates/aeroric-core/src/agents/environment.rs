@@ -50,7 +50,7 @@ pub fn terminal_env_ops(login_env: &[(String, String)]) -> Vec<EnvOp> {
     ops
 }
 
-/// Aeroric hook 守卫(`aeroric-hook.mjs` / `aeroric-omp-hook.js` 依靠
+/// Aeroric hook 守卫(`aeroric-hook.mjs` 依靠
 /// AERORIC_TASK_ID + AERORIC_EVENT_DIR 同时存在才工作;用户在 Aeroric 之外手动
 /// 跑 agent 时这些变量缺失,脚本立即 exit 0)。`event_dir` 为 `None` 时(宿主
 /// 侧 events 目录不可得)什么都不注入——与旧 `setup_aeroric_env` 的 if-let 一致。

@@ -3,4 +3,3 @@
 //! 消费脚本内容;改动脚本只动本目录下的文件。
 
 pub const AERORIC_HOOK_SCRIPT: &str = include_str!("aeroric-hook.mjs");
-pub const AERORIC_OMP_HOOK_SCRIPT: &str = include_str!("aeroric-omp-hook.js");

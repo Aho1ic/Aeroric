@@ -12,10 +12,51 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
+    // SSH_ASKPASS mode (remote native sessions): ssh runs us with only the
+    // prompt as argument and a one-time ticket in the environment.
+    if let Ok(ticket) = std::env::var(aeroric_host::remote_sessions::TICKET_ENV) {
+        let args: Vec<String> = std::env::args().collect();
+        if args.len() == 2 {
+            return std::process::ExitCode::from(askpass(&ticket, &args[1]).await);
+        }
+    }
     // clap 的参数错误默认 exit 2（= USAGE），与 Action 4 对齐；这里不覆盖。
     let cli = Cli::parse();
     let code = dispatch(cli).await;
     std::process::ExitCode::from(u8::try_from(code).unwrap_or(1))
+}
+
+/// Trade the ticket for the connection's password and print it for ssh. Any
+/// failure prints nothing and exits non-zero, so ssh gives up cleanly.
+async fn askpass(ticket: &str, prompt: &str) -> u8 {
+    if !aeroric_core::sessions::live::remote::is_password_prompt(prompt) {
+        return 1;
+    }
+    let Ok(data_dir) = std::env::var(aeroric_host::remote_sessions::DATA_DIR_ENV) else {
+        return 1;
+    };
+    let client_id = uuid::Uuid::new_v4().to_string();
+    let Ok(mut client) =
+        client::HostClient::connect(std::path::Path::new(&data_dir), &client_id).await
+    else {
+        return 1;
+    };
+    match client
+        .call(
+            aeroric_host::remote_sessions::ASKPASS_METHOD,
+            serde_json::json!({ "ticket": ticket, "prompt": prompt }),
+        )
+        .await
+    {
+        Ok(result) => match result.get("password").and_then(serde_json::Value::as_str) {
+            Some(password) => {
+                println!("{password}");
+                0
+            }
+            None => 1,
+        },
+        Err(_) => 1,
+    }
 }
 
 async fn dispatch(cli: Cli) -> i32 {

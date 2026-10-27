@@ -31,6 +31,15 @@ const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 pub enum ServerKey {
     Agent(String),
     Config(String),
+    /// One remote `codex app-server` per (SSH connection, agent).
+    Remote(RemoteKey),
+}
+
+/// A session on another machine over SSH (2026-10-27).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RemoteKey {
+    pub connection_id: String,
+    pub agent: String,
 }
 
 /// Which Claude launch a run uses (N5): one process per session, so the key
@@ -55,6 +64,8 @@ pub enum Route {
     Codex(ServerKey),
     Claude(ClaudeKey),
     Omp(OmpKey),
+    RemoteClaude(RemoteKey),
+    RemoteOmp(RemoteKey),
 }
 
 /// What the host decides per run: whether `(family, agent, agent configuration)`
@@ -76,6 +87,22 @@ pub trait Routing: Send + Sync {
     }
     fn omp_launcher(&self, _key: &OmpKey) -> OmpLauncher {
         std::sync::Arc::new(|_| Err("这个宿主不支持 omp 原生会话".to_string()))
+    }
+    /// A session on an SSH workspace; `None` = the PTY executor.
+    fn route_remote(
+        &self,
+        _family: ProtocolFamily,
+        _agent: &str,
+        _agent_config_id: Option<&str>,
+        _connection_id: &str,
+    ) -> Option<Route> {
+        None
+    }
+    fn remote_claude_launcher(&self, _key: &RemoteKey) -> ClaudeLauncher {
+        std::sync::Arc::new(|_| Err("这个宿主不支持远程原生会话".to_string()))
+    }
+    fn remote_omp_launcher(&self, _key: &RemoteKey) -> OmpLauncher {
+        std::sync::Arc::new(|_| Err("这个宿主不支持远程原生会话".to_string()))
     }
 }
 
@@ -179,11 +206,17 @@ impl StructuredExecutor {
         if !matches!(
             family,
             ProtocolFamily::Codex | ProtocolFamily::Claude | ProtocolFamily::Omp
-        ) || !matches!(cwd, WorkingDirectory::Local { .. })
-        {
+        ) {
             return None;
         }
-        self.routing.route(family, agent, config)
+        match cwd {
+            WorkingDirectory::Local { .. } => self.routing.route(family, agent, config),
+            WorkingDirectory::Ssh { connection_id, .. } => {
+                self.routing
+                    .route_remote(family, agent, config, connection_id)
+            }
+            WorkingDirectory::Wsl { .. } => None,
+        }
     }
 
     fn claude_launcher(&self, key: &ClaudeKey) -> ClaudeLauncher {
@@ -214,8 +247,15 @@ impl StructuredExecutor {
             .registry
             .log(&spec.task_id)
             .unwrap_or_else(|| SharedLog::new(&spec.task_id));
-        self.turn_changes
-            .watch(&spec.task_id, &spec.project_id, &spec.cwd);
+        // A05 snapshots the working tree with local git; a remote one is not here.
+        let remote = matches!(
+            route,
+            Route::RemoteClaude(_) | Route::RemoteOmp(_) | Route::Codex(ServerKey::Remote(_))
+        );
+        if !remote {
+            self.turn_changes
+                .watch(&spec.task_id, &spec.project_id, &spec.cwd);
+        }
         let session: Arc<dyn SessionDriver> = match route {
             Route::Codex(key) => CodexSession::start(
                 spec.clone(),
@@ -238,6 +278,42 @@ impl StructuredExecutor {
                     config_dir: self.routing.claude_config_dir(key),
                 },
                 self.claude_launcher(key),
+                Arc::clone(&self.sink),
+                log.clone(),
+                &self.runtime,
+            ),
+            Route::RemoteClaude(key) => ClaudeSession::start(
+                ClaudeSessionSpec {
+                    task_id: spec.task_id.clone(),
+                    project_id: spec.project_id.clone(),
+                    generation: spec.generation,
+                    agent: spec.agent.clone(),
+                    cwd: spec.cwd.clone(),
+                    permission: spec.permission.clone(),
+                    model: spec.model.clone(),
+                    effort: spec.effort.clone(),
+                    session_id: spec.thread_id.clone(),
+                    // Transcript paths are the remote machine's (`~` expands there).
+                    config_dir: Some(std::path::PathBuf::from("~/.claude")),
+                },
+                self.routing.remote_claude_launcher(key),
+                Arc::clone(&self.sink),
+                log.clone(),
+                &self.runtime,
+            ),
+            Route::RemoteOmp(key) => OmpSession::start(
+                OmpSessionSpec {
+                    task_id: spec.task_id.clone(),
+                    project_id: spec.project_id.clone(),
+                    generation: spec.generation,
+                    agent: spec.agent.clone(),
+                    cwd: spec.cwd.clone(),
+                    permission: spec.permission.clone(),
+                    model: spec.model.clone(),
+                    effort: spec.effort.clone(),
+                    session: spec.thread_id.clone(),
+                },
+                self.routing.remote_omp_launcher(key),
                 Arc::clone(&self.sink),
                 log.clone(),
                 &self.runtime,

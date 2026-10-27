@@ -8,6 +8,7 @@ pub mod claude;
 pub mod codex;
 pub mod executor;
 pub mod omp;
+pub mod remote;
 pub mod turn_changes;
 pub mod update;
 

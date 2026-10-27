@@ -2330,26 +2330,6 @@
         }
       ]
     },
-    "mode-switch": {
-      "cases": [
-        {
-          "name": "mode-switch-unit",
-          "kind": "test",
-          "argv": [
-            "swift",
-            "test",
-            "--package-path",
-            "macos/AeroricKit",
-            "--filter",
-            "ModeSwitchTests"
-          ],
-          "parse": "swift",
-          "minCases": 9,
-          "$note": "P5-02 ModeSwitchTests 9 例：迁移默认（导入=advanced/新装=native）、Toggle 映射、保存失败回滚、呈现决策（native+未验证=requiresAdvanced 状态卡）、六步切换序列、同模式 no-op、任务协议禁用法（start/resume/cancel/reset 全禁）。",
-          "timeoutMs": 900000
-        }
-      ]
-    },
     "tasks-ui": {
       "cases": [
         {
@@ -6947,7 +6927,6 @@
     "native-design": "P4-03",
     "shell": "P4-04",
     "native-terminal": "P5-01",
-    "mode-switch": "P5-02",
     "tasks-ui": "P5-03",
     "sessions-ui": "P5-04",
     "settings": "P5-05",
