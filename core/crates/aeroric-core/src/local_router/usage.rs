@@ -685,6 +685,7 @@ mod tests {
     use uuid::Uuid;
 
     fn temp_database_path() -> PathBuf {
+        crate::test_support::raise_open_file_limit();
         std::env::temp_dir().join(format!("aeroric-router-{}.sqlite3", Uuid::new_v4()))
     }
 

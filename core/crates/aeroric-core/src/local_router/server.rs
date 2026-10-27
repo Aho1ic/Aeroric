@@ -2363,6 +2363,7 @@ mod tests {
     }
 
     fn temp_database_path() -> PathBuf {
+        crate::test_support::raise_open_file_limit();
         std::env::temp_dir().join(format!(
             "aeroric-router-integration-{}.sqlite3",
             Uuid::new_v4()
@@ -2376,6 +2377,7 @@ mod tests {
     }
 
     async fn start_mock_upstream(app: Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        crate::test_support::raise_open_file_limit();
         let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap();

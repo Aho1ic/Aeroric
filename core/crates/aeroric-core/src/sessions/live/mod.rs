@@ -3,9 +3,9 @@
 //! status; [`executor::StructuredExecutor`] puts drivers behind the existing
 //! `TaskExecutor` port so the task service and its reducer stay unchanged.
 
+pub mod auto_check;
 pub mod claude;
 pub mod codex;
-pub mod auto_check;
 pub mod executor;
 pub mod turn_changes;
 pub mod update;

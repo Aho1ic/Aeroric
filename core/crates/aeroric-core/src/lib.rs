@@ -60,3 +60,6 @@ pub use storage_lock::{
 pub fn crate_name() -> &'static str {
     "aeroric-core"
 }
+
+#[cfg(test)]
+pub(crate) mod test_support;
