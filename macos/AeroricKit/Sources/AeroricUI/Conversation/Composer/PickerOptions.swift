@@ -84,7 +84,7 @@ public enum ComposerPickerOptions {
                 sections: [
                     PickerSection(id: "builtin", title: "本机登录", options: builtIn),
                     PickerSection(id: "connections", title: "我的连接", options: connections),
-                    PickerSection(id: "configs", title: "Agent 配置", options: configs),
+                    PickerSection(id: "configs", title: "Agent 预设", options: configs),
                 ].filter { !$0.options.isEmpty },
                 note: rows.isEmpty ? "\(AgentGlyph.displayName(for: harness)) 还没有可用的登录或连接：安装并登录它，或在侧栏“Agent 配置 → 连接”里新建连接。" : nil
             )

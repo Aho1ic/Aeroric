@@ -407,12 +407,12 @@ struct ConfigsPane: View {
 
     var body: some View {
         MasterDetail {
-            ConfigListColumn("Agent 配置", newTitle: "新建", newIdentifier: "agent-config.new-config",
+            ConfigListColumn("Agent 预设", newTitle: "新建", newIdentifier: "agent-config.new-config",
                              onNew: { store.newConfig() }) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: AeroricSpace.xxs) {
                         if store.document.configs.isEmpty {
-                            Text("还没有自定义配置。已保存的连接会直接出现在新建任务里；需要号池、自动路由或备用模型时再新建。")
+                            Text("还没有 Agent 预设。已保存的连接会直接出现在新建任务里；需要号池、自动路由或备用模型时再新建。")
                                 .font(.system(size: AeroricType.caption))
                                 .foregroundStyle(AeroricColor.textTertiary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -444,7 +444,7 @@ struct ConfigsPane: View {
                 } else {
                     ConfigEmptyDetail(systemImage: "slider.horizontal.3", title: "选择左侧的配置，或者新建一个",
                                       message: "Agent 配置 = Harness + 用哪些连接（单个连接、号池，或按模型自动路由）+ 默认模型和备用模型。",
-                                      actionTitle: "新建 Agent 配置") { store.newConfig() }
+                                      actionTitle: "新建 Agent 预设") { store.newConfig() }
                 }
             }
             .padding(.bottom, 72)

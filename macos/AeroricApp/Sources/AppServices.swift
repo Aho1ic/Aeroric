@@ -56,6 +56,7 @@ final class AppServices {
     let legacyCleanupStore = LegacyCleanupStore()
     /// Imported Claude/Codex sessions (M4); gated on the host's `imports` capability.
     let importBook = ImportBook()
+    let agentUpgradeBook = AgentUpgradeBook()
     let keepAwakeStore = KeepAwakeStore()
     /// Canvas boards and node layout (M5); gated on the host's `canvas` capability.
     let canvasBook = CanvasBook()
@@ -222,6 +223,10 @@ final class AppServices {
                     )
                     // The import picker may add projects; show them at once.
                     self.importBook.onProjectsChanged = { [weak self] in await self?.refreshWorkspace() }
+                    self.agentUpgradeBook.attach(
+                        client: AgentUpgradeClient(connection: connection),
+                        capabilityEnabled: advertised[AgentUpgradeClient.capability] == true
+                    )
                     self.canvasBook.attach(
                         client: CanvasClient(connection: connection),
                         capabilityEnabled: advertised[CanvasClient.capability] == true

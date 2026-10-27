@@ -334,6 +334,8 @@ struct AeroricNativeApp: App {
                 AnyView(TaskWorkspaceView(services: services, selection: selection))
             }
         )
+            // Versions and upgrades for the session capsule and Agent 升级.
+            .environment(services.agentUpgradeBook)
             // M4: first-launch onboarding once the host is ready.
             .sheet(isPresented: Binding(
                 get: { OnboardingFlow.shouldPresent(completed: onboardingCompleted, phase: services.phaseSnapshot) },

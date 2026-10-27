@@ -43,7 +43,7 @@ final class NewSessionLayoutTests: XCTestCase {
             config("claude", harness: "claude"),
         ]
         let menu = ComposerPickerOptions.configurations(catalogue, draft: NewSessionDraft(), harness: "codex")
-        XCTAssertEqual(menu.sections.map(\.title), ["本机登录", "我的连接", "Agent 配置"],
+        XCTAssertEqual(menu.sections.map(\.title), ["本机登录", "我的连接", "Agent 预设"],
                        "2026-10-27: saved connections are offered directly")
         XCTAssertEqual(menu.sections[1].options.first?.detail, "经本机网关")
         XCTAssertEqual(menu.sections[2].options.first?.detail, "经本机网关 · 自定义配置")

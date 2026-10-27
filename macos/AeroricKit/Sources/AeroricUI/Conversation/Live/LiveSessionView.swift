@@ -11,6 +11,7 @@ public struct LiveSessionView: View {
     /// Scroll to this approval card when it changes (a clicked notification).
     let focusApproval: String?
     @State private var draft = ""
+    @Environment(AgentUpgradeBook.self) private var upgrades: AgentUpgradeBook?
     @State private var infoCollapsed: Bool
     @AppStorage(SessionInfoLayout.widthKey) private var infoWidth = Double(SessionInfoLayout.defaultWidth)
     @State private var dragStartWidth: Double?
@@ -59,6 +60,9 @@ public struct LiveSessionView: View {
             )
             HStack(spacing: 0) {
                 conversation
+                    .overlay(alignment: .top) {
+                        if let upgrades { AgentUpdateCapsule(book: upgrades, family: store.family) }
+                    }
                 if showsColumn {
                     infoResizeHandle
                     VStack(spacing: 0) {
@@ -386,6 +390,13 @@ public struct LiveSessionView: View {
     private func send() {
         let text = draft
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // Below the native-session minimum the agent cannot run: keep the draft
+        // and send it once the one-click upgrade succeeds.
+        if let upgrades, let harness = upgrades.harness(forFamily: store.family), harness.status == .required {
+            upgrades.whenUpgraded(harness.agent) { send() }
+            store.errorText = "\(harness.title) 需要先升级，升级完成后会自动发送这条消息"
+            return
+        }
         draft = ""
         Task { @MainActor in
             do {

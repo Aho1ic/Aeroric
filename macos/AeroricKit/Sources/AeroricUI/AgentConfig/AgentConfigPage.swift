@@ -6,6 +6,7 @@ import SwiftUI
 /// an editor on the right; nothing is saved until the user clicks 保存 (G3).
 public struct AgentConfigPage: View {
     @Bindable var store: AgentConfigStore
+    @Environment(AgentUpgradeBook.self) private var upgrades: AgentUpgradeBook?
 
     public init(store: AgentConfigStore) { self.store = store }
 
@@ -16,7 +17,8 @@ public struct AgentConfigPage: View {
                     .init(value: .connections, title: "连接", systemImage: "link"),
                     .init(value: .pools, title: "号池", systemImage: "square.stack.3d.up"),
                     .init(value: .routes, title: "模型路由", systemImage: "arrow.triangle.branch"),
-                    .init(value: .configs, title: "Agent 配置", systemImage: "slider.horizontal.3"),
+                    .init(value: .configs, title: "Agent 预设", systemImage: "slider.horizontal.3"),
+                    .init(value: .upgrades, title: "Agent 升级", systemImage: "arrow.up.circle"),
                 ])
                 .fixedSize()
                 Spacer(minLength: 0)
@@ -34,6 +36,7 @@ public struct AgentConfigPage: View {
                 case .pools: PoolsPane(store: store)
                 case .routes: RoutesPane(store: store)
                 case .configs: ConfigsPane(store: store)
+                case .upgrades: AgentUpgradePane(book: upgrades)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -303,7 +303,7 @@ struct AgentsSettingsPane: View {
                 }
             }
             SettingsCard {
-                SettingsRow("管理 Agent 配置", detail: "第三方 API 连接、号池、模型路由与 Agent 配置，在主窗口侧栏的“Agent 配置”页。") {
+                SettingsRow("管理 Agent 配置", detail: "第三方 API 连接、号池、模型路由、Agent 预设与 Agent 升级，在主窗口侧栏的“Agent 配置”页。") {
                     if let openAgentConfig {
                         Button("打开 Agent 配置") { openAgentConfig() }
                             .accessibilityIdentifier("settings.agents.open-config")
