@@ -276,6 +276,17 @@ public final class AgentConfigStore {
         probe = nil
     }
 
+    /// Append a placeholder model to the connection draft. The name is worked
+    /// out before the write: reading `connectionDraft` inside its own mutation
+    /// is an exclusivity violation that aborts the app.
+    public func addManualModel() {
+        guard let draft = connectionDraft else { return }
+        let taken = Set(draft.models.map(\.upstreamId))
+        var number = draft.models.count + 1
+        while taken.contains("model-\(number)") { number += 1 }
+        connectionDraft?.models.append(ACC.ModelEntry(upstreamId: "model-\(number)"))
+    }
+
     public func newConnection() {
         selectedConnection = nil
         var draft = ACC.Connection(id: AgentConfigText.newID("conn"), label: "新连接")

@@ -186,4 +186,17 @@ final class AgentConfigStoreTests: XCTestCase {
         await store.refreshStatus()
         XCTAssertTrue(store.reasoningStripped.isEmpty)
     }
+
+    /// Crash 2026-10-26: "新建连接 → 手动添加" read the draft inside its own
+    /// mutation and aborted with an exclusivity conflict.
+    func testAddingAModelByHandToANewConnection() async {
+        let store = AgentConfigStore(backend: FakeBackend())
+        await store.refresh()
+        store.newConnection()
+        store.addManualModel()
+        store.addManualModel()
+        store.connectionDraft?.models.remove(at: 0)
+        store.addManualModel()
+        XCTAssertEqual(store.connectionDraft?.models.map(\.upstreamId), ["model-2", "model-3"])
+    }
 }

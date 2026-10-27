@@ -166,9 +166,8 @@ struct ConnectionsPane: View {
                     .disabled(store.selectedConnection == nil || store.connectionDirty)
                     .help(store.connectionDirty ? "先保存连接" : "从上游的 /models 拉取，合并进下表；已有的条目和你改过的字段保留。")
                     .accessibilityIdentifier("agent-config.fetch-models")
-                Button("手动添加") {
-                    store.connectionDraft?.models.append(ACC.ModelEntry(upstreamId: "model-\(draft.wrappedValue.models.count + 1)"))
-                }
+                Button("手动添加") { store.addManualModel() }
+                    .accessibilityIdentifier("agent-config.add-model")
                 Spacer()
                 Text("映射名相同的模型会组成一条路由，故障时自动切换。")
                     .font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)
