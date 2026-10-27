@@ -796,11 +796,11 @@ mod tests {
 
         let error = run(&b.path, "notebook: test round").unwrap_err();
 
-        assert!(
-            error.contains("unrelated histories") || error.contains("无关的历史"),
-            "error = {error}"
-        );
-        // b 自己的东西还在,没有被这次失败动过。
+        // 判据看行为而不是 git 的文案:git 按系统语言输出(英文 "unrelated histories"、
+        // 简体"无关的历史"、繁体"不相關的歷史"……),匹配文字在别的语言下必然误报。
+        assert!(!error.trim().is_empty());
+        // a 的库没有被拼进来,b 自己的东西还在,没有被这次失败动过。
+        assert!(!b.path.join("from-a.md").exists(), "error = {error}");
         assert_eq!(b.read("from-b.md"), "b");
     }
 
