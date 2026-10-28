@@ -91,9 +91,12 @@ struct MasterDetail<List: View, Detail: View, Overlay: View>: View {
     let list: List
     let detail: Detail
     let overlay: Overlay
+    /// An empty state: the detail sits in the middle of the pane (2026-10-28).
+    var centered = false
 
-    init(@ViewBuilder list: () -> List, @ViewBuilder detail: () -> Detail,
+    init(centered: Bool = false, @ViewBuilder list: () -> List, @ViewBuilder detail: () -> Detail,
          @ViewBuilder overlay: () -> Overlay) {
+        self.centered = centered
         self.list = list()
         self.detail = detail()
         self.overlay = overlay()
@@ -108,23 +111,27 @@ struct MasterDetail<List: View, Detail: View, Overlay: View>: View {
                 .frame(width: 260)
                 .frame(maxHeight: .infinity, alignment: .top)
             HairlineDivider(.vertical)
-            ScrollView {
-                // Centred, so the margins either side are even rather than a
-                // wide dark band on the right.
-                detail
-                    .frame(maxWidth: 820, alignment: .leading)
-                    .padding(.horizontal, AeroricSpace.huge)
-                    .padding(.vertical, AeroricSpace.xxxl)
-                    .frame(maxWidth: .infinity)
+            GeometryReader { viewport in
+                ScrollView {
+                    // Centred, so the margins either side are even rather than a
+                    // wide dark band on the right; an empty state also sits
+                    // halfway down rather than near the top.
+                    detail
+                        .frame(maxWidth: 820, alignment: .leading)
+                        .padding(.horizontal, AeroricSpace.huge)
+                        .padding(.vertical, AeroricSpace.xxxl)
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: centered ? viewport.size.height : 0)
+                }
+                .scrollIndicators(.hidden)
             }
-            .scrollIndicators(.hidden)
             .overlay(alignment: .bottom) { overlay }
         }
     }
 }
 
 extension MasterDetail where Overlay == EmptyView {
-    init(@ViewBuilder list: () -> List, @ViewBuilder detail: () -> Detail) {
-        self.init(list: list, detail: detail, overlay: { EmptyView() })
+    init(centered: Bool = false, @ViewBuilder list: () -> List, @ViewBuilder detail: () -> Detail) {
+        self.init(centered: centered, list: list, detail: detail, overlay: { EmptyView() })
     }
 }

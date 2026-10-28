@@ -16,7 +16,7 @@ public struct ContentBlock: View {
         switch block {
         case let .text(text):
             Markdown(text)
-                .markdownTheme(.aeroric)
+                .markdownTheme(.aeroric(AeroricType.conversation))
                 .markdownImageProvider(NoImageProvider())
                 .markdownInlineImageProvider(NoInlineImageProvider())
                 .textSelection(.enabled)
@@ -188,11 +188,13 @@ struct NoInlineImageProvider: InlineImageProvider {
 }
 
 extension Theme {
-    /// System text at 13pt, JetBrains Mono for code, DSH colour roles.
-    @MainActor static let aeroric = Theme()
+    /// System text at the session's own size (设置 → 外观 → 会话), JetBrains
+    /// Mono for code, DSH colour roles.
+    @MainActor static func aeroric(_ size: CGFloat) -> Theme {
+        Theme()
         .text {
             ForegroundColor(AeroricColor.text)
-            FontSize(13)
+            FontSize(size)
         }
         .code {
             FontFamily(.custom("JetBrainsMono-Regular"))
@@ -225,7 +227,7 @@ extension Theme {
                 configuration.label
                     .markdownTextStyle {
                         FontFamily(.custom("JetBrainsMono-Regular"))
-                        FontSize(12)
+                        FontSize(size - 1)
                         ForegroundColor(AeroricColor.textSecondary)
                     }
                     .padding(10)
@@ -241,4 +243,5 @@ extension Theme {
                     Rectangle().fill(AeroricColor.separator2).frame(width: 2)
                 }
         }
+    }
 }

@@ -19,6 +19,8 @@ public struct ImportsClient: Sendable {
         public var root: String
         public var grantedAtMs: UInt64?
         public var sessions: Int
+        /// Sessions left out at import time (S8), offered back by the picker.
+        public var excluded: Int = 0
         public var id: String { agent }
     }
 
@@ -54,9 +56,12 @@ public struct ImportsClient: Sendable {
         public var tooLarge: Bool
         /// Hidden from the projects and 未归类, listed under 已归档.
         public var archived: Bool
+        /// The agent's own session id, read off the file name (复制 Session ID).
+        public var sessionId: String?
 
         public init(id: String, agent: String, cwd: String?, title: String, lastAtMs: UInt64,
-                    projectId: String?, tooLarge: Bool, archived: Bool = false) {
+                    projectId: String?, tooLarge: Bool, archived: Bool = false, sessionId: String? = nil) {
+            self.sessionId = sessionId
             self.id = id
             self.agent = agent
             self.cwd = cwd
@@ -178,7 +183,8 @@ public struct ImportsClient: Sendable {
             guard let agent = row["agent"]?.stringValue else { return nil }
             return AgentStatus(agent: agent, granted: row["granted"]?.boolValue ?? false,
                                root: row["root"]?.stringValue ?? "", grantedAtMs: number(row["grantedAtMs"]),
-                               sessions: Int(number(row["sessions"]) ?? 0))
+                               sessions: Int(number(row["sessions"]) ?? 0),
+                               excluded: Int(number(row["excluded"]) ?? 0))
         }
         return Status(agents: agents, lastScanAtMs: number(value.fields["lastScanAtMs"]),
                       lastError: value.fields["lastError"]?.stringValue)
@@ -204,7 +210,16 @@ public struct ImportsClient: Sendable {
                                title: row["title"]?.stringValue ?? id, lastAtMs: number(row["lastAtMs"]) ?? 0,
                                projectId: row["projectId"]?.stringValue,
                                tooLarge: row["tooLarge"]?.boolValue ?? false,
-                               archived: row["archived"]?.boolValue ?? false)
+                               archived: row["archived"]?.boolValue ?? false,
+                               sessionId: row["sourcePath"]?.stringValue.flatMap(Self.sessionID(fromSource:)))
+    }
+
+    /// Claude names a transcript `<uuid>.jsonl`; Codex `rollout-<time>-<uuid>.jsonl`.
+    public static func sessionID(fromSource path: String) -> String? {
+        let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        guard stem.hasPrefix("rollout-") else { return stem.isEmpty ? nil : stem }
+        let tail = String(stem.suffix(36))
+        return UUID(uuidString: tail) != nil ? tail : nil
     }
 
     /// `PreviewSession` is the session flattened plus `selected`.

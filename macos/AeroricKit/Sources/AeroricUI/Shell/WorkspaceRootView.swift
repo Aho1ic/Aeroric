@@ -100,7 +100,11 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                     onOpenRemote: { onCommand(PaletteCommand(id: "project.open_remote", title: "打开远程项目…")) },
                     onOpenSettings: { onCommand(PaletteCommand(id: "settings.show", title: "设置…")) },
                     onAddProject: { state.addProject(path: $0) },
-                    onSessionAction: { state.sessionAction($0, $1) }
+                    onSessionAction: { state.sessionAction($0, $1) },
+                    onProjectAction: { state.projectAction($0, $1) },
+                    projectGroupNames: state.projectGroupNames,
+                    agentChoices: { state.agentChoices(projectID: $0) },
+                    allSessions: { state.allSessions(projectID: $0) }
                 )
                 Group {
                     if railShown {

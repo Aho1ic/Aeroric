@@ -124,8 +124,10 @@ extension AppServices {
             for effort in configuration.options.efforts where !efforts.contains(effort) { efforts.append(effort) }
         }
         let projectPath = taskStore.projects.first { $0.id == task.projectID }?.path
+        let pinned = task.agentConfigID.flatMap { id in configurations.first { $0.id == id } }
         return LiveSessionFacts(
-            agent: task.agent, configurationTitle: configurations.first?.title,
+            agent: task.agent, configurationTitle: pinned?.title ?? configurations.first?.title,
+            presetTitle: pinned?.title,
             workingDirectory: task.worktreePath ?? projectPath, branch: task.worktreeBranch,
             startedAt: task.createdAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) },
             additions: task.additions, deletions: task.deletions, models: models, efforts: efforts,

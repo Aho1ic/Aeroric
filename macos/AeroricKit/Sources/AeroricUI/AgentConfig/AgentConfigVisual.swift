@@ -309,22 +309,68 @@ struct FloatingSaveBar: View {
 /// A list row's content (the List keeps selection and arrow keys).
 struct ConfigListItem: View {
     let title: String
-    let subtitle: String
-    var status: Color?
+    /// The official logo of the harness behind the row (2026-10-28).
+    var harness: String? = nil
+    /// Used when there is no harness (a pool, an unknown wire).
+    var systemImage: String? = nil
+    /// A short muted fact before the tag, e.g. `8 个模型`.
+    var detail: String? = nil
+    var tag: String? = nil
+    var tagTint: Color = AeroricColor.textTertiary
 
     var body: some View {
-        HStack(spacing: AeroricSpace.m) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.system(size: AeroricType.body, weight: .medium)).lineLimit(1)
-                Text(subtitle).font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)
+        HStack(spacing: AeroricSpace.s) {
+            Group {
+                if HarnessLogo.asset(harness: harness, agent: nil) != nil {
+                    HarnessLogo(harness: harness, agent: nil, size: 14)
+                } else {
+                    Image(systemName: systemImage ?? "link")
+                        .font(.system(size: 12))
+                        .foregroundStyle(AeroricColor.textSecondary)
+                }
+            }
+            .frame(width: 16)
+            Text(title)
+                .font(.system(size: AeroricType.body, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: AeroricSpace.xs)
+            if let detail {
+                Text(detail)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
                     .lineLimit(1)
             }
-            Spacer(minLength: 0)
-            if let status {
-                Circle().fill(status).frame(width: 7, height: 7)
+            if let tag {
+                Text(tag)
+                    .font(.system(size: AeroricType.caption - 1, weight: .medium))
+                    .foregroundStyle(tagTint)
+                    .padding(.horizontal, AeroricSpace.s)
+                    .padding(.vertical, 1)
+                    .background(tagTint.opacity(0.13), in: Capsule(style: .continuous))
+                    .lineLimit(1)
             }
         }
-        .padding(.vertical, AeroricSpace.xs)
+    }
+}
+
+extension AgentConfigText {
+    /// The harness a connection's wire speaks to, for its logo.
+    static func connectionHarness(_ connection: AgentConnectionsClient.Connection) -> String? {
+        if connection.protocols.contains("responses") { return "codex" }
+        if connection.protocols.contains("messages") { return "claude" }
+        return nil
+    }
+}
+
+extension AgentConfigText.ConnectionStatus {
+    var title: String {
+        switch self {
+        case .disabled: "已停用"
+        case .missingKey: "缺少 key"
+        case .cooling: "冷却中"
+        case .ready: "正常"
+        }
     }
 }
 

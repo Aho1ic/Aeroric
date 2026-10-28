@@ -232,7 +232,8 @@ struct AppearanceSettingsPane: View {
                 }
             }
             SettingsCard("字号") {
-                sizeRow(.text, title: "正文", detail: "界面与对话文字")
+                sizeRow(.text, title: "正文", detail: "界面文字")
+                sizeRow(.conversation, title: "会话", detail: "会话里的消息正文与代码块")
                 sizeRow(.code, title: "代码", detail: "代码、diff 与工具调用详情")
                 sizeRow(.terminal, title: "终端", detail: "内嵌终端")
             }
@@ -410,6 +411,14 @@ struct ImportsSettingsPane: View {
                         .disabled(book.busyAgents.contains("apply"))
                         .accessibilityIdentifier("settings.imports.pick")
                 }
+                if excludedCount > 0 {
+                    SettingsRow("已排除 \(excludedCount) 个会话",
+                                detail: "之前导入时没有勾选的会话不会显示在侧栏；在“选择会话…”里重新勾选即可找回。") {
+                        Button("重新选择") { openPicker() }
+                            .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                            .accessibilityIdentifier("settings.imports.reselect")
+                    }
+                }
             }
             SettingsCard("已有会话") {
                 ForEach(ImportBook.importableAgents, id: \.self) { agent in
@@ -455,7 +464,12 @@ struct ImportsSettingsPane: View {
             let projects = last.createdProjects.isEmpty ? "" : "，新建 \(last.createdProjects.count) 个项目"
             return "上次导入了 \(last.imported) 个会话\(projects)。"
         }
-        return "按项目列出 Claude Code 与 Codex 的全部会话，勾选后导入；新目录会自动添加为项目。"
+        return "按项目列出 Claude Code 与 Codex 的全部会话（含 Codex 已归档的），勾选后导入；新目录会自动添加为项目。"
+    }
+
+    /// S8: how many sessions the user left out, so they can be picked again.
+    private var excludedCount: Int {
+        book.status?.agents.reduce(0) { $0 + $1.excluded } ?? 0
     }
 
     private func openPicker() {

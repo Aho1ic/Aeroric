@@ -4,6 +4,7 @@ import AeroricProtocol
 import AeroricUI
 import Foundation
 import Observation
+import os
 
 /// App-scoped services. P4-02 adds the single supervisor/client pair:
 /// `startSupervisor()` spawns the headless host (`aeroric-cli serve`) from
@@ -94,6 +95,9 @@ final class AppServices {
     var agentCatalogEpoch = UUID()
     /// A05 → A19: task id → its latest auto-check run, when that run failed.
     var checkFailures: [String: AttentionQueue.CheckFailure] = [:]
+    /// Group names the 移动到分组 menu offers (host `project.group_names`).
+    var projectGroupNames: [String] = []
+    @ObservationIgnored private var projectListRetries = 0
     @ObservationIgnored var statusPumpTask: Task<Void, Never>?
     @ObservationIgnored var statusCursor: UInt64?
     @ObservationIgnored var notificationGate = ApprovalNotificationGate()
@@ -253,6 +257,9 @@ final class AppServices {
                     }
                 }
                 await self.refreshWorkspace()
+                // 2026-10-28: the local Codex / Claude logins are read in the
+                // background at launch, so 连接 → 本机登录 is ready when opened.
+                Task { @MainActor in await self.agentConfigStore.detectOfficial() }
             }
         )
         self.supervisor = supervisor
@@ -347,18 +354,43 @@ final class AppServices {
 
     /// 连接就绪后读取项目/任务镜像；不把初次快照冒充实时事件覆盖。
     func refreshWorkspace() async {
-        guard let client = workspaceClient else { return }
+        guard let client = workspaceClient else {
+            Self.log.error("refreshWorkspace: no workspace client")
+            return
+        }
         // Imports re-scan incrementally on the host when stale; cheap to ask.
         Task { await importBook.refresh() }
         taskSnapshotReadState = .loading
-        if let projects = try? await client.listProjects() {
+        do {
+            let projects = try await client.listProjects()
             for project in projects {
-                _ = projectStore.upsertProject(id: project.id, path: project.path)
-                _ = taskStore.upsertProject(id: project.id, path: project.path)
+                let name = project.name.flatMap { $0.isEmpty ? nil : $0 }
+                projectStore.upsert(ProjectStore.ProjectEntry(
+                    id: project.id, path: project.path, name: name, color: project.color,
+                    defaultAgent: project.defaultAgent, group: project.group))
+                _ = taskStore.upsertProject(id: project.id, path: project.path, name: name)
+            }
+            let ids = Set(projects.map(\.id))
+            projectStore.retain(ids: ids)
+            taskStore.retainProjects(ids: ids)
+            projectListRetries = 0
+            Self.log.info("project.list: \(projects.count, privacy: .public) projects")
+            projectGroupNames = (try? await client.projectGroupNames()) ?? projectGroupNames
+        } catch {
+            // S9: the list can fail while macOS asks for folder access; try
+            // again instead of leaving the sidebar empty until a re-add.
+            Self.log.error("project.list failed: \(String(describing: error), privacy: .public)")
+            if projectListRetries < 20 {
+                projectListRetries += 1
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(3))
+                    await self?.refreshWorkspace()
+                }
             }
         }
         do {
             let tasks = try await client.listTasks()
+            taskStore.removeTasks(ids: Set(taskStore.tasks.map(\.id)).subtracting(tasks.map(\.id)))
             for task in tasks {
                 taskStore.upsertTask(TaskStore.TaskEntry(
                     id: task.id,
@@ -374,7 +406,11 @@ final class AppServices {
                     worktreeBranch: task.worktreeBranch,
                     additions: task.additions,
                     deletions: task.deletions,
-                    prompt: task.prompt
+                    prompt: task.prompt,
+                    agentConfigID: task.agentConfigID,
+                    harness: task.harness,
+                    sessionID: task.sessionId,
+                    model: task.model
                 ))
                 if let generation = task.generation {
                     pendingGenerations[task.id] = generation
@@ -382,9 +418,12 @@ final class AppServices {
             }
             taskSnapshotReadState = .loaded
         } catch {
+            Self.log.error("task.list failed: \(String(describing: error), privacy: .public)")
             taskSnapshotReadState = .failed(String(describing: error))
         }
     }
+
+    static let log = Logger(subsystem: "com.aeroric.native", category: "workspace")
 
     /// 创建任务：task.run，taskId 由窗口草稿 owner 在请求前铸造；
     /// 回执后镜像一个 pending 条目（下轮刷新校正）。
@@ -512,15 +551,54 @@ final class AppServices {
 
     /// Sidebar context menu: 归档 / 取消归档 for tasks and imports, 移除 for imports.
     func sessionAction(_ id: String, _ action: SessionRowAction) {
+        if case .copySessionID = action {
+            let session = SessionNavigation.taskID(id).flatMap { taskID in
+                taskStore.tasks.first { $0.id == taskID }?.sessionID
+            } ?? SessionNavigation.importedID(id).flatMap { importedID in
+                importBook.sessions.first { $0.id == importedID }?.sessionId
+            }
+            if let session {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(session, forType: .string)
+            }
+            return
+        }
         if let taskID = SessionNavigation.taskID(id) {
-            let archived = taskStore.tasks.first { $0.id == taskID }?.archived ?? false
-            if (action == .archive) != archived { toggleArchived(taskId: taskID) }
+            let entry = taskStore.tasks.first { $0.id == taskID }
+            switch action {
+            case .archive, .unarchive:
+                if (action == .archive) != (entry?.archived ?? false) { toggleArchived(taskId: taskID) }
+            default:
+                guard let client = workspaceClient else { return }
+                Task { @MainActor in
+                    do {
+                        switch action {
+                        case .pin, .unpin:
+                            try await client.setStarred(taskId: taskID, action == .pin)
+                        case let .rename(name):
+                            try await client.renameTask(taskId: taskID, name: name)
+                        case .remove:
+                            let kept = try await client.deleteTasks(taskIds: [taskID])
+                            if !kept.isEmpty { showActionError("已置顶的会话不能移除：请先取消置顶") }
+                        case .fork:
+                            let forked = try await client.forkTask(taskId: taskID)
+                            requestedSelection = SessionNavigation.task(forked)
+                        default:
+                            break
+                        }
+                    } catch {
+                        showActionError("会话操作失败：\(error)")
+                    }
+                    await refreshWorkspace()
+                }
+            }
         } else if let importedID = SessionNavigation.importedID(id) {
             Task { @MainActor in
                 switch action {
                 case .archive: await importBook.setArchived(importedID, true)
                 case .unarchive: await importBook.setArchived(importedID, false)
                 case .remove: await importBook.remove(importedID)
+                default: break
                 }
             }
         }
@@ -861,7 +939,7 @@ extension AppServices: WorkspaceStateProviding {
         let projects = projectStore.projects.map { project in
             SidebarItem(
                 id: project.id,
-                title: URL(fileURLWithPath: project.path).lastPathComponent,
+                title: project.name ?? URL(fileURLWithPath: project.path).lastPathComponent,
                 systemImage: "folder",
                 group: .projects,
                 children: [
@@ -869,13 +947,9 @@ extension AppServices: WorkspaceStateProviding {
                                 title: "新建会话", systemImage: "plus", group: .projects),
                 ] + taskStore.tasks.filter { task in task.projectID == project.id && !task.archived }
                     .sorted { ($0.starred ? 0 : 1, $1.updatedAtMs ?? 0) < ($1.starred ? 0 : 1, $0.updatedAtMs ?? 0) }
-                    .map { task in
-                        SidebarItem(id: SessionNavigation.task(task.id), title: task.title,
-                                    systemImage: "bubble.left", group: .projects,
-                                    status: task.status, pinned: task.starred, agent: task.agent,
-                                    updatedAt: task.updatedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) })
-                    }
-                    + importBook.sessions(inProject: project.id).map(Self.importedItem)
+                    .map { task in Self.taskItem(task, group: .projects) }
+                    + importBook.sessions(inProject: project.id).map(Self.importedItem),
+                color: project.color, defaultAgent: project.defaultAgent, projectGroup: project.group
             )
         }
         let unassigned = importBook.unassigned.map(Self.importedItem).map { item -> SidebarItem in
@@ -883,12 +957,7 @@ extension AppServices: WorkspaceStateProviding {
             item.group = .imports
             return item
         }
-        let archivedTasks = taskStore.tasks.filter(\.archived).map { task in
-            SidebarItem(id: SessionNavigation.task(task.id), title: task.title,
-                        systemImage: "bubble.left", group: .archived,
-                        status: task.status, agent: task.agent,
-                        updatedAt: task.updatedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) })
-        }
+        let archivedTasks = taskStore.tasks.filter(\.archived).map { Self.taskItem($0, group: .archived) }
         let archivedImports = importBook.archivedSessions.map(Self.importedItem).map { item -> SidebarItem in
             var item = item
             item.group = .archived
@@ -962,9 +1031,73 @@ extension AppServices: WorkspaceStateProviding {
 
     static func importedItem(_ session: ImportsClient.ImportedSession) -> SidebarItem {
         SidebarItem(id: SessionNavigation.imported(session.id), title: session.title,
-                    systemImage: "tray.and.arrow.down", group: .projects, agent: session.agent,
+                    systemImage: "tray.and.arrow.down", group: session.archived ? .archived : .projects,
+                    agent: session.agent,
                     updatedAt: Date(timeIntervalSince1970: Double(session.lastAtMs) / 1000),
-                    imported: true, path: session.cwd)
+                    imported: true, path: session.cwd, harness: session.agent,
+                    sessionID: session.sessionId)
+    }
+
+    static func taskItem(_ task: TaskStore.TaskEntry, group: SidebarGroup) -> SidebarItem {
+        SidebarItem(id: SessionNavigation.task(task.id), title: task.title,
+                    systemImage: "bubble.left", group: group,
+                    status: task.status, pinned: task.starred, agent: task.agent,
+                    updatedAt: task.updatedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) },
+                    harness: task.harness, sessionID: task.sessionID)
+    }
+
+    /// A pinned Agent preset's title, from any project's loaded catalogue.
+    func presetTitle(_ configID: String?) -> String? {
+        guard let configID, !configID.isEmpty else { return nil }
+        let catalogID = "agent-config:\(configID)"
+        return projectConfigurations.values.lazy.flatMap { $0 }
+            .first { $0.id == catalogID || $0.id == configID }?.title
+    }
+
+    /// A menu action the host refused, told plainly instead of dropped.
+    func showActionError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "好")
+        alert.runModal()
+    }
+
+    /// 会话管理…: the project's tasks and imports, archived ones included.
+    func allSessions(projectID: String) -> [SidebarItem] {
+        let tasks = taskStore.tasks.filter { $0.projectID == projectID }
+            .map { Self.taskItem($0, group: $0.archived ? .archived : .projects) }
+        let imports = importBook.sessions.filter { $0.projectId == projectID }.map(Self.importedItem)
+        return (tasks + imports).sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+    }
+
+    /// 设置默认 Harness: the four harnesses a new session can start on.
+    func agentChoices(projectID: String) -> [AgentChoice] {
+        NativeHarnessPicker.harnesses.map { AgentChoice(id: $0.id, title: $0.title, harness: $0.id) }
+    }
+
+    func projectAction(_ id: String, _ action: ProjectRowAction) {
+        guard let client = workspaceClient else { return }
+        Task { @MainActor in
+            do {
+                switch action {
+                case let .rename(name):
+                    try await client.updateProjectMeta(projectId: id, ["name": .string(name)])
+                case let .color(color):
+                    try await client.updateProjectMeta(projectId: id, ["color": color.map { .string($0) } ?? .null])
+                case let .defaultAgent(agent):
+                    try await client.updateProjectMeta(projectId: id,
+                                                       ["defaultAgent": agent.map { .string($0) } ?? .null])
+                case let .group(group):
+                    try await client.updateProjectMeta(projectId: id, ["group": group.map { .string($0) } ?? .null])
+                case .remove:
+                    try await client.removeProject(projectId: id)
+                }
+            } catch {
+                showActionError("项目操作失败：\(error)")
+            }
+            await refreshWorkspace()
+        }
     }
 
     /// "添加为项目…" on an unassigned import: open its cwd as a project, then

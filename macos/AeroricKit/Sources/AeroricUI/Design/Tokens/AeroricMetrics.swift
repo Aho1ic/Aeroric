@@ -38,6 +38,8 @@ public enum AeroricType {
     public static var body: CGFloat { AeroricTypeScale.shared.textSize }
     /// Code, diffs and inline monospaced text.
     public static var code: CGFloat { AeroricTypeScale.shared.codeSize }
+    /// A session's messages (设置 → 外观 → 会话).
+    public static var conversation: CGFloat { AeroricTypeScale.shared.conversationSize }
     public static let headline: CGFloat = 15
     public static let title: CGFloat = 17
     public static let largeTitle: CGFloat = 22

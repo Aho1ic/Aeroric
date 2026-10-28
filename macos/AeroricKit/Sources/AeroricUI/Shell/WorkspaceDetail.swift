@@ -133,6 +133,15 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
     public var imported: Bool
     /// Working directory of an imported session, for "添加为项目…".
     public var path: String?
+    /// Harness that runs the session (`claude`, `codex`, `omp`, `dsh`): the row's logo.
+    public var harness: String?
+    /// The agent's own session id, for 复制 Session ID; nil before it has one.
+    public var sessionID: String?
+    /// Project rows: the folder icon's tint (a `ProjectColor` id), default
+    /// Agent configuration id and group (更多 menu, 2026-10-28).
+    public var color: String?
+    public var defaultAgent: String?
+    public var projectGroup: String?
 
     public init(
         id: String,
@@ -146,10 +155,20 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
         agent: String? = nil,
         updatedAt: Date? = nil,
         imported: Bool = false,
-        path: String? = nil
+        path: String? = nil,
+        harness: String? = nil,
+        sessionID: String? = nil,
+        color: String? = nil,
+        defaultAgent: String? = nil,
+        projectGroup: String? = nil
     ) {
         self.imported = imported
         self.path = path
+        self.harness = harness
+        self.sessionID = sessionID
+        self.color = color
+        self.defaultAgent = defaultAgent
+        self.projectGroup = projectGroup
         self.id = id
         self.title = title
         self.systemImage = systemImage
@@ -160,6 +179,39 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
         self.pinned = pinned
         self.agent = agent
         self.updatedAt = updatedAt
+    }
+}
+
+public extension SidebarItem {
+    /// Projects in sidebar order, under their groups: ungrouped first (name ""),
+    /// then each group in `order`, then any group `order` does not know.
+    struct ProjectSection: Identifiable {
+        public let name: String
+        public let projects: [SidebarItem]
+        public var id: String { name }
+    }
+
+    static func groupedProjects(_ projects: [SidebarItem], order: [String]) -> [ProjectSection] {
+        var names = [""]
+        for name in order + projects.compactMap(\.projectGroup) where !names.contains(name) {
+            names.append(name)
+        }
+        return names.compactMap { name in
+            let rows = projects.filter { ($0.projectGroup ?? "") == name }
+            return rows.isEmpty ? nil : ProjectSection(name: name, projects: rows)
+        }
+    }
+
+    /// Why 分叉会话 is unavailable for this row, or nil when it can fork (S6).
+    static func forkUnavailableReason(_ item: SidebarItem) -> String? {
+        if item.imported { return "导入的会话只读，不能分叉" }
+        guard let harness = item.harness ?? item.agent, ["claude", "codex"].contains(harness) else {
+            return "只有 Claude Code 和 Codex 的会话可以分叉"
+        }
+        guard let session = item.sessionID, !session.hasPrefix("fork:") else {
+            return "这个会话还没有可分叉的对话"
+        }
+        return nil
     }
 }
 
@@ -203,13 +255,48 @@ public protocol WorkspaceStateProviding: AnyObject {
     func addProject(path: String)
     /// A session row's context-menu action (`id` is the row's sidebar id).
     func sessionAction(_ id: String, _ action: SessionRowAction)
+    /// A project row's 更多 menu action.
+    func projectAction(_ id: String, _ action: ProjectRowAction)
+    /// Group names a project can be moved to.
+    var projectGroupNames: [String] { get }
+    /// Agents and presets a project can default to (id, title).
+    func agentChoices(projectID: String) -> [AgentChoice]
+    /// Every session of a project, archived ones included (会话管理).
+    func allSessions(projectID: String) -> [SidebarItem]
 }
 
-/// What a session row's context menu can do. 移除 only exists for imported
-/// sessions and only hides them in Aeroric; the agent's file stays.
+/// One entry of 设置默认 Agent.
+public struct AgentChoice: Identifiable, Hashable, Sendable {
+    public var id: String
+    public var title: String
+    public var harness: String?
+    public init(id: String, title: String, harness: String? = nil) {
+        self.id = id
+        self.title = title
+        self.harness = harness
+    }
+}
+
+/// What a session row's menus can do. 移除 hides an imported session and
+/// deletes a task's row; the agent's own session file always stays (S7).
 public enum SessionRowAction: Sendable, Equatable {
     case archive
     case unarchive
+    case remove
+    case pin
+    case unpin
+    case rename(String)
+    case fork
+    case copySessionID
+}
+
+/// What a project row's 更多 menu can do (S1–S5).
+public enum ProjectRowAction: Sendable, Equatable {
+    /// Empty = back to the folder's own name.
+    case rename(String)
+    case color(String?)
+    case defaultAgent(String?)
+    case group(String?)
     case remove
 }
 
@@ -218,6 +305,10 @@ public extension WorkspaceStateProviding {
     var keepingAwake: Bool { false }
     func addProject(path: String) {}
     func sessionAction(_ id: String, _ action: SessionRowAction) {}
+    func projectAction(_ id: String, _ action: ProjectRowAction) {}
+    var projectGroupNames: [String] { [] }
+    func agentChoices(projectID: String) -> [AgentChoice] { [] }
+    func allSessions(projectID: String) -> [SidebarItem] { [] }
 }
 
 /// Running / waiting-for-you counts shown in the status bar.

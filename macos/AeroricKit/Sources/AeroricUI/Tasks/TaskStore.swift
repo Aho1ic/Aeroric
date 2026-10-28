@@ -39,6 +39,12 @@ public final class TaskStore {
         /// The prompt the task was started with (the session page shows it as
         /// the first user message until history has one).
         public var prompt: String?
+        /// The Agent preset the task is pinned to, if any.
+        public var agentConfigID: String?
+        /// The family that runs it (the sidebar logo) and the agent's own session id.
+        public var harness: String?
+        public var sessionID: String?
+        public var model: String?
 
         public init(
             id: String,
@@ -54,9 +60,17 @@ public final class TaskStore {
             worktreeBranch: String? = nil,
             additions: UInt64? = nil,
             deletions: UInt64? = nil,
-            prompt: String? = nil
+            prompt: String? = nil,
+            agentConfigID: String? = nil,
+            harness: String? = nil,
+            sessionID: String? = nil,
+            model: String? = nil
         ) {
+            self.model = model
             self.prompt = prompt
+            self.agentConfigID = agentConfigID
+            self.harness = harness
+            self.sessionID = sessionID
             self.worktreePath = worktreePath
             self.worktreeBranch = worktreeBranch
             self.additions = additions
@@ -112,6 +126,19 @@ public final class TaskStore {
             projects.append(entry)
         }
         return entry
+    }
+
+    /// Keep only the projects the host still lists (and their tasks).
+    public func retainProjects(ids: Set<String>) {
+        projects.removeAll { !ids.contains($0.id) }
+        tasks.removeAll { !ids.contains($0.projectID) }
+        rebuildVisible()
+    }
+
+    /// Drop task rows the host no longer has.
+    public func removeTasks(ids: Set<String>) {
+        tasks.removeAll { ids.contains($0.id) }
+        rebuildVisible()
     }
 
     public func upsertTask(_ task: TaskEntry) {

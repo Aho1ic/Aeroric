@@ -445,3 +445,26 @@ fn a_session_without_a_prompt_is_named_by_agent_and_time() {
     store.scan(&projects()).unwrap();
     assert_eq!(store.index()[0].title, "Codex 会话 · 2026-08-01 21:20");
 }
+
+#[test]
+fn codex_archived_sessions_are_found_and_shown_archived_until_brought_back() {
+    let scratch = Scratch::new("codex-archived");
+    scratch.write(".codex/sessions/2026/10/02/rollout-a.jsonl", CODEX);
+    let archived = scratch.write(".codex/archived_sessions/rollout-b.jsonl", CODEX);
+    let store = scratch.store();
+    store
+        .grant(
+            ImportAgent::Codex,
+            ImportAgent::Codex.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    assert_eq!(store.scan(&projects()).unwrap().added, 2);
+    let id = session_id(ImportAgent::Codex, &archived);
+    let shown = |store: &ImportStore| store.visible().into_iter().find(|s| s.id == id).unwrap();
+    assert!(shown(&store).archived, "Codex archived it");
+    store.set_archived(&id, false).unwrap();
+    assert!(!shown(&store).archived, "the user brought it back");
+    store.set_archived(&id, true).unwrap();
+    assert!(shown(&store).archived);
+}

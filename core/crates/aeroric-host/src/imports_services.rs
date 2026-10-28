@@ -161,6 +161,7 @@ fn status(request: Request, env: Arc<Env>) -> Frame {
     let store = store(context);
     let grants = store.grants();
     let index = store.index();
+    let excluded = store.prefs().excluded;
     let state = STATE.lock();
     let agents: Vec<Value> = ImportAgent::ALL
         .iter()
@@ -174,6 +175,11 @@ fn status(request: Request, env: Arc<Env>) -> Frame {
                     .unwrap_or_else(|| agent.default_root(&env.home)),
                 "grantedAtMs": grant.map(|g| g.granted_at_ms),
                 "sessions": index.iter().filter(|s| s.agent == *agent).count(),
+                // S8: sessions the user left out at import time, offered back.
+                "excluded": index
+                    .iter()
+                    .filter(|s| s.agent == *agent && excluded.contains(&s.id))
+                    .count(),
             })
         })
         .collect();

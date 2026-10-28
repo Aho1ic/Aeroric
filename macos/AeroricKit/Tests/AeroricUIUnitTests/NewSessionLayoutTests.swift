@@ -47,6 +47,20 @@ final class NewSessionLayoutTests: XCTestCase {
                        "2026-10-27: saved connections are offered directly")
         XCTAssertEqual(menu.sections[1].options.first?.detail, "经本机网关")
         XCTAssertEqual(menu.sections[2].options.first?.detail, "经本机网关 · 自定义配置")
+        let remote = ComposerPickerOptions.configurations(catalogue, draft: NewSessionDraft(), harness: "codex",
+                                                          remote: true)
+        XCTAssertEqual(remote.sections.map(\.title), ["经本机网关 · 我的连接", "经本机网关 · Agent 预设", "远程自带登录"],
+                       "G4: presets first, the remote machine's own login last")
+        XCTAssertEqual(remote.sections[2].options.first?.detail, "使用远程机器自己的账号")
+        XCTAssertEqual(remote.sections[1].options.first?.detail, "经 SSH 转发到本机网关 · 自定义配置")
+        XCTAssertEqual(LiveSessionFacts(agent: "codex", presetTitle: "DeepSeek",
+                                        workingDirectory: "ssh://c1/srv/api").remoteGatewayBadge,
+                       "经本机网关 · DeepSeek")
+        XCTAssertNil(LiveSessionFacts(agent: "codex", presetTitle: "DeepSeek",
+                                      workingDirectory: "/Users/me/api").remoteGatewayBadge)
+        XCTAssertNil(LiveSessionFacts(agent: "codex", configurationTitle: "Codex",
+                                      workingDirectory: "ssh://c1/srv/api").remoteGatewayBadge,
+                     "the remote CLI's own login shows no gateway badge")
         let empty = ComposerPickerOptions.configurations(catalogue, draft: NewSessionDraft(), harness: "omp")
         XCTAssertTrue(empty.isEmpty)
         XCTAssertNotNil(empty.note)

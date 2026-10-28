@@ -267,6 +267,23 @@ impl ProjectService {
         self.persist(next, true)
     }
 
+    /// One of [`mutations::META_KEYS`]; anything else is not the menu's to set.
+    pub fn set_meta(
+        &self,
+        project_id: &str,
+        key: &str,
+        value: Option<serde_json::Value>,
+    ) -> Result<Applied, ProjectError> {
+        if !mutations::META_KEYS.contains(&key) {
+            return Err(ProjectError::NotFound {
+                project_id: format!("{project_id} (field {key})"),
+            });
+        }
+        self.require_project(project_id)?;
+        let next = mutations::set_meta(&self.list()?, project_id, key, value);
+        self.persist(next, true)
+    }
+
     pub fn toggle_hidden(&self, project_id: &str) -> Result<Applied, ProjectError> {
         self.require_project(project_id)?;
         let next = mutations::toggle_hidden(&self.list()?, project_id);

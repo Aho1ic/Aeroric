@@ -845,6 +845,17 @@ fn explain(stderr: &str) -> Option<String> {
     }
 }
 
+/// A remote session through this Mac's gateway (G1–G6): the token for its
+/// first stdin line, this Mac's gateway port, and — once the remote end of
+/// the forward is known — what to set up there and the agent's arguments.
+pub struct RemoteGateway {
+    pub token: String,
+    pub local_port: u16,
+    #[allow(clippy::type_complexity)]
+    pub build:
+        Box<dyn Fn(&str) -> Result<(remote::GatewayLaunch, Vec<String>), String> + Send + Sync>,
+}
+
 /// `--version` on the remote machine, checked; then the session itself.
 pub fn spawn_remote(
     context: &CoreContext,
@@ -853,6 +864,7 @@ pub fn spawn_remote(
     agent: &str,
     args: &[String],
     check: fn(&str) -> Result<(), String>,
+    gateway: Option<RemoteGateway>,
 ) -> Result<(Transport, Option<ChildGuard>), String> {
     aeroric_core::connections::ssh::validate_remote_path(cwd)
         .map_err(|reason| format!("远程路径无效：{reason}"))?;
@@ -865,10 +877,14 @@ pub fn spawn_remote(
         agent,
         args,
         check,
+        gateway,
     )
 }
 
+const FORWARD_REFUSED: &str = "这台主机不允许 SSH 端口转发（可能设置了 AllowTcpForwarding no），不能经本机网关：可以改用“远程自带登录”";
+
 /// [`spawn_remote`] with the ssh program and connection given (tests use a fake ssh).
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_with(
     ssh: &str,
     data_dir: &std::path::Path,
@@ -877,16 +893,46 @@ pub fn spawn_with(
     agent: &str,
     args: &[String],
     check: fn(&str) -> Result<(), String>,
+    gateway: Option<RemoteGateway>,
 ) -> Result<(Transport, Option<ChildGuard>), String> {
-    let (probe, probe_ticket) =
-        ssh_spec(ssh, data_dir, connection, &remote::version_command(agent));
-    let output = command(&probe).output();
-    if let Some(ticket) = &probe_ticket {
-        revoke_ticket(ticket);
-    }
-    let output = output.map_err(|e| format!("无法运行 ssh（{}）：{e}", probe.program))?;
-    if !output.status.success() {
+    // The version probe carries the same forward, so a taken port or a host
+    // that refuses forwarding shows here; three ports are tried (G3/G5).
+    let attempts = if gateway.is_some() { 3 } else { 1 };
+    let mut forward = Vec::new();
+    for attempt in 1..=attempts {
+        forward = match &gateway {
+            Some(gateway) => remote::forward_args(
+                remote::pick_remote_port(uuid::Uuid::new_v4().as_u128()),
+                gateway.local_port,
+            ),
+            None => Vec::new(),
+        };
+        let (mut probe, probe_ticket) =
+            ssh_spec(ssh, data_dir, connection, &remote::version_command(agent));
+        probe.args.splice(0..0, forward.iter().cloned());
+        let output = command(&probe).output();
+        if let Some(ticket) = &probe_ticket {
+            revoke_ticket(ticket);
+        }
+        let output = output.map_err(|e| format!("无法运行 ssh（{}）：{e}", probe.program))?;
+        if output.status.success() {
+            check(&String::from_utf8_lossy(&output.stdout)).map_err(|reason| {
+                let hint = remote::upgrade_hint(agent);
+                if hint.is_empty() {
+                    format!("{reason}（远程机器上）")
+                } else {
+                    format!("{reason}（远程机器上；请在“连接”里升级，或在远程运行：{hint}）")
+                }
+            })?;
+            break;
+        }
         let stderr = String::from_utf8_lossy(&output.stderr);
+        if gateway.is_some() && remote::is_forward_failure(&stderr) {
+            if attempt == attempts {
+                return Err(FORWARD_REFUSED.into());
+            }
+            continue;
+        }
         return Err(explain(&stderr).unwrap_or_else(|| {
             format!(
                 "远程机器上运行 {agent} 失败（是否已安装？）：{}",
@@ -894,28 +940,33 @@ pub fn spawn_with(
             )
         }));
     }
-    check(&String::from_utf8_lossy(&output.stdout)).map_err(|reason| {
-        let hint = remote::upgrade_hint(agent);
-        if hint.is_empty() {
-            format!("{reason}（远程机器上）")
-        } else {
-            format!("{reason}（远程机器上；请在远程运行：{hint}）")
+    let remote_line = match &gateway {
+        Some(gateway) => {
+            let remote_port = forward
+                .last()
+                .and_then(|spec| spec.split(':').nth(1))
+                .unwrap_or_default();
+            let (launch, args) = (gateway.build)(&format!("http://127.0.0.1:{remote_port}"))?;
+            remote::gateway_command(cwd, agent, &args, &launch)
         }
-    })?;
-    let (spec, ticket) = ssh_spec(
-        ssh,
-        data_dir,
-        connection,
-        &remote::remote_command(cwd, agent, args),
-    );
+        None => remote::remote_command(cwd, agent, args),
+    };
+    let (mut spec, ticket) = ssh_spec(ssh, data_dir, connection, &remote_line);
+    spec.args.splice(0..0, forward);
     match Transport::spawn(tokio::process::Command::from(command(&spec))) {
-        Ok((transport, guard)) => Ok((
-            transport,
-            Some(match ticket {
-                Some(ticket) => guard.with_cleanup(move || revoke_ticket(&ticket)),
-                None => guard,
-            }),
-        )),
+        Ok((transport, guard)) => {
+            if let Some(gateway) = &gateway {
+                // G1: the first line the remote command reads is the token.
+                let _ = transport.outgoing.send(gateway.token.clone());
+            }
+            Ok((
+                transport,
+                Some(match ticket {
+                    Some(ticket) => guard.with_cleanup(move || revoke_ticket(&ticket)),
+                    None => guard,
+                }),
+            ))
+        }
         Err(error) => {
             if let Some(ticket) = &ticket {
                 revoke_ticket(ticket);
@@ -974,9 +1025,9 @@ pub fn mark_remote_availability(
     let probe = load_probes(context).get(&connection_id).cloned();
     for configuration in configurations.iter_mut() {
         let agent = configuration.harness.as_str();
-        let reason = if configuration.id.starts_with("agent-config:") {
-            Some("远程项目暂不能用 Agent 预设：经本机网关的远程会话即将接入".to_string())
-        } else if agent == "dsh" {
+        // Agent presets go through this Mac's gateway over an SSH reverse
+        // forward (G1–G6); they need the same agent on the remote machine.
+        let reason = if agent == "dsh" {
             Some("DSH 只在本机项目里运行".to_string())
         } else if !matches!(agent, "claude" | "codex" | "omp") {
             None
@@ -1083,6 +1134,7 @@ mod tests {
             agent.to_str().unwrap(),
             &["--mode".into(), "it's rpc".into()],
             check,
+            None,
         )
         .unwrap();
         let first = tokio::time::timeout(Duration::from_secs(10), transport.incoming.recv())
@@ -1114,10 +1166,118 @@ mod tests {
             agent.to_str().unwrap(),
             &[],
             refuse,
+            None,
         )
         .err()
         .unwrap();
         assert!(error.contains("远程机器上"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn gateway_sessions_forward_and_hand_the_token_over_stdin() {
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-remote-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let args_seen = dir.join("ssh-args");
+        let ssh = dir.join("ssh");
+        std::fs::write(
+            &ssh,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nfor last; do :; done\nexec /bin/sh -c \"$last\"\n",
+                args_seen.display()
+            ),
+        )
+        .unwrap();
+        let agent = dir.join("agent");
+        std::fs::write(
+            &agent,
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'fake 9.9.9'; exit 0; fi\nprintf '%s %s %s\\n' \"$ANTHROPIC_AUTH_TOKEN\" \"$ANTHROPIC_BASE_URL\" \"$1\"\nwhile read -r line; do printf '%s\\n' \"$line\"; done\n",
+        )
+        .unwrap();
+        let refusing = dir.join("ssh-refusing");
+        std::fs::write(
+            &refusing,
+            "#!/bin/sh\necho 'Error: remote port forwarding failed for listen port 20001' >&2\nexit 255\n",
+        )
+        .unwrap();
+        for file in [&ssh, &agent, &refusing] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let connection = SshConnection {
+            id: "c1".into(),
+            name: "dev".into(),
+            group: None,
+            host: "dev.example".into(),
+            port: 22,
+            username: "me".into(),
+            identity_file: None,
+            password: None,
+            has_password: false,
+        };
+        let gateway = || RemoteGateway {
+            token: "tok-9".into(),
+            local_port: 51234,
+            build: Box::new(|base: &str| {
+                Ok((
+                    remote::GatewayLaunch {
+                        env: vec![
+                            ("ANTHROPIC_AUTH_TOKEN".into(), remote::RemoteValue::Token),
+                            (
+                                "ANTHROPIC_BASE_URL".into(),
+                                remote::RemoteValue::Text(format!("{base}/claude")),
+                            ),
+                        ],
+                        ..Default::default()
+                    },
+                    vec!["--print".into()],
+                ))
+            }),
+        };
+        let ok: fn(&str) -> Result<(), String> = |_| Ok(());
+        let (mut transport, _guard) = spawn_with(
+            ssh.to_str().unwrap(),
+            &dir,
+            &connection,
+            "/",
+            agent.to_str().unwrap(),
+            &[],
+            ok,
+            Some(gateway()),
+        )
+        .unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(10), transport.incoming.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let words: Vec<&str> = first.split(' ').collect();
+        assert_eq!(words[0], "tok-9");
+        assert!(words[1].starts_with("http://127.0.0.1:") && words[1].ends_with("/claude"));
+        assert_eq!(words[2], "--print");
+        let seen = std::fs::read_to_string(&args_seen).unwrap();
+        assert_eq!(seen.lines().count(), 2, "probe and session both forward");
+        let port = words[1]
+            .trim_start_matches("http://127.0.0.1:")
+            .trim_end_matches("/claude");
+        assert!(seen.lines().all(|line| line
+            .contains(&format!("-R 127.0.0.1:{port}:127.0.0.1:51234"))
+            && line.contains("ExitOnForwardFailure=yes")));
+        assert!(!seen.contains("tok-9"), "the token never reaches argv");
+
+        let error = spawn_with(
+            refusing.to_str().unwrap(),
+            &dir,
+            &connection,
+            "/",
+            agent.to_str().unwrap(),
+            &[],
+            ok,
+            Some(gateway()),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error, FORWARD_REFUSED);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

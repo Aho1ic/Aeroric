@@ -5,6 +5,8 @@ import Foundation
 public struct LiveSessionFacts: Equatable, Sendable {
     public var agent: String?
     public var configurationTitle: String?
+    /// The Agent preset the task is pinned to (nil: the CLI's own login).
+    public var presetTitle: String?
     public var workingDirectory: String?
     public var branch: String?
     public var startedAt: Date?
@@ -19,12 +21,14 @@ public struct LiveSessionFacts: Equatable, Sendable {
     /// The prompt the task started with (shown until history has it).
     public var initialPrompt: String?
 
-    public init(agent: String?, configurationTitle: String? = nil, workingDirectory: String? = nil,
+    public init(agent: String?, configurationTitle: String? = nil, presetTitle: String? = nil,
+                workingDirectory: String? = nil,
                 branch: String? = nil, startedAt: Date? = nil, additions: UInt64? = nil, deletions: UInt64? = nil,
                 models: [String] = [], efforts: [String] = [],
                 downgradeBadge: String? = nil, downgradeHelp: String? = nil, initialPrompt: String? = nil) {
         self.agent = agent
         self.configurationTitle = configurationTitle
+        self.presetTitle = presetTitle
         self.workingDirectory = workingDirectory
         self.branch = branch
         self.startedAt = startedAt
@@ -35,6 +39,14 @@ public struct LiveSessionFacts: Equatable, Sendable {
         self.downgradeBadge = downgradeBadge
         self.downgradeHelp = downgradeHelp
         self.initialPrompt = initialPrompt
+    }
+
+    /// G4 (2026-10-28): a remote session pinned to an Agent preset reaches it
+    /// through this Mac's gateway; nil otherwise.
+    public var remoteGatewayBadge: String? {
+        guard workingDirectory?.hasPrefix("ssh://") == true, let title = presetTitle,
+              !title.isEmpty else { return nil }
+        return "经本机网关 · \(title)"
     }
 
     /// N4 D9: lines, not files — the record only knows lines.

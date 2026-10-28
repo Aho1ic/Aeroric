@@ -23,8 +23,18 @@ public struct ProjectSidebar: View {
     private let onOpenSettings: () -> Void
     private let onAddProject: (String) -> Void
     private let onSessionAction: (String, SessionRowAction) -> Void
-    /// The imported session waiting for 移除 to be confirmed.
+    private let onProjectAction: (String, ProjectRowAction) -> Void
+    private let projectGroupNames: [String]
+    private let agentChoices: (String) -> [AgentChoice]
+    private let allSessions: (String) -> [SidebarItem]
+    /// The session waiting for 移除 to be confirmed.
     @State private var removing: SidebarItem?
+    @State private var removingProject: SidebarItem?
+    @State private var renamingProject: SidebarItem?
+    @State private var renamingSession: SidebarItem?
+    @State private var groupingProject: SidebarItem?
+    @State private var managingProject: SidebarItem?
+    @State private var renameText = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Window-local status filter. Presentation only; never a host query.
     @State private var filter: SidebarStatusFilter = .all
@@ -45,7 +55,11 @@ public struct ProjectSidebar: View {
         onOpenRemote: @escaping () -> Void = {},
         onOpenSettings: @escaping () -> Void = {},
         onAddProject: @escaping (String) -> Void = { _ in },
-        onSessionAction: @escaping (String, SessionRowAction) -> Void = { _, _ in }
+        onSessionAction: @escaping (String, SessionRowAction) -> Void = { _, _ in },
+        onProjectAction: @escaping (String, ProjectRowAction) -> Void = { _, _ in },
+        projectGroupNames: [String] = [],
+        agentChoices: @escaping (String) -> [AgentChoice] = { _ in [] },
+        allSessions: @escaping (String) -> [SidebarItem] = { _ in [] }
     ) {
         self._selection = selection
         self.items = items
@@ -61,6 +75,10 @@ public struct ProjectSidebar: View {
         self.onOpenSettings = onOpenSettings
         self.onAddProject = onAddProject
         self.onSessionAction = onSessionAction
+        self.onProjectAction = onProjectAction
+        self.projectGroupNames = projectGroupNames
+        self.agentChoices = agentChoices
+        self.allSessions = allSessions
     }
 
     private var workItems: [SidebarItem] {
@@ -91,7 +109,47 @@ public struct ProjectSidebar: View {
             Button("移除", role: .destructive) { onSessionAction(item.id, .remove) }
             Button("取消", role: .cancel) {}
         } message: { item in
-            Text("“\(item.title)”将不再出现在 Aeroric 中。Agent 自己的会话文件不会被删除，以后可在 设置 → 导入 中重新勾选导入。")
+            Text(item.imported
+                 ? "“\(item.title)”将不再出现在 Aeroric 中。Agent 自己的会话文件不会被删除，以后可在 设置 → 导入 中重新勾选导入。"
+                 : "“\(item.title)”会从 Aeroric 的会话列表里删除。Agent 自己的会话文件不会被删除。已置顶的会话需要先取消置顶。")
+        }
+        .confirmationDialog("从 Aeroric 移除这个工作区？", isPresented: Binding(
+            get: { removingProject != nil }, set: { if !$0 { removingProject = nil } }
+        ), presenting: removingProject) { project in
+            Button("移除", role: .destructive) { onProjectAction(project.id, .remove) }
+            Button("取消", role: .cancel) {}
+        } message: { project in
+            Text("“\(project.title)”会从侧栏移走。磁盘上的文件和 Agent 的会话记录都不动；以后重新打开这个文件夹，它的会话会回来。")
+        }
+        .alert("重命名工作区", isPresented: Binding(
+            get: { renamingProject != nil }, set: { if !$0 { renamingProject = nil } }
+        ), presenting: renamingProject) { project in
+            TextField("留空则恢复为文件夹名", text: $renameText)
+            Button("保存") { onProjectAction(project.id, .rename(renameText)) }
+            Button("取消", role: .cancel) {}
+        } message: { _ in
+            Text("只改 Aeroric 里显示的名字，不改磁盘上的文件夹名。")
+        }
+        .alert("重命名会话", isPresented: Binding(
+            get: { renamingSession != nil }, set: { if !$0 { renamingSession = nil } }
+        ), presenting: renamingSession) { item in
+            TextField("会话标题", text: $renameText)
+            Button("保存") { onSessionAction(item.id, .rename(renameText)) }
+            Button("取消", role: .cancel) {}
+        }
+        .alert("新建分组", isPresented: Binding(
+            get: { groupingProject != nil }, set: { if !$0 { groupingProject = nil } }
+        ), presenting: groupingProject) { project in
+            TextField("分组名称", text: $renameText)
+            Button("新建并移入") {
+                let name = renameText.trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty { onProjectAction(project.id, .group(name)) }
+            }
+            Button("取消", role: .cancel) {}
+        }
+        .sheet(item: $managingProject) { project in
+            SessionManagerSheet(project: project, sessions: allSessions(project.id),
+                                onAction: onSessionAction, onClose: { managingProject = nil })
         }
     }
 
@@ -117,8 +175,19 @@ public struct ProjectSidebar: View {
                                 .padding(.horizontal, AeroricSpace.m)
                                 .padding(.vertical, AeroricSpace.xs)
                         }
-                        ForEach(projectItems) { project in
-                            projectGroup(project)
+                        ForEach(SidebarItem.groupedProjects(projectItems, order: projectGroupNames),
+                                id: \.name) { section in
+                            if let name = section.name.isEmpty ? nil : section.name {
+                                Text(name)
+                                    .font(.system(size: AeroricType.caption, weight: .medium))
+                                    .foregroundStyle(AeroricColor.textTertiary)
+                                    .padding(.horizontal, AeroricSpace.m)
+                                    .padding(.top, AeroricSpace.s)
+                                    .accessibilityIdentifier("sidebar.project-group.\(name)")
+                            }
+                            ForEach(section.projects) { project in
+                                projectGroup(project)
+                            }
                         }
                         if !importItems.isEmpty { importsGroup }
                         if !archivedItems.isEmpty { archivedGroup }
@@ -192,17 +261,14 @@ public struct ProjectSidebar: View {
                    onToggle: {
                        if expanded { expandedProjects.remove(project.id) } else { expandedProjects.insert(project.id) }
                    },
-                   onNewTask: { onNewProjectTask(project.id) })
+                   onNewTask: { onNewProjectTask(project.id) },
+                   menu: { projectMenu(project) })
+            .contextMenu { projectMenu(project) }
             .accessibilityIdentifier("sidebar.item.\(project.id)")
         if expanded {
             ForEach(rows) { child in
-                HoverCapsuleRow(selected: selection == child.id, height: shell.sessionRowHeight,
-                                action: { selection = child.id }) {
-                    SessionRow(item: child)
-                }
-                .contextMenu { sessionMenu(child) }
-                .padding(.leading, AeroricSpace.l)
-                .accessibilityIdentifier("sidebar.item.\(child.id)")
+                sessionTreeRow(child)
+                    .padding(.leading, AeroricSpace.l)
             }
             if rows.isEmpty {
                 Text(filter == .all ? "还没有会话" : "没有符合筛选的会话")
@@ -221,10 +287,7 @@ public struct ProjectSidebar: View {
                           identifier: "sidebar.group.imports")
         if importsExpanded {
             ForEach(importItems) { item in
-                HoverCapsuleRow(selected: selection == item.id, height: shell.sessionRowHeight,
-                                action: { selection = item.id }) {
-                    SessionRow(item: item)
-                }
+                sessionTreeRow(item, contextMenu: false)
                 .contextMenu {
                     if let path = item.path {
                         Button("将 \(URL(fileURLWithPath: path).lastPathComponent) 添加为项目") { onAddProject(path) }
@@ -244,13 +307,8 @@ public struct ProjectSidebar: View {
                           identifier: "sidebar.group.archived")
         if archivedExpanded {
             ForEach(archivedItems) { item in
-                HoverCapsuleRow(selected: selection == item.id, height: shell.sessionRowHeight,
-                                action: { selection = item.id }) {
-                    SessionRow(item: item)
-                }
-                .opacity(0.75)
-                .contextMenu { sessionMenu(item, archived: true) }
-                .accessibilityIdentifier("sidebar.item.\(item.id)")
+                sessionTreeRow(item, archived: true)
+                    .opacity(0.75)
             }
         }
     }
@@ -273,18 +331,104 @@ public struct ProjectSidebar: View {
         .accessibilityIdentifier(identifier)
     }
 
-    /// 归档 / 取消归档 for every session; 从 Aeroric 移除… only for imports.
-    /// A task the host is still running cannot be archived (the core keeps
-    /// pending and running tasks out of the archive).
+    // MARK: 更多 menus (2026-10-28)
+
+    /// The full session menu, shared by the row's ⋯ button and its context menu.
     @ViewBuilder private func sessionMenu(_ item: SidebarItem, archived: Bool = false) -> some View {
+        let isTask = SessionNavigation.taskID(item.id) != nil
+        if isTask {
+            Button(item.pinned ? "取消置顶" : "置顶", systemImage: item.pinned ? "pin.slash" : "pin") {
+                onSessionAction(item.id, item.pinned ? .unpin : .pin)
+            }
+            Button("重命名…", systemImage: "pencil") {
+                renameText = item.title
+                renamingSession = item
+            }
+            Button("分叉会话", systemImage: "arrow.triangle.branch") { onSessionAction(item.id, .fork) }
+                .disabled(SidebarItem.forkUnavailableReason(item) != nil)
+                .help(SidebarItem.forkUnavailableReason(item) ?? "从这里复制出一个新会话，原会话不受影响")
+        }
+        Button("复制 Session ID", systemImage: "doc.on.doc") { onSessionAction(item.id, .copySessionID) }
+            .disabled(item.sessionID == nil)
+        Divider()
         if archived {
-            Button("取消归档") { onSessionAction(item.id, .unarchive) }
+            Button("取消归档", systemImage: "tray.and.arrow.up") { onSessionAction(item.id, .unarchive) }
         } else {
-            Button("归档") { onSessionAction(item.id, .archive) }
+            Button("归档", systemImage: "archivebox") { onSessionAction(item.id, .archive) }
                 .disabled(["pending", "running"].contains(item.status ?? ""))
         }
-        if item.imported {
-            Button("从 Aeroric 移除…", role: .destructive) { removing = item }
+        Button(item.imported ? "从 Aeroric 移除…" : "移除会话…", systemImage: "trash", role: .destructive) {
+            removing = item
+        }
+        .disabled(isTask && ["pending", "running"].contains(item.status ?? ""))
+    }
+
+    @ViewBuilder private func projectMenu(_ project: SidebarItem) -> some View {
+        Button("重命名…", systemImage: "pencil") {
+            renameText = project.title
+            renamingProject = project
+        }
+        Menu("修改颜色") {
+            ForEach(ProjectColor.all) { color in
+                Button {
+                    onProjectAction(project.id, .color(color.id))
+                } label: {
+                    Label { Text(color.title) } icon: {
+                        Image(systemName: project.color == color.id ? "checkmark.circle" : "folder")
+                            .foregroundStyle(color.color)
+                    }
+                }
+            }
+            Divider()
+            Button("不设置") { onProjectAction(project.id, .color(nil)) }
+        }
+        Menu("设置默认 Harness") {
+            ForEach(agentChoices(project.id)) { choice in
+                Button {
+                    onProjectAction(project.id, .defaultAgent(choice.id))
+                } label: {
+                    Label {
+                        Text(project.defaultAgent == choice.id ? "\(choice.title)  ✓" : choice.title)
+                    } icon: {
+                        if let asset = HarnessLogo.asset(harness: choice.id, agent: nil) {
+                            Image(asset).renderingMode(.template)
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button("不设置（沿用全局默认）") { onProjectAction(project.id, .defaultAgent(nil)) }
+                .disabled(project.defaultAgent == nil)
+        }
+        Button("会话管理…", systemImage: "list.bullet.rectangle") { managingProject = project }
+        Menu("移动到分组") {
+            ForEach(projectGroupNames, id: \.self) { name in
+                Button(project.projectGroup == name ? "✓ \(name)" : name) { onProjectAction(project.id, .group(name)) }
+            }
+            if !projectGroupNames.isEmpty { Divider() }
+            Button("新建分组…") {
+                renameText = ""
+                groupingProject = project
+            }
+            Button("不分组") { onProjectAction(project.id, .group(nil)) }
+                .disabled(project.projectGroup == nil)
+        }
+        Divider()
+        Button("从 Aeroric 移除工作区…", systemImage: "trash", role: .destructive) { removingProject = project }
+    }
+
+    /// A session row with its ⋯ menu beside the status dot (shown on hover).
+    @ViewBuilder
+    private func sessionTreeRow(_ item: SidebarItem, archived: Bool = false, contextMenu: Bool = true) -> some View {
+        let row = SessionTreeRow(item: item, selected: selection == item.id, height: shell.sessionRowHeight,
+                                 onSelect: { selection = item.id }) {
+            sessionMenu(item, archived: archived)
+        }
+        .accessibilityIdentifier("sidebar.item.\(item.id)")
+        if contextMenu {
+            row.contextMenu { sessionMenu(item, archived: archived) }
+        } else {
+            row
         }
     }
 
@@ -451,7 +595,7 @@ struct NavigationLabel<Trailing: View>: View {
 
 /// Project row (DSH): the folder glyph turns into the disclosure chevron on
 /// hover; the session count gives way to a "新建会话" button.
-private struct ProjectRow: View {
+private struct ProjectRow<MenuContent: View>: View {
     let item: SidebarItem
     let sessionCount: Int
     let expanded: Bool
@@ -460,6 +604,7 @@ private struct ProjectRow: View {
     let onSelect: () -> Void
     let onToggle: () -> Void
     let onNewTask: () -> Void
+    @ViewBuilder let menu: () -> MenuContent
     @State private var hovered = false
 
     var body: some View {
@@ -471,8 +616,10 @@ private struct ProjectRow: View {
                             .font(.system(size: 10, weight: .semibold))
                             .rotationEffect(.degrees(expanded ? 90 : 0))
                     } else {
-                        Image(systemName: expanded ? "folder.fill" : "folder")
+                        // S5: a chosen colour tints the outlined folder itself.
+                        Image(systemName: expanded && item.color == nil ? "folder.fill" : "folder")
                             .font(.system(size: 13))
+                            .foregroundStyle(ProjectColor.color(item.color) ?? AeroricColor.textSecondary)
                     }
                 }
                 .foregroundStyle(AeroricColor.textSecondary)
@@ -500,6 +647,20 @@ private struct ProjectRow: View {
             .buttonStyle(.plain)
             .accessibilityAddTraits(selected ? .isSelected : [])
             if hovered {
+                Menu(content: menu) {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(AeroricColor.textSecondary)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(AeroricColor.hover))
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("更多")
+                .accessibilityLabel("\(item.title) 的更多操作")
+                .accessibilityIdentifier("sidebar.project-more.\(item.id)")
                 Button(action: onNewTask) {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .medium))
@@ -529,10 +690,11 @@ private struct ProjectRow: View {
 /// Session row: agent glyph (who), title, relative time, status dot (what).
 private struct SessionRow: View {
     let item: SidebarItem
+    var showsMore = false
 
     var body: some View {
         HStack(spacing: AeroricSpace.s) {
-            AgentGlyph(agent: item.agent, size: 14)
+            HarnessLogo(harness: item.harness, agent: item.agent, size: 14)
             Text(item.title)
                 .font(.system(size: AeroricType.body))
                 .lineLimit(1)
@@ -552,7 +714,10 @@ private struct SessionRow: View {
                     .foregroundStyle(AeroricColor.textTertiary)
                     .accessibilityLabel("已置顶")
             }
-            if let updatedAt = item.updatedAt {
+            if showsMore {
+                // The ⋯ button is laid over this slot (SessionTreeRow).
+                Color.clear.frame(width: 20, height: 20)
+            } else if let updatedAt = item.updatedAt {
                 Text(RelativeTime.short(updatedAt))
                     .font(.system(size: AeroricType.caption).monospacedDigit())
                     .foregroundStyle(AeroricColor.textTertiary)
@@ -564,13 +729,224 @@ private struct SessionRow: View {
 }
 
 /// Status dot for a host task status (wire vocabulary). Forwards to the shared
+/// A session row in the tree: the row itself selects; on hover its ⋯ menu
+/// sits just left of the status dot (outside the row's button, so a click on
+/// it never also opens the session).
+private struct SessionTreeRow<MenuContent: View>: View {
+    let item: SidebarItem
+    let selected: Bool
+    let height: CGFloat
+    let onSelect: () -> Void
+    @ViewBuilder let menu: () -> MenuContent
+    @State private var hovered = false
+
+    var body: some View {
+        HoverCapsuleRow(selected: selected, height: height, action: onSelect) {
+            SessionRow(item: item, showsMore: hovered)
+        }
+        .overlay(alignment: .trailing) {
+            if hovered {
+                Menu(content: menu) {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(AeroricColor.textSecondary)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(AeroricColor.hover))
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .padding(.trailing, AeroricSpace.m + 6 + AeroricSpace.s)
+                .help("更多")
+                .accessibilityLabel("\(item.title) 的更多操作")
+                .accessibilityIdentifier("sidebar.session-more.\(item.id)")
+            }
+        }
+        .onHover { hovered = $0 }
+    }
+}
+
+/// The harness's own logo, borderless and tinted like text (S9); an agent
+/// without a known harness keeps its symbol.
+struct HarnessLogo: View {
+    let harness: String?
+    let agent: String?
+    var size: CGFloat = 14
+
+    static func asset(harness: String?, agent: String?) -> String? {
+        let family = (harness ?? agent)?.lowercased()
+        switch family {
+        case "claude", "claude_gpt55": return "HarnessClaude"
+        case "codex": return "HarnessCodex"
+        case "omp": return "HarnessOMP"
+        case "dsh": return "HarnessDSH"
+        default: return nil
+        }
+    }
+
+    var body: some View {
+        if let asset = Self.asset(harness: harness, agent: agent) {
+            Image(asset)
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+                .foregroundStyle(AeroricColor.textSecondary)
+                .accessibilityLabel(AgentGlyph.displayName(for: harness ?? agent))
+        } else {
+            AgentGlyph(agent: agent, size: size)
+        }
+    }
+}
+
+/// The folder tints 修改颜色 offers (S5).
+struct ProjectColor: Identifiable {
+    let id: String
+    let title: String
+    let color: Color
+
+    static let all: [ProjectColor] = [
+        ProjectColor(id: "red", title: "红", color: Color(red: 0.89, green: 0.29, blue: 0.29)),
+        ProjectColor(id: "orange", title: "橙", color: Color(red: 0.85, green: 0.45, blue: 0.19)),
+        ProjectColor(id: "yellow", title: "黄", color: Color(red: 0.84, green: 0.65, blue: 0.13)),
+        ProjectColor(id: "green", title: "绿", color: Color(red: 0.39, green: 0.60, blue: 0.13)),
+        ProjectColor(id: "teal", title: "青", color: Color(red: 0.11, green: 0.62, blue: 0.46)),
+        ProjectColor(id: "blue", title: "蓝", color: Color(red: 0.22, green: 0.54, blue: 0.87)),
+        ProjectColor(id: "purple", title: "紫", color: Color(red: 0.50, green: 0.47, blue: 0.87)),
+        ProjectColor(id: "pink", title: "粉", color: Color(red: 0.83, green: 0.33, blue: 0.49)),
+    ]
+
+    static func color(_ id: String?) -> Color? {
+        all.first { $0.id == id }?.color
+    }
+}
+
+/// 会话管理…: every session of one project, archived ones included, with
+/// bulk 归档 / 取消归档 / 移除 (S4).
+struct SessionManagerSheet: View {
+    let project: SidebarItem
+    let sessions: [SidebarItem]
+    let onAction: (String, SessionRowAction) -> Void
+    let onClose: () -> Void
+    @State private var chosen: Set<String> = []
+    @State private var harness = "all"
+    @State private var confirmingRemove = false
+
+    private var shown: [SidebarItem] {
+        sessions.filter { harness == "all" || ($0.harness ?? $0.agent) == harness }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.l) {
+            HStack {
+                Label("\(project.title) 的会话", systemImage: "list.bullet.rectangle")
+                    .font(.system(size: AeroricType.headline, weight: .semibold))
+                Spacer()
+                CapsuleSlider(selection: $harness, groupTitle: "harness", identifier: "sessions.manage.harness",
+                              segments: [.init(value: "all", title: "全部")]
+                                + ["claude", "codex", "omp", "dsh"]
+                                .filter { id in sessions.contains { ($0.harness ?? $0.agent) == id } }
+                                .map { .init(value: $0, title: AgentGlyph.displayName(for: $0)) })
+                    .fixedSize()
+            }
+            List(shown) { item in
+                HStack(spacing: AeroricSpace.s) {
+                    Toggle("", isOn: Binding(get: { chosen.contains(item.id) },
+                                             set: { if $0 { chosen.insert(item.id) } else { chosen.remove(item.id) } }))
+                        .labelsHidden()
+                    HarnessLogo(harness: item.harness, agent: item.agent, size: 14)
+                    Text(item.title).lineLimit(1)
+                    Spacer()
+                    if item.group == .archived {
+                        Text("已归档").font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)
+                    }
+                    if item.imported {
+                        Text("已导入").font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)
+                    }
+                    SessionStatusDot(status: item.status)
+                }
+            }
+            .frame(minHeight: 280)
+            .clipShape(AeroricRadius.shape(16))
+            HStack {
+                Button(chosen.count == shown.count && !shown.isEmpty ? "全不选" : "全选") {
+                    chosen = chosen.count == shown.count ? [] : Set(shown.map(\.id))
+                }
+                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                Text("已选 \(chosen.count) 个").font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                Spacer()
+                Button("归档") { apply(.archive) }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                Button("取消归档") { apply(.unarchive) }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                Button("移除…") { confirmingRemove = true }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.destructive, compact: true))
+                Button("完成", action: onClose)
+                    .buttonStyle(AeroricCapsuleButtonStyle(.primary, compact: true))
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(AeroricSpace.xxl)
+        .frame(width: 620)
+        .glassSurface(.floatingCard, in: AeroricRadius.shape(26))
+        .confirmationDialog("移除选中的 \(chosen.count) 个会话？", isPresented: $confirmingRemove) {
+            Button("移除", role: .destructive) { apply(.remove) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只从 Aeroric 的列表里移除，Agent 自己的会话文件不会被删除；已置顶和运行中的会话会保留。")
+        }
+    }
+
+    private func apply(_ action: SessionRowAction) {
+        for id in chosen { onAction(id, action) }
+        chosen = []
+    }
+}
+
 /// `StatusDot`; the label is the accessibility value and tooltip.
 public struct SessionStatusDot: View {
     let status: String?
     public init(status: String?) { self.status = status }
 
+    /// 2026-10-28: one quiet glyph per state instead of the same flat dot —
+    /// a spinning ring while it runs, a soft halo when it needs you or failed,
+    /// a small check when done, a hollow ring otherwise.
     public var body: some View {
-        StatusDot(ActivityState(wireStatus: status), label: Self.label(status))
+        Group {
+            switch status {
+            case "running", "detached":
+                StatusDot(ActivityState(wireStatus: status), label: Self.label(status))
+            case "input_required":
+                halo(AeroricColor.warning)
+            case "failed":
+                halo(AeroricColor.danger)
+            case "done":
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(AeroricColor.success.opacity(0.85))
+            case "cancelled":
+                Image(systemName: "minus")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(AeroricColor.textTertiary)
+            default:
+                Circle()
+                    .strokeBorder(AeroricColor.textTertiary.opacity(0.7), lineWidth: 1.2)
+                    .frame(width: 7, height: 7)
+            }
+        }
+        .frame(width: 12, height: 12)
+        .help(Self.label(status))
+        .accessibilityElement()
+        .accessibilityLabel(Self.label(status))
+    }
+
+    private func halo(_ color: Color) -> some View {
+        ZStack {
+            Circle().fill(color.opacity(0.2)).frame(width: 11, height: 11)
+            Circle().fill(color).frame(width: 5.5, height: 5.5)
+        }
     }
 
     public static func color(_ status: String?) -> Color {

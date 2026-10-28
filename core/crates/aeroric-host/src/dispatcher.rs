@@ -79,30 +79,68 @@ pub async fn dispatch(request: Request, context: Arc<CallContext>) -> Frame {
 /// 连接循环：读帧→分发→写帧，直到对端关闭或 codec 拒绝。
 /// codec 的三种拒绝（Partial/Overlong/Frame）都是**断连不降级**——
 /// 半帧与超长帧永远不该被猜测处理。
+///
+/// 2026-10-28：请求并发处理，响应按完成顺序写回（客户端按 id 配对）。
+/// 串行时一个慢请求（联网的版本检查、SSH 探测、导入扫描）会让同一连接上
+/// 排在后面的 `project.list` / `session.updates` 等满 30 秒超时——发版后
+/// 侧栏空白、会话页“连接中断”都是它。握手仍在读循环里串行处理，认证之前
+/// 不会有第二个请求被分发。
 pub async fn serve_connection(
     reader: BufReader<OwnedReadHalf>,
     mut writer: tokio::net::unix::OwnedWriteHalf,
     context: Arc<CallContext>,
 ) {
+    /// One connection's requests in flight at once.
+    const IN_FLIGHT: usize = 64;
     let mut reader = reader;
+    let (responses, mut outbox) = tokio::sync::mpsc::unbounded_channel::<Frame>();
+    let write = tokio::spawn(async move {
+        while let Some(response) = outbox.recv().await {
+            if codec::write_frame(&mut writer, &response).await.is_err() {
+                return;
+            }
+        }
+    });
+    let permits = Arc::new(tokio::sync::Semaphore::new(IN_FLIGHT));
     loop {
         let frame = match codec::read_frame(&mut reader).await {
             Ok(Some(frame)) => frame,
-            Ok(None) => return,
-            Err(_) => return,
+            Ok(None) | Err(_) => break,
         };
-        let response = match frame {
-            Frame::Request(request) => dispatch(request, Arc::clone(&context)).await,
-            other => failure(
-                String::new(),
-                ErrorCode::InvalidArgument,
-                &format!("the host expects requests, got {}", frame_kind(&other)),
-            ),
-        };
-        if codec::write_frame(&mut writer, &response).await.is_err() {
-            return;
+        match frame {
+            Frame::Request(request) if request.method == Connection::HANDSHAKE_METHOD => {
+                let response = dispatch(request, Arc::clone(&context)).await;
+                if responses.send(response).is_err() {
+                    break;
+                }
+            }
+            Frame::Request(request) => {
+                let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
+                    break;
+                };
+                let context = Arc::clone(&context);
+                let responses = responses.clone();
+                tokio::spawn(async move {
+                    let response = dispatch(request, context).await;
+                    let _ = responses.send(response);
+                    drop(permit);
+                });
+            }
+            other => {
+                let response = failure(
+                    String::new(),
+                    ErrorCode::InvalidArgument,
+                    &format!("the host expects requests, got {}", frame_kind(&other)),
+                );
+                if responses.send(response).is_err() {
+                    break;
+                }
+            }
         }
     }
+    // Requests still running finish and are answered while the peer listens.
+    drop(responses);
+    let _ = write.await;
 }
 
 fn frame_kind(frame: &Frame) -> &'static str {
@@ -309,6 +347,14 @@ impl HostServices {
         // 否则广告会落在快照之后(实测:握手应答里根本没有 session-controls)。
         let adapters = wiring.adapters.take();
         crate::submission_services::register(&mut set, Arc::clone(&context), service.clone());
+        // 2026-10-28：侧栏“更多”菜单的项目与会话元数据；仅本机 UDS。
+        if let Some(tasks) = &service {
+            crate::workspace_meta_services::register(
+                &mut set,
+                Arc::clone(&context),
+                Arc::clone(tasks),
+            );
+        }
         if service.is_some() {
             capabilities.push(aeroric_protocol::capability::Capability {
                 name: aeroric_protocol::submission::CAPABILITY.into(),
@@ -638,6 +684,55 @@ mod tests {
             idempotency_key: None,
             extra: Default::default(),
         }
+    }
+
+    /// 2026-10-28: a slow request no longer holds up the next one on the same
+    /// connection; replies come back as they finish, paired by id.
+    #[tokio::test]
+    async fn a_slow_request_does_not_block_the_next_on_one_connection() {
+        let mut set = ServiceSet::new();
+        for (name, delay) in [("t.slow", 1500u64), ("t.fast", 0)] {
+            set.register(
+                name,
+                Arc::new(move |request: Request, _call| {
+                    Box::pin(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                        crate::services::ok(&request, json!({}))
+                    })
+                }),
+            );
+        }
+        let mut connection = Connection::new();
+        connection.mark_authenticated("test".into());
+        let context = Arc::new(CallContext {
+            services: Arc::new(set),
+            connection: Arc::new(tokio::sync::Mutex::new(connection)),
+        });
+        let (client, server) = tokio::net::UnixStream::pair().unwrap();
+        let (read, write) = server.into_split();
+        tokio::spawn(serve_connection(BufReader::new(read), write, context));
+        let (client_read, mut client_write) = client.into_split();
+        for (id, method) in [("1", "t.slow"), ("2", "t.fast")] {
+            codec::write_frame(
+                &mut client_write,
+                &Frame::Request(request(id, method, &json!({}))),
+            )
+            .await
+            .unwrap();
+        }
+        let mut reader = BufReader::new(client_read);
+        let started = std::time::Instant::now();
+        let first = codec::read_frame(&mut reader).await.unwrap().unwrap();
+        assert!(
+            matches!(&first, Frame::Success(s) if s.id == "2"),
+            "{first:?}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_millis(1000));
+        let second = codec::read_frame(&mut reader).await.unwrap().unwrap();
+        assert!(
+            matches!(&second, Frame::Success(s) if s.id == "1"),
+            "{second:?}"
+        );
     }
 
     /// 每测试一个唯一目录（pid 不够——cargo test 并行同进程共享 pid）；

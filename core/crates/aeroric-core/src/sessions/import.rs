@@ -126,6 +126,9 @@ pub struct ImportPrefs {
     pub excluded: std::collections::BTreeSet<String>,
     #[serde(default)]
     pub archived: std::collections::BTreeSet<String>,
+    /// Sessions the agent archived that the user brought back.
+    #[serde(default)]
+    pub unarchived: std::collections::BTreeSet<String>,
 }
 
 /// One session found on disk for the import picker.
@@ -210,7 +213,8 @@ impl ImportStore {
             .into_iter()
             .filter(|session| !prefs.excluded.contains(&session.id))
             .map(|mut session| {
-                session.archived = prefs.archived.contains(&session.id);
+                session.archived = prefs.archived.contains(&session.id)
+                    || (archived_by_agent(&session) && !prefs.unarchived.contains(&session.id));
                 session
             })
             .collect()
@@ -223,8 +227,10 @@ impl ImportStore {
         let mut prefs = self.prefs();
         if archived {
             prefs.archived.insert(id.to_string());
+            prefs.unarchived.remove(id);
         } else {
             prefs.archived.remove(id);
+            prefs.unarchived.insert(id.to_string());
         }
         self.save_prefs(&prefs)
     }
@@ -426,6 +432,18 @@ pub fn estimate(agent: ImportAgent, root: &Path) -> ImportEstimate {
     estimate
 }
 
+/// Where Codex keeps the sessions the user archived.
+const ARCHIVED_CODEX_DIR: &str = "archived_sessions";
+
+/// A source Codex itself archived: shown as archived until the user says otherwise.
+fn archived_by_agent(session: &ImportedSession) -> bool {
+    session.agent == ImportAgent::Codex
+        && session
+            .source_path
+            .components()
+            .any(|c| c.as_os_str() == ARCHIVED_CODEX_DIR)
+}
+
 /// 会话文件清单。Claude 跳过 `subagents/` 下的子代理转录（它们不是独立会话）。
 pub fn collect_sources(agent: ImportAgent, root: &Path) -> Vec<PathBuf> {
     let dir = agent.sessions_dir(root);
@@ -435,7 +453,11 @@ pub fn collect_sources(agent: ImportAgent, root: &Path) -> Vec<PathBuf> {
             collect_jsonl_files(&dir, &mut files);
             files.retain(|path| !path.components().any(|c| c.as_os_str() == "subagents"));
         }
-        ImportAgent::Codex => collect_session_files(&dir, &mut files),
+        ImportAgent::Codex => {
+            collect_session_files(&dir, &mut files);
+            // S8 (2026-10-28): Codex moves archived sessions out of `sessions/`.
+            collect_session_files(&root.join(ARCHIVED_CODEX_DIR), &mut files);
+        }
     }
     files.sort();
     files

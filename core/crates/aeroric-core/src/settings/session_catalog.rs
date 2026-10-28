@@ -69,10 +69,16 @@ pub fn for_project(
         return Err("原项目地址格式无效。".into());
     }
     let target = crate::projects::mutations::resolve_location(&project);
-    let path = target
-        .local_path()
-        .filter(|path| std::path::Path::new(path).is_absolute())
-        .ok_or("此提交契约仅支持已登记的本地项目；不会退到本地影子路径。")?;
+    // An SSH project (2026-10-28) is named by its identity, never a local
+    // path; the remote agent's availability is the host's to mark.
+    let identity = target.identity_key();
+    let path = match &target {
+        aeroric_protocol::project::ProjectTarget::Ssh { .. } => identity.as_str(),
+        _ => target
+            .local_path()
+            .filter(|path| std::path::Path::new(path).is_absolute())
+            .ok_or("此提交契约仅支持已登记的本地项目或 SSH 项目；不会退到本地影子路径。")?,
+    };
     let fields = crate::storage::load_settings(context)
         .map_err(|_| "Agent 设置读取失败；未回退默认配置。".to_string())?
         .found()

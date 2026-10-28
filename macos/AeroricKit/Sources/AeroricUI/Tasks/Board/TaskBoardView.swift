@@ -17,13 +17,18 @@ public struct TaskBoardView: View {
     let onCancel: (String) -> Void
     let onStar: (String) -> Void
     let onArchive: (String) -> Void
+    let projects: [TaskBoardProject]
+    let presetTitle: (String?) -> String?
     @AppStorage("tasks.viewMode") private var modeRawValue = Mode.board.rawValue
     @State private var cancelling: TaskStore.TaskEntry?
 
     public init(tasks: [TaskStore.TaskEntry], filterText: Binding<String>, selectedTaskID: Binding<String?>,
                 projectNames: [String: String], onOpenDraft: @escaping () -> Void,
                 onCancel: @escaping (String) -> Void, onStar: @escaping (String) -> Void,
-                onArchive: @escaping (String) -> Void) {
+                onArchive: @escaping (String) -> Void, projects: [TaskBoardProject] = [],
+                presetTitle: @escaping (String?) -> String? = { _ in nil }) {
+        self.projects = projects
+        self.presetTitle = presetTitle
         self.tasks = tasks
         _filterText = filterText
         _selectedTaskID = selectedTaskID
@@ -109,19 +114,57 @@ public struct TaskBoardView: View {
         }
     }
 
+    /// T1/T2 (2026-10-28): groups → projects → capsule rows, the way the
+    /// sidebar orders them.
     private var list: some View {
-        List(selection: $selectedTaskID) {
-            ForEach(TaskBoard.sorted(tasks.filter { !$0.archived })) { task in
-                TaskRow(task: task, projectName: projectNames[task.projectID])
-                    .tag(Optional(task.id))
-                    .contextMenu { menu(task) }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: AeroricSpace.xs) {
+                ForEach(TaskListLayout.groups(tasks.filter { !$0.archived }, projects: projects)) { group in
+                    if !group.name.isEmpty {
+                        Text(group.name)
+                            .font(.system(size: AeroricType.caption, weight: .medium))
+                            .foregroundStyle(AeroricColor.textTertiary)
+                            .padding(.horizontal, AeroricSpace.s)
+                            .padding(.top, AeroricSpace.m)
+                    }
+                    ForEach(group.projects) { block in
+                        projectHeader(block)
+                        ForEach(block.tasks) { task in
+                            TaskCapsuleRow(task: task,
+                                           meta: TaskListLayout.meta(task, remote: block.project.remote,
+                                                                     preset: presetTitle(task.agentConfigID)),
+                                           selected: selectedTaskID == task.id,
+                                           onOpen: { selectedTaskID = task.id })
+                                .contextMenu { menu(task) }
+                        }
+                    }
+                }
             }
+            .padding(.vertical, AeroricSpace.l)
+            .padding(.horizontal, AeroricSpace.xl)
+            .frame(maxWidth: NativePanelGeometry.mainShell.readingColumnWidth)
+            .frame(maxWidth: .infinity)
         }
-        .listStyle(.inset)
-        .frame(maxWidth: NativePanelGeometry.mainShell.readingColumnWidth)
-        .frame(maxWidth: .infinity)
-        .scrollContentBackground(.hidden)
+        .scrollIndicators(.never)
         .accessibilityIdentifier("tasks.list")
+    }
+
+    private func projectHeader(_ block: TaskListLayout.ProjectBlock) -> some View {
+        let running = block.tasks.filter { ["running", "pending", "detached"].contains($0.status) }.count
+        return HStack(spacing: AeroricSpace.s) {
+            Image(systemName: block.project.remote ? "globe" : "folder")
+                .font(.system(size: 13))
+                .foregroundStyle(ProjectColor.color(block.project.color) ?? AeroricColor.textSecondary)
+            Text(block.project.name)
+                .font(.system(size: AeroricType.body, weight: .semibold))
+                .lineLimit(1)
+            Text("\(block.tasks.count) 个会话" + (running > 0 ? " · \(running) 个运行中" : ""))
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+        }
+        .padding(.horizontal, AeroricSpace.s)
+        .padding(.top, AeroricSpace.m)
+        .padding(.bottom, 2)
     }
 
     @ViewBuilder private func menu(_ task: TaskStore.TaskEntry) -> some View {
@@ -239,7 +282,7 @@ struct TaskMetaLine: View {
             Circle().fill(Self.tints[ProjectTint.index(for: task.projectID)]).frame(width: 7, height: 7)
             Text(projectName ?? "未知项目").lineLimit(1)
             Text("·")
-            AgentGlyph(agent: task.agent, size: 12)
+            HarnessLogo(harness: task.harness, agent: task.agent, size: 12)
             if let date = TaskBoard.date(of: task) {
                 Text("·")
                 Text(RelativeTime.short(date))
@@ -247,5 +290,138 @@ struct TaskMetaLine: View {
         }
         .font(.system(size: AeroricType.caption))
         .foregroundStyle(AeroricColor.textTertiary)
+    }
+}
+
+/// A project as the task page groups it (T1, 2026-10-28).
+public struct TaskBoardProject: Identifiable, Equatable, Sendable {
+    public var id: String
+    public var name: String
+    public var color: String?
+    public var group: String?
+    public var remote: Bool
+    public init(id: String, name: String, color: String? = nil, group: String? = nil, remote: Bool = false) {
+        self.id = id
+        self.name = name
+        self.color = color
+        self.group = group
+        self.remote = remote
+    }
+}
+
+/// The list mode's layout: groups → projects → tasks, in the sidebar's order.
+enum TaskListLayout {
+    struct ProjectBlock: Identifiable {
+        let project: TaskBoardProject
+        let tasks: [TaskStore.TaskEntry]
+        var id: String { project.id }
+    }
+
+    struct GroupBlock: Identifiable {
+        let name: String
+        let projects: [ProjectBlock]
+        var id: String { name }
+    }
+
+    static func groups(_ tasks: [TaskStore.TaskEntry], projects: [TaskBoardProject]) -> [GroupBlock] {
+        let known = Set(projects.map(\.id))
+        var all = projects
+        for id in Set(tasks.map(\.projectID)).subtracting(known).sorted() {
+            all.append(TaskBoardProject(id: id, name: "其他项目"))
+        }
+        let blocks = all.compactMap { project -> ProjectBlock? in
+            let rows = TaskBoard.sorted(tasks.filter { $0.projectID == project.id })
+            return rows.isEmpty ? nil : ProjectBlock(project: project, tasks: rows)
+        }
+        var names = [""]
+        for block in blocks { if let group = block.project.group, !names.contains(group) { names.append(group) } }
+        return names.compactMap { name in
+            let inGroup = blocks.filter { ($0.project.group ?? "") == name }
+            return inGroup.isEmpty ? nil : GroupBlock(name: name, projects: inGroup)
+        }
+    }
+
+    /// The row's second line: who answers it, the model, the branch, the
+    /// change size and when it last moved. Missing facts are left out.
+    static func meta(_ task: TaskStore.TaskEntry, remote: Bool, preset: String?) -> String {
+        var parts: [String] = [preset ?? (remote ? "远程自带登录" : "本机登录")]
+        if let model = task.model, !model.isEmpty { parts.append(model) }
+        if let branch = task.worktreeBranch, !branch.isEmpty { parts.append("分支 \(branch)") }
+        if let added = task.additions, let removed = task.deletions, added + removed > 0 {
+            parts.append("+\(added) −\(removed)")
+        }
+        if let date = TaskBoard.date(of: task) { parts.append(RelativeTime.short(date)) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// A task's status as a small text capsule (T2).
+struct TaskStatusTag: View {
+    let status: String
+
+    static func tint(_ status: String) -> Color {
+        switch status {
+        case "running", "pending", "detached": AeroricColor.accent
+        case "input_required": AeroricColor.warning
+        case "done": AeroricColor.success
+        case "failed": AeroricColor.danger
+        default: AeroricColor.textTertiary
+        }
+    }
+
+    var body: some View {
+        Text(SessionStatusDot.label(status))
+            .font(.system(size: AeroricType.caption, weight: .medium))
+            .foregroundStyle(Self.tint(status))
+            .padding(.horizontal, AeroricSpace.m)
+            .padding(.vertical, 2)
+            .background(Self.tint(status).opacity(0.13), in: Capsule(style: .continuous))
+            .fixedSize()
+    }
+}
+
+/// One task in the list mode: logo, title (and pin), the meta line, the status tag.
+struct TaskCapsuleRow: View {
+    let task: TaskStore.TaskEntry
+    let meta: String
+    let selected: Bool
+    let onOpen: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: AeroricSpace.m) {
+                HarnessLogo(harness: task.harness, agent: task.agent, size: 16)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: AeroricSpace.xs) {
+                        Text(task.title)
+                            .font(.system(size: AeroricType.body, weight: .medium))
+                            .lineLimit(1)
+                        if task.starred {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(AeroricColor.textTertiary)
+                                .accessibilityLabel("已置顶")
+                        }
+                    }
+                    Text(meta)
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: AeroricSpace.m)
+                TaskStatusTag(status: task.status)
+            }
+            .padding(.horizontal, AeroricSpace.l)
+            .frame(height: 46)
+            .background(selected ? AeroricColor.selection : hovered ? AeroricColor.hover : AeroricColor.layer1.opacity(0.7),
+                        in: Capsule(style: .continuous))
+            .overlay { Capsule(style: .continuous).strokeBorder(AeroricColor.separator1, lineWidth: 1) }
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .accessibilityIdentifier("task.row.\(task.id)")
     }
 }

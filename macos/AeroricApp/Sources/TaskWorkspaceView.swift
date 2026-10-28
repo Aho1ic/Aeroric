@@ -852,6 +852,14 @@ struct TaskWorkspaceView: View {
         selection = SessionNavigation.newDraftSelection(from: selection, items: services.sidebarItems)
     }
 
+    /// The project's 默认 Harness when it names one of the four.
+    private func projectHarness(_ projectID: String?) -> String? {
+        guard let projectID,
+              let harness = services.projectStore.projects.first(where: { $0.id == projectID })?.defaultAgent,
+              NativeHarnessPicker.harnesses.contains(where: { $0.id == harness }) else { return nil }
+        return harness
+    }
+
     private func composer(_ scope: SessionDraftScope) -> some View {
         let project = services.taskStore.projects.first { $0.id == scope.projectID }
         let value = draftBook[scope] ?? NewSessionDraft(submissionID: "unopened")
@@ -874,7 +882,8 @@ struct TaskWorkspaceView: View {
                 guard let projectID = scope.projectID else { return }
                 Task { await services.switchBranch(projectID: projectID, to: branch) }
             },
-            preferredHarness: defaultHarness
+            // S5: the project's 默认 Harness, else the global default.
+            preferredHarness: projectHarness(scope.projectID) ?? defaultHarness
         )
         .task(id: [scope.projectID ?? "", services.configurationEpoch.uuidString,
                    services.agentCatalogEpoch.uuidString]) {
@@ -1007,9 +1016,24 @@ struct TaskWorkspaceView: View {
                                              uniquingKeysWith: { first, _ in first }),
                     onOpenDraft: { openNewSession() },
                     onCancel: { id in Task { await services.cancelTask(taskId: id) } },
-                    onStar: { services.toggleStar(taskId: $0) },
-                    onArchive: { services.toggleArchived(taskId: $0) }
+                    onStar: { id in
+                        let starred = services.taskStore.tasks.first { $0.id == id }?.starred ?? false
+                        services.sessionAction(SessionNavigation.task(id), starred ? .unpin : .pin)
+                    },
+                    onArchive: { services.toggleArchived(taskId: $0) },
+                    projects: services.projectStore.projects.map { project in
+                        TaskBoardProject(id: project.id,
+                                         name: project.name ?? URL(fileURLWithPath: project.path).lastPathComponent,
+                                         color: project.color, group: project.group,
+                                         remote: project.path.hasPrefix("ssh://"))
+                    },
+                    presetTitle: { services.presetTitle($0) }
                 )
+                .task {
+                    for project in services.projectStore.projects {
+                        await services.loadSessionConfigurations(projectID: project.id)
+                    }
+                }
             }
         }
         .accessibilityIdentifier("tasks.workspace")

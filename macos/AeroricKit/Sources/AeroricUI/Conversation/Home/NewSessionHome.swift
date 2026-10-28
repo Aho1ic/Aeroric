@@ -220,7 +220,8 @@ public struct NewSessionHome: View {
 
     private var configurationPicker: some View {
         ComposerPicker(title: selected?.title ?? "Agent", systemImage: AgentGlyph.symbol(for: selected?.agent),
-                       menu: ComposerPickerOptions.configurations(configurations, draft: draft, harness: harness),
+                       menu: ComposerPickerOptions.configurations(configurations, draft: draft, harness: harness,
+                                                                  remote: project?.path.hasPrefix("ssh://") == true),
                        identifier: "new-session.configuration") { id in
             guard let configuration = configurations.first(where: { "\($0.id)@\($0.version)" == id }) else { return }
             draft.selectHarness(configuration.harness)

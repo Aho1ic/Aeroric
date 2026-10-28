@@ -153,6 +153,17 @@ impl SharedLog {
 /// A closed session's log stays this long for clients catching up (N3 D5).
 pub const CLOSED_LOG_RETENTION_MS: u64 = 10 * 60_000;
 
+/// A forked session (S6, 2026-10-28) starts with `fork:<source session id>`
+/// as its session: its first launch resumes the source as a new conversation
+/// (Claude `--fork-session`, Codex `thread/fork`), and the agent's own new id
+/// replaces it once the session attaches.
+pub const FORK_PREFIX: &str = "fork:";
+
+/// The source session of a fork placeholder.
+pub fn fork_source(session: &str) -> Option<&str> {
+    session.strip_prefix(FORK_PREFIX).filter(|s| !s.is_empty())
+}
+
 /// Live drivers by task id, plus their logs (kept a while after close).
 #[derive(Default)]
 pub struct DriverRegistry {

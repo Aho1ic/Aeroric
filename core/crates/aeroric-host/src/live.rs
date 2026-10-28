@@ -24,6 +24,7 @@ use aeroric_core::sessions::live::claude::driver::{ClaudeLauncher, ClaudeStart};
 use aeroric_core::sessions::live::claude::map::{
     claude_permission_mode, version_supported as claude_version_supported,
 };
+use aeroric_core::sessions::live::codex::rpc::{ChildGuard, Transport};
 use aeroric_core::sessions::live::codex::server::{
     process_launcher, spawn_checked, Launcher, ProcessSpec,
 };
@@ -33,6 +34,7 @@ use aeroric_core::sessions::live::executor::{
 use aeroric_core::sessions::live::omp::driver::{
     version_supported as omp_version_supported, OmpLauncher, OmpStart,
 };
+use aeroric_core::sessions::live::remote;
 use aeroric_core::sessions::live::LiveStatusSink;
 use aeroric_core::settings::get_login_shell_env;
 use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
@@ -219,9 +221,10 @@ impl Routing for HostRouting {
     }
 
     /// SSH workspaces (2026-10-27): the three structured families of a
-    /// built-in agent, with the remote machine's own login and configuration.
-    /// An Agent configuration needs this Mac's loopback gateway, so it stays
-    /// refused (PTY path), as do custom wrappers that may not take the flags.
+    /// built-in agent with the remote machine's own login; an Agent
+    /// configuration of the same harness through this Mac's gateway over an
+    /// SSH reverse forward (G1–G6, 2026-10-28). Custom wrappers that may not
+    /// take the flags stay refused (PTY path).
     fn route_remote(
         &self,
         family: ProtocolFamily,
@@ -229,12 +232,27 @@ impl Routing for HostRouting {
         agent_config_id: Option<&str>,
         connection_id: &str,
     ) -> Option<Route> {
-        if agent_config_id.is_some_and(|id| !id.trim().is_empty()) || !is_builtin(agent) {
-            return None;
-        }
+        let config = match agent_config_id.filter(|id| !id.trim().is_empty()) {
+            Some(id) => {
+                let config = resolve_config(self.context.paths.data_dir(), id).ok()?;
+                let same = matches!(
+                    (family, config.harness),
+                    (ProtocolFamily::Claude, Harness::Claude)
+                        | (ProtocolFamily::Codex, Harness::Codex)
+                        | (ProtocolFamily::Omp, Harness::Omp)
+                );
+                if !same {
+                    return None;
+                }
+                Some(config.config_id)
+            }
+            None if is_builtin(agent) => None,
+            None => return None,
+        };
         let key = RemoteKey {
             connection_id: connection_id.to_string(),
             agent: agent.to_string(),
+            config,
         };
         match family {
             ProtocolFamily::Claude => Some(Route::RemoteClaude(key)),
@@ -244,17 +262,48 @@ impl Routing for HostRouting {
         }
     }
 
+    fn remote_claude_config_dir(&self, key: &RemoteKey) -> std::path::PathBuf {
+        key.config
+            .as_deref()
+            .and_then(|id| resolve_config(self.context.paths.data_dir(), id).ok())
+            .and_then(|config| remote::remote_home(&config.home_dir_name).ok())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.claude"))
+    }
+
     fn remote_claude_launcher(&self, key: &RemoteKey) -> ClaudeLauncher {
         let context = Arc::clone(&self.context);
         let key = key.clone();
         Arc::new(move |start: &ClaudeStart| {
-            crate::remote_sessions::spawn_remote(
-                &context,
-                &key.connection_id,
-                &start.cwd,
-                "claude",
-                &claude_args(start, true),
-                claude_version_supported,
+            let args = claude_args(start, true);
+            let Some(config_id) = &key.config else {
+                return crate::remote_sessions::spawn_remote(
+                    &context,
+                    &key.connection_id,
+                    &start.cwd,
+                    "claude",
+                    &args,
+                    claude_version_supported,
+                    None,
+                );
+            };
+            let config = resolve_config(context.paths.data_dir(), config_id)?;
+            let token = aeroric_core::local_router::task_tokens::issue(
+                &start.task_id,
+                Some(config_id.clone()),
+            );
+            let gateway = remote_gateway(&context, &config, &token, move |_| args.clone())?;
+            with_token(
+                crate::remote_sessions::spawn_remote(
+                    &context,
+                    &key.connection_id,
+                    &start.cwd,
+                    "claude",
+                    &[],
+                    claude_version_supported,
+                    Some(gateway),
+                ),
+                token,
             )
         })
     }
@@ -263,36 +312,267 @@ impl Routing for HostRouting {
         let context = Arc::clone(&self.context);
         let key = key.clone();
         Arc::new(move |start: &OmpStart| {
-            let args = aeroric_core::agents::launch::omp_rpc_args(
-                &start.permission,
-                &start.cwd,
-                start.model.as_deref(),
-                start.effort.as_deref(),
-                start.resume.as_deref(),
+            let rpc_args = |model: Option<&str>| {
+                aeroric_core::agents::launch::omp_rpc_args(
+                    &start.permission,
+                    &start.cwd,
+                    model,
+                    start.effort.as_deref(),
+                    start.resume.as_deref(),
+                )
+            };
+            let Some(config_id) = &key.config else {
+                return crate::remote_sessions::spawn_remote(
+                    &context,
+                    &key.connection_id,
+                    &start.cwd,
+                    "omp",
+                    &rpc_args(start.model.as_deref()),
+                    omp_version_supported,
+                    None,
+                );
+            };
+            let config = resolve_config(context.paths.data_dir(), config_id)?;
+            let args = rpc_args(gateway_omp_model(start.model.as_deref(), &config).as_deref());
+            let token = aeroric_core::local_router::task_tokens::issue(
+                &start.task_id,
+                Some(config_id.clone()),
             );
-            crate::remote_sessions::spawn_remote(
-                &context,
-                &key.connection_id,
-                &start.cwd,
-                "omp",
-                &args,
-                omp_version_supported,
+            let gateway = remote_gateway(&context, &config, &token, move |_| args.clone())?;
+            with_token(
+                crate::remote_sessions::spawn_remote(
+                    &context,
+                    &key.connection_id,
+                    &start.cwd,
+                    "omp",
+                    &[],
+                    omp_version_supported,
+                    Some(gateway),
+                ),
+                token,
             )
         })
     }
 }
 
-/// A remote `codex app-server` over one SSH connection.
+/// Revoke `token` with the process, or now when it did not start.
+fn with_token(
+    spawned: Result<(Transport, Option<ChildGuard>), String>,
+    token: String,
+) -> Result<(Transport, Option<ChildGuard>), String> {
+    match spawned {
+        Ok((transport, guard)) => {
+            let own = token.clone();
+            Ok((
+                transport,
+                guard.map(|guard| {
+                    guard.with_cleanup(move || {
+                        aeroric_core::local_router::task_tokens::revoke_token(&own)
+                    })
+                }),
+            ))
+        }
+        Err(reason) => {
+            aeroric_core::local_router::task_tokens::revoke_token(&token);
+            Err(reason)
+        }
+    }
+}
+
+/// The model a gateway omp asks for: the gateway's provider, a mapped name.
+fn gateway_omp_model(requested: Option<&str>, config: &ConfigLaunch) -> Option<String> {
+    requested
+        .filter(|m| !m.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| Some(config.default_model.clone()).filter(|m| !m.trim().is_empty()))
+        .map(|m| {
+            if m.starts_with("aeroric/") {
+                m
+            } else {
+                format!("aeroric/{m}")
+            }
+        })
+}
+
+/// What a remote agent pinned to `config` needs (G1/G2): its managed home on
+/// the remote machine and the gateway environment, rebuilt for the forward's
+/// remote base URL. Local values that are the token travel over stdin.
+fn remote_gateway(
+    context: &CoreContext,
+    config: &ConfigLaunch,
+    token: &str,
+    args: impl Fn(&str) -> Vec<String> + Send + Sync + 'static,
+) -> Result<crate::remote_sessions::RemoteGateway, String> {
+    use aeroric_core::agent_connections::model::WireProtocol;
+    let base = crate::gateway::ensure_running(context.paths.data_dir())?;
+    let local_port = base
+        .rsplit(':')
+        .next()
+        .and_then(|port| port.parse::<u16>().ok())
+        .ok_or_else(|| format!("本机网关地址无效：{base}"))?;
+    let home = remote::remote_home(&config.home_dir_name)?;
+    let config = config.clone();
+    let marker = token.to_string();
+    let build = move |remote_base: &str| -> Result<(remote::GatewayLaunch, Vec<String>), String> {
+        let mut launch = remote::GatewayLaunch::default();
+        let mut ops = Vec::new();
+        let mut args = args(remote_base);
+        match config.harness {
+            Harness::Claude => {
+                ops.extend(crate::executor::managed_home_ops(Harness::Claude, &home));
+                ops.extend(crate::executor::gateway_ops(
+                    remote_base,
+                    ProtocolFamily::Claude,
+                    &marker,
+                )?);
+                launch.dirs = vec![
+                    home.clone(),
+                    format!("{home}/session-env"),
+                    format!("{home}/tmp"),
+                ];
+            }
+            Harness::Codex => {
+                ops.extend(crate::executor::managed_home_ops(Harness::Codex, &home));
+                ops.extend(crate::executor::gateway_ops(
+                    remote_base,
+                    ProtocolFamily::Codex,
+                    &marker,
+                )?);
+                launch.dirs = vec![home.clone()];
+                let mut codex = codex_gateway_args(remote_base);
+                codex.append(&mut args);
+                args = codex;
+            }
+            Harness::Omp => {
+                let (base_url, api) = match config.protocol {
+                    WireProtocol::Responses => {
+                        (format!("{remote_base}/codex/v1"), "openai-responses")
+                    }
+                    _ => (format!("{remote_base}/claude"), "anthropic-messages"),
+                };
+                let (dirs, files) = stage_omp_home(&home, &base_url, api, &config.models)?;
+                launch.dirs = dirs;
+                launch.files = files;
+                ops.push(EnvOp::Set("PI_CODING_AGENT_DIR".into(), home.clone()));
+                ops.push(EnvOp::Set(
+                    aeroric_core::settings::omp_home::OMP_API_KEY_ENV.into(),
+                    marker.clone(),
+                ));
+                ops.extend(
+                    aeroric_core::agents::environment::OMP_PROFILE_KEYS
+                        .iter()
+                        .map(|name| EnvOp::Unset((*name).to_string())),
+                );
+            }
+            Harness::Dsh => return Err("DSH 只在本机项目里运行".into()),
+        }
+        for op in ops {
+            match op {
+                EnvOp::Set(name, value) => launch.env.push((
+                    name,
+                    if value == marker {
+                        remote::RemoteValue::Token
+                    } else if value.starts_with("~/") {
+                        remote::RemoteValue::Path(value)
+                    } else {
+                        remote::RemoteValue::Text(value)
+                    },
+                )),
+                EnvOp::Unset(name) => launch.unset.push(name),
+            }
+        }
+        Ok((launch, args))
+    };
+    Ok(crate::remote_sessions::RemoteGateway {
+        token: token.to_string(),
+        local_port,
+        build: Box::new(build),
+    })
+}
+
+/// The omp gateway home laid out here in a scratch directory, as remote
+/// directories and files under `home` (models.yml is always rewritten; the
+/// rest only when missing, as locally).
+#[allow(clippy::type_complexity)]
+fn stage_omp_home(
+    home: &str,
+    base_url: &str,
+    api: &str,
+    models: &[String],
+) -> Result<(Vec<String>, Vec<(String, String, bool)>), String> {
+    let scratch = std::env::temp_dir().join(format!(
+        "aeroric-omp-home-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let staged =
+        aeroric_core::settings::omp_home::prepare_gateway_home(&scratch, base_url, api, models)
+            .and_then(|()| {
+                let mut dirs = vec![home.to_string()];
+                let mut files = Vec::new();
+                let mut pending = vec![scratch.clone()];
+                while let Some(dir) = pending.pop() {
+                    for entry in std::fs::read_dir(&dir)
+                        .map_err(|e| e.to_string())?
+                        .flatten()
+                    {
+                        let path = entry.path();
+                        let relative = path
+                            .strip_prefix(&scratch)
+                            .map_err(|e| e.to_string())?
+                            .to_string_lossy()
+                            .into_owned();
+                        let remote = format!("{home}/{relative}");
+                        if path.is_dir() {
+                            dirs.push(remote);
+                            pending.push(path);
+                        } else {
+                            let content =
+                                std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+                            files.push((remote, content, relative == "models.yml"));
+                        }
+                    }
+                }
+                Ok((dirs, files))
+            });
+    let _ = std::fs::remove_dir_all(&scratch);
+    staged
+}
+
+/// A remote `codex app-server` over one SSH connection; pinned to an Agent
+/// configuration it talks to this Mac's gateway with a token per server
+/// process (G6).
 fn remote_codex_launcher(context: Arc<CoreContext>, key: RemoteKey) -> Launcher {
     Arc::new(move || {
         let cwd = "~".to_string();
-        crate::remote_sessions::spawn_remote(
-            &context,
-            &key.connection_id,
-            &cwd,
-            "codex",
-            &["app-server".to_string()],
-            aeroric_core::sessions::live::codex::map::version_supported,
+        let app_server = vec!["app-server".to_string()];
+        let Some(config_id) = &key.config else {
+            return crate::remote_sessions::spawn_remote(
+                &context,
+                &key.connection_id,
+                &cwd,
+                "codex",
+                &app_server,
+                aeroric_core::sessions::live::codex::map::version_supported,
+                None,
+            );
+        };
+        let config = resolve_config(context.paths.data_dir(), config_id)?;
+        let token = aeroric_core::local_router::task_tokens::issue(
+            &server_token_id(&format!("{}/{config_id}", key.connection_id)),
+            Some(config_id.clone()),
+        );
+        let gateway = remote_gateway(&context, &config, &token, move |_| app_server.clone())?;
+        with_token(
+            crate::remote_sessions::spawn_remote(
+                &context,
+                &key.connection_id,
+                &cwd,
+                "codex",
+                &[],
+                aeroric_core::sessions::live::codex::map::version_supported,
+                Some(gateway),
+            ),
+            token,
         )
     })
 }
@@ -567,7 +847,14 @@ pub fn claude_args(start: &ClaudeStart, passes_model: bool) -> Vec<String> {
         args.extend(["--effort".to_string(), effort.to_string()]);
     }
     if let Some(session) = &start.resume {
-        args.extend(["--resume".to_string(), session.clone()]);
+        match aeroric_core::sessions::live::fork_source(session) {
+            Some(source) => args.extend([
+                "--resume".to_string(),
+                source.to_string(),
+                "--fork-session".to_string(),
+            ]),
+            None => args.extend(["--resume".to_string(), session.clone()]),
+        }
     }
     args
 }

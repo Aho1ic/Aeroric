@@ -16,6 +16,11 @@ public struct WorkspaceClient: Sendable {
     public struct Project: Sendable, Equatable {
         public var id: String
         public var path: String
+        /// The 更多 menu's display fields (2026-10-28); nil = not set.
+        public var name: String? = nil
+        public var color: String? = nil
+        public var defaultAgent: String? = nil
+        public var group: String? = nil
     }
 
     public func listProjects() async throws -> [Project] {
@@ -26,8 +31,54 @@ public struct WorkspaceClient: Sendable {
         return items.compactMap { item in
             guard let id = item["id"]?.stringValue else { return nil }
             let path = item["path"]?.stringValue ?? ""
-            return Project(id: id, path: path)
+            return Project(id: id, path: path, name: item["name"]?.stringValue,
+                           color: item["color"]?.stringValue, defaultAgent: item["defaultAgent"]?.stringValue,
+                           group: item["group"]?.stringValue)
         }
+    }
+
+    // MARK: - 更多 menus (2026-10-28)
+
+    /// Present keys apply; `.null` clears back to the default.
+    public func updateProjectMeta(projectId: String, _ fields: [String: JSONValue]) async throws {
+        var params = fields
+        params["projectId"] = .string(projectId)
+        _ = try await connection.request("project.update_meta", params: .object(params))
+    }
+
+    public func projectGroupNames() async throws -> [String] {
+        let frame = try await connection.request("project.group_names", params: .object([:]))
+        return (frame.result["groups"]?.arrayValue ?? []).compactMap(\.stringValue)
+    }
+
+    /// Drops the project from the list; files and transcripts stay.
+    public func removeProject(projectId: String) async throws {
+        _ = try await connection.request("project.remove", params: .object(["projectId": .string(projectId)]))
+    }
+
+    public func setStarred(taskId: String, _ starred: Bool) async throws {
+        _ = try await connection.request("task.set_starred",
+                                         params: .object(["taskId": .string(taskId), "starred": .bool(starred)]))
+    }
+
+    public func renameTask(taskId: String, name: String) async throws {
+        _ = try await connection.request("task.rename",
+                                         params: .object(["taskId": .string(taskId), "name": .string(name)]))
+    }
+
+    /// Removes the rows only; returns the pinned ids that were kept.
+    @discardableResult
+    public func deleteTasks(taskIds: [String]) async throws -> [String] {
+        let frame = try await connection.request("task.delete",
+                                                 params: .object(["taskIds": .array(taskIds.map { .string($0) })]))
+        return (frame.result["skippedStarred"]?.arrayValue ?? []).compactMap(\.stringValue)
+    }
+
+    /// A new session continuing `taskId`'s conversation; returns its id.
+    public func forkTask(taskId: String) async throws -> String {
+        let frame = try await connection.request("task.fork", params: .object(["taskId": .string(taskId)]))
+        guard let id = frame.result["taskId"]?.stringValue else { throw MalformedReply("task.fork missing taskId") }
+        return id
     }
 
     // MARK: - project.open
@@ -78,14 +129,39 @@ public struct WorkspaceClient: Sendable {
         public var additions: UInt64? = nil
         public var deletions: UInt64? = nil
         public var prompt: String? = nil
+        /// The Agent preset the task is pinned to, if any.
+        public var agentConfigID: String? = nil
+        /// The protocol family that runs it (`claude`, `codex`, `omp`, `dsh`).
+        public var harness: String? = nil
+        /// The model the task was started with, if one was chosen.
+        public var model: String? = nil
     }
 
     /// 展示标题：记录无 title 字段时取 prompt 首行（展示推导，非业务推断）。
     static func displayTitle(_ record: JSONValue) -> String {
+        // A renamed session (task.rename) carries `name`; a new task's `name` is its agent.
+        if let name = record["name"]?.stringValue, !name.isEmpty, name != record["agent"]?.stringValue {
+            return name
+        }
         if let title = record["title"]?.stringValue, !title.isEmpty { return title }
         let prompt = record["prompt"]?.stringValue ?? ""
         let firstLine = prompt.split(separator: "\n", omittingEmptySubsequences: true).first
         return firstLine.map(String.init) ?? (record["id"]?.stringValue ?? "（未命名）")
+    }
+
+    /// The session id the task resumes: its family's own field first, then the
+    /// legacy `sessionId` (mirrors core `session_owner::current_session`).
+    static func currentSessionID(_ record: JSONValue) -> String? {
+        let family = record["sessionFamily"]?.stringValue ?? "codex"
+        for key in ["\(family)SessionId", "sessionId"] {
+            if let id = record[key]?.stringValue, !id.isEmpty { return id }
+        }
+        return nil
+    }
+
+    /// Which harness runs the task, for its sidebar logo (S9).
+    static func harness(_ record: JSONValue) -> String? {
+        record["sessionFamily"]?.stringValue
     }
 
     static func parseTask(_ record: JSONValue, projectID fallback: String?) -> Task? {
@@ -104,13 +180,16 @@ public struct WorkspaceClient: Sendable {
             // The core keeps `archivedAt` (ms); older rows carried a bool.
             archived: record["archivedAt"]?.numberText != nil || (record["archived"]?.boolValue ?? false),
             starred: record["starred"]?.boolValue ?? false,
-            sessionId: record["sessionId"]?.stringValue,
+            sessionId: currentSessionID(record),
             generation: record["generation"]?.numberText.flatMap(UInt64.init),
             worktreePath: record["worktreePath"]?.stringValue,
             worktreeBranch: record["worktreeBranch"]?.stringValue,
             additions: record["additions"]?.numberText.flatMap(UInt64.init),
             deletions: record["deletions"]?.numberText.flatMap(UInt64.init),
-            prompt: record["prompt"]?.stringValue
+            prompt: record["prompt"]?.stringValue,
+            agentConfigID: record["agentConfigId"]?.stringValue,
+            harness: harness(record),
+            model: record["selectedModel"]?.stringValue
         )
     }
 

@@ -117,7 +117,7 @@ struct MessageBubble: View {
                 ContentBlock(block: block)
             }
         }
-        .font(.system(size: AeroricType.body))
+        .font(.system(size: AeroricType.conversation))
         .padding(.horizontal, isUser ? AeroricSpace.l + 2 : 0)
         .padding(.vertical, isUser ? AeroricSpace.m + 2 : 0)
         .background {

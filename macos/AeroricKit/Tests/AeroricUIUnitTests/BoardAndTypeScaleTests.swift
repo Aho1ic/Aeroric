@@ -65,9 +65,13 @@ final class BoardAndTypeScaleTests: XCTestCase {
     }
 
     func testStepsMapToTheAgreedSizes() {
-        XCTAssertEqual(AeroricTypeScale.Step.allCases.map { AeroricTypeScale.Kind.text.size($0) }, [12, 13, 14])
-        XCTAssertEqual(AeroricTypeScale.Step.allCases.map { AeroricTypeScale.Kind.code.size($0) }, [11, 12, 13])
-        XCTAssertEqual(AeroricTypeScale.Step.allCases.map { AeroricTypeScale.Kind.terminal.size($0) }, [12, 13, 15])
+        XCTAssertEqual(AeroricTypeScale.Step.allCases.map { AeroricTypeScale.Kind.text.size($0) }, [12, 13, 14, 15])
+        XCTAssertEqual(AeroricTypeScale.Step.allCases.map { AeroricTypeScale.Kind.code.size($0) }, [11, 12, 13, 14])
+        XCTAssertEqual(AeroricTypeScale.Step.allCases.map { AeroricTypeScale.Kind.terminal.size($0) }, [12, 13, 15, 17])
+        // 2026-10-28: the session's own size starts larger than the interface's.
+        XCTAssertEqual(AeroricTypeScale.Step.allCases.map { AeroricTypeScale.Kind.conversation.size($0) },
+                       [13, 15, 17, 19])
+        XCTAssertEqual(AeroricTypeScale(defaults: scratchDefaults()).conversationSize, 15)
     }
 
     func testDefaultsToMediumAndUnknownValuesFallBack() {

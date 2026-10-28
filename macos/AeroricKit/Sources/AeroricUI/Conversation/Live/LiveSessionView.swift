@@ -80,13 +80,33 @@ public struct LiveSessionView: View {
             .overlay(alignment: .topTrailing) {
                 if !showsColumn { foldedInfo }
             }
-            .overlay(alignment: .topLeading) { downgradeBadge }
+            .overlay(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: 0) {
+                    gatewayBadge
+                    downgradeBadge
+                }
+            }
         }
         .onChange(of: infoCollapsed) { _, value in UserDefaults.standard.set(value, forKey: Self.infoCollapsedKey) }
         .task(id: store.taskID) { await store.run() }
         .modifier(SessionDialogs(store: store, confirmEnd: $confirmEnd, confirmFullAccess: $confirmFullAccess,
                                  configure: { configure(permission: $0) }))
         .accessibilityIdentifier("session.live.view")
+    }
+
+    /// G4: a remote session talking to an Agent preset through this Mac's gateway.
+    @ViewBuilder private var gatewayBadge: some View {
+        if let badge = facts.remoteGatewayBadge {
+            Label(badge, systemImage: "arrow.left.arrow.right")
+                .font(.system(size: AeroricType.caption, weight: .semibold))
+                .foregroundStyle(AeroricColor.accent)
+                .padding(.horizontal, AeroricSpace.m)
+                .padding(.vertical, 3)
+                .background(AeroricColor.accent.opacity(0.12), in: Capsule(style: .continuous))
+                .help("这个远程会话经 SSH 反向转发使用本机网关和 Agent 预设")
+                .padding([.horizontal, .top], AeroricSpace.m)
+                .accessibilityIdentifier("session.remote-gateway")
+        }
     }
 
     /// R8: the gateway is answering with a fallback model.

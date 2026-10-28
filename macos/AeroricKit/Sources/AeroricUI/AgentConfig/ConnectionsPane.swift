@@ -16,15 +16,15 @@ struct ConnectionsPane: View {
     private typealias ACC = AgentConnectionsClient
 
     var body: some View {
-        MasterDetail {
+        MasterDetail(centered: builtin == nil && store.connectionDraft == nil) {
             ConfigListColumn("连接", newTitle: "新建", newIdentifier: "agent-config.new-connection",
                              onNew: { newConnection() }) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: AeroricSpace.xxs) {
-                        listSection("本机登录")
+                    VStack(alignment: .leading, spacing: 2) {
+                        listSection("CLI 自带登录")
                         builtinRow("codex", title: "Codex", login: store.official?.codex)
                         builtinRow("claude", title: "Claude Code", login: store.official?.claude)
-                        listSection("我的连接").padding(.top, AeroricSpace.m)
+                        listSection("API 连接").padding(.top, AeroricSpace.m)
                         if store.document.connections.isEmpty {
                             Text("还没有连接，点右上角“新建”。")
                                 .font(.system(size: AeroricType.caption))
@@ -33,13 +33,14 @@ struct ConnectionsPane: View {
                         }
                         ForEach(store.document.connections) { connection in
                             HoverCapsuleRow(selected: builtin == nil && store.selectedConnection == connection.id,
-                                            height: 50, horizontalPadding: AeroricSpace.s) {
+                                            height: 34, horizontalPadding: AeroricSpace.m) {
                                 builtin = nil
                                 store.selectConnection(connection.id)
                             } label: {
                                 ConfigListItem(title: connection.label,
-                                               subtitle: AgentConfigText.connectionSubtitle(connection),
-                                               status: status(connection).tint)
+                                               harness: AgentConfigText.connectionHarness(connection),
+                                               detail: connection.models.isEmpty ? "无模型" : "\(connection.models.count) 个模型",
+                                               tag: status(connection).title, tagTint: status(connection).tint)
                             }
                             .help(connection.baseUrl)
                             .accessibilityIdentifier("agent-config.connection.\(connection.id)")
@@ -70,6 +71,10 @@ struct ConnectionsPane: View {
             FloatingSaveBar(visible: store.connectionDirty,
                             onRevert: { store.selectConnection(store.selectedConnection) },
                             onSave: { Task { await store.saveConnection() } })
+        }
+        // 2026-10-28: opening the page shows the first row, not an empty side.
+        .task {
+            if builtin == nil && store.connectionDraft == nil { builtin = "codex" }
         }
         .onChange(of: store.selectedConnection) { _, _ in
             expandedModel = nil
@@ -259,22 +264,22 @@ struct ConnectionsPane: View {
     }
 
     private func builtinRow(_ id: String, title: String, login: ACC.OfficialLogin?) -> some View {
-        HoverCapsuleRow(selected: builtin == id, height: 50, horizontalPadding: AeroricSpace.s) {
+        HoverCapsuleRow(selected: builtin == id, height: 34, horizontalPadding: AeroricSpace.m) {
             builtin = id
             store.selectConnection(nil)
             if store.official == nil { Task { await store.detectOfficial() } }
         } label: {
-            ConfigListItem(title: title, subtitle: officialSubtitle(login),
-                           status: login.map { $0.installed && $0.signedIn ? AeroricColor.success : AeroricColor.textTertiary })
+            ConfigListItem(title: title, harness: id, tag: officialTag(login).0, tagTint: officialTag(login).1)
         }
         .accessibilityIdentifier("agent-config.builtin.\(id)")
     }
 
-    private func officialSubtitle(_ login: ACC.OfficialLogin?) -> String {
-        guard let login else { return "本机登录 · 点开检测" }
-        if !login.installed { return "未安装" }
-        guard login.signedIn else { return "已安装，未登录" }
-        return modeTitle(login.mode) + (login.account.map { " · \($0)" } ?? "")
+    /// The list row's tag: how the CLI is signed in, or why it is not.
+    private func officialTag(_ login: ACC.OfficialLogin?) -> (String, Color) {
+        guard let login else { return ("检测中", AeroricColor.textTertiary) }
+        if !login.installed { return ("未安装", AeroricColor.textTertiary) }
+        guard login.signedIn else { return ("未登录", AeroricColor.warning) }
+        return (modeTitle(login.mode), AeroricColor.success)
     }
 
     private func addModel() {
@@ -431,20 +436,9 @@ struct ConnectionsPane: View {
     // MARK: Empty and official logins (G1)
 
     private var emptyDetail: some View {
-        VStack(spacing: AeroricSpace.m) {
-            Image(systemName: "link.circle")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(AeroricColor.textTertiary)
-            Text("选择左侧的连接，或者新建一个").font(.system(size: AeroricType.headline, weight: .medium))
-            Text("连接 = 一个第三方 API 端点 + 它的 key 和模型。号池和 Agent 配置会用到它们。")
-                .font(.system(size: AeroricType.secondary))
-                .foregroundStyle(AeroricColor.textTertiary)
-            Button { newConnection() } label: { Label("新建连接", systemImage: "plus") }
-                .buttonStyle(AeroricCapsuleButtonStyle(.primary))
-                .padding(.top, AeroricSpace.s)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, AeroricSpace.huge)
+        ConfigEmptyDetail(systemImage: "link.circle", title: "选择左侧的连接，或者新建一个",
+                          message: "连接 = 一个第三方 API 端点 + 它的 key 和模型。号池和 Agent 预设会用到它们。",
+                          actionTitle: "新建连接") { newConnection() }
     }
 
     /// A built-in local login, shown like a connection but read-only (G1).

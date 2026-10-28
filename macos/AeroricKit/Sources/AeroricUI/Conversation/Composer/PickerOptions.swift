@@ -62,8 +62,11 @@ public enum ComposerPickerOptions {
 
     /// Configurations grouped by harness, in the harness picker's order.
     /// Blocked configurations stay visible with their first reason.
+    /// `remote`: the project is on an SSH host, so the CLI's own login is the
+    /// remote machine's and presets reach this Mac's gateway over SSH (G4).
     public static func configurations(_ configurations: [SessionConfiguration],
-                                      draft: NewSessionDraft, harness: String? = nil) -> PickerMenu {
+                                      draft: NewSessionDraft, harness: String? = nil,
+                                      remote: Bool = false) -> PickerMenu {
         let selected = selectedConfiguration(configurations, draft: draft)
         if let harness {
             // D: the harness slider already chose the family; split its
@@ -74,18 +77,27 @@ public enum ComposerPickerOptions {
                              detail: detail, systemImage: AgentGlyph.symbol(for: configuration.agent),
                              selected: configuration == selected, disabledReason: configuration.blockedReasons.first)
             }
-            let builtIn = rows.filter { !NewSessionLayout.isAgentConfig($0) }.map { option($0, "使用本机 CLI 自己的登录") }
+            let builtIn = rows.filter { !NewSessionLayout.isAgentConfig($0) }
+                .map { option($0, remote ? "使用远程机器自己的账号" : "使用本机 CLI 自己的登录") }
             // 2026-10-27: the harness is the slider's; this menu picks the
             // saved connection (and, below, any configuration of your own).
-            let connections = rows.filter(NewSessionLayout.isConnection).map { option($0, "经本机网关") }
+            let gateway = remote ? "经 SSH 转发到本机网关" : "经本机网关"
+            let connections = rows.filter(NewSessionLayout.isConnection).map { option($0, gateway) }
             let configs = rows.filter { NewSessionLayout.isAgentConfig($0) && !NewSessionLayout.isConnection($0) }
-                .map { option($0, "经本机网关 · 自定义配置") }
-            return PickerMenu(
-                sections: [
+                .map { option($0, "\(gateway) · 自定义配置") }
+            let sections = remote
+                ? [
+                    PickerSection(id: "connections", title: "经本机网关 · 我的连接", options: connections),
+                    PickerSection(id: "configs", title: "经本机网关 · Agent 预设", options: configs),
+                    PickerSection(id: "builtin", title: "远程自带登录", options: builtIn),
+                ]
+                : [
                     PickerSection(id: "builtin", title: "本机登录", options: builtIn),
                     PickerSection(id: "connections", title: "我的连接", options: connections),
                     PickerSection(id: "configs", title: "Agent 预设", options: configs),
-                ].filter { !$0.options.isEmpty },
+                ]
+            return PickerMenu(
+                sections: sections.filter { !$0.options.isEmpty },
                 note: rows.isEmpty ? "\(AgentGlyph.displayName(for: harness)) 还没有可用的登录或连接：安装并登录它，或在侧栏“Agent 配置 → 连接”里新建连接。" : nil
             )
         }

@@ -1,3 +1,4 @@
+import os
 import Foundation
 import Observation
 import AeroricProtocol
@@ -74,6 +75,7 @@ public final class LiveSessionStore {
     public private(set) var loading = false
     /// Polling trouble, shown as a thin banner; cleared by the next good poll.
     public private(set) var connectionProblem: String?
+    @ObservationIgnored private var pollFailures = 0
     public var errorText: String?
     /// A05: nil until read, or when the host does not offer auto checks.
     public private(set) var autoCheck: LiveAutoCheckSelection?
@@ -143,6 +145,7 @@ public final class LiveSessionStore {
         do {
             let batch = try await actions.updates(taskID: taskID, after: current.cursor)
             connectionProblem = nil
+            pollFailures = 0
             let wasActive = current.turnActive
             switch current.apply(batch) {
             case .needsResync:
@@ -156,8 +159,19 @@ public final class LiveSessionStore {
                 return batch.latestSeq > current.cursor
             }
         } catch {
-            connectionProblem = "连接中断，正在重试…"
+            noteConnectionFailure(error)
             return false
+        }
+    }
+
+    /// One failed round is a blip; the banner shows from the second in a row,
+    /// with the reason, which also goes to the log (2026-10-28).
+    private func noteConnectionFailure(_ error: Error) {
+        pollFailures += 1
+        Logger(subsystem: "com.aeroric.native", category: "live")
+            .error("session \(self.taskID, privacy: .public) poll failed (\(self.pollFailures, privacy: .public)): \(String(describing: error), privacy: .public)")
+        if pollFailures >= 2 {
+            connectionProblem = "连接中断，正在重试…（\(String(describing: error).prefix(120))）"
         }
     }
 
@@ -172,7 +186,7 @@ public final class LiveSessionStore {
             await reloadHistory()
             baseline = LiveHistoryMerge.assistantCount(history)
         } catch {
-            connectionProblem = "连接中断，正在重试…"
+            noteConnectionFailure(error)
         }
     }
 

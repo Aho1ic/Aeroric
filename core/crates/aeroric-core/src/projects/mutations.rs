@@ -706,6 +706,26 @@ pub fn set_avatar(projects: &[Record], project_id: &str, avatar: Option<Value>) 
     })
 }
 
+/// Display fields the sidebar's 更多 menu sets (2026-10-28): the folder
+/// icon's tint and the Agent a new session starts with. `None` clears it.
+pub const META_KEYS: [&str; 2] = ["color", "defaultAgent"];
+
+pub fn set_meta(
+    projects: &[Record],
+    project_id: &str,
+    key: &str,
+    value: Option<Value>,
+) -> Vec<Record> {
+    map_one(projects, project_id, |record| match value {
+        Some(value) => {
+            record.0.insert(key.to_string(), value);
+        }
+        None => {
+            record.0.remove(key);
+        }
+    })
+}
+
 pub fn toggle_hidden(projects: &[Record], project_id: &str) -> Vec<Record> {
     map_one(projects, project_id, |record| {
         let next = !bool_field(record, "hiddenFromRail");

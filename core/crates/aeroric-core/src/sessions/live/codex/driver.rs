@@ -408,10 +408,16 @@ impl Actor {
             return Ok((client, thread.clone()));
         }
         let response = match &thread_id {
-            Some(thread) => client
-                .request("thread/resume", json!({"threadId": thread}))
-                .await
-                .map_err(|e| format!("无法恢复 Codex 会话：{e}"))?,
+            Some(thread) => match crate::sessions::live::fork_source(thread) {
+                Some(source) => client
+                    .request("thread/fork", json!({"threadId": source}))
+                    .await
+                    .map_err(|e| format!("无法分叉 Codex 会话：{e}"))?,
+                None => client
+                    .request("thread/resume", json!({"threadId": thread}))
+                    .await
+                    .map_err(|e| format!("无法恢复 Codex 会话：{e}"))?,
+            },
             None => {
                 let policy = codex_policy(&permission);
                 let mut params = Map::new();
@@ -431,7 +437,7 @@ impl Actor {
             .pointer("/thread/id")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .or(thread_id)
+            .or(thread_id.filter(|t| crate::sessions::live::fork_source(t).is_none()))
             .ok_or_else(|| "Codex 没有返回会话 id".to_string())?;
         let path = response.pointer("/thread/path").and_then(Value::as_str);
         self.server

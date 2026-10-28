@@ -6,7 +6,7 @@
 //! 超大帧把本端内存吃掉，验收红线「超长 JSONL 拒绝」要的是**读到上限即断**，
 //! 不是读到完整帧再算账。
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 use aeroric_protocol::envelope::{decode_line, encode_line, Frame, MAX_FRAME_BYTES};
 
@@ -28,29 +28,35 @@ pub enum CodecError {
 
 /// 读一帧：按 `\n` 定界，**累计到 `MAX_FRAME_BYTES + 1` 仍未见定界符即断流**
 /// （超长的剩余字节从不进内存）。`Ok(None)` = 对端在帧边界处干净关闭。
+///
+/// 2026-10-28：只消耗到本帧的换行为止，其后的字节留在 `BufReader` 里给下一帧。
+/// 之前按 4 KiB 块读、见换行即返回，同一块里紧跟着的帧被整条丢弃——客户端
+/// 连发请求时后面的请求石沉大海，等满 30 秒超时（发版后侧栏空白的根因）。
 pub async fn read_frame<R: AsyncRead + Unpin>(
     reader: &mut BufReader<R>,
 ) -> Result<Option<Frame>, CodecError> {
+    use tokio::io::AsyncBufReadExt;
     let mut buf = Vec::with_capacity(256);
-    let mut scratch = [0u8; 4096];
     loop {
-        let read = reader
-            .read(&mut scratch)
+        let available = reader
+            .fill_buf()
             .await
             .map_err(|e| CodecError::Io(e.to_string()))?;
-        if read == 0 {
+        if available.is_empty() {
             return if buf.is_empty() {
                 Ok(None)
             } else {
                 Err(CodecError::PartialFrame)
             };
         }
-        let chunk = &scratch[..read];
-        if let Some(nl) = chunk.iter().position(|byte| *byte == b'\n') {
-            buf.extend_from_slice(&chunk[..nl]);
+        if let Some(nl) = available.iter().position(|byte| *byte == b'\n') {
+            buf.extend_from_slice(&available[..nl]);
+            reader.consume(nl + 1);
             return decode_line(&buf).map(Some).map_err(CodecError::Frame);
         }
-        buf.extend_from_slice(chunk);
+        let taken = available.len();
+        buf.extend_from_slice(available);
+        reader.consume(taken);
         if buf.len() > MAX_FRAME_BYTES {
             return Err(CodecError::Overlong {
                 limit: MAX_FRAME_BYTES,
@@ -135,6 +141,25 @@ mod tests {
             serde_json::to_string(&got).expect("a"),
             serde_json::to_string(&sample()).expect("b")
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 2026-10-28: frames written back to back in one chunk all arrive.
+    #[tokio::test]
+    async fn back_to_back_frames_in_one_write_are_all_read() {
+        let (mut reader, mut client, dir) = pair().await;
+        let line = encode_line(&sample()).expect("encode");
+        use tokio::io::AsyncWriteExt;
+        client
+            .write_all(format!("{line}{line}{line}").as_bytes())
+            .await
+            .expect("client write");
+        client.flush().await.expect("flush");
+        for _ in 0..3 {
+            assert!(read_frame(&mut reader).await.expect("read").is_some());
+        }
+        drop(client);
+        assert!(read_frame(&mut reader).await.expect("eof").is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 

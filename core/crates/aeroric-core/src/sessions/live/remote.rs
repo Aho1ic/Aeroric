@@ -310,6 +310,125 @@ pub fn ssh_args(target: &SshTarget, remote_command: &str) -> Vec<String> {
     args
 }
 
+// ── Through this Mac's gateway (G1–G6, 2026-10-28) ─────────────────────────
+
+/// One value exported to a remote agent through the gateway.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RemoteValue {
+    Text(String),
+    /// `~/…`, expanded on the remote side.
+    Path(String),
+    /// The task token, read from the session's first stdin line (G1): never
+    /// in argv, where `ps` on the remote machine would show it.
+    Token,
+}
+
+/// What a remote session through the gateway needs on the remote machine:
+/// its managed home (G2) and the environment pointing it at the forward.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GatewayLaunch {
+    pub env: Vec<(String, RemoteValue)>,
+    pub unset: Vec<String>,
+    /// Private directories to create (`~/…`).
+    pub dirs: Vec<String>,
+    /// (path `~/…`, content, overwrite) written privately before the agent starts.
+    pub files: Vec<(String, String, bool)>,
+}
+
+/// A configuration's managed home on the remote machine (G2), mirroring
+/// `<data>/agent-homes/<name>` here.
+pub fn remote_home(home_dir_name: &str) -> Result<String, String> {
+    let safe = !home_dir_name.is_empty()
+        && !home_dir_name.starts_with('.')
+        && home_dir_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if safe {
+        Ok(format!("~/.aeroric/agent-homes/{home_dir_name}"))
+    } else {
+        Err(format!("Agent 预设的目录名 {home_dir_name} 不能用在远程"))
+    }
+}
+
+/// `ssh` options forwarding the remote machine's `127.0.0.1:remote_port` to
+/// this Mac's gateway (G3); ssh exits instead of running without it.
+pub fn forward_args(remote_port: u16, local_port: u16) -> Vec<String> {
+    vec![
+        "-o".into(),
+        "ExitOnForwardFailure=yes".into(),
+        "-R".into(),
+        format!("127.0.0.1:{remote_port}:127.0.0.1:{local_port}"),
+    ]
+}
+
+/// Whether ssh's stderr says the remote forward could not be set up.
+pub fn is_forward_failure(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("remote port forwarding failed")
+        || lower.contains("forwarding failed for listen port")
+        || lower.contains("administratively prohibited")
+}
+
+/// A random port for the remote end of the forward.
+pub fn pick_remote_port(seed: u128) -> u16 {
+    20000 + (seed % 40000) as u16
+}
+
+/// The session command through the gateway: read the token line, prepare the
+/// managed home, export the environment, then `cd` and exec as usual.
+pub fn gateway_command(
+    cwd: &str,
+    program: &str,
+    args: &[String],
+    launch: &GatewayLaunch,
+) -> String {
+    let mut line = String::from("IFS= read -r AERORIC_T || exit 5; ");
+    if !launch.dirs.is_empty() || !launch.files.is_empty() {
+        let mut prepare = vec!["umask 077".to_string()];
+        if !launch.dirs.is_empty() {
+            let dirs: Vec<String> = launch.dirs.iter().map(|d| remote_path(d)).collect();
+            prepare.push(format!("mkdir -p {}", dirs.join(" ")));
+        }
+        for (path, content, overwrite) in &launch.files {
+            let write = format!("printf '%s' {} > {}", quote(content), remote_path(path));
+            prepare.push(if *overwrite {
+                write
+            } else {
+                format!("{{ [ -f {} ] || {write}; }}", remote_path(path))
+            });
+        }
+        line.push_str(&format!(
+            "( {} ) || {{ echo '无法在远程准备 Agent 预设目录' >&2; exit 5; }}; ",
+            prepare.join(" && ")
+        ));
+    }
+    for (name, value) in &launch.env {
+        let value = match value {
+            RemoteValue::Text(text) => quote(text),
+            RemoteValue::Path(path) => remote_path(path),
+            RemoteValue::Token => "\"$AERORIC_T\"".to_string(),
+        };
+        line.push_str(&format!("{name}={value}; export {name}; "));
+    }
+    if !launch.unset.is_empty() {
+        line.push_str(&format!("unset {}; ", launch.unset.join(" ")));
+    }
+    line.push_str(
+        "NO_PROXY=\"127.0.0.1,localhost,::1${NO_PROXY:+,$NO_PROXY}\"; \
+         no_proxy=\"127.0.0.1,localhost,::1${no_proxy:+,$no_proxy}\"; export NO_PROXY no_proxy; unset AERORIC_T; ",
+    );
+    line.push_str(&format!(
+        "cd {} && exec {}",
+        remote_path(cwd),
+        quote(program)
+    ));
+    for arg in args {
+        line.push(' ');
+        line.push_str(&quote(arg));
+    }
+    login_shell(&line)
+}
+
 /// What to tell the user when a remote agent is too old (B5: copy, no remote upgrade).
 pub fn upgrade_hint(agent: &str) -> &'static str {
     match agent {
@@ -625,6 +744,88 @@ mod tests {
         assert_eq!(direct_host("codex", false), "registry.npmjs.org");
         assert_eq!(direct_host("claude", false), "downloads.claude.ai");
         assert_eq!(direct_host("omp", false), "build.stencil.so");
+    }
+
+    #[test]
+    fn gateway_sessions_take_the_token_from_stdin_and_prepare_their_home() {
+        let home = tempdir();
+        let launch = GatewayLaunch {
+            env: vec![
+                (
+                    "CLAUDE_CONFIG_DIR".into(),
+                    RemoteValue::Path("~/.aeroric/agent-homes/p".into()),
+                ),
+                (
+                    "ANTHROPIC_BASE_URL".into(),
+                    RemoteValue::Text("http://127.0.0.1:20001/claude".into()),
+                ),
+                ("ANTHROPIC_AUTH_TOKEN".into(), RemoteValue::Token),
+            ],
+            unset: vec!["ANTHROPIC_API_KEY".into()],
+            dirs: vec!["~/.aeroric/agent-homes/p/tmp".into()],
+            files: vec![
+                (
+                    "~/.aeroric/agent-homes/p/a.yml".into(),
+                    "it's\n".into(),
+                    true,
+                ),
+                ("~/.aeroric/agent-homes/p/keep".into(), "new".into(), false),
+            ],
+        };
+        std::fs::create_dir_all(home.path().join(".aeroric/agent-homes/p")).unwrap();
+        std::fs::write(home.path().join(".aeroric/agent-homes/p/keep"), "old").unwrap();
+        let script = gateway_command(
+            "~",
+            "sh",
+            &["-c".into(), "printf '%s|%s|%s|%s' \"$CLAUDE_CONFIG_DIR\" \"$ANTHROPIC_AUTH_TOKEN\" \"${ANTHROPIC_API_KEY-unset}\" \"${AERORIC_T-gone}\"; cat".into()],
+            &launch,
+        );
+        assert!(!script.contains("tok-123"));
+        let out = run_offline(&script, home.path(), b"tok-123\n{\"type\":\"user\"}\n");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            stdout,
+            format!(
+                "{}/.aeroric/agent-homes/p|tok-123|unset|gone{{\"type\":\"user\"}}\n",
+                home.path().display()
+            ),
+            "the token line is consumed; the protocol that follows reaches the agent"
+        );
+        let dir = home.path().join(".aeroric/agent-homes/p");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.yml")).unwrap(),
+            "it's\n"
+        );
+        assert_eq!(std::fs::read_to_string(dir.join("keep")).unwrap(), "old");
+        assert!(dir.join("tmp").is_dir());
+    }
+
+    #[test]
+    fn forwards_are_strict_and_home_names_safe() {
+        assert_eq!(
+            forward_args(20001, 51234),
+            [
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-R",
+                "127.0.0.1:20001:127.0.0.1:51234"
+            ]
+        );
+        assert!(is_forward_failure(
+            "Error: remote port forwarding failed for listen port 20001"
+        ));
+        assert!(!is_forward_failure("Permission denied"));
+        assert!((20000..60000).contains(&pick_remote_port(u128::MAX)));
+        assert_eq!(
+            remote_home("custom-ab12").unwrap(),
+            "~/.aeroric/agent-homes/custom-ab12"
+        );
+        assert!(remote_home("../x").is_err() && remote_home("a b").is_err());
     }
 
     #[test]

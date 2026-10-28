@@ -41,6 +41,7 @@ pub mod startup;
 pub mod submission_services;
 pub mod subscriptions;
 pub mod uds;
+pub mod workspace_meta_services;
 
 pub fn is_library_only() -> bool {
     true

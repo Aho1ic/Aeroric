@@ -530,6 +530,12 @@ fn project_open(request: Request, context: Arc<CoreContext>) -> Frame {
         );
     };
     let now_ms_inner = context.clock.now_ms() as i64;
+    // S3: a folder removed earlier comes back with its old id (and sessions).
+    let new_id = &crate::workspace_meta_services::reuse_removed_id(
+        &context,
+        &format!("local:{}", mutations::normalise_local_path(path)),
+        new_id,
+    );
     match ProjectService::new(context).open_local(path, new_id, now_ms_inner) {
         Ok((upserted, applied)) => ok(
             &request,
@@ -587,6 +593,14 @@ fn project_open_ssh(request: Request, context: Arc<CoreContext>) -> Frame {
             .to_string()
     });
     let now = context.clock.now_ms() as i64;
+    let new_id = crate::workspace_meta_services::reuse_removed_id(
+        &context,
+        &format!(
+            "ssh:{connection_id}:{}",
+            mutations::normalize_remote_path(&remote_path)
+        ),
+        &new_id,
+    );
     match ProjectService::new(context).open_ssh(&name, &connection_id, &remote_path, &new_id, now) {
         Ok((upserted, applied)) => ok(
             &request,

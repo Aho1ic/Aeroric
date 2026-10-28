@@ -406,20 +406,28 @@ pub(crate) fn config_home_env(
         aeroric_core::settings::ensure_private_dir(dir)
             .map_err(|e| format!("cannot prepare managed agent home {}: {e}", dir.display()))?;
     }
-    let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
     if config.harness == Harness::Codex {
         set_aside_chatgpt_login(&home)?;
     }
-    Ok(match config.harness {
+    Ok(managed_home_ops(config.harness, &home.to_string_lossy()))
+}
+
+/// The environment a configuration's CLI gets for its managed home at `home`
+/// (a local path, or `~/…` on a remote machine).
+pub(crate) fn managed_home_ops(harness: Harness, home: &str) -> Vec<EnvOp> {
+    match harness {
         Harness::Codex => vec![
-            EnvOp::Set("CODEX_HOME".into(), path(&home)),
+            EnvOp::Set("CODEX_HOME".into(), home.to_string()),
             EnvOp::Unset("OPENAI_ORG_ID".into()),
             EnvOp::Unset("OPENAI_PROJECT".into()),
         ],
         _ => vec![
-            EnvOp::Set("CLAUDE_CONFIG_DIR".into(), path(&home)),
-            EnvOp::Set("CLAUDE_CODE_SESSION_ENV_DIR".into(), path(&session_env)),
-            EnvOp::Set("TMPDIR".into(), path(&tmp)),
+            EnvOp::Set("CLAUDE_CONFIG_DIR".into(), home.to_string()),
+            EnvOp::Set(
+                "CLAUDE_CODE_SESSION_ENV_DIR".into(),
+                format!("{home}/session-env"),
+            ),
+            EnvOp::Set("TMPDIR".into(), format!("{home}/tmp")),
             EnvOp::Set(
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(),
                 "1".into(),
@@ -431,7 +439,7 @@ pub(crate) fn config_home_env(
             EnvOp::Unset("ANTHROPIC_DEFAULT_HAIKU_MODEL".into()),
             EnvOp::Unset("AGENT_ROUTER_TOKEN".into()),
         ],
-    })
+    }
 }
 
 fn config_family(config: &ConfigLaunch) -> ProtocolFamily {
@@ -484,20 +492,7 @@ pub(crate) fn gateway_env_ops(
     token: &str,
 ) -> Result<Vec<EnvOp>, String> {
     let base = crate::gateway::ensure_running(data_dir)?;
-    let mut ops = match family {
-        ProtocolFamily::Claude => vec![
-            EnvOp::Set("ANTHROPIC_BASE_URL".into(), format!("{base}/claude")),
-            EnvOp::Set("ANTHROPIC_AUTH_TOKEN".into(), token.to_string()),
-            EnvOp::Unset("ANTHROPIC_API_KEY".into()),
-        ],
-        ProtocolFamily::Codex => vec![
-            EnvOp::Set("OPENAI_BASE_URL".into(), format!("{base}/codex/v1")),
-            EnvOp::Set("OPENAI_API_KEY".into(), token.to_string()),
-            EnvOp::Set(GATEWAY_TOKEN_ENV.into(), token.to_string()),
-            EnvOp::Unset("CODEX_API_KEY".into()),
-        ],
-        _ => return Err("this agent family does not use the gateway yet".into()),
-    };
+    let mut ops = gateway_ops(&base, family, token)?;
     // A system proxy must never carry loopback gateway traffic.
     for key in ["NO_PROXY", "no_proxy"] {
         let mut list: Vec<String> = std::env::var(key)
@@ -515,6 +510,28 @@ pub(crate) fn gateway_env_ops(
         ops.push(EnvOp::Set(key.into(), list.join(",")));
     }
     Ok(ops)
+}
+
+/// The gateway at `base` for one family's CLI, with its token.
+pub(crate) fn gateway_ops(
+    base: &str,
+    family: ProtocolFamily,
+    token: &str,
+) -> Result<Vec<EnvOp>, String> {
+    Ok(match family {
+        ProtocolFamily::Claude => vec![
+            EnvOp::Set("ANTHROPIC_BASE_URL".into(), format!("{base}/claude")),
+            EnvOp::Set("ANTHROPIC_AUTH_TOKEN".into(), token.to_string()),
+            EnvOp::Unset("ANTHROPIC_API_KEY".into()),
+        ],
+        ProtocolFamily::Codex => vec![
+            EnvOp::Set("OPENAI_BASE_URL".into(), format!("{base}/codex/v1")),
+            EnvOp::Set("OPENAI_API_KEY".into(), token.to_string()),
+            EnvOp::Set(GATEWAY_TOKEN_ENV.into(), token.to_string()),
+            EnvOp::Unset("CODEX_API_KEY".into()),
+        ],
+        _ => return Err("this agent family does not use the gateway yet".into()),
+    })
 }
 
 fn apply_env_ops(c: &mut CommandBuilder, ops: &[EnvOp]) {

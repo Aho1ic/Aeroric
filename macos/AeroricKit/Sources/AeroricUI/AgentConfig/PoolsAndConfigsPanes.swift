@@ -98,7 +98,7 @@ struct ConfigEmptyDetail: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, AeroricSpace.huge)
+        .padding(.vertical, AeroricSpace.xl)
     }
 }
 
@@ -136,11 +136,11 @@ struct PoolsPane: View {
     private typealias ACC = AgentConnectionsClient
 
     var body: some View {
-        MasterDetail {
+        MasterDetail(centered: store.poolDraft == nil) {
             ConfigListColumn("号池", newTitle: "新建", newIdentifier: "agent-config.new-pool",
                              onNew: { store.newPool() }) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: AeroricSpace.xxs) {
+                    VStack(alignment: .leading, spacing: 2) {
                         if store.document.pools.isEmpty {
                             Text("还没有号池，点右上角“新建”。")
                                 .font(.system(size: AeroricType.caption))
@@ -148,13 +148,13 @@ struct PoolsPane: View {
                                 .padding(.horizontal, AeroricSpace.l)
                         }
                         ForEach(store.document.pools) { pool in
-                            HoverCapsuleRow(selected: store.selectedPool == pool.id, height: 50,
-                                            horizontalPadding: AeroricSpace.s) {
+                            HoverCapsuleRow(selected: store.selectedPool == pool.id, height: 34,
+                                            horizontalPadding: AeroricSpace.m) {
                                 store.selectPool(pool.id)
                             } label: {
-                                ConfigListItem(title: pool.label,
-                                               subtitle: "\(AgentConfigText.strategyTitle(pool.strategy)) · \(pool.members.count) 个成员",
-                                               status: poolStatus(pool))
+                                ConfigListItem(title: pool.label, systemImage: "square.stack.3d.up",
+                                               detail: "\(pool.members.count) 个 · \(AgentConfigText.strategyTitle(pool.strategy))",
+                                               tag: poolTag(pool).0, tagTint: poolTag(pool).1)
                             }
                             .accessibilityIdentifier("agent-config.pool.\(pool.id)")
                         }
@@ -182,6 +182,10 @@ struct PoolsPane: View {
                             onRevert: { store.selectPool(store.selectedPool) },
                             onSave: { Task { await store.savePool() } })
         }
+        // 2026-10-28: opening the page shows the first pool rather than an empty side.
+        .task(id: store.document.pools.first?.id) {
+            if store.poolDraft == nil, let first = store.document.pools.first { store.selectPool(first.id) }
+        }
         .confirmationDialog("删除这个号池？", isPresented: $confirmDelete) {
             Button("删除", role: .destructive) { Task { await store.deletePool() } }
                 .accessibilityIdentifier("agent-config.delete")
@@ -196,10 +200,11 @@ struct PoolsPane: View {
     }
 
     /// Green when some member is ready, orange when all are cooling, grey when empty.
-    private func poolStatus(_ pool: ACC.Pool) -> Color {
-        guard !pool.members.isEmpty else { return AeroricColor.textTertiary }
-        let ready = pool.members.contains { store.cooldowns(forConnection: $0.connectionId).isEmpty }
-        return ready ? AeroricColor.success : AeroricColor.warning
+    private func poolTag(_ pool: ACC.Pool) -> (String, Color) {
+        guard !pool.members.isEmpty else { return ("空", AeroricColor.textTertiary) }
+        let cooling = pool.members.filter { !store.cooldowns(forConnection: $0.connectionId).isEmpty }.count
+        if cooling == 0 { return ("正常", AeroricColor.success) }
+        return cooling == pool.members.count ? ("全部冷却", AeroricColor.danger) : ("部分冷却", AeroricColor.warning)
     }
 
     private var overview: some View {
@@ -406,11 +411,11 @@ struct ConfigsPane: View {
     private typealias ACC = AgentConnectionsClient
 
     var body: some View {
-        MasterDetail {
+        MasterDetail(centered: store.configDraft == nil) {
             ConfigListColumn("Agent 预设", newTitle: "新建", newIdentifier: "agent-config.new-config",
                              onNew: { store.newConfig() }) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: AeroricSpace.xxs) {
+                    VStack(alignment: .leading, spacing: 2) {
                         if store.document.configs.isEmpty {
                             Text("还没有 Agent 预设。已保存的连接会直接出现在新建任务里；需要号池、自动路由或备用模型时再新建。")
                                 .font(.system(size: AeroricType.caption))
@@ -419,12 +424,12 @@ struct ConfigsPane: View {
                                 .padding(.horizontal, AeroricSpace.l)
                         }
                         ForEach(store.document.configs) { config in
-                            HoverCapsuleRow(selected: store.selectedConfig == config.id, height: 50,
-                                            horizontalPadding: AeroricSpace.s) {
+                            HoverCapsuleRow(selected: store.selectedConfig == config.id, height: 34,
+                                            horizontalPadding: AeroricSpace.m) {
                                 Task { await store.selectConfig(config.id) }
                             } label: {
-                                ConfigListItem(title: config.label,
-                                               subtitle: "\(AgentConfigText.harnessTitle(config.harness)) · \(targetTitle(config.target))")
+                                ConfigListItem(title: config.label, harness: config.harness,
+                                               systemImage: "slider.horizontal.3", detail: targetTitle(config.target))
                             }
                             .accessibilityIdentifier("agent-config.config.\(config.id)")
                         }
@@ -452,6 +457,9 @@ struct ConfigsPane: View {
             FloatingSaveBar(visible: store.configDirty,
                             onRevert: { Task { await store.selectConfig(store.selectedConfig) } },
                             onSave: { Task { await store.saveConfig() } })
+        }
+        .task(id: store.document.configs.first?.id) {
+            if store.configDraft == nil, let first = store.document.configs.first { await store.selectConfig(first.id) }
         }
         .confirmationDialog("删除这个 Agent 配置？", isPresented: $confirmDelete) {
             Button("删除", role: .destructive) { Task { await store.deleteConfig() } }

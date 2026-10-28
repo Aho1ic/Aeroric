@@ -31,7 +31,7 @@ const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 pub enum ServerKey {
     Agent(String),
     Config(String),
-    /// One remote `codex app-server` per (SSH connection, agent).
+    /// One remote `codex app-server` per (SSH connection, agent, configuration).
     Remote(RemoteKey),
 }
 
@@ -40,6 +40,9 @@ pub enum ServerKey {
 pub struct RemoteKey {
     pub connection_id: String,
     pub agent: String,
+    /// A pinned Agent configuration: the remote agent talks to this Mac's
+    /// gateway through an SSH reverse forward (G1–G6, 2026-10-28).
+    pub config: Option<String>,
 }
 
 /// Which Claude launch a run uses (N5): one process per session, so the key
@@ -103,6 +106,10 @@ pub trait Routing: Send + Sync {
     }
     fn remote_omp_launcher(&self, _key: &RemoteKey) -> OmpLauncher {
         std::sync::Arc::new(|_| Err("这个宿主不支持远程原生会话".to_string()))
+    }
+    /// Where a remote Claude writes transcripts (`~` expands there).
+    fn remote_claude_config_dir(&self, _key: &RemoteKey) -> std::path::PathBuf {
+        std::path::PathBuf::from("~/.claude")
     }
 }
 
@@ -294,7 +301,7 @@ impl StructuredExecutor {
                     effort: spec.effort.clone(),
                     session_id: spec.thread_id.clone(),
                     // Transcript paths are the remote machine's (`~` expands there).
-                    config_dir: Some(std::path::PathBuf::from("~/.claude")),
+                    config_dir: Some(self.routing.remote_claude_config_dir(key)),
                 },
                 self.routing.remote_claude_launcher(key),
                 Arc::clone(&self.sink),
