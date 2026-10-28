@@ -53,6 +53,13 @@ public struct SshHostsPage: View {
             HostTrustSheet(pending: pending, onTrust: { Task { await store.trustPending() } },
                            onCancel: { store.pendingTrust = nil })
         }
+        .sheet(item: $store.pendingInstall) { pending in
+            RemoteInstallSheet(pending: pending,
+                               method: Binding(get: { store.pendingInstall?.method ?? pending.method },
+                                               set: { store.pendingInstall?.method = $0 }),
+                               onInstall: { Task { await store.confirmInstall() } },
+                               onCancel: { store.pendingInstall = nil })
+        }
         .sheet(item: $groupSheet) { sheet in
             GroupNameSheet(sheet: sheet, store: store) { name in
                 groupSheet = nil
@@ -247,6 +254,7 @@ public struct SshHostsPage: View {
                     }
                 }
                 if let state = store.selectedID.flatMap(store.test(for:)) { testCapsule(state) }
+                if let id = store.selectedID, let probe = store.probes[id] { remoteAgents(id, probe) }
                 if let error = store.errorText {
                     StatusCapsule(text: error, systemImage: "exclamationmark.circle", tint: AeroricColor.danger)
                 }
@@ -281,6 +289,101 @@ public struct SshHostsPage: View {
             AeroricEmptyState(systemImage: "server.rack", title: "SSH 主机",
                               message: "添加主机后，可以在项目的“+”里打开远程项目，Agent 会在远程机器上运行。")
                 .padding(.top, 80)
+        }
+    }
+
+    private static let agentTitles = [("claude", "Claude Code", "asterisk"),
+                                      ("codex", "Codex", "chevron.left.forwardslash.chevron.right"),
+                                      ("omp", "omp", "circle.hexagongrid")]
+
+    /// R1/R3: each agent on the host, with install / upgrade where needed.
+    private func remoteAgents(_ hostID: String, _ probe: SshClient.Probe) -> some View {
+        section("远程 Agent") {
+            Text(probe.npm.map { "npm \($0)" + (probe.node.map { " · node \($0)" } ?? "") } ?? "远程没有 npm：可用“本机下载后传输”安装")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+            ForEach(Self.agentTitles, id: \.0) { agent, title, symbol in
+                remoteAgentRow(hostID: hostID, agent: agent, title: title, symbol: symbol,
+                               state: SshHostsStore.remoteAgent(agent, in: probe))
+            }
+            if store.packageCacheBytes > 0 {
+                HStack(spacing: AeroricSpace.s) {
+                    Text("本机缓存的独立安装包 "
+                        + ByteCountFormatter.string(fromByteCount: Int64(clamping: store.packageCacheBytes), countStyle: .file))
+                    Button("清空") { Task { await store.clearPackageCache() } }
+                        .buttonStyle(.link)
+                        .accessibilityIdentifier("connections.packages.clear")
+                }
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+            }
+        }
+    }
+
+    private func remoteAgentRow(hostID: String, agent: String, title: String, symbol: String,
+                                state: SshHostsStore.RemoteAgent) -> some View {
+        let job = store.installJob(hostID, agent)
+        return VStack(alignment: .leading, spacing: AeroricSpace.xs) {
+            HStack(spacing: AeroricSpace.m) {
+                Image(systemName: symbol).frame(width: 16).foregroundStyle(AeroricColor.textSecondary)
+                Text(title).font(.system(size: AeroricType.secondary, weight: .medium))
+                if job?.running == true {
+                    StatusChip(text: "安装中", tint: AeroricColor.running)
+                } else {
+                    switch state {
+                    case .missing: StatusChip(text: "未安装", tint: AeroricColor.danger)
+                    case let .tooOld(version, minimum):
+                        StatusChip(text: "\(version) · 需要 \(minimum)+", tint: AeroricColor.warning)
+                    case let .ready(version): StatusChip(text: version, systemImage: "checkmark", tint: AeroricColor.success)
+                    }
+                }
+                Spacer()
+                if job?.running == true || store.preparing.contains(hostID + "." + agent) {
+                    ProgressView().controlSize(.small)
+                } else {
+                    switch state {
+                    case .missing:
+                        Button { Task { await store.prepareInstall(hostID: hostID, agent: agent) } } label: {
+                            Label("在远程安装", systemImage: "arrow.down.circle")
+                        }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.primary, compact: true))
+                        .accessibilityIdentifier("connections.install.\(agent)")
+                    case .tooOld:
+                        Button { Task { await store.prepareInstall(hostID: hostID, agent: agent) } } label: {
+                            Label("在远程升级", systemImage: "arrow.up.circle")
+                        }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.primary, compact: true))
+                        .accessibilityIdentifier("connections.upgrade.\(agent)")
+                    case .ready:
+                        Text("已可用").font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)
+                    }
+                }
+            }
+            .padding(.leading, AeroricSpace.l)
+            .padding(.trailing, AeroricSpace.s)
+            .frame(height: 38)
+            .background(AeroricColor.layer1.opacity(0.85), in: Capsule(style: .continuous))
+            .overlay { Capsule(style: .continuous).strokeBorder(AeroricColor.separator1, lineWidth: 1) }
+            if let job, job.running, job.method == "offline" {
+                OfflineInstallProgress(job: job).padding(.leading, AeroricSpace.xl)
+            }
+            if let job, job.running || job.state == "failed", !job.log.isEmpty || job.message != nil {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(job.log.suffix(6).enumerated()), id: \.offset) { _, line in
+                        Text(line).lineLimit(1).truncationMode(.middle)
+                    }
+                    if job.state == "failed", let message = job.message {
+                        Text(message).foregroundStyle(AeroricColor.danger).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .font(AeroricType.mono(AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(AeroricSpace.m)
+                .background(AeroricColor.layer2, in: AeroricRadius.shape(16))
+                .padding(.leading, AeroricSpace.xl)
+            }
         }
     }
 
@@ -629,5 +732,163 @@ public struct OpenRemoteProjectSheet: View {
         } catch {
             self.error = "打开失败：\(error)"
         }
+    }
+}
+
+/// "在 Mac mini 上安装 Claude Code": pick direct or offline (O1), see exactly
+/// what runs / what is sent before anything happens.
+struct RemoteInstallSheet: View {
+    let pending: SshHostsStore.PendingInstall
+    @Binding var method: String
+    let onInstall: () -> Void
+    let onCancel: () -> Void
+
+    private var title: String {
+        let name = ["claude": "Claude Code", "codex": "Codex", "omp": "omp"][pending.agent] ?? pending.agent
+        return "在 \(pending.hostName) 上\(pending.upgrade ? "升级" : "安装") \(name)"
+    }
+
+    private var plan: SshClient.InstallPlan { pending.plan }
+    private var ready: Bool { method == "offline" ? plan.offline != nil : plan.command != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.l) {
+            Label(title, systemImage: "arrow.down.circle").font(.system(size: AeroricType.headline, weight: .semibold))
+            VStack(alignment: .leading, spacing: AeroricSpace.s) {
+                Text("安装方式").font(.system(size: AeroricType.secondary)).foregroundStyle(AeroricColor.textSecondary)
+                CapsuleSlider(selection: $method, groupTitle: "安装方式", identifier: "connections.install.method",
+                              segments: [
+                                  .init(value: "direct", title: "远程直接下载", systemImage: "network"),
+                                  .init(value: "offline", title: "本机下载后传输", systemImage: "arrow.up.forward.app"),
+                              ])
+                    .fixedSize()
+            }
+            if let reason = recommendation {
+                StatusCapsule(text: reason, systemImage: "wifi.slash", tint: AeroricColor.warning)
+            }
+            if method == "offline" { offlineDetails } else { directDetails }
+            HStack {
+                Spacer()
+                Button("取消", action: onCancel).buttonStyle(AeroricCapsuleButtonStyle(.ghost))
+                if ready {
+                    Button(confirmTitle, action: onInstall)
+                        .buttonStyle(AeroricCapsuleButtonStyle(.primary))
+                        .keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("connections.install.confirm")
+                }
+            }
+        }
+        .padding(AeroricSpace.xxl)
+        .frame(width: 500)
+        .glassSurface(.floatingCard, in: AeroricRadius.shape(26))
+    }
+
+    private var confirmTitle: String {
+        method == "offline" ? "传输并\(pending.upgrade ? "升级" : "安装")" : (pending.upgrade ? "升级" : "安装")
+    }
+
+    /// Why the offline way was picked for the user, shown while it is selected.
+    private var recommendation: String? {
+        guard plan.recommended == "offline", method == "offline" else { return nil }
+        if plan.command == nil { return "远程没有 npm，已自动选择传输：独立安装包不需要 Node.js" }
+        return "远程连不上 \(plan.directHost)，已自动选择传输"
+    }
+
+    @ViewBuilder private var directDetails: some View {
+        if let command = plan.command {
+            Text("将经 SSH 在远程运行：").font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
+            commandCapsule(command)
+            if plan.directReachable == false {
+                StatusCapsule(text: "上次测试时远程连不上 \(plan.directHost)，直接下载可能会失败",
+                              systemImage: "exclamationmark.triangle", tint: AeroricColor.warning)
+            }
+        } else {
+            StatusCapsule(text: "远程没有 npm：改用“本机下载后传输”，或先在远程安装 Node.js（含 npm）。",
+                          systemImage: "info.circle", tint: AeroricColor.warning)
+        }
+    }
+
+    @ViewBuilder private var offlineDetails: some View {
+        if let offline = plan.offline {
+            VStack(spacing: AeroricSpace.xs) {
+                detail("远程平台", offline.platform)
+                detail("版本", "\(offline.version)（官方独立包）")
+                detail("大小", ByteCountFormatter.string(fromByteCount: Int64(clamping: offline.size), countStyle: .file)
+                    + (offline.cached ? " · 本机已缓存" : " · 先下载到本机"))
+                detail("装到", offline.destination, mono: true)
+            }
+            Text("本机校验 sha256 后经这条 SSH 连接传过去，远程再校验一次才放到位；不改远程的 shell 配置。")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            StatusCapsule(text: plan.offlineError ?? "暂时拿不到独立安装包", systemImage: "exclamationmark.triangle",
+                          tint: AeroricColor.danger)
+        }
+    }
+
+    private func detail(_ label: String, _ value: String, mono: Bool = false) -> some View {
+        HStack {
+            Text(label).foregroundStyle(AeroricColor.textSecondary)
+            Spacer()
+            Text(value).font(mono ? AeroricType.mono(AeroricType.caption) : .system(size: AeroricType.secondary))
+                .textSelection(.enabled)
+        }
+        .font(.system(size: AeroricType.secondary))
+    }
+
+    private func commandCapsule(_ command: String) -> some View {
+        Text(command)
+            .font(AeroricType.mono(AeroricType.caption))
+            .textSelection(.enabled)
+            .padding(.horizontal, AeroricSpace.l)
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+            .background(AeroricColor.layer1.opacity(0.85), in: Capsule(style: .continuous))
+            .overlay { Capsule(style: .continuous).strokeBorder(AeroricColor.separator2, lineWidth: 1) }
+    }
+}
+
+/// An offline install's four steps (O6), the current one with its bar.
+struct OfflineInstallProgress: View {
+    let job: SshClient.InstallJob
+
+    private static let steps = [("download", "本机下载并校验 sha256"), ("upload", "经 SSH 传到远程"),
+                                ("verify", "远程校验 sha256 并放到位"), ("check", "运行 --version 确认能启动")]
+
+    var body: some View {
+        let current = Self.steps.firstIndex { $0.0 == job.phase } ?? 0
+        VStack(alignment: .leading, spacing: AeroricSpace.xs) {
+            if let fraction = job.fraction {
+                HStack(spacing: AeroricSpace.m) {
+                    ProgressView(value: fraction).progressViewStyle(.linear).tint(AeroricColor.accent)
+                    Text(amount(fraction)).monospacedDigit().foregroundStyle(AeroricColor.textSecondary)
+                }
+                .font(.system(size: AeroricType.caption))
+            }
+            ForEach(Array(Self.steps.enumerated()), id: \.offset) { index, step in
+                Label {
+                    Text(step.1)
+                } icon: {
+                    if index < current {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(AeroricColor.success)
+                    } else if index == current {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "circle").foregroundStyle(AeroricColor.textTertiary)
+                    }
+                }
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(index <= current ? AeroricColor.text : AeroricColor.textTertiary)
+            }
+        }
+        .padding(AeroricSpace.m)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AeroricColor.layer2, in: AeroricRadius.shape(16))
+    }
+
+    private func amount(_ fraction: Double) -> String {
+        let format = { (bytes: UInt64) in ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file) }
+        return "\(Int((fraction * 100).rounded()))% · \(format(job.done)) / \(format(job.total))"
     }
 }

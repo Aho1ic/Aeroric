@@ -52,8 +52,16 @@ pub fn register(
                         }
                     };
                     let _settings = aeroric_core::storage::settings::settings_lock().lock();
-                    let result = session_catalog::for_project(&context, &params.project_id)
-                        .map(|(_, catalog)| catalog);
+                    let result = session_catalog::for_project(&context, &params.project_id).map(
+                        |(project, mut catalog)| {
+                            crate::remote_sessions::mark_remote_availability(
+                                &context,
+                                &project,
+                                &mut catalog.configurations,
+                            );
+                            catalog
+                        },
+                    );
                     match result {
                         Ok(mut directory) => {
                             if !can_execute {

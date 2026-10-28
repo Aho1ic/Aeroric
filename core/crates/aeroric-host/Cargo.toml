@@ -28,7 +28,7 @@ parking_lot = { workspace = true } # metrics 的 codex 进程句柄槽(宿主持
 # AP6 推送出口:签名/载荷策略都在 core,这里只做网络(HTTP 到自托管发送端、
 # WS 到自托管 relay)。不引入第二套传输:与 core 用同 crate 同 feature 的 reqwest。
 remote-protocol = { path = "../../../remote-protocol" }
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking"] } # AP6 推送出口(与 core/Cargo.toml:65 同 crate 同版本)
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking", "socks"] } # socks：离线远程安装跟随 macOS 的 SOCKS 系统代理（2026-10-28）；AP6 推送出口(与 core/Cargo.toml:65 同 crate 同版本)
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] } # AP6 relay 诊断(与 core/Cargo.toml:63 逐字一致)
 # 显式给出 provider:本仓依赖图同时存在 ring(hyper-rustls)与 aws-lc-rs
 # (reqwest/rustls 默认),rustls 在两者同开时**不自己选**,首次 TLS 会 panic。

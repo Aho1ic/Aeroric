@@ -115,6 +115,61 @@ pub fn register_remote_services(set: &mut ServiceSet, context: Arc<CoreContext>)
         })
     });
     set.register(TEST_METHOD, test);
+    for (method, action) in [
+        ("connections.ssh_probes", 0u8),
+        ("connections.remote_install_plan", 1),
+        ("connections.remote_install", 2),
+        ("connections.remote_install_status", 3),
+        ("connections.remote_package_cache", 4),
+        ("connections.clear_remote_package_cache", 5),
+    ] {
+        let context = Arc::clone(&groups_context);
+        set.register(
+            method,
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    let text = |key: &str| {
+                        request
+                            .params
+                            .get(key)
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    };
+                    let (connection_id, agent, method) = (
+                        text("id").unwrap_or_default(),
+                        text("agent").unwrap_or_default(),
+                        text("method").unwrap_or_else(|| "direct".into()),
+                    );
+                    let request_for = request.clone();
+                    let work = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+                        match action {
+                            0 => Ok(Value::Object(load_probes(&context))),
+                            1 => install_plan(&context, &connection_id, &agent),
+                            2 => {
+                                start_install(Arc::clone(&context), &connection_id, &agent, &method)
+                                    .map(|command| json!({ "started": true, "command": command }))
+                            }
+                            3 => Ok(install_status(&connection_id)),
+                            4 => Ok(json!({ "bytes": crate::remote_packages::cache_size(
+                                &crate::remote_packages::cache_root(&context)
+                            ) })),
+                            _ => crate::remote_packages::clear_cache(
+                                &crate::remote_packages::cache_root(&context),
+                            )
+                            .map(|()| json!({ "bytes": 0 })),
+                        }
+                    });
+                    match work.await {
+                        Ok(Ok(value)) => ok(&request_for, value),
+                        Ok(Err(message)) => failure(id, ErrorCode::InvalidArgument, &message),
+                        Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+                    }
+                })
+            }),
+        );
+    }
     set.register(
         "connections.load_ssh_groups",
         Arc::new(move |request: Request, _call| {
@@ -251,11 +306,404 @@ pub fn test_connection(context: &CoreContext, connection_id: &str) -> Result<Val
             json!({"state": "failed", "message": explain(&stderr).unwrap_or_else(|| stderr.trim().to_string())}),
         );
     }
-    let agents: Vec<Value> = remote::parse_agent_probe(&String::from_utf8_lossy(&output.stdout))
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let agents: Vec<Value> = remote::parse_agent_probe(&stdout)
         .into_iter()
         .map(|(agent, version)| json!({"agent": agent, "version": version}))
         .collect();
-    Ok(json!({"state": "ok", "agents": agents}))
+    let (npm, node) = remote::parse_tool_probe(&stdout);
+    let platform = remote::parse_platform_probe(&stdout)
+        .map(|p| json!({"os": p.os, "arch": p.arch, "musl": p.musl}));
+    let net: serde_json::Map<String, Value> = remote::parse_net_probe(&stdout)
+        .into_iter()
+        .map(|(host, ok)| (host, Value::Bool(ok)))
+        .collect();
+    let result = json!({"state": "ok", "agents": agents, "npm": npm, "node": node,
+        "platform": platform, "net": net, "checkedAt": context.clock.now_ms()});
+    remember_probe(context, connection_id, &result);
+    Ok(result)
+}
+
+// ── Probe cache (R4) and remote installs (R1/R3), 2026-10-27 ──────────────
+
+fn probes_file(context: &CoreContext) -> std::path::PathBuf {
+    context.paths.data_dir().join("ssh-probes.json")
+}
+
+static PROBES_LOCK: Mutex<()> = Mutex::new(());
+
+/// The last successful test of every host: what its agents and npm were.
+pub fn load_probes(context: &CoreContext) -> serde_json::Map<String, Value> {
+    std::fs::read(probes_file(context))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn remember_probe(context: &CoreContext, connection_id: &str, result: &Value) {
+    let _guard = PROBES_LOCK.lock();
+    let mut probes = load_probes(context);
+    probes.insert(connection_id.to_string(), result.clone());
+    if let Ok(bytes) = serde_json::to_vec_pretty(&Value::Object(probes)) {
+        let _ = aeroric_core::storage::atomic::write_atomic(
+            &probes_file(context),
+            &bytes,
+            aeroric_core::storage::atomic::FileMode::Private,
+        );
+    }
+}
+
+/// The agent's version on the host per the last test (None = not installed).
+pub fn probed_version(probe: &Value, agent: &str) -> Option<String> {
+    probe["agents"]
+        .as_array()?
+        .iter()
+        .find(|entry| entry["agent"] == agent)?
+        .get("version")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Where an offline install puts `agent` on the remote machine.
+fn offline_destination(agent: &str) -> String {
+    format!("~/.local/bin/{agent}")
+}
+
+/// Both ways to install / upgrade `agent` on the host (O1): `direct` runs
+/// `command` there (None = it needs Node.js first); `offline` downloads the
+/// standalone build here and sends it. `recommended` is offline when the
+/// direct way can't work or the host can't reach where it downloads from.
+pub fn install_plan(
+    context: &CoreContext,
+    connection_id: &str,
+    agent: &str,
+) -> Result<Value, String> {
+    let probe = match load_probes(context).get(connection_id).cloned() {
+        Some(probe) if probe.get("platform").is_some() => probe,
+        _ => test_connection(context, connection_id)?,
+    };
+    if probe["state"] != "ok" {
+        return Err("先“测试连接”成功，才能在远程安装".into());
+    }
+    let has_npm = probe["npm"].as_str().is_some();
+    let command = remote::install_command(agent, has_npm, probed_version(&probe, agent).is_some());
+    let direct_host = remote::direct_host(agent, has_npm);
+    let reachable = probe["net"][direct_host].as_bool();
+    let platform = probe_platform(&probe);
+    let offline = match &platform {
+        None => Err("远程平台不受支持（只支持 macOS 与 Linux 的 arm64 / x86_64）".to_string()),
+        Some(platform) => {
+            crate::remote_packages::resolve(agent, &remote::package_platform(agent, platform))
+        }
+    };
+    let root = crate::remote_packages::cache_root(context);
+    let recommended = if command.is_none() || reachable == Some(false) {
+        "offline"
+    } else {
+        "direct"
+    };
+    Ok(json!({
+        "command": command,
+        "directHost": direct_host,
+        "directReachable": reachable,
+        "recommended": recommended,
+        "offline": offline.as_ref().ok().map(|package| json!({
+            "platform": package.platform,
+            "version": package.version,
+            "size": package.size,
+            "cached": crate::remote_packages::cached(&root, package).is_some(),
+            "destination": offline_destination(agent),
+        })),
+        "offlineError": offline.err(),
+    }))
+}
+
+fn probe_platform(probe: &Value) -> Option<remote::RemotePlatform> {
+    let platform = &probe["platform"];
+    Some(remote::RemotePlatform {
+        os: platform["os"].as_str()?.into(),
+        arch: platform["arch"].as_str()?.into(),
+        musl: platform["musl"].as_bool().unwrap_or(false),
+    })
+}
+
+struct RemoteJob {
+    state: &'static str,
+    method: &'static str,
+    command: String,
+    /// download / upload / verify / check (offline installs).
+    phase: Option<String>,
+    done: u64,
+    total: u64,
+    log: std::collections::VecDeque<String>,
+    message: Option<String>,
+}
+
+static JOBS: Mutex<Option<HashMap<(String, String), RemoteJob>>> = Mutex::new(None);
+
+fn update_job(key: &(String, String), change: impl FnOnce(&mut RemoteJob)) {
+    if let Some(job) = JOBS.lock().as_mut().and_then(|jobs| jobs.get_mut(key)) {
+        change(job);
+    }
+}
+
+fn push_job_line(key: &(String, String), line: &str) {
+    let line = line
+        .rsplit('\r')
+        .find(|part| !part.trim().is_empty())
+        .unwrap_or("")
+        .trim_end();
+    if line.is_empty() {
+        return;
+    }
+    if let Some(step) = line.strip_prefix("AERORIC_STEP ") {
+        let step = step.trim().to_string();
+        update_job(key, |job| {
+            if step != "upload" {
+                job.done = job.total;
+            }
+            job.phase = Some(step);
+        });
+        return;
+    }
+    update_job(key, |job| {
+        if job.log.len() == 40 {
+            job.log.pop_front();
+        }
+        job.log.push_back(line.to_string());
+    });
+}
+
+/// Start installing (or upgrading) `agent` on the host, `method` "direct" or
+/// "offline"; output streams into the job, the host is re-tested at the end.
+pub fn start_install(
+    context: Arc<CoreContext>,
+    connection_id: &str,
+    agent: &str,
+    method: &str,
+) -> Result<String, String> {
+    if !matches!(agent, "claude" | "codex" | "omp") {
+        return Err(format!("不支持在远程安装 {agent}"));
+    }
+    let key = (connection_id.to_string(), agent.to_string());
+    if JOBS
+        .lock()
+        .as_ref()
+        .and_then(|jobs| jobs.get(&key))
+        .is_some_and(|job| job.state == "running")
+    {
+        return Err("正在安装中".into());
+    }
+    let connection = load_connection(&context, connection_id)?;
+    let offline = method == "offline";
+    let (shown, remote_line, platform) = if offline {
+        let probe = match load_probes(&context).get(connection_id).cloned() {
+            Some(probe) if probe.get("platform").is_some() => probe,
+            _ => test_connection(&context, connection_id)?,
+        };
+        let platform = probe_platform(&probe)
+            .ok_or("远程平台不受支持（只支持 macOS 与 Linux 的 arm64 / x86_64）")?;
+        let name = remote::package_platform(agent, &platform);
+        (
+            format!(
+                "本机下载 {agent} 独立安装包（{name}）→ 经 SSH 传到 {}",
+                offline_destination(agent)
+            ),
+            None,
+            Some(name),
+        )
+    } else {
+        let line = install_plan(&context, connection_id, agent)?["command"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or("远程机器没有 npm：改用“本机下载后传输”，或先在远程安装 Node.js（含 npm）")?;
+        (line.clone(), Some(line), None)
+    };
+    JOBS.lock().get_or_insert_with(HashMap::new).insert(
+        key.clone(),
+        RemoteJob {
+            state: "running",
+            method: if offline { "offline" } else { "direct" },
+            command: shown.clone(),
+            phase: offline.then(|| "download".to_string()),
+            done: 0,
+            total: 0,
+            log: Default::default(),
+            message: None,
+        },
+    );
+    let connection_id = connection_id.to_string();
+    let agent = agent.to_string();
+    std::thread::spawn(move || {
+        let mut ticket = None;
+        let outcome = (|| -> Result<(), String> {
+            let (remote_line, upload) = match (remote_line, platform) {
+                (Some(line), _) => (remote::shell_command(&line), None),
+                (None, Some(platform)) => {
+                    let package = crate::remote_packages::resolve(&agent, &platform)?;
+                    update_job(&key, |job| job.total = package.size);
+                    let root = crate::remote_packages::cache_root(&context);
+                    let file = crate::remote_packages::fetch(&root, &package, |done, total| {
+                        update_job(&key, |job| {
+                            job.done = done;
+                            job.total = total;
+                        })
+                    })?;
+                    push_job_line(
+                        &key,
+                        &format!("已在本机下载并校验 {} {}", agent, package.version),
+                    );
+                    update_job(&key, |job| {
+                        job.phase = Some("upload".into());
+                        job.done = 0;
+                    });
+                    (
+                        remote::offline_install_command(
+                            &agent,
+                            &package.version,
+                            &package.sha256,
+                            package.archive,
+                        ),
+                        Some(file),
+                    )
+                }
+                _ => return Err("没有可执行的安装方式".into()),
+            };
+            let (spec, minted) = ssh_spec(
+                &ssh_program(&context),
+                context.paths.data_dir(),
+                &connection,
+                &remote_line,
+            );
+            ticket = minted;
+            run_job_process(&key, &spec, upload.as_deref())
+        })();
+        if let Some(ticket) = &ticket {
+            revoke_ticket(ticket);
+        }
+        let after = test_connection(&context, &connection_id).ok();
+        let version = after
+            .as_ref()
+            .and_then(|probe| probed_version(probe, &agent));
+        let (state, message) = match (outcome, version) {
+            (Ok(()), Some(version)) => ("succeeded", format!("已可用：{version}")),
+            (Ok(()), None) => (
+                "failed",
+                "命令已完成，但远程仍找不到它（可能需要重新登录 shell 让 PATH 生效）".into(),
+            ),
+            (Err(error), _) => ("failed", error),
+        };
+        update_job(&key, |job| {
+            job.state = state;
+            job.message = Some(message);
+        });
+    });
+    Ok(shown)
+}
+
+/// Run one install's ssh, its output into the job; `upload` is streamed to
+/// its stdin with progress (offline installs).
+fn run_job_process(
+    key: &(String, String),
+    spec: &ProcessSpec,
+    upload: Option<&std::path::Path>,
+) -> Result<(), String> {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let mut child = command(spec)
+        .stdin(if upload.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("无法运行 ssh：{e}"))?;
+    let readers: Vec<_> = [
+        child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+        child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|stream| {
+        let key = key.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stream).split(b'\n').map_while(Result::ok) {
+                push_job_line(&key, &String::from_utf8_lossy(&line));
+            }
+        })
+    })
+    .collect();
+    let mut sent = Ok(());
+    if let (Some(path), Some(mut stdin)) = (upload, child.stdin.take()) {
+        sent = (|| -> Result<(), String> {
+            let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+            let total = file.metadata().map(|m| m.len()).unwrap_or(0);
+            update_job(key, |job| job.total = total);
+            let mut buffer = vec![0u8; 256 * 1024];
+            let mut done = 0u64;
+            loop {
+                let read = file.read(&mut buffer).map_err(|e| e.to_string())?;
+                if read == 0 {
+                    return Ok(());
+                }
+                stdin
+                    .write_all(&buffer[..read])
+                    .map_err(|_| "传输中断：SSH 连接已断开".to_string())?;
+                done += read as u64;
+                update_job(key, |job| job.done = done);
+            }
+        })();
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    for reader in readers {
+        let _ = reader.join();
+    }
+    let tail = JOBS
+        .lock()
+        .as_ref()
+        .and_then(|jobs| jobs.get(key))
+        .and_then(|job| job.log.back().cloned())
+        .unwrap_or_default();
+    if status.success() {
+        sent
+    } else {
+        Err(if tail.to_ascii_lowercase().contains("eacces") {
+            "没有写入 npm 全局目录的权限：请在远程把 npm 的 prefix 设到用户目录（npm config set prefix ~/.local）后重试，或改用“本机下载后传输”".into()
+        } else if tail.is_empty() {
+            sent.err()
+                .unwrap_or_else(|| format!("安装命令退出码 {status}"))
+        } else {
+            tail
+        })
+    }
+}
+
+/// Every install job of one host.
+pub fn install_status(connection_id: &str) -> Value {
+    let jobs = JOBS.lock();
+    let list: Vec<Value> = jobs
+        .as_ref()
+        .map(|jobs| {
+            jobs.iter()
+                .filter(|((id, _), _)| id == connection_id)
+                .map(|((_, agent), job)| {
+                    json!({"agent": agent, "state": job.state, "method": job.method,
+                        "command": job.command, "phase": job.phase, "done": job.done,
+                        "total": job.total, "log": job.log.iter().collect::<Vec<_>>(),
+                        "message": job.message})
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({ "jobs": list })
 }
 
 fn askpass(request: &Request, context: &CoreContext) -> Frame {
@@ -504,6 +952,65 @@ pub fn read_remote_file(
             let stderr = String::from_utf8_lossy(&output.stderr);
             Err(explain(&stderr)
                 .unwrap_or_else(|| format!("读取远程会话文件失败：{}", stderr.trim())))
+        }
+    }
+}
+
+/// R4: on a remote project, what the new-session picker may offer, from the
+/// host's last test — missing or too-old agents say so and where to fix it.
+pub fn mark_remote_availability(
+    context: &CoreContext,
+    project: &aeroric_core::storage::Record,
+    configurations: &mut [aeroric_protocol::submission::AgentConfiguration],
+) {
+    let aeroric_core::projects::ProjectTarget::Ssh { connection_id, .. } =
+        aeroric_core::projects::mutations::resolve_location(project)
+    else {
+        return;
+    };
+    let host = load_connection(context, &connection_id)
+        .map(|c| c.name)
+        .unwrap_or_else(|_| "远程主机".into());
+    let probe = load_probes(context).get(&connection_id).cloned();
+    for configuration in configurations.iter_mut() {
+        let agent = configuration.harness.as_str();
+        let reason = if configuration.id.starts_with("agent-config:") {
+            Some("远程项目暂不能用 Agent 预设：经本机网关的远程会话即将接入".to_string())
+        } else if agent == "dsh" {
+            Some("DSH 只在本机项目里运行".to_string())
+        } else if !matches!(agent, "claude" | "codex" | "omp") {
+            None
+        } else {
+            match probe.as_ref().filter(|p| p["state"] == "ok") {
+                None => Some(format!("还没测试过 {host}：先在“连接”里测试连接")),
+                Some(probe) => {
+                    match probed_version(probe, agent) {
+                        None => Some(format!("{host} 上未安装：在“连接”里一键安装")),
+                        Some(version) => {
+                            let minimum = aeroric_core::agents::upgrade::Harness::from_id(agent)
+                                .and_then(|h| h.minimum());
+                            let number = version
+                                .split(|c: char| c.is_whitespace() || c == '/')
+                                .find(|w| {
+                                    w.trim_start_matches('v')
+                                        .starts_with(|c: char| c.is_ascii_digit())
+                                })
+                                .unwrap_or(&version)
+                                .trim_start_matches('v')
+                                .to_string();
+                            minimum
+                            .filter(|min| {
+                                aeroric_core::agents::upgrade::compare_versions(&number, min)
+                                    == std::cmp::Ordering::Less
+                            })
+                            .map(|min| format!("{host} 上的版本 {number} 太旧（需要 {min}+）：在“连接”里升级"))
+                        }
+                    }
+                }
+            }
+        };
+        if let Some(reason) = reason {
+            configuration.blocked_reasons.push(reason);
         }
     }
 }

@@ -34,10 +34,19 @@ pub fn remote_path(path: &str) -> String {
     }
 }
 
+/// Where offline installs put agents (O3, 2026-10-28); always first on PATH
+/// for what Aeroric runs remotely, the user's shell files are never edited.
+pub const OFFLINE_BIN: &str = "$HOME/.local/bin";
+
 /// Run `inner` (a shell command line) under the remote user's login shell, so
-/// PATH is what they get in a terminal there.
+/// PATH is what they get in a terminal there (plus [`OFFLINE_BIN`] first).
 fn login_shell(inner: &str) -> String {
-    format!("exec \"${{SHELL:-/bin/sh}}\" -lc {}", quote(inner))
+    format!(
+        "exec \"${{SHELL:-/bin/sh}}\" -lc {}",
+        quote(&format!(
+            "PATH=\"{OFFLINE_BIN}:$PATH\"; export PATH; {inner}"
+        ))
+    )
 }
 
 /// `cd <cwd> && exec <program> <args…>` under the login shell.
@@ -55,12 +64,185 @@ pub fn version_command(program: &str) -> String {
     login_shell(&format!("exec {} --version", quote(program)))
 }
 
-/// One line per agent, `<name>\t<first line of --version or empty>`.
+/// Hosts a direct (remote-side) install downloads from; the probe checks
+/// the remote machine can reach each (O1).
+pub const DIRECT_HOSTS: [&str; 3] = [
+    "registry.npmjs.org",
+    "downloads.claude.ai",
+    "build.stencil.so",
+];
+
+/// One line per agent and tool, `<name>\t<first line of --version or empty>`
+/// (npm and node decide how a missing agent can be installed), then
+/// `platform\t<uname -s> <uname -m> <musl|libc>` and `net\t<host>\t<ok|no>`
+/// for each of [`DIRECT_HOSTS`] (unknown without curl).
 pub fn probe_agents_command() -> String {
-    login_shell(
-        "for a in claude codex omp; do v=''; if command -v \"$a\" >/dev/null 2>&1; then \
-         v=$(\"$a\" --version 2>/dev/null | head -n 1); fi; printf '%s\\t%s\\n' \"$a\" \"$v\"; done",
-    )
+    let mut line = String::from(
+        "for a in claude codex omp npm node; do v=''; if command -v \"$a\" >/dev/null 2>&1; then \
+         v=$(\"$a\" --version 2>/dev/null | head -n 1); fi; printf '%s\\t%s\\n' \"$a\" \"$v\"; done; \
+         l=libc; if [ -f /etc/alpine-release ] || { command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; }; \
+         then l=musl; fi; printf 'platform\\t%s %s %s\\n' \"$(uname -s)\" \"$(uname -m)\" \"$l\"; \
+         if command -v curl >/dev/null 2>&1; then",
+    );
+    for host in DIRECT_HOSTS {
+        line.push_str(&format!(
+            " (if curl -sS -o /dev/null -m 6 -I https://{host}/ >/dev/null 2>&1; then r=ok; else r=no; fi; \
+             printf 'net\\t%s\\t%s\\n' {host} \"$r\") &"
+        ));
+    }
+    line.push_str(" wait; fi");
+    login_shell(&line)
+}
+
+/// The remote machine's platform per the probe.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemotePlatform {
+    /// `darwin` or `linux`.
+    pub os: String,
+    /// `arm64` or `x64`.
+    pub arch: String,
+    pub musl: bool,
+}
+
+/// The probe's `platform` line; `None` for an OS / CPU no agent ships for.
+pub fn parse_platform_probe(stdout: &str) -> Option<RemotePlatform> {
+    let rest = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("platform\t"))?;
+    let mut words = rest.split_whitespace();
+    let os = match words.next()? {
+        "Darwin" => "darwin",
+        "Linux" => "linux",
+        _ => return None,
+    };
+    let arch = match words.next()? {
+        "arm64" | "aarch64" => "arm64",
+        "x86_64" | "amd64" => "x64",
+        _ => return None,
+    };
+    Some(RemotePlatform {
+        os: os.into(),
+        arch: arch.into(),
+        musl: os == "linux" && words.next() == Some("musl"),
+    })
+}
+
+/// The probe's `net` lines: host → reachable.
+pub fn parse_net_probe(stdout: &str) -> Vec<(String, bool)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.strip_prefix("net\t")?.split('\t');
+            Some((parts.next()?.to_string(), parts.next()? == "ok"))
+        })
+        .collect()
+}
+
+/// The host a direct install of `agent` downloads from.
+pub fn direct_host(agent: &str, has_npm: bool) -> &'static str {
+    match (agent, has_npm) {
+        (_, true) | ("codex", _) => "registry.npmjs.org",
+        ("claude", false) => "downloads.claude.ai",
+        _ => "build.stencil.so",
+    }
+}
+
+/// The vendor's name for `platform` in `agent`'s standalone builds.
+pub fn package_platform(agent: &str, platform: &RemotePlatform) -> String {
+    let RemotePlatform { os, arch, musl } = platform;
+    match agent {
+        "claude" => format!("{os}-{arch}{}", if *musl { "-musl" } else { "" }),
+        "codex" => {
+            let cpu = if arch == "arm64" { "aarch64" } else { "x86_64" };
+            if os == "darwin" {
+                format!("{cpu}-apple-darwin")
+            } else {
+                format!("{cpu}-unknown-linux-musl")
+            }
+        }
+        _ => {
+            let cpu = if arch == "arm64" { "arm64" } else { "x86_64" };
+            match (os.as_str(), musl) {
+                ("darwin", _) => format!("macos-{cpu}"),
+                (_, true) => format!("linux-musl-{cpu}"),
+                _ => format!("linux-{cpu}"),
+            }
+        }
+    }
+}
+
+/// Receive one standalone build on stdin, check it and put it in place
+/// (O3/O6): nothing is left behind when a step fails. `archive` = a
+/// `.tar.gz` holding one executable (Codex). Prints `AERORIC_STEP <name>`
+/// as it goes and the agent's `--version` at the end.
+pub fn offline_install_command(agent: &str, version: &str, sha256: &str, archive: bool) -> String {
+    let place = match agent {
+        "claude" => format!(
+            "d=\"$HOME/.local/share/claude/versions\"; mkdir -p \"$d\"; chmod +x \"$f\"; \
+             mv -f \"$f\" \"$d\"/{v}; ln -sfn \"$d\"/{v} \"{OFFLINE_BIN}/claude\"",
+            v = quote(version)
+        ),
+        _ => format!("chmod +x \"$f\"; mv -f \"$f\" \"{OFFLINE_BIN}/{agent}\""),
+    };
+    let unpack = if archive {
+        "mkdir \"$t/x\" && tar -xzf \"$t/pkg\" -C \"$t/x\" || { echo '解压失败' >&2; exit 4; }; \
+         f=$(find \"$t/x\" -type f -name 'codex*' | head -n 1); [ -n \"$f\" ] || { echo '压缩包里没有可执行文件' >&2; exit 4; }; "
+    } else {
+        "f=\"$t/pkg\"; "
+    };
+    login_shell(&format!(
+        "set -u; t=$(mktemp -d \"${{TMPDIR:-/tmp}}/aeroric-install.XXXXXX\") || exit 4; trap 'rm -rf \"$t\"' EXIT; \
+         echo 'AERORIC_STEP upload'; cat > \"$t/pkg\" || {{ echo '接收安装包失败' >&2; exit 4; }}; \
+         echo 'AERORIC_STEP verify'; \
+         if command -v sha256sum >/dev/null 2>&1; then h=$(sha256sum \"$t/pkg\" | cut -d' ' -f1); \
+         elif command -v shasum >/dev/null 2>&1; then h=$(shasum -a 256 \"$t/pkg\" | cut -d' ' -f1); \
+         else echo '远程没有 sha256sum 或 shasum，无法校验' >&2; exit 4; fi; \
+         [ \"$h\" = {sha} ] || {{ echo '远程校验 sha256 不一致：传输可能被损坏' >&2; exit 4; }}; \
+         {unpack}mkdir -p \"{OFFLINE_BIN}\"; {place}; \
+         echo 'AERORIC_STEP check'; \"{OFFLINE_BIN}/{agent}\" --version",
+        sha = quote(sha256)
+    ))
+}
+
+/// The probe's npm / node versions.
+pub fn parse_tool_probe(stdout: &str) -> (Option<String>, Option<String>) {
+    let mut npm = None;
+    let mut node = None;
+    for line in stdout.lines() {
+        if let Some((name, version)) = line.split_once('\t') {
+            let version = version.trim();
+            let version = (!version.is_empty()).then(|| version.to_string());
+            match name.trim() {
+                "npm" => npm = version,
+                "node" => node = version,
+                _ => {}
+            }
+        }
+    }
+    (npm, node)
+}
+
+/// What installs or upgrades `agent` on a remote machine (R1/R3, 2026-10-27):
+/// npm when it is there, else the agent's own installer; `None` when the
+/// machine needs Node.js first. `installed` picks an upgrade where the agent
+/// can update itself without npm.
+pub fn install_command(agent: &str, has_npm: bool, installed: bool) -> Option<String> {
+    let npm = |package: &str| format!("npm install -g {package}@latest");
+    match (agent, has_npm, installed) {
+        ("claude", true, _) => Some(npm("@anthropic-ai/claude-code")),
+        ("claude", false, true) => Some("claude update".into()),
+        ("claude", false, false) => Some("curl -fsSL https://claude.ai/install.sh | bash".into()),
+        ("codex", true, _) => Some(npm("@openai/codex")),
+        ("omp", true, _) => Some(npm("@oh-my-pi/pi-coding-agent")),
+        ("omp", false, true) => Some("omp update".into()),
+        ("omp", false, false) => Some("curl -fsSL https://omp.sh/install | sh".into()),
+        _ => None,
+    }
+}
+
+/// Run a shell command line under the remote login shell (installs).
+pub fn shell_command(line: &str) -> String {
+    login_shell(line)
 }
 
 /// `<name>\t<version>` lines → (agent, version or None).
@@ -173,10 +355,10 @@ mod tests {
     #[test]
     fn commands_run_under_the_login_shell_with_every_word_quoted() {
         let command = remote_command("/srv/it's", "claude", &["--resume".into(), "a b".into()]);
-        assert_eq!(
-            command,
-            "exec \"${SHELL:-/bin/sh}\" -lc 'cd '\\''/srv/it'\\''\\'\\'''\\''s'\\'' && exec '\\''claude'\\'' '\\''--resume'\\'' '\\''a b'\\'''"
-        );
+        assert!(command.starts_with(
+            "exec \"${SHELL:-/bin/sh}\" -lc 'PATH=\"$HOME/.local/bin:$PATH\"; export PATH; cd "
+        ));
+        assert!(command.ends_with("&& exec '\\''claude'\\'' '\\''--resume'\\'' '\\''a b'\\'''"));
         // Round-trip through a real shell: the inner line is what sh -lc gets.
         let out = std::process::Command::new("/bin/sh")
             .arg("-c")
@@ -220,7 +402,7 @@ mod tests {
         let read = read_command("~/.claude/projects/x/s.jsonl", 1024);
         assert!(read.contains("tail -c 1024"));
         assert!(read.contains("\"$HOME\"/"));
-        assert!(version_command("omp").ends_with("'exec '\\''omp'\\'' --version'"));
+        assert!(version_command("omp").ends_with("exec '\\''omp'\\'' --version'"));
     }
 
     #[test]
@@ -244,6 +426,205 @@ mod tests {
                 ("codex".into(), None)
             ]
         );
+    }
+
+    #[test]
+    fn installs_prefer_npm_and_fall_back_to_each_agents_installer() {
+        assert_eq!(
+            install_command("claude", true, false).as_deref(),
+            Some("npm install -g @anthropic-ai/claude-code@latest")
+        );
+        assert_eq!(
+            install_command("claude", false, true).as_deref(),
+            Some("claude update")
+        );
+        assert!(install_command("claude", false, false)
+            .unwrap()
+            .starts_with("curl -fsSL https://claude.ai/install.sh"));
+        assert_eq!(
+            install_command("codex", false, false),
+            None,
+            "Codex needs Node.js"
+        );
+        assert_eq!(
+            install_command("omp", false, true).as_deref(),
+            Some("omp update")
+        );
+        assert_eq!(
+            parse_tool_probe("npm\t10.8.2\nnode\tv22.1.0\nclaude\t\n"),
+            (Some("10.8.2".into()), Some("v22.1.0".into()))
+        );
+    }
+
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tempdir() -> TempDir {
+        let dir = std::env::temp_dir().join(format!("aeroric-remote-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        TempDir(dir)
+    }
+
+    /// The script under `sh -c` with HOME in a temp dir (no login shell).
+    fn run_offline(script: &str, home: &std::path::Path, payload: &[u8]) -> std::process::Output {
+        use std::io::Write;
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script.replace("exec \"${SHELL:-/bin/sh}\" -lc", "exec /bin/sh -c"))
+            .env("HOME", home)
+            .env("TMPDIR", home)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(payload).unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    fn sha(bytes: &[u8]) -> String {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(bytes))
+    }
+
+    #[test]
+    fn offline_installs_check_the_sum_place_the_binary_and_leave_nothing_behind() {
+        let home = tempdir();
+        let binary = b"#!/bin/sh\necho 'omp/9.9.9'\n";
+        let out = run_offline(
+            &offline_install_command("omp", "9.9.9", &sha(binary), false),
+            home.path(),
+            binary,
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(stdout.contains("AERORIC_STEP verify") && stdout.ends_with("omp/9.9.9\n"));
+        assert!(home.path().join(".local/bin/omp").is_file());
+
+        let claude = b"#!/bin/sh\necho '2.1.312 (Claude Code)'\n";
+        let out = run_offline(
+            &offline_install_command("claude", "2.1.312", &sha(claude), false),
+            home.path(),
+            claude,
+        );
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(home
+            .path()
+            .join(".local/share/claude/versions/2.1.312")
+            .is_file());
+        assert!(
+            std::fs::symlink_metadata(home.path().join(".local/bin/claude"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        let out = run_offline(
+            &offline_install_command("codex", "1.0.0", &sha(b"other"), false),
+            home.path(),
+            b"corrupted",
+        );
+        assert_eq!(out.status.code(), Some(4));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("sha256"));
+        assert!(!home.path().join(".local/bin/codex").exists());
+        let leftovers = std::fs::read_dir(home.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("aeroric-install")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn codex_archives_are_unpacked_on_the_remote_side() {
+        let home = tempdir();
+        let work = tempdir();
+        std::fs::write(
+            work.path().join("codex-aarch64-apple-darwin"),
+            "#!/bin/sh\necho 'codex-cli 0.165.0'\n",
+        )
+        .unwrap();
+        let archive = work.path().join("pkg.tar.gz");
+        assert!(std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(work.path())
+            .arg("codex-aarch64-apple-darwin")
+            .status()
+            .unwrap()
+            .success());
+        let bytes = std::fs::read(&archive).unwrap();
+        let out = run_offline(
+            &offline_install_command("codex", "0.165.0", &sha(&bytes), true),
+            home.path(),
+            &bytes,
+        );
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(String::from_utf8_lossy(&out.stdout).ends_with("codex-cli 0.165.0\n"));
+    }
+
+    #[test]
+    fn platforms_map_to_each_vendors_build_names() {
+        let probe = "claude\t\nplatform\tLinux aarch64 musl\nnet\tregistry.npmjs.org\tno\nnet\tbuild.stencil.so\tok\n";
+        let linux = parse_platform_probe(probe).unwrap();
+        assert_eq!(
+            linux,
+            RemotePlatform {
+                os: "linux".into(),
+                arch: "arm64".into(),
+                musl: true
+            }
+        );
+        assert_eq!(package_platform("claude", &linux), "linux-arm64-musl");
+        assert_eq!(
+            package_platform("codex", &linux),
+            "aarch64-unknown-linux-musl"
+        );
+        assert_eq!(package_platform("omp", &linux), "linux-musl-arm64");
+        let mac = parse_platform_probe("platform\tDarwin x86_64 libc\n").unwrap();
+        assert_eq!(package_platform("claude", &mac), "darwin-x64");
+        assert_eq!(package_platform("codex", &mac), "x86_64-apple-darwin");
+        assert_eq!(package_platform("omp", &mac), "macos-x86_64");
+        assert_eq!(parse_platform_probe("platform\tFreeBSD amd64 libc\n"), None);
+        assert_eq!(
+            parse_net_probe(probe),
+            vec![
+                ("registry.npmjs.org".into(), false),
+                ("build.stencil.so".into(), true)
+            ]
+        );
+        assert_eq!(direct_host("codex", false), "registry.npmjs.org");
+        assert_eq!(direct_host("claude", false), "downloads.claude.ai");
+        assert_eq!(direct_host("omp", false), "build.stencil.so");
     }
 
     #[test]

@@ -55,6 +55,89 @@ public struct SshClient: Sendable {
         }
     }
 
+    /// A remote install / upgrade (R1/R3; offline O1–O6).
+    public struct InstallJob: Sendable, Equatable {
+        public var agent: String
+        public var state: String
+        public var command: String
+        public var log: [String]
+        public var message: String?
+        /// "direct" or "offline".
+        public var method: String
+        /// download / upload / verify / check (offline installs).
+        public var phase: String?
+        public var done: UInt64
+        public var total: UInt64
+        public init(agent: String, state: String, command: String = "", log: [String] = [], message: String? = nil,
+                    method: String = "direct", phase: String? = nil, done: UInt64 = 0, total: UInt64 = 0) {
+            self.agent = agent
+            self.state = state
+            self.command = command
+            self.log = log
+            self.message = message
+            self.method = method
+            self.phase = phase
+            self.done = done
+            self.total = total
+        }
+        public var running: Bool { state == "running" }
+        /// 0…1 for the current download / upload, nil when there is none.
+        public var fraction: Double? {
+            guard running, total > 0, phase == "download" || phase == "upload" else { return nil }
+            return min(1, Double(done) / Double(total))
+        }
+    }
+
+    /// Both ways to install an agent on a host (O1).
+    public struct InstallPlan: Sendable, Equatable {
+        public struct Offline: Sendable, Equatable {
+            public var platform: String
+            public var version: String
+            public var size: UInt64
+            public var cached: Bool
+            public var destination: String
+            public init(platform: String, version: String, size: UInt64, cached: Bool, destination: String) {
+                self.platform = platform
+                self.version = version
+                self.size = size
+                self.cached = cached
+                self.destination = destination
+            }
+        }
+        /// What a direct install runs remotely (nil: needs Node.js first).
+        public var command: String?
+        public var directHost: String
+        /// Whether the host reached `directHost` at its last test (nil: unknown).
+        public var directReachable: Bool?
+        /// "direct" or "offline".
+        public var recommended: String
+        public var offline: Offline?
+        public var offlineError: String?
+        public init(command: String?, directHost: String = "", directReachable: Bool? = nil,
+                    recommended: String = "direct", offline: Offline? = nil, offlineError: String? = nil) {
+            self.command = command
+            self.directHost = directHost
+            self.directReachable = directReachable
+            self.recommended = recommended
+            self.offline = offline
+            self.offlineError = offlineError
+        }
+    }
+
+    /// What a host's last successful test found (R4).
+    public struct Probe: Sendable, Equatable {
+        public var agents: [AgentVersion]
+        public var npm: String?
+        public var node: String?
+        public var checkedAtMs: UInt64?
+        public init(agents: [AgentVersion], npm: String? = nil, node: String? = nil, checkedAtMs: UInt64? = nil) {
+            self.agents = agents
+            self.npm = npm
+            self.node = node
+            self.checkedAtMs = checkedAtMs
+        }
+    }
+
     public enum TestResult: Sendable, Equatable {
         case ok([AgentVersion])
         case untrusted([HostKey])
@@ -111,6 +194,74 @@ public struct SshClient: Sendable {
     public func test(id: String) async throws -> TestResult {
         Self.decodeTest(try await connection.request("connections.test_ssh_connection",
                                                      params: .object(["id": .string(id)])).result)
+    }
+
+    /// The last successful test of every host.
+    public func probes() async throws -> [String: Probe] {
+        let value = try await connection.request("connections.ssh_probes", params: .object([:])).result
+        var out: [String: Probe] = [:]
+        for (id, item) in value.fields { if let probe = Self.decodeProbe(item) { out[id] = probe } }
+        return out
+    }
+
+    /// Both ways installing or upgrading `agent` there could go.
+    public func installPlan(id: String, agent: String) async throws -> InstallPlan {
+        Self.decodePlan(try await connection.request("connections.remote_install_plan",
+                                                     params: .object(["id": .string(id), "agent": .string(agent)])).result)
+    }
+
+    public static func decodePlan(_ value: JSONValue) -> InstallPlan {
+        let offline = value["offline"].flatMap { item -> InstallPlan.Offline? in
+            guard let platform = item["platform"]?.stringValue, let version = item["version"]?.stringValue else {
+                return nil
+            }
+            return InstallPlan.Offline(platform: platform, version: version,
+                                       size: item["size"]?.numberText.flatMap { UInt64($0) } ?? 0,
+                                       cached: item["cached"]?.boolValue ?? false,
+                                       destination: item["destination"]?.stringValue ?? "")
+        }
+        return InstallPlan(command: value["command"]?.stringValue, directHost: value["directHost"]?.stringValue ?? "",
+                           directReachable: value["directReachable"]?.boolValue,
+                           recommended: value["recommended"]?.stringValue ?? "direct", offline: offline,
+                           offlineError: value["offlineError"]?.stringValue)
+    }
+
+    public func install(id: String, agent: String, method: String) async throws {
+        _ = try await connection.request("connections.remote_install", params: .object([
+            "id": .string(id), "agent": .string(agent), "method": .string(method),
+        ]))
+    }
+
+    /// Bytes of standalone builds kept on this Mac for offline installs (O4).
+    public func packageCacheBytes() async throws -> UInt64 {
+        try await connection.request("connections.remote_package_cache", params: .object([:]))
+            .result["bytes"]?.numberText.flatMap { UInt64($0) } ?? 0
+    }
+
+    public func clearPackageCache() async throws {
+        _ = try await connection.request("connections.clear_remote_package_cache", params: .object([:]))
+    }
+
+    public func installStatus(id: String) async throws -> [InstallJob] {
+        let value = try await connection.request("connections.remote_install_status",
+                                                 params: .object(["id": .string(id)])).result
+        return (value["jobs"]?.arrayValue ?? []).compactMap { item in
+            guard let agent = item["agent"]?.stringValue, let state = item["state"]?.stringValue else { return nil }
+            return InstallJob(agent: agent, state: state, command: item["command"]?.stringValue ?? "",
+                              log: (item["log"]?.arrayValue ?? []).compactMap(\.stringValue),
+                              message: item["message"]?.stringValue,
+                              method: item["method"]?.stringValue ?? "direct", phase: item["phase"]?.stringValue,
+                              done: item["done"]?.numberText.flatMap { UInt64($0) } ?? 0,
+                              total: item["total"]?.numberText.flatMap { UInt64($0) } ?? 0)
+        }
+    }
+
+    public static func decodeProbe(_ value: JSONValue) -> Probe? {
+        guard value["state"]?.stringValue == "ok" else { return nil }
+        return Probe(agents: (value["agents"]?.arrayValue ?? []).compactMap { item in
+            item["agent"]?.stringValue.map { AgentVersion(agent: $0, version: item["version"]?.stringValue) }
+        }, npm: value["npm"]?.stringValue, node: value["node"]?.stringValue,
+        checkedAtMs: value["checkedAt"]?.numberText.flatMap { UInt64($0) })
     }
 
     public func trust(_ keys: [HostKey]) async throws {

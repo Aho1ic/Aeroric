@@ -37,6 +37,118 @@ public final class SshHostsStore {
     public var pendingTrust: PendingTrust?
     public var errorText: String?
     public var busy = false
+    /// Each host's last successful test (agents, npm), kept by the host.
+    public private(set) var probes: [String: SshClient.Probe] = [:]
+    /// Remote installs per host, refreshed every second while one runs.
+    public private(set) var installs: [String: [SshClient.InstallJob]] = [:]
+    /// An install waiting for the user to pick a way and confirm (O1).
+    public struct PendingInstall: Equatable, Identifiable {
+        public var hostID: String
+        public var hostName: String
+        public var agent: String
+        public var plan: SshClient.InstallPlan
+        public var upgrade: Bool
+        /// "direct" or "offline"; starts at the plan's recommendation.
+        public var method: String
+        public var id: String { hostID + "." + agent }
+        public init(hostID: String, hostName: String, agent: String, plan: SshClient.InstallPlan, upgrade: Bool) {
+            self.hostID = hostID
+            self.hostName = hostName
+            self.agent = agent
+            self.plan = plan
+            self.upgrade = upgrade
+            method = plan.recommended
+        }
+        /// Whether the chosen way can run.
+        public var ready: Bool { method == "offline" ? plan.offline != nil : plan.command != nil }
+    }
+    public var pendingInstall: PendingInstall?
+    /// "host.agent" while its plan is being worked out.
+    public private(set) var preparing: Set<String> = []
+    /// Bytes of standalone builds kept on this Mac (O4).
+    public private(set) var packageCacheBytes: UInt64 = 0
+    @ObservationIgnored private var installPoll: Task<Void, Never>?
+
+    /// The minimum each agent's native session needs (ADR-043 §8, omp phase two).
+    public static let minimums = ["claude": "2.1.0", "codex": "0.162.0", "omp": "18.12.0"]
+
+    /// One remote agent's standing, from a probe.
+    public enum RemoteAgent: Equatable {
+        case missing
+        case tooOld(version: String, minimum: String)
+        case ready(version: String)
+    }
+
+    public static func remoteAgent(_ agent: String, in probe: SshClient.Probe) -> RemoteAgent {
+        guard let raw = probe.agents.first(where: { $0.agent == agent })?.version else { return .missing }
+        let version = raw.split(whereSeparator: { $0 == " " || $0 == "/" })
+            .first { $0.trimmingCharacters(in: CharacterSet(charactersIn: "v")).first?.isNumber == true }
+            .map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: "v")) } ?? raw
+        if let minimum = minimums[agent], version.compare(minimum, options: .numeric) == .orderedAscending {
+            return .tooOld(version: version, minimum: minimum)
+        }
+        return .ready(version: version)
+    }
+
+    public func installJob(_ hostID: String, _ agent: String) -> SshClient.InstallJob? {
+        installs[hostID]?.first { $0.agent == agent }
+    }
+
+    /// Ask the host what would run, then wait for the user's confirmation.
+    public func prepareInstall(hostID: String, agent: String) async {
+        guard let client else { return }
+        let key = hostID + "." + agent
+        preparing.insert(key)
+        defer { preparing.remove(key) }
+        do {
+            let plan = try await client.installPlan(id: hostID, agent: agent)
+            let upgrade = probes[hostID].map { Self.remoteAgent(agent, in: $0) != .missing } ?? false
+            pendingInstall = PendingInstall(hostID: hostID, hostName: hosts.first { $0.id == hostID }?.name ?? "",
+                                            agent: agent, plan: plan, upgrade: upgrade)
+        } catch {
+            errorText = "\(error)"
+        }
+    }
+
+    public func confirmInstall() async {
+        guard let client, let pending = pendingInstall, pending.ready else { return }
+        pendingInstall = nil
+        do {
+            try await client.install(id: pending.hostID, agent: pending.agent, method: pending.method)
+            await pollInstalls(pending.hostID)
+        } catch {
+            errorText = "安装没能开始：\(error)"
+        }
+    }
+
+    public func clearPackageCache() async {
+        guard let client else { return }
+        do {
+            try await client.clearPackageCache()
+            packageCacheBytes = 0
+        } catch {
+            errorText = "清空本机缓存失败：\(error)"
+        }
+    }
+
+    private func pollInstalls(_ hostID: String) async {
+        guard let client else { return }
+        installs[hostID] = (try? await client.installStatus(id: hostID)) ?? installs[hostID]
+        guard installs[hostID]?.contains(where: \.running) == true, installPoll == nil else { return }
+        installPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, let client = self.client else { return }
+                self.installs[hostID] = (try? await client.installStatus(id: hostID)) ?? self.installs[hostID]
+                if self.installs[hostID]?.contains(where: \.running) != true {
+                    self.probes = (try? await client.probes()) ?? self.probes
+                    self.packageCacheBytes = (try? await client.packageCacheBytes()) ?? self.packageCacheBytes
+                    break
+                }
+            }
+            self?.installPoll = nil
+        }
+    }
 
     @ObservationIgnored private var client: SshClient?
 
@@ -140,6 +252,8 @@ public final class SshHostsStore {
         do {
             hosts = try await client.load()
             savedGroups = (try? await client.loadGroups()) ?? savedGroups
+            probes = (try? await client.probes()) ?? probes
+            packageCacheBytes = (try? await client.packageCacheBytes()) ?? packageCacheBytes
             if let id = selectedID, !hosts.contains(where: { $0.id == id }) { select(nil) }
             if selectedID == nil, let first = hosts.first { select(first.id) }
         } catch {
@@ -217,6 +331,7 @@ public final class SshHostsStore {
         do {
             let result = try await client.test(id: id)
             tests[id] = .result(result)
+            if case .ok = result { probes = (try? await client.probes()) ?? probes }
             if case let .untrusted(keys) = result {
                 pendingTrust = PendingTrust(hostID: id, hostName: hosts.first { $0.id == id }?.name ?? "", keys: keys)
             }

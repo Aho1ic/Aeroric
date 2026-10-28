@@ -33,6 +33,19 @@ final class SshHostsTests: XCTestCase {
         XCTAssertNil(store.groupProblem("测试环境"))
     }
 
+    func testRemoteAgentsAreMissingTooOldOrReady() {
+        let probe = SshClient.Probe(agents: [
+            .init(agent: "claude", version: nil),
+            .init(agent: "codex", version: "codex-cli 0.153.2"),
+            .init(agent: "omp", version: "omp/18.13.1"),
+        ], npm: "10.8.2")
+        XCTAssertEqual(SshHostsStore.remoteAgent("claude", in: probe), .missing)
+        XCTAssertEqual(SshHostsStore.remoteAgent("codex", in: probe), .tooOld(version: "0.153.2", minimum: "0.162.0"))
+        XCTAssertEqual(SshHostsStore.remoteAgent("omp", in: probe), .ready(version: "18.13.1"))
+        XCTAssertEqual(SshHostsStore.remoteAgent("claude", in: .init(agents: [.init(agent: "claude", version: "2.1.311 (Claude Code)")])),
+                       .ready(version: "2.1.311"))
+    }
+
     func testTheDraftNeedsHostUserPortAndAPasswordWhenChosen() {
         let store = SshHostsStore()
         store.newHost()
@@ -63,5 +76,32 @@ final class SshHostsTests: XCTestCase {
                        .failed("拒绝"))
         XCTAssertEqual(SshHostsPage.shortVersion("2.1.311 (Claude Code)"), "2.1.311")
         XCTAssertEqual(SshHostsPage.shortVersion("codex-cli 0.164.0"), "0.164.0")
+    }
+
+    func testInstallPlansStartAtTheRecommendedWayAndProgressIsAFraction() {
+        let plan = SshClient.decodePlan(.object([
+            "command": .null, "directHost": .string("registry.npmjs.org"), "directReachable": .bool(false),
+            "recommended": .string("offline"),
+            "offline": .object(["platform": .string("darwin-arm64"), "version": .string("2.1.312"),
+                                "size": .number("275775488"), "cached": .bool(true),
+                                "destination": .string("~/.local/bin/claude")]),
+        ]))
+        XCTAssertNil(plan.command)
+        XCTAssertEqual(plan.offline?.size, 275_775_488)
+        var pending = SshHostsStore.PendingInstall(hostID: "h", hostName: "Mac mini", agent: "claude", plan: plan,
+                                                   upgrade: false)
+        XCTAssertEqual(pending.method, "offline")
+        XCTAssertTrue(pending.ready)
+        pending.method = "direct"
+        XCTAssertFalse(pending.ready, "no npm: the direct way can't run")
+        let noOffline = SshClient.decodePlan(.object(["command": .string("npm i -g x"), "offline": .null,
+                                                       "offlineError": .string("本机连不上")]))
+        XCTAssertNil(noOffline.offline)
+        XCTAssertEqual(noOffline.recommended, "direct")
+
+        let job = SshClient.InstallJob(agent: "claude", state: "running", method: "offline", phase: "upload",
+                                       done: 25, total: 100)
+        XCTAssertEqual(job.fraction, 0.25)
+        XCTAssertNil(SshClient.InstallJob(agent: "claude", state: "running", phase: "verify", done: 1, total: 1).fraction)
     }
 }
