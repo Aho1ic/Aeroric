@@ -1,9 +1,9 @@
 import SwiftUI
 import AppKit
 
-/// New-session home (Q12): a question that types itself in, scenario tabs
-/// with recipe cards, and the floating composer with the host-sourced
-/// pickers. Every action is injected; this view cannot discover profiles,
+/// New-session home (Q12): the Propel motto, the floating composer with the
+/// host-sourced pickers, and the scenario tabs with recipe cards right below
+/// it, the whole group centred in the window. Every action is injected; this view cannot discover profiles,
 /// start agents or send on its own.
 public struct NewSessionHome: View {
     @Binding private var draft: NewSessionDraft
@@ -31,7 +31,7 @@ public struct NewSessionHome: View {
     @State private var focusRequest = 0
     @State private var selectingAttachment = false
 
-    public static let heading = "你想做什么？"
+    public static let heading = PropelMotto.text
     static let columnWidth: CGFloat = 760
 
     public init(draft: Binding<NewSessionDraft>, projectID: String?, projects: [TaskStore.ProjectEntry],
@@ -87,32 +87,25 @@ public struct NewSessionHome: View {
     public var body: some View {
         GeometryReader { viewport in
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // D: heading + the row above the input + the input sit in
-                    // the middle of the window, a little below centre.
-                    VStack(alignment: .leading, spacing: 0) {
-                        VStack(alignment: .leading, spacing: AeroricSpace.s) {
-                            TypewriterText(Self.heading, size: AeroricType.hero)
-                                .accessibilityIdentifier("new-session.title")
-                            Text(project.map { "在 \($0.name) 中开始新会话" } ?? "先在下方选择一个项目")
-                                .font(.system(size: AeroricType.body))
-                                .foregroundStyle(AeroricColor.textSecondary)
-                        }
-                        .padding(.bottom, AeroricSpace.xxl)
+                VStack(spacing: 0) {
+                    // 2026-10-28 (第五轮): motto, the row above the input, the
+                    // input and the scenarios move as one group, centred a
+                    // little above the middle of the window.
+                    PropelMotto().padding(.bottom, AeroricSpace.huge)
 
-                        aboveComposer.padding(.bottom, AeroricSpace.s)
-                        composer
-                        status.padding(.top, AeroricSpace.m)
-                    }
-                    .frame(minHeight: viewport.size.height * 0.85, alignment: .center)
+                    aboveComposer.padding(.bottom, AeroricSpace.s)
+                    composer
+                    status.padding(.top, AeroricSpace.m)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                     CapsuleSlider(selection: $scenario, groupTitle: "场景", size: .large,
                                   identifier: "new-session.scenario",
                                   segments: Scenario.allCases.map { .init(value: $0, title: $0.title, systemImage: $0.symbol) })
                     .fixedSize()
+                    .padding(.top, AeroricSpace.xxxl + AeroricSpace.xs) // 36 below the composer with the status padding
                     .padding(.bottom, AeroricSpace.l)
 
-                    FlowLayout(spacing: AeroricSpace.s) {
+                    FlowLayout(spacing: AeroricSpace.s, centered: true) {
                         ForEach(scenario.recipes) { recipe in
                             RecipeChip(recipe: recipe) { choose(recipe) }
                                 .disabled(!draft.isEditable)
@@ -121,8 +114,9 @@ public struct NewSessionHome: View {
                 }
                 .frame(maxWidth: Self.columnWidth)
                 .padding(.horizontal, AeroricSpace.huge)
-                .padding(.bottom, AeroricSpace.huge)
-                .frame(maxWidth: .infinity)
+                .padding(.top, AeroricSpace.huge)
+                .padding(.bottom, AeroricSpace.huge + 2 * AeroricSpace.xxl)
+                .frame(maxWidth: .infinity, minHeight: viewport.size.height)
             }
         }
         .onAppear(perform: adoptDefaults)

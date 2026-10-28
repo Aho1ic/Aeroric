@@ -90,4 +90,9 @@ final class NewSessionLayoutTests: XCTestCase {
         XCTAssertEqual(Picker.neighbour(of: "claude", step: 1, in: segments), "omp", "a disabled choice is skipped")
         XCTAssertEqual(Picker.neighbour(of: "codex", step: -1, in: segments), nil)
     }
+
+    func testTheMottoGivesEveryWordItsOwnColour() {
+        XCTAssertEqual(NewSessionHome.heading, "Propel ideas forward.")
+        XCTAssertEqual(PropelMotto.words.count, PropelMotto.colors.count)
+    }
 }

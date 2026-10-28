@@ -51,6 +51,8 @@ struct BranchPicker: View {
 /// Lays children out left to right and wraps onto the next line.
 struct FlowLayout: Layout {
     var spacing: CGFloat = AeroricSpace.s
+    /// Each row centred in the width instead of starting at the leading edge.
+    var centered = false
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
@@ -61,7 +63,7 @@ struct FlowLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         for row in arrange(width: bounds.width, subviews: subviews) {
-            var x = bounds.minX
+            var x = bounds.minX + (centered ? max(0, bounds.width - row.width) / 2 : 0)
             for index in row.indices {
                 let size = subviews[index].sizeThatFits(.unspecified)
                 subviews[index].place(at: CGPoint(x: x, y: bounds.minY + row.y), proposal: ProposedViewSize(size))
