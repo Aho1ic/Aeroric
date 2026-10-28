@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 
 /// 支持的 dsh 会话日志格式版本(`SESSION_FORMAT_VERSION`,dev preview 期为 0)。
 pub const DSH_SESSION_FORMAT_VERSION: u64 = 0;
+/// 能读的最高日志格式版本（2026-10-28：DSH 0.9 写 `session.v4.jsonl.zstd`，header `version: 4`）。
+/// v1–v4 只改了文件名与事件里的附加字段，读侧用到的事件形状不变。
+pub const DSH_MAX_SESSION_FORMAT_VERSION: u64 = 4;
 
 /// 明文 transcript 文件名(`compression: none`)。
 pub const DSH_TRANSCRIPT_RAW: &str = "session.jsonl";
@@ -86,12 +89,52 @@ pub fn dsh_encode_segment(raw: &str) -> String {
 /// 磁盘上,所以这里按"存在即唯一"逐会话判定:明文优先,其次压缩,都不在返回
 /// `None`。
 pub fn dsh_transcript_in(session_dir: &Path) -> Option<PathBuf> {
+    // 2026-10-28: a migrated session is addressed by its newest `session.vN`
+    // generation; the predecessor stays beside it and must not win.
+    if let Some(latest) = latest_dsh_generation(session_dir) {
+        return Some(latest);
+    }
     let raw = session_dir.join(DSH_TRANSCRIPT_RAW);
     if raw.is_file() {
         return Some(raw);
     }
     let compressed = session_dir.join(DSH_TRANSCRIPT_ZSTD);
     compressed.is_file().then_some(compressed)
+}
+
+/// `session.vN.jsonl(.zstd)`（N ≥ 1，无前导零）里 N 最大的那个；同一 N 两种编码并存时取压缩的
+/// （DSH 默认 `compression: zstd`）。其余名字（`session.lock`、迁移临时文件）不算。
+fn latest_dsh_generation(session_dir: &Path) -> Option<PathBuf> {
+    let mut best: Option<(u64, bool, PathBuf)> = None;
+    for entry in std::fs::read_dir(session_dir).ok()?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let (stem, zstd) = match name.strip_suffix(".zstd") {
+            Some(stem) => (stem, true),
+            None => (name.as_str(), false),
+        };
+        let Some(digits) = stem
+            .strip_suffix(".jsonl")
+            .and_then(|s| s.strip_prefix("session.v"))
+        else {
+            continue;
+        };
+        if digits.starts_with('0') || !digits.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(version) = digits.parse::<u64>() else {
+            continue;
+        };
+        if !entry.path().is_file() {
+            continue;
+        }
+        let better = best
+            .as_ref()
+            .is_none_or(|(v, z, _)| version > *v || (version == *v && zstd && !*z));
+        if better {
+            best = Some((version, zstd, entry.path()));
+        }
+    }
+    best.map(|(_, _, path)| path)
 }
 
 // ── 读侧与解析（第三片，2026-09-29 补记二百四十三）──────────────────────────
@@ -135,6 +178,25 @@ pub fn read_dsh_session_lines(path: &Path) -> Result<Vec<String>, String> {
     Ok(text.lines().map(str::to_owned).collect())
 }
 
+/// 只读开头至多 `max_lines` 行（导入摘要用）：压缩产物流式解码，读够即停，不解整个文件。
+pub fn read_dsh_head_lines(path: &Path, max_lines: usize) -> Result<Vec<String>, String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let reader: Box<dyn Read> = if is_zstd_transcript(path) {
+        Box::new(zstd::stream::read::Decoder::new(file).map_err(|error| error.to_string())?)
+    } else {
+        Box::new(file)
+    };
+    let mut lines = Vec::new();
+    for line in BufReader::new(reader).lines().take(max_lines) {
+        match line {
+            Ok(line) => lines.push(line),
+            // A batch still being written ends mid-frame; what came before is usable.
+            Err(_) => break,
+        }
+    }
+    Ok(lines)
+}
+
 /// 压缩 transcript 的全部行;明文 transcript 返回 `None`,让调用方保留自己的
 /// 按字节分页 / 尾部截断读法。
 pub fn read_compressed_dsh_lines(path: &Path) -> Result<Option<Vec<String>>, String> {
@@ -165,7 +227,7 @@ fn check_dsh_header(value: &Value) -> Result<(), String> {
         .get("version")
         .and_then(Value::as_u64)
         .ok_or_else(|| "Corrupt dsh session log: header has no format version".to_string())?;
-    if version != DSH_SESSION_FORMAT_VERSION {
+    if version > DSH_MAX_SESSION_FORMAT_VERSION {
         return Err(format!(
             "This DeepSeek Harness session uses log format v{version}, which this version of Aeroric cannot read; please upgrade Aeroric"
         ));
@@ -305,6 +367,16 @@ fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
     let data = value.get("data").unwrap_or(&Value::Null);
     match kind {
         "user/message" => {
+            // Plugin-injected runtime context, compaction checkpoints and
+            // sub-agent notices carry a non-"user" source (v4); only the
+            // person's own prompts are the conversation.
+            if data
+                .pointer("/source/kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind != "user")
+            {
+                return;
+            }
             let blocks = data
                 .get("content")
                 .and_then(Value::as_array)
@@ -349,6 +421,29 @@ fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
             else {
                 return;
             };
+            // v4: the result is the message itself (`toolCallId`, `isError`,
+            // text `content`), not a list of tool-result blocks.
+            if let Some(id) = data
+                .get("message")
+                .and_then(|message| message.get("toolCallId"))
+                .and_then(Value::as_str)
+            {
+                let mut output = tool_result_output(blocks);
+                if data.pointer("/message/isError").and_then(Value::as_bool) == Some(true)
+                    && !output.is_empty()
+                {
+                    output = format!("[error] {output}");
+                }
+                messages.push(SessionMessage {
+                    role: "user".to_string(),
+                    content: vec![SessionContent::ToolResult {
+                        id: id.to_string(),
+                        output,
+                    }],
+                    message_id: None,
+                });
+                return;
+            }
             for block in blocks {
                 if block.get("type").and_then(Value::as_str) != Some("tool-result") {
                     continue;

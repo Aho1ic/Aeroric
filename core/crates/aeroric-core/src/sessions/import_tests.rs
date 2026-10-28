@@ -220,7 +220,7 @@ fn messages_parse_and_unmatched_cwd_stays_unassigned() {
 }
 
 #[test]
-fn oversized_sessions_are_listed_but_not_read() {
+fn oversized_sessions_are_listed_and_read_from_the_tail() {
     let scratch = Scratch::new("large");
     let path = scratch.write(".claude/projects/-work-app/big.jsonl", CLAUDE);
     File::options()
@@ -239,15 +239,13 @@ fn oversized_sessions_are_listed_but_not_read() {
         .unwrap();
     store.scan(&projects()).unwrap();
     let entry = store.index()[0].clone();
-    assert!(entry.too_large);
-    assert_eq!(
-        entry.title, "修复登录页",
-        "the head is still read for the title; only the history is refused"
+    assert!(
+        !entry.too_large,
+        "2026-10-28: nothing is refused for its size"
     );
-    assert_eq!(
-        store.messages(&entry.id).unwrap_err(),
-        ImportError::TooLarge
-    );
+    assert_eq!(entry.title, "修复登录页");
+    let (_, messages) = store.messages(&entry.id).unwrap();
+    assert!(!messages.is_empty(), "the newest lines are read");
 }
 
 #[test]

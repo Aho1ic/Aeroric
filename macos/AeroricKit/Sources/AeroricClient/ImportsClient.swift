@@ -58,10 +58,14 @@ public struct ImportsClient: Sendable {
         public var archived: Bool
         /// The agent's own session id, read off the file name (复制 Session ID).
         public var sessionId: String?
+        /// The OMP profile it was found in (`~/.omp/profiles/<name>`).
+        public var profile: String?
 
         public init(id: String, agent: String, cwd: String?, title: String, lastAtMs: UInt64,
-                    projectId: String?, tooLarge: Bool, archived: Bool = false, sessionId: String? = nil) {
+                    projectId: String?, tooLarge: Bool, archived: Bool = false, sessionId: String? = nil,
+                    profile: String? = nil) {
             self.sessionId = sessionId
+            self.profile = profile
             self.id = id
             self.agent = agent
             self.cwd = cwd
@@ -211,11 +215,29 @@ public struct ImportsClient: Sendable {
                                projectId: row["projectId"]?.stringValue,
                                tooLarge: row["tooLarge"]?.boolValue ?? false,
                                archived: row["archived"]?.boolValue ?? false,
-                               sessionId: row["sourcePath"]?.stringValue.flatMap(Self.sessionID(fromSource:)))
+                               sessionId: row["sourceKey"]?.stringValue
+                                   ?? row["sourcePath"]?.stringValue.flatMap {
+                                       Self.sessionID(fromSource: $0, agent: row["agent"]?.stringValue)
+                                   },
+                               profile: row["profile"]?.stringValue)
     }
 
-    /// Claude names a transcript `<uuid>.jsonl`; Codex `rollout-<time>-<uuid>.jsonl`.
-    public static func sessionID(fromSource path: String) -> String? {
+    /// Claude names a transcript `<uuid>.jsonl`; Codex `rollout-<time>-<uuid>.jsonl`;
+    /// OMP `<time>_<id>.jsonl`. DeepSeek Harness and Cursor keep one directory
+    /// per session (`session-<id>/session.v4.jsonl.zstd`, `<id>/store.db`).
+    public static func sessionID(fromSource path: String, agent: String? = nil) -> String? {
+        let url = URL(fileURLWithPath: path)
+        switch agent {
+        case "dsh", "cursor":
+            let dir = url.deletingLastPathComponent().lastPathComponent
+            let id = dir.hasPrefix("session-") ? String(dir.dropFirst("session-".count)) : dir
+            return id.isEmpty ? nil : id
+        case "omp":
+            let stem = url.deletingPathExtension().lastPathComponent
+            return stem.split(separator: "_", maxSplits: 1).last.map(String.init)
+        default:
+            break
+        }
         let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
         guard stem.hasPrefix("rollout-") else { return stem.isEmpty ? nil : stem }
         let tail = String(stem.suffix(36))

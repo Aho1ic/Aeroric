@@ -39,10 +39,8 @@ public enum OnboardingFlow {
     }
 
     /// Agents the import page offers: importable ones first, then the rest as
-    /// "即将支持" (D5).
+    /// "即将支持" (D5). Since 2026-10-28 every listed agent is importable.
     public static func importRows(detected: [String]) -> [(agent: String, importable: Bool)] {
-        let importable = ImportBook.importableAgents
-        let later = ["dsh", "omp"].filter { !importable.contains($0) }
-        return importable.map { ($0, true) } + later.map { ($0, false) }
+        ImportBook.importableAgents.map { ($0, true) }
     }
 }

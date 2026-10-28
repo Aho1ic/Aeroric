@@ -106,10 +106,10 @@ fn dsh_parses_slash_dialect_events_into_messages() {
 
 #[test]
 fn dsh_rejects_future_header_version_and_tolerates_truncated_tail() {
-    let future = vec![dsh_header_line(1, "dsh-s2", 100)];
+    let future = vec![dsh_header_line(5, "dsh-s2", 100)];
     let err = parse_dsh_session_lines(&future).unwrap_err();
     assert!(
-        err.contains("v1") && err.contains("upgrade Aeroric"),
+        err.contains("v5") && err.contains("upgrade Aeroric"),
         "{err}"
     );
     // 尾部截断读取不带 header 时，纯事件行照常解析（宿主 read_session_messages 的截断路径）。

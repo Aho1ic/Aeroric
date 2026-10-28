@@ -23,6 +23,7 @@ pub mod export;
 pub mod history;
 pub mod hooks;
 pub mod import;
+pub mod import_sources;
 pub mod live;
 pub mod omp;
 pub mod parser;

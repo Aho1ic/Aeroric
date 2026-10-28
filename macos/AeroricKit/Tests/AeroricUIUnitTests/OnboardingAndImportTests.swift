@@ -19,10 +19,19 @@ final class OnboardingAndImportTests: XCTestCase {
                        "never before the host is ready: the import page needs it")
     }
 
-    func testImportRowsOfferClaudeAndCodexAndMarkTheRestLater() {
+    func testImportRowsOfferEveryImportableAgent() {
         let rows = OnboardingFlow.importRows(detected: [])
-        XCTAssertEqual(rows.map(\.agent), ["claude", "codex", "dsh", "omp"])
-        XCTAssertEqual(rows.map(\.importable), [true, true, false, false])
+        XCTAssertEqual(rows.map(\.agent), ["claude", "codex", "dsh", "omp", "qoder", "cursor", "opencode"])
+        XCTAssertTrue(rows.allSatisfy(\.importable))
+    }
+
+    func testNativeSessionIDsFollowEachAgentsNaming() {
+        XCTAssertEqual(ImportsClient.sessionID(fromSource: "/h/.dsh/sessions/--w--/session-ab12/session.v4.jsonl.zstd",
+                                               agent: "dsh"), "ab12")
+        XCTAssertEqual(ImportsClient.sessionID(fromSource: "/h/.omp/agent/sessions/-w/2026-09-02T03-47-26-356Z_01a0.jsonl",
+                                               agent: "omp"), "01a0")
+        XCTAssertEqual(ImportsClient.sessionID(fromSource: "/h/.cursor/chats/9f/chat-7/store.db", agent: "cursor"), "chat-7")
+        XCTAssertEqual(ImportsClient.sessionID(fromSource: "/h/.claude/projects/-w/0b1c.jsonl"), "0b1c")
     }
 
     func testEstimateTextAndPathAbbreviation() {

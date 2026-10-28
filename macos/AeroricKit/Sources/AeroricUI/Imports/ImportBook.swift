@@ -24,7 +24,7 @@ public final class ImportBook {
     @ObservationIgnored public var onProjectsChanged: (@MainActor () async -> Void)?
 
     /// Agents this build can import (D5: DSH / omp later).
-    nonisolated public static let importableAgents = ["claude", "codex"]
+    nonisolated public static let importableAgents = ["claude", "codex", "dsh", "omp", "qoder", "cursor", "opencode"]
     /// History pages read per session (≈ 640 KB each).
     nonisolated static let maxHistoryPages = 24
 

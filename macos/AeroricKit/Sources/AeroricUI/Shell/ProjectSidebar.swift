@@ -781,6 +781,9 @@ struct HarnessLogo: View {
         case "codex": return "HarnessCodex"
         case "omp": return "HarnessOMP"
         case "dsh": return "HarnessDSH"
+        case "qoder": return "HarnessQoder"
+        case "cursor": return "HarnessCursor"
+        case "opencode": return "HarnessOpenCode"
         default: return nil
         }
     }

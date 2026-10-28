@@ -19,7 +19,7 @@ public struct ImportedSessionPane: View {
                 task: TaskStore.TaskEntry(id: session.id, projectID: session.projectId ?? "", title: session.title,
                                           status: "done", agent: session.agent, updatedAtMs: session.lastAtMs),
                 actions: ImportedSessionActions(book: book), canSend: false,
-                readOnlyNotice: session.tooLarge ? "会话文件过大（超过 32 MB），不在应用内显示。" : Self.notice
+                readOnlyNotice: Self.notice
             )
             .id(session.id)
         } else {

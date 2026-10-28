@@ -12,8 +12,9 @@ use aeroric_core::agents::detect::detect_agents;
 use aeroric_core::context::CoreContext;
 use aeroric_core::projects::{mutations, ProjectService};
 use aeroric_core::sessions::import::{
-    assign_project, estimate, ImportAgent, ImportError, ImportStore, ScanReport,
+    assign_project, estimate, ImportAgent, ImportError, ImportEstimate, ImportStore, ScanReport,
 };
+use aeroric_core::sessions::import_sources::{has_sessions, DiscoveryEnv};
 use aeroric_core::storage::projects::load_projects;
 use aeroric_core::tasks::ProtocolFamily;
 use aeroric_protocol::envelope::{Frame, Request};
@@ -128,7 +129,7 @@ fn bad_agent(request: &Request) -> Frame {
     failure(
         request.id.clone(),
         ErrorCode::InvalidArgument,
-        "params.agent must be \"claude\" or \"codex\"",
+        "params.agent must be one of claude, codex, dsh, omp, qoder, cursor, opencode",
     )
 }
 
@@ -172,7 +173,7 @@ fn status(request: Request, env: Arc<Env>) -> Frame {
                 "granted": grant.is_some(),
                 "root": grant
                     .map(|g| g.root.clone())
-                    .unwrap_or_else(|| agent.default_root(&env.home)),
+                    .unwrap_or_else(|| roots_of(&env, *agent).remove(0)),
                 "grantedAtMs": grant.map(|g| g.granted_at_ms),
                 "sessions": index.iter().filter(|s| s.agent == *agent).count(),
                 // S8: sessions the user left out at import time, offered back.
@@ -198,11 +199,18 @@ fn estimate_handler(request: Request, env: Arc<Env>) -> Frame {
     let Some(agent) = agent_param(&request) else {
         return bad_agent(&request);
     };
-    let root = agent.default_root(&env.home);
-    let estimate = estimate(agent, &root);
+    let roots = roots_of(&env, agent);
+    let mut total = ImportEstimate::default();
+    for root in &roots {
+        let one = estimate(agent, root);
+        total.root_exists |= one.root_exists;
+        total.sessions += one.sessions;
+        total.bytes += one.bytes;
+        total.latest_ms = total.latest_ms.max(one.latest_ms);
+    }
     ok(
         &request,
-        json!({ "agent": agent.as_str(), "root": root, "estimate": estimate }),
+        json!({ "agent": agent.as_str(), "root": roots[0], "roots": roots, "estimate": total }),
     )
 }
 
@@ -211,10 +219,11 @@ fn grant(request: Request, env: Arc<Env>) -> Frame {
     let Some(agent) = agent_param(&request) else {
         return bad_agent(&request);
     };
-    // The root is always the host-computed default; a client cannot point the
-    // importer at an arbitrary directory.
-    let root = agent.default_root(&env.home);
-    if let Err(error) = store(context).grant(agent, root.clone(), now_ms()) {
+    // The roots are always host-computed (each agent's own variables and
+    // editions); a client cannot point the importer at an arbitrary directory.
+    let roots = roots_of(&env, agent);
+    let root = roots[0].clone();
+    if let Err(error) = store(context).grant_roots(agent, roots, now_ms()) {
         return io_failure(&request, error);
     }
     match scan(context, true) {
@@ -264,12 +273,22 @@ fn list(request: Request, env: Arc<Env>) -> Frame {
     ok(&request, json!({ "sessions": sessions }))
 }
 
-/// The agents whose session roots exist under the user's home.
+/// One agent's roots, resolved by its own rules (environment variables,
+/// China / international editions, the Cursor editor beside the CLI).
+fn roots_of(env: &Env, agent: ImportAgent) -> Vec<PathBuf> {
+    agent.roots(&DiscoveryEnv::with_process_vars(&env.home))
+}
+
+/// Every agent root that holds sessions.
 fn import_roots(env: &Env) -> Vec<(ImportAgent, PathBuf)> {
-    [ImportAgent::Claude, ImportAgent::Codex]
+    ImportAgent::ALL
         .into_iter()
-        .map(|agent| (agent, agent.default_root(&env.home)))
-        .filter(|(_, root)| root.is_dir())
+        .flat_map(|agent| {
+            roots_of(env, agent)
+                .into_iter()
+                .map(move |root| (agent, root))
+        })
+        .filter(|(agent, root)| has_sessions(*agent, root))
         .collect()
 }
 
@@ -415,13 +434,21 @@ fn history(request: Request, env: Arc<Env>) -> Frame {
         .and_then(|cursor| cursor.parse::<usize>().ok());
     match store(context).messages(id) {
         Ok((session, messages)) => {
+            // Qoder writes Claude's format; Cursor and OpenCode are shown
+            // through the Claude rendering (read-only, `agent` tells them apart).
             let family = match session.agent {
-                ImportAgent::Claude => ProtocolFamily::Claude,
                 ImportAgent::Codex => ProtocolFamily::Codex,
+                ImportAgent::Dsh => ProtocolFamily::Dsh,
+                ImportAgent::Omp => ProtocolFamily::Omp,
+                ImportAgent::Claude
+                | ImportAgent::Qoder
+                | ImportAgent::Cursor
+                | ImportAgent::OpenCode => ProtocolFamily::Claude,
             };
             let page = history_page(session_page(session.id.clone(), family, messages), before);
             let mut page = serde_json::to_value(page).unwrap_or_default();
             page["origin"] = json!("imported");
+            page["agent"] = json!(session.agent.as_str());
             page["title"] = json!(session.title);
             ok(&request, page)
         }
@@ -726,12 +753,20 @@ mod tests {
             other => panic!("a revoked session must not be readable: {other:?}"),
         }
         match grant(
-            request("imports.grant", json!({"agent":"dsh"})),
+            request("imports.grant", json!({"agent":"windsurf"})),
             Arc::clone(&context),
         ) {
             Frame::Failure(_) => {}
             other => panic!("unsupported agents are rejected: {other:?}"),
         }
+        let dsh = result(grant(
+            request("imports.grant", json!({"agent":"dsh"})),
+            Arc::clone(&context),
+        ));
+        assert_eq!(
+            dsh["report"]["added"], 0,
+            "a supported agent with no sessions grants cleanly"
+        );
         let detected = result(detect(
             request("agents.detect", json!({})),
             Arc::clone(&context),

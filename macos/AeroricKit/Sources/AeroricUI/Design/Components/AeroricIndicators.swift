@@ -91,6 +91,9 @@ public struct AgentGlyph: View {
         case "codex": "chevron.left.forwardslash.chevron.right"
         case "dsh": "water.waves"
         case "omp": "circle.hexagongrid"
+        case "qoder": "q.circle"
+        case "cursor": "cursorarrow"
+        case "opencode": "terminal"
         case nil, "": "bubble.left"
         default: "cpu"
         }
@@ -103,6 +106,9 @@ public struct AgentGlyph: View {
         case "codex": "Codex"
         case "dsh": "DSH"
         case "omp": "oh-my-pi"
+        case "qoder": "Qoder"
+        case "cursor": "Cursor"
+        case "opencode": "OpenCode"
         case nil, "": "会话"
         default: agent ?? "Agent"
         }

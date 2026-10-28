@@ -1,4 +1,6 @@
-//! 已有会话导入（UI 改版 M4）：Claude / Codex 本机会话的**授权后只读索引**。
+//! 已有会话导入（UI 改版 M4）：本机 Agent 会话的**授权后只读索引**。Claude / Codex 在本文件；
+//! 2026-10-28 起另有 DeepSeek Harness、OMP、Qoder、Cursor、OpenCode，其发现与解析在
+//! `import_sources.rs`。
 //!
 //! 规则：
 //! - 没有授权记录的 Agent，一个文件都不读（`scan` 只遍历授权根）；`estimate` 只做目录遍历计数，
@@ -18,18 +20,19 @@ use sha2::{Digest, Sha256};
 
 use crate::sessions::codex::is_injected_context;
 use crate::sessions::discovery::{collect_jsonl_files, collect_session_files};
+use crate::sessions::import_sources::{self, DiscoveryEnv, Source};
 use crate::sessions::parser::parse_session_lines;
 use crate::sessions::SessionMessage;
 use crate::storage::atomic::{write_atomic, FileMode};
 
-/// 单个会话文件的读取上限：超过即标 `too_large`，不读内容。
+/// 单个会话文件整读的上限：超过的从尾部读最近的部分（`read_session_tail`）。
 pub const MAX_SESSION_BYTES: u64 = 32 * 1024 * 1024;
 /// 取 cwd / 标题时最多读的头部字节数。新版 Codex 在首条真提示词之前先写
 /// session_meta、developer 指令、AGENTS.md 与 world_state，常过 100 KB，
 /// 所以窗口放到 1 MiB；读到标题即停。
 const HEAD_BYTES: u64 = 1024 * 1024;
-/// 标题算法的版本。索引里旧版本的条目即便文件未变也重算一次标题。
-const TITLE_REV: u32 = 2;
+/// 摘要算法的版本。索引里旧版本的条目即便文件未变也重算一次（3：2026-10-28 去掉 too_large）。
+const TITLE_REV: u32 = 3;
 /// 头部单行上限：更长的行（超大附件）跳过不解析。
 const HEAD_LINE_BYTES: u64 = 16 * 1024 * 1024;
 const TITLE_CHARS: usize = 80;
@@ -39,40 +42,59 @@ const TITLE_CHARS: usize = 80;
 pub enum ImportAgent {
     Claude,
     Codex,
+    Dsh,
+    Omp,
+    Qoder,
+    Cursor,
+    #[serde(rename = "opencode")]
+    OpenCode,
 }
 
 impl ImportAgent {
-    pub const ALL: [ImportAgent; 2] = [ImportAgent::Claude, ImportAgent::Codex];
+    pub const ALL: [ImportAgent; 7] = [
+        ImportAgent::Claude,
+        ImportAgent::Codex,
+        ImportAgent::Dsh,
+        ImportAgent::Omp,
+        ImportAgent::Qoder,
+        ImportAgent::Cursor,
+        ImportAgent::OpenCode,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             ImportAgent::Claude => "claude",
             ImportAgent::Codex => "codex",
+            ImportAgent::Dsh => "dsh",
+            ImportAgent::Omp => "omp",
+            ImportAgent::Qoder => "qoder",
+            ImportAgent::Cursor => "cursor",
+            ImportAgent::OpenCode => "opencode",
         }
     }
 
     pub fn parse(text: &str) -> Option<Self> {
-        match text {
-            "claude" => Some(ImportAgent::Claude),
-            "codex" => Some(ImportAgent::Codex),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|agent| agent.as_str() == text)
     }
 
-    /// 默认根目录（宿主注入 home）。
+    /// 默认主根目录（宿主注入 home，不看环境变量）。
     pub fn default_root(self, home: &Path) -> PathBuf {
-        match self {
-            ImportAgent::Claude => home.join(".claude"),
-            ImportAgent::Codex => home.join(".codex"),
-        }
+        import_sources::resolve_roots(self, &DiscoveryEnv::new(home)).remove(0)
     }
 
-    /// 根目录下真正存放会话的子目录。
-    fn sessions_dir(self, root: &Path) -> PathBuf {
-        match self {
-            ImportAgent::Claude => root.join("projects"),
-            ImportAgent::Codex => root.join("sessions"),
-        }
+    /// 全部根目录：主根在前，其余是同一家的其他存放处（发行变体、编辑器目录）。
+    pub fn roots(self, env: &DiscoveryEnv) -> Vec<PathBuf> {
+        import_sources::resolve_roots(self, env)
+    }
+
+    /// Claude / Codex 之外的几家由 `import_sources` 读。
+    fn is_external(self) -> bool {
+        !matches!(self, ImportAgent::Claude | ImportAgent::Codex)
+    }
+
+    /// 与 Claude 同格式的 jsonl（Qoder）。
+    fn claude_format(self) -> bool {
+        matches!(self, ImportAgent::Claude | ImportAgent::Qoder)
     }
 }
 
@@ -84,7 +106,7 @@ pub struct ImportGrant {
     pub granted_at_ms: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceMarker {
     pub mtime_ms: u64,
@@ -97,6 +119,15 @@ pub struct ImportedSession {
     pub id: String,
     pub agent: ImportAgent,
     pub source_path: PathBuf,
+    /// 数据库源里的哪一行（OpenCode 会话 id、Cursor 编辑器 composerId）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_key: Option<String>,
+    /// OMP 配置档名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// 来源 Agent 自己归档了它（OpenCode、Cursor 编辑器）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived_at_source: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     pub title: String,
@@ -257,11 +288,17 @@ impl ImportStore {
         let prefs = self.prefs();
         let mut out = Vec::new();
         for (agent, root) in roots {
-            for path in collect_sources(*agent, root) {
-                let Some(marker) = marker_of(&path) else {
+            for source in sources_of(*agent, root) {
+                let Some(marker) = source.marker.or_else(|| marker_of(&source.path)) else {
                     continue;
                 };
-                let id = session_id(*agent, &path);
+                let id = source_id(*agent, &source);
+                if out
+                    .iter()
+                    .any(|known: &PreviewSession| known.session.id == id)
+                {
+                    continue;
+                }
                 let session = match previous
                     .iter()
                     .find(|s| s.id == id && s.marker == marker && s.title_rev == TITLE_REV)
@@ -271,9 +308,9 @@ impl ImportStore {
                         known.project_id = assign_project(known.cwd.as_deref(), projects);
                         known
                     }
-                    None => match describe(*agent, &path, id, marker, projects) {
-                        Ok(session) => session,
-                        Err(_) => continue,
+                    None => match describe(*agent, &source, id, marker, projects) {
+                        Ok(Some(session)) => session,
+                        _ => continue,
                     },
                 };
                 out.push(PreviewSession {
@@ -319,13 +356,23 @@ impl ImportStore {
 
     /// 写入（或替换）一个 Agent 的授权。不触发扫描；调用方随后调用 `scan`。
     pub fn grant(&self, agent: ImportAgent, root: PathBuf, now_ms: u64) -> Result<(), ImportError> {
+        self.grant_roots(agent, vec![root], now_ms)
+    }
+
+    /// 一家多个根（Qoder 发行变体、Cursor CLI 与编辑器）：每个根一条授权记录。
+    pub fn grant_roots(
+        &self,
+        agent: ImportAgent,
+        roots: Vec<PathBuf>,
+        now_ms: u64,
+    ) -> Result<(), ImportError> {
         let mut grants = self.grants();
         grants.retain(|grant| grant.agent != agent);
-        grants.push(ImportGrant {
+        grants.extend(roots.into_iter().map(|root| ImportGrant {
             agent,
             root,
             granted_at_ms: now_ms,
-        });
+        }));
         self.save_grants(&grants)
     }
 
@@ -346,11 +393,17 @@ impl ImportStore {
         let mut report = ScanReport::default();
         let mut next = Vec::new();
         for grant in &grants {
-            for path in collect_sources(grant.agent, &grant.root) {
-                let Some(marker) = marker_of(&path) else {
+            for source in sources_of(grant.agent, &grant.root) {
+                let Some(marker) = source.marker.or_else(|| marker_of(&source.path)) else {
                     continue;
                 };
-                let id = session_id(grant.agent, &path);
+                let id = source_id(grant.agent, &source);
+                if next
+                    .iter()
+                    .any(|session: &ImportedSession| session.id == id)
+                {
+                    continue;
+                }
                 match previous.iter().find(|session| session.id == id) {
                     Some(old) if old.marker == marker && old.title_rev == TITLE_REV => {
                         let mut kept = old.clone();
@@ -358,8 +411,8 @@ impl ImportStore {
                         next.push(kept);
                         report.unchanged += 1;
                     }
-                    old => match describe(grant.agent, &path, id, marker, projects) {
-                        Ok(session) => {
+                    old => match describe(grant.agent, &source, id, marker, projects) {
+                        Ok(Some(session)) => {
                             if old.is_some() {
                                 report.updated += 1;
                             } else {
@@ -367,7 +420,10 @@ impl ImportStore {
                             }
                             next.push(session);
                         }
-                        Err(error) => report.errors.push(format!("{}: {error}", path.display())),
+                        Ok(None) => {}
+                        Err(error) => report
+                            .errors
+                            .push(format!("{}: {error}", source.path.display())),
                     },
                 }
             }
@@ -399,17 +455,31 @@ impl ImportStore {
         {
             return Err(ImportError::NotGranted(session.agent.as_str()));
         }
+        if session.agent.is_external() && !session.agent.claude_format() {
+            let messages = import_sources::messages(
+                session.agent,
+                &session.source_path,
+                session.source_key.as_deref(),
+            )
+            .map_err(ImportError::Io)?;
+            return Ok((session, messages));
+        }
         let size = fs::metadata(&session.source_path)
             .map_err(|e| ImportError::Io(e.to_string()))?
             .len();
-        if size > MAX_SESSION_BYTES {
-            return Err(ImportError::TooLarge);
-        }
-        let mut text = String::new();
-        File::open(&session.source_path)
-            .and_then(|mut file| file.read_to_string(&mut text))
-            .map_err(|e| ImportError::Io(e.to_string()))?;
-        let lines: Vec<String> = text.lines().map(str::to_string).collect();
+        // 2026-10-28: an oversized session is read from its tail (the newest
+        // lines, `read_session_tail`) instead of being refused.
+        let lines: Vec<String> = if size > MAX_SESSION_BYTES {
+            crate::sessions::history::read_session_tail(&session.source_path)
+                .map_err(ImportError::Io)?
+                .0
+        } else {
+            let mut text = String::new();
+            File::open(&session.source_path)
+                .and_then(|mut file| file.read_to_string(&mut text))
+                .map_err(|e| ImportError::Io(e.to_string()))?;
+            text.lines().map(str::to_string).collect()
+        };
         let mut messages = Vec::new();
         parse_session_lines(&lines, session.agent == ImportAgent::Codex, &mut messages);
         Ok((session, messages))
@@ -419,11 +489,11 @@ impl ImportStore {
 /// dry-run：只遍历目录与 metadata，不打开文件、不写索引，不需要授权。
 pub fn estimate(agent: ImportAgent, root: &Path) -> ImportEstimate {
     let mut estimate = ImportEstimate {
-        root_exists: agent.sessions_dir(root).is_dir(),
+        root_exists: import_sources::has_sessions(agent, root),
         ..ImportEstimate::default()
     };
-    for path in collect_sources(agent, root) {
-        if let Some(marker) = marker_of(&path) {
+    for source in sources_of(agent, root) {
+        if let Some(marker) = source.marker.or_else(|| marker_of(&source.path)) {
             estimate.sessions += 1;
             estimate.bytes += marker.size;
             estimate.latest_ms = Some(estimate.latest_ms.unwrap_or(0).max(marker.mtime_ms));
@@ -432,32 +502,61 @@ pub fn estimate(agent: ImportAgent, root: &Path) -> ImportEstimate {
     estimate
 }
 
+/// Every session source under one root: Claude / Codex files here, the
+/// others from `import_sources`.
+pub fn sources_of(agent: ImportAgent, root: &Path) -> Vec<Source> {
+    if agent.is_external() {
+        import_sources::collect(agent, root)
+    } else {
+        collect_sources(agent, root)
+            .into_iter()
+            .map(|path| Source {
+                path,
+                ..Source::default()
+            })
+            .collect()
+    }
+}
+
+/// A row in a shared database is told apart by its key.
+fn source_id(agent: ImportAgent, source: &Source) -> String {
+    match &source.key {
+        None => session_id(agent, &source.path),
+        Some(key) => session_id(
+            agent,
+            &PathBuf::from(format!("{}#{key}", source.path.display())),
+        ),
+    }
+}
+
 /// Where Codex keeps the sessions the user archived.
 const ARCHIVED_CODEX_DIR: &str = "archived_sessions";
 
 /// A source Codex itself archived: shown as archived until the user says otherwise.
 fn archived_by_agent(session: &ImportedSession) -> bool {
-    session.agent == ImportAgent::Codex
-        && session
-            .source_path
-            .components()
-            .any(|c| c.as_os_str() == ARCHIVED_CODEX_DIR)
+    session.archived_at_source
+        || session.agent == ImportAgent::Codex
+            && session
+                .source_path
+                .components()
+                .any(|c| c.as_os_str() == ARCHIVED_CODEX_DIR)
 }
 
 /// 会话文件清单。Claude 跳过 `subagents/` 下的子代理转录（它们不是独立会话）。
 pub fn collect_sources(agent: ImportAgent, root: &Path) -> Vec<PathBuf> {
-    let dir = agent.sessions_dir(root);
     let mut files = Vec::new();
     match agent {
         ImportAgent::Claude => {
+            let dir = root.join("projects");
             collect_jsonl_files(&dir, &mut files);
             files.retain(|path| !path.components().any(|c| c.as_os_str() == "subagents"));
         }
         ImportAgent::Codex => {
-            collect_session_files(&dir, &mut files);
+            collect_session_files(&root.join("sessions"), &mut files);
             // S8 (2026-10-28): Codex moves archived sessions out of `sessions/`.
             collect_session_files(&root.join(ARCHIVED_CODEX_DIR), &mut files);
         }
+        _ => {}
     }
     files.sort();
     files
@@ -501,34 +600,55 @@ fn marker_of(path: &Path) -> Option<SourceMarker> {
     })
 }
 
+/// `Ok(None)`: not a session of its own (a sub-agent, an empty chat).
 fn describe(
     agent: ImportAgent,
-    path: &Path,
+    source: &Source,
     id: String,
     marker: SourceMarker,
     projects: &[(String, String)],
-) -> Result<ImportedSession, String> {
-    let fallback_title = path
-        .file_stem()
-        .map(|stem| fallback_title(agent, &stem.to_string_lossy()))
-        .unwrap_or_else(|| id.clone());
+) -> Result<Option<ImportedSession>, String> {
+    let path = source.path.as_path();
+    let fallback_title = match &source.key {
+        Some(_) => fallback_title(agent, ""),
+        None => path
+            .file_stem()
+            .map(|stem| fallback_title(agent, &stem.to_string_lossy()))
+            .unwrap_or_else(|| id.clone()),
+    };
     // The head is read even for an oversized file: its title and cwd are in
     // the first lines, only the full history is off limits.
-    let head = read_head(agent, path)?;
-    Ok(ImportedSession {
+    let head = if agent.is_external() && !agent.claude_format() {
+        match import_sources::summarize(agent, source, projects)? {
+            Some(summary) => Head {
+                cwd: summary.cwd,
+                title: summary.title,
+                first_at: summary.first_at,
+            },
+            None => return Ok(None),
+        }
+    } else {
+        read_head(agent, path)?
+    };
+    Ok(Some(ImportedSession {
         project_id: assign_project(head.cwd.as_deref(), projects),
         id,
         agent,
         source_path: path.to_path_buf(),
+        source_key: source.key.clone(),
+        profile: source.profile.clone(),
+        archived_at_source: source.archived,
         cwd: head.cwd,
         title: head.title.unwrap_or(fallback_title),
         first_at: head.first_at,
         last_at_ms: marker.mtime_ms,
         marker,
-        too_large: marker.size > MAX_SESSION_BYTES,
+        // A file source too big to read whole is read from its tail; database
+        // rows are read by query, so neither is "too large" any more.
+        too_large: false,
         archived: false,
         title_rev: TITLE_REV,
-    })
+    }))
 }
 
 #[derive(Default)]
@@ -582,7 +702,7 @@ fn read_head(agent: ImportAgent, path: &Path) -> Result<Head, String> {
                 .map(str::to_string);
         }
         match agent {
-            ImportAgent::Claude => {
+            ImportAgent::Claude | ImportAgent::Qoder => {
                 if head.cwd.is_none() {
                     head.cwd = value
                         .get("cwd")
@@ -624,6 +744,7 @@ fn read_head(agent: ImportAgent, path: &Path) -> Result<Head, String> {
                     _ => {}
                 }
             }
+            _ => {}
         }
         if head.cwd.is_some() && head.title.is_some() && head.first_at.is_some() {
             break;
@@ -639,6 +760,11 @@ fn fallback_title(agent: ImportAgent, stem: &str) -> String {
     let name = match agent {
         ImportAgent::Claude => "Claude Code 会话",
         ImportAgent::Codex => "Codex 会话",
+        ImportAgent::Dsh => "DeepSeek Harness 会话",
+        ImportAgent::Omp => "OMP 会话",
+        ImportAgent::Qoder => "Qoder 会话",
+        ImportAgent::Cursor => "Cursor 会话",
+        ImportAgent::OpenCode => "OpenCode 会话",
     };
     let stamp = stem.strip_prefix("rollout-").and_then(|rest| {
         let date = rest.get(0..10)?;
