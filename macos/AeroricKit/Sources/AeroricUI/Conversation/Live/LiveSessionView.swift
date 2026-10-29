@@ -48,7 +48,14 @@ public struct LiveSessionView: View {
         TranscriptTurns.attach(store.transcriptStats?.turns ?? [], to: TranscriptTurns.group(historyItems))
     }
 
-    private var liveItems: [LiveItem] { store.model?.items ?? [] }
+    /// 2026-10-29: Codex's "no metadata for this model" notice is dropped —
+    /// it fires for every third-party model and asks nothing of the user.
+    private var liveItems: [LiveItem] {
+        (store.model?.items ?? []).filter { item in
+            if case let .notice(_, message, _) = item { return LiveNoticeRow.fallbackModel(in: message) == nil }
+            return true
+        }
+    }
 
     /// The whole session's turns (the person's own messages) and tool steps:
     /// history plus the live rows history has not taken over yet.

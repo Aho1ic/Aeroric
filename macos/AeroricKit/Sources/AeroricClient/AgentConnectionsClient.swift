@@ -341,6 +341,12 @@ public struct AgentConnectionsClient: Sendable {
         return try Self.decode([Cooldown].self, reply["cooldowns"] ?? .array([]), snake: false)
     }
 
+    /// 立即恢复 (2026-10-29): ends every cooldown on the connection and its models.
+    public func clearCooldown(connectionId: String) async throws {
+        _ = try await connection.request("agentConnections.clearCooldown",
+                                         params: .object(["connectionId": .string(connectionId)]))
+    }
+
     /// R7: connections that refused replayed thinking; the gateway strips it for them.
     public func reasoningStripped() async throws -> [String] {
         let reply = try await connection.request("agentConnections.status", params: .object([:])).result

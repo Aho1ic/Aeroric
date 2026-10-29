@@ -235,12 +235,10 @@ struct LiveNoticeRow: View {
     }
 
     var body: some View {
-        if let model = Self.fallbackModel(in: message) {
-            Label("Codex 不认识 \(model) 的参数，按通用默认值运行", systemImage: "info.circle")
-                .font(.system(size: AeroricType.caption))
-                .foregroundStyle(AeroricColor.textTertiary)
-                .help(message)
-                .accessibilityIdentifier("session.live.notice")
+        if Self.fallbackModel(in: message) != nil {
+            // 2026-10-29: not shown. It fires for every third-party model and
+            // says nothing the user can act on; Codex runs on its defaults.
+            EmptyView()
         } else {
             Label(message, systemImage: recoverable ? "info.circle" : "exclamationmark.triangle")
                 .font(.system(size: AeroricType.secondary))

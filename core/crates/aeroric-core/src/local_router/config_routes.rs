@@ -532,6 +532,27 @@ pub fn record_failure(
     true
 }
 
+/// 立即恢复 (2026-10-29): the user ends every cooldown on a connection and
+/// its models, rate-limit rests included. Returns how many were lifted.
+pub fn clear_cooldowns(connection_id: &str) -> usize {
+    let model_prefix = routing::model_key(connection_id, "");
+    with_state(|state| {
+        let keys: Vec<String> = state
+            .cooldowns
+            .keys()
+            .filter(|key| key.as_str() == connection_id || key.starts_with(&model_prefix))
+            .cloned()
+            .collect();
+        for key in &keys {
+            state.cooldowns.remove(key);
+            state.reasons.remove(key);
+            state.streaks.remove(key);
+            state.slow.remove(key);
+        }
+        keys.len()
+    })
+}
+
 /// A connection's key or settings changed (R5): forget what the edit can fix —
 /// auth, credit and missing-model cooldowns on it and its models — but keep
 /// rate-limit rests, which an edit does not cure.
@@ -1086,5 +1107,28 @@ mod tests {
             resolve(&doc(Harness::Codex), &g, "", &secrets),
             Resolution::Unavailable(_)
         ));
+    }
+}
+
+#[cfg(test)]
+mod clear_tests {
+    use super::*;
+
+    #[test]
+    fn clearing_lifts_a_connections_cooldowns_and_its_models_only() {
+        let id = format!("clear-{}", now_epoch_s());
+        let other = format!("{id}-other");
+        with_state(|state| {
+            let until = now_epoch_s() + 600;
+            state.cooldowns.insert(id.clone(), until);
+            state.cooldowns.insert(routing::model_key(&id, "m"), until);
+            state.cooldowns.insert(other.clone(), until);
+            state.reasons.insert(id.clone(), FailureClass::RateLimited);
+        });
+        assert_eq!(clear_cooldowns(&id), 2);
+        let report = cooldown_report();
+        assert!(!report.iter().any(|e| e.connection_id == id));
+        assert!(report.iter().any(|e| e.connection_id == other));
+        clear_cooldowns(&other);
     }
 }

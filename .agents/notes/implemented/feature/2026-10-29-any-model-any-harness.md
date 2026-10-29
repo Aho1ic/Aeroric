@@ -27,4 +27,8 @@ Status: implemented
 - 新的宿主方法 `session.moveSource`；任务记录可能带 `pendingHandoff`；数据目录新增 `handoffs/`。
 - 复制进本机登录目录（`~/.claude/projects`、`~/.codex/sessions`）的是新文件，不改已有记录。
 - 测试：派生来源、DSH 网关 home、搬会话的窗口适配与复制位置、菜单分组与一行附注。
+- 目检后（2026-10-29）：
+  - 网关从落地起就以 `record_usage = false` 启动，`gateway-usage.sqlite` 一条记录都没有，冷却原因无从追溯；现在打开记录，并只保留 90 天。
+  - 冷却只由真实请求失败触发（`record_failure`），没有后台测活，冷却只在内存、主机重启即清空。连接列表直接写「冷却到 17:45 · 网络错误」，详情的冷却卡片加「立即恢复」（`agentConnections.clearCooldown`，连同限流休息一起解除）。
+  - Codex 对每个第三方模型都会提示“找不到模型参数，按默认值运行”，用户无事可做，会话页不再显示这一行。
 - 未在真实环境验证：DSH 经网关实际对话、Codex / Claude 跨来源搬会话后的第一轮。

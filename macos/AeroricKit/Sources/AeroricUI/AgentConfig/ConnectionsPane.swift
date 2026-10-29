@@ -40,7 +40,7 @@ struct ConnectionsPane: View {
                                 ConfigListItem(title: connection.label,
                                                harness: AgentConfigText.connectionHarness(connection),
                                                detail: connection.models.isEmpty ? "无模型" : "\(connection.models.count) 个模型",
-                                               tag: status(connection).title, tagTint: status(connection).tint)
+                                               tag: statusTag(connection), tagTint: status(connection).tint)
                             }
                             .help(connection.baseUrl)
                             .accessibilityIdentifier("agent-config.connection.\(connection.id)")
@@ -90,6 +90,15 @@ struct ConnectionsPane: View {
         } message: {
             Text("钥匙串里的 key 会一起删掉。用到它的号池会自动去掉这个成员。")
         }
+    }
+
+    /// 2026-10-29: a cooling connection says why and until when, in one line.
+    private func statusTag(_ connection: ACC.Connection) -> String {
+        let cooling = store.cooldowns(forConnection: connection.id)
+        guard status(connection) == .cooling, let last = cooling.max(by: { $0.untilEpochS < $1.untilEpochS }) else {
+            return status(connection).title
+        }
+        return AgentConfigText.coolingTag(until: clock(last.untilEpochS), reason: last.reason)
     }
 
     private func status(_ connection: ACC.Connection) -> AgentConfigText.ConnectionStatus {
@@ -198,7 +207,15 @@ struct ConnectionsPane: View {
     @ViewBuilder private var coolingCard: some View {
         let cooling = store.selectedConnection.map { store.cooldowns(forConnection: $0) } ?? []
         if !cooling.isEmpty {
-            ConfigCard("冷却中") {
+            ConfigCard("冷却中", trailing: {
+                if let id = store.selectedConnection {
+                    Button("立即恢复") { Task { await store.clearCooldown(connectionId: id) } }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
+                        .fixedSize()
+                        .help("现在就让这个连接重新接请求；下次失败还会再冷却")
+                        .accessibilityIdentifier("agent-config.clear-cooldown")
+                }
+            }) {
                 ForEach(Array(cooling.enumerated()), id: \.offset) { index, entry in
                     ConfigRow(entry.model ?? "整条连接", detail: AgentConfigText.reasonTitle(entry.reason), first: index == 0) {
                         StatusChip(text: "到 \(clock(entry.untilEpochS))", systemImage: "snowflake", tint: AeroricColor.warning)

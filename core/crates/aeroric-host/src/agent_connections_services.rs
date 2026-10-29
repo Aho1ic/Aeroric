@@ -377,6 +377,24 @@ async fn fetch_models_for_draft(context: &Arc<CoreContext>, request: &Request) -
 /// G: live cooldowns from the gateway (same process), for the pool page; R8:
 /// tasks whose last answer came from a fallback model, for the session page;
 /// R7: connections that refused replayed thinking, for the connection page.
+/// `{connectionId}` → `{cleared}` (2026-10-29, 立即恢复).
+fn clear_cooldown(request: Request, _context: Arc<CoreContext>) -> Frame {
+    let Some(id) = request
+        .params
+        .get("connectionId")
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+    else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "agentConnections.clearCooldown requires params.connectionId",
+        );
+    };
+    let cleared = aeroric_core::local_router::config_routes::clear_cooldowns(id);
+    ok(&request, json!({ "cleared": cleared }))
+}
+
 fn status(request: Request, _context: Arc<CoreContext>) -> Frame {
     use aeroric_core::local_router::config_routes::{
         cooldown_report, downgrade_report, reasoning_stripped_report,
@@ -567,6 +585,10 @@ fn legacy_cleanup_apply(request: Request, context: Arc<CoreContext>) -> Frame {
 pub fn register_agent_connection_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     set.register("agentConnections.load", blocking(&context, load));
     set.register("agentConnections.status", blocking(&context, status));
+    set.register(
+        "agentConnections.clearCooldown",
+        blocking(&context, clear_cooldown),
+    );
     set.register(
         "agentConnections.officialStatus",
         blocking(&context, official_status),

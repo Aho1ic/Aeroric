@@ -18,6 +18,7 @@ public protocol AgentConfigBackend {
     func fetchModels(connectionId: String) async throws -> ACC.FetchResult
     func candidates(configId: String, model: String?) async throws -> ACC.Candidates
     func status() async throws -> [ACC.Cooldown]
+    func clearCooldown(connectionId: String) async throws
     func officialStatus() async throws -> ACC.OfficialStatus
     func testConnection(connectionId: String, model: String) async throws -> ACC.Probe
     /// R7: connections the gateway strips replayed thinking for.
@@ -63,6 +64,11 @@ public enum AgentConfigText {
     }
 
     /// The gateway's failure classes, as the pool page shows them.
+    /// `冷却到 17:45 · 网络错误` (2026-10-29).
+    public static func coolingTag(until: String, reason: String) -> String {
+        "冷却到 \(until) · \(reasonTitle(reason))"
+    }
+
     public static func reasonTitle(_ raw: String) -> String {
         switch raw {
         case "RateLimited": "限流"
@@ -243,6 +249,12 @@ public final class AgentConfigStore {
                 return
             }
         }
+    }
+
+    /// 立即恢复 (2026-10-29).
+    public func clearCooldown(connectionId: String) async {
+        await run("解除冷却失败") { [self] in try await backend.clearCooldown(connectionId: connectionId) }
+        await refreshStatus()
     }
 
     public func refreshStatus() async {
@@ -565,3 +577,8 @@ public final class AgentConfigStore {
 }
 
 extension AgentConnectionsClient: AgentConfigBackend {}
+
+extension AgentConfigBackend {
+    /// Backends without the gateway (previews, tests) have nothing to clear.
+    public func clearCooldown(connectionId: String) async throws {}
+}

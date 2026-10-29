@@ -73,6 +73,9 @@ pub(crate) struct UsageStore {
     database_path: Arc<PathBuf>,
 }
 
+/// How long request rows are kept (2026-10-29).
+const RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+
 impl UsageStore {
     pub(crate) fn new(database_path: PathBuf) -> Self {
         Self {
@@ -150,6 +153,14 @@ impl UsageStore {
                         request.error_summary,
                         request.ttft_ms.map(as_sql_integer),
                     ],
+                )
+                .map_err(|error| RouterError::storage(error.to_string()))?;
+            // Keep 90 days (2026-10-29: recording is on now, so the table grows).
+            let cutoff = request.completed_at.saturating_sub(RETENTION_MS);
+            connection
+                .execute(
+                    "DELETE FROM router_requests WHERE completed_at < ?1",
+                    params![cutoff],
                 )
                 .map_err(|error| RouterError::storage(error.to_string()))?;
             Ok(())
