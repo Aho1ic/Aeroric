@@ -336,6 +336,8 @@ struct AeroricNativeApp: App {
         )
             // Versions and upgrades for the session capsule and Agent 升级.
             .environment(services.agentUpgradeBook)
+            // Tags on sidebar rows and in their menus (2026-10-29).
+            .environment(services.tagBook)
             // M4: first-launch onboarding once the host is ready.
             .sheet(isPresented: Binding(
                 get: { OnboardingFlow.shouldPresent(completed: onboardingCompleted, phase: services.phaseSnapshot) },

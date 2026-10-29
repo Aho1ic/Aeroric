@@ -124,6 +124,11 @@ impl AppPaths {
         self.data_dir.join("project-groups.json")
     }
 
+    /// The tag library and which sidebar rows carry which tag (2026-10-29).
+    pub fn tags_file(&self) -> PathBuf {
+        self.data_dir.join("tags.json")
+    }
+
     /// `task-operations.json` — which start attempts were already claimed, and how far
     /// each task's generation counter got. Core-exclusive like `project-groups.json`: the
     /// legacy client's full-list save drops fields it does not model, and a lost claim is a

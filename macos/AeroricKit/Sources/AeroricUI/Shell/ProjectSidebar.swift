@@ -38,6 +38,12 @@ public struct ProjectSidebar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Window-local status filter. Presentation only; never a host query.
     @State private var filter: SidebarStatusFilter = .all
+    /// Tags (2026-10-29): the library, the window-local tag filter (one tag,
+    /// Q1-a) and the two tag sheets.
+    @Environment(TagBook.self) private var tagBook: TagBook?
+    @State private var tagFilter: String?
+    @State private var draftTag: TagDraftTarget?
+    @State private var managingTags = false
 
     public static let collapsedWidth: CGFloat = NativePanelGeometry.mainShell.railWidth
 
@@ -147,6 +153,18 @@ public struct ProjectSidebar: View {
             }
             Button("取消", role: .cancel) {}
         }
+        .sheet(item: $draftTag) { target in
+            if let tagBook { TagEditorSheet(target: target, book: tagBook, onClose: { draftTag = nil }) }
+        }
+        .sheet(isPresented: $managingTags) {
+            if let tagBook {
+                TagManagerSheet(book: tagBook, projects: projectItems.map { (id: $0.id, title: $0.title) },
+                                onClose: { managingTags = false })
+            }
+        }
+        .onChange(of: tagBook?.tags.map(\.id) ?? []) { _, ids in
+            if let tagFilter, !ids.contains(tagFilter) { self.tagFilter = nil }
+        }
         .sheet(item: $managingProject) { project in
             SessionManagerSheet(project: project, sessions: allSessions(project.id),
                                 onAction: onSessionAction, onClose: { managingProject = nil })
@@ -189,7 +207,7 @@ public struct ProjectSidebar: View {
                                 projectGroup(project)
                             }
                         }
-                        if !importItems.isEmpty { importsGroup }
+                        if !visibleImports.isEmpty { importsGroup }
                         if !archivedItems.isEmpty { archivedGroup }
                     }
                     .padding(.horizontal, AeroricSpace.m)
@@ -232,15 +250,87 @@ public struct ProjectSidebar: View {
     }
 
     private func sessions(of project: SidebarItem) -> [SidebarItem] {
-        (project.children ?? []).filter {
+        let rows = (project.children ?? []).filter {
             (SessionNavigation.taskID($0.id) != nil && filter.matches($0.status))
                 || (SessionNavigation.importedID($0.id) != nil && filter == .all)
+        }
+        guard let tagFilter, let tagBook else { return rows }
+        let kept = Set(TagBook.filter(project: project.id, sessions: rows.map(\.id), by: tagFilter,
+                                      in: tagBook.library).sessions)
+        return rows.filter { kept.contains($0.id) }
+    }
+
+    /// With a tag filter on, a project shows only when it or one of its
+    /// sessions carries the tag (Q2-a).
+    private func showsProject(_ project: SidebarItem) -> Bool {
+        guard let tagFilter, let tagBook else { return true }
+        return TagBook.filter(project: project.id, sessions: (project.children ?? []).map(\.id),
+                              by: tagFilter, in: tagBook.library).showsProject
+    }
+
+    private var visibleImports: [SidebarItem] {
+        guard let tagFilter, let tagBook else { return importItems }
+        return importItems.filter { tagBook.tags(on: $0.id).contains { $0.id == tagFilter } }
+    }
+
+    /// The project a session row sits under, for its 仅当前项目 tags.
+    private func projectID(of item: SidebarItem) -> String? {
+        projectItems.first { $0.children?.contains { $0.id == item.id } == true }?.id
+    }
+
+    private func projectTitle(_ id: String?) -> String? {
+        id.flatMap { id in projectItems.first { $0.id == id }?.title }
+    }
+
+    /// 设置标签 › (Q5): the tags this row may carry with a native tick on
+    /// the ones it has (Q4: library order), each with its colour dot; then
+    /// 新建标签… (put on this row) and 管理标签….
+    @ViewBuilder private func tagMenu(_ item: SidebarItem, isProject: Bool, projectID: String?) -> some View {
+        if let tagBook {
+            Menu("设置标签") {
+                let on = Set(tagBook.tags(on: item.id).map(\.id))
+                let offered = tagBook.available(isProject: isProject, projectID: projectID)
+                ForEach(offered) { tag in
+                    Toggle(isOn: Binding(
+                        get: { on.contains(tag.id) },
+                        set: { _ in tagBook.toggle(tag, on: item.id, isProject: isProject, projectID: projectID) }
+                    )) {
+                        Label { Text(tag.projectId == nil ? tag.name : "\(tag.name)（仅本项目）") } icon: {
+                            Image(nsImage: TagDot.image(tag.color))
+                        }
+                    }
+                }
+                if !offered.isEmpty { Divider() }
+                Button("新建标签…", systemImage: "plus") {
+                    draftTag = TagDraftTarget(projectID: projectID, projectTitle: projectTitle(projectID),
+                                              row: (item.id, isProject, projectID))
+                }
+                Button("管理标签…", systemImage: "tag") { managingTags = true }
+            }
         }
     }
 
     private var projectsHeader: some View {
         SectionHeader("项目") {
             HStack(spacing: 2) {
+                if let tagFilter, let tag = tagBook?.tags.first(where: { $0.id == tagFilter }) {
+                    Button { self.tagFilter = nil } label: {
+                        HStack(spacing: 3) {
+                            Text("标签：\(tag.name)").lineLimit(1)
+                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                        }
+                        .font(.system(size: AeroricType.caption - 1, weight: .medium))
+                        .foregroundStyle(ProjectColor.color(tag.color) ?? AeroricColor.accent)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background((ProjectColor.color(tag.color) ?? AeroricColor.accent).opacity(0.16),
+                                    in: Capsule(style: .continuous))
+                        .fixedSize()
+                    }
+                    .buttonStyle(.plain)
+                    .help("清除标签筛选")
+                    .accessibilityIdentifier("sidebar.tag-filter.clear")
+                }
                 openFolderButton
                 filterMenu
             }
@@ -250,7 +340,12 @@ public struct ProjectSidebar: View {
     }
 
     @ViewBuilder private func projectGroup(_ project: SidebarItem) -> some View {
-        let expanded = expandedProjects.contains(project.id)
+        if showsProject(project) { projectGroupRows(project) }
+    }
+
+    @ViewBuilder private func projectGroupRows(_ project: SidebarItem) -> some View {
+        // A tag filter shows its matches without unfolding by hand.
+        let expanded = expandedProjects.contains(project.id) || tagFilter != nil
         let rows = sessions(of: project)
         ProjectRow(item: project, sessionCount: rows.count, expanded: expanded,
                    selected: selection == project.id, height: shell.projectRowHeight,
@@ -284,10 +379,10 @@ public struct ProjectSidebar: View {
     /// Imported sessions whose cwd matches no open project. Each row can turn
     /// its directory into a project, which moves the sessions under it.
     @ViewBuilder private var importsGroup: some View {
-        collapsibleHeader("未归类导入 · \(importItems.count)", expanded: $importsExpanded,
+        collapsibleHeader("未归类导入 · \(visibleImports.count)", expanded: $importsExpanded,
                           identifier: "sidebar.group.imports")
         if importsExpanded {
-            ForEach(importItems) { item in
+            ForEach(visibleImports) { item in
                 sessionTreeRow(item, contextMenu: false)
                 .contextMenu {
                     if let path = item.path {
@@ -351,6 +446,7 @@ public struct ProjectSidebar: View {
         }
         Button("复制 Session ID", systemImage: "doc.on.doc") { onSessionAction(item.id, .copySessionID) }
             .disabled(item.sessionID == nil)
+        tagMenu(item, isProject: false, projectID: projectID(of: item))
         Divider()
         if archived {
             Button("取消归档", systemImage: "tray.and.arrow.up") { onSessionAction(item.id, .unarchive) }
@@ -369,6 +465,7 @@ public struct ProjectSidebar: View {
             renameText = project.title
             renamingProject = project
         }
+        tagMenu(project, isProject: true, projectID: project.id)
         Menu("修改颜色") {
             ForEach(ProjectColor.all) { color in
                 Button {
@@ -460,10 +557,24 @@ public struct ProjectSidebar: View {
                 }
             }
             .pickerStyle(.inline)
+            if let tagBook {
+                Divider()
+                Picker("标签", selection: $tagFilter) {
+                    Text("不按标签").tag(String?.none)
+                    ForEach(tagBook.tags) { tag in
+                        Text(tag.projectId.map { "\(tag.name) · 仅 \(projectTitle($0) ?? "某项目")" } ?? tag.name)
+                            .tag(Optional(tag.id))
+                    }
+                }
+                .pickerStyle(.inline)
+                Divider()
+                Button("管理标签…") { managingTags = true }
+            }
         } label: {
-            Image(systemName: filter == .all
-                  ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
-                .foregroundStyle(filter == .all ? AeroricColor.textTertiary : AeroricColor.accent)
+            let active = filter != .all || tagFilter != nil
+            Image(systemName: active
+                  ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
+                .foregroundStyle(active ? AeroricColor.accent : AeroricColor.textTertiary)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -598,6 +709,7 @@ struct NavigationLabel<Trailing: View>: View {
 /// hover; the session count gives way to a "新建会话" button.
 private struct ProjectRow<MenuContent: View>: View {
     let item: SidebarItem
+    @Environment(TagBook.self) private var tagBook: TagBook?
     let sessionCount: Int
     let expanded: Bool
     let selected: Bool
@@ -635,6 +747,7 @@ private struct ProjectRow<MenuContent: View>: View {
                         .font(.system(size: AeroricType.body, weight: .medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    TagChips(tags: tagBook?.tags(on: item.id) ?? [])
                     Spacer(minLength: 2)
                     if sessionCount > 0 && !hovered {
                         Text("\(sessionCount)")
@@ -692,6 +805,7 @@ private struct ProjectRow<MenuContent: View>: View {
 private struct SessionRow: View {
     let item: SidebarItem
     var showsMore = false
+    @Environment(TagBook.self) private var tagBook: TagBook?
 
     var body: some View {
         HStack(spacing: AeroricSpace.s) {
@@ -700,6 +814,8 @@ private struct SessionRow: View {
                 .font(.system(size: AeroricType.body))
                 .lineLimit(1)
                 .truncationMode(.tail)
+            // T2: tags in full after the title; the title truncates first.
+            TagChips(tags: tagBook?.tags(on: item.id) ?? [])
             Spacer(minLength: 2)
             if item.imported {
                 Text("已导入")

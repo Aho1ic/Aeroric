@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use aeroric_core::context::CoreContext;
+use aeroric_core::projects::tags::{TagError, TagStore, TagTarget};
 use aeroric_core::projects::{mutations, GroupConfig, ProjectService};
 use aeroric_core::tasks::{NewTask, ProtocolFamily, TaskService};
 use aeroric_protocol::envelope::{Frame, Request};
@@ -32,7 +33,12 @@ fn invalid(request: &Request, message: &str) -> Frame {
 
 pub fn register(set: &mut ServiceSet, context: Arc<CoreContext>, tasks: Arc<TaskService>) {
     type Run = fn(&Request, &Arc<CoreContext>, &TaskService) -> Frame;
-    let methods: [(&str, Run); 8] = [
+    let methods: [(&str, Run); 13] = [
+        ("tags.list", tags_list),
+        ("tags.create", tags_create),
+        ("tags.update", tags_update),
+        ("tags.delete", tags_delete),
+        ("tags.assign", tags_assign),
         ("project.update_meta", project_update_meta),
         ("project.group_names", project_group_names),
         ("project.remove", project_remove),
@@ -60,6 +66,104 @@ pub fn register(set: &mut ServiceSet, context: Arc<CoreContext>, tasks: Arc<Task
                 })
             }),
         );
+    }
+}
+
+// MARK: tags (2026-10-29)
+
+fn tag_store(context: &CoreContext) -> TagStore {
+    TagStore::new(context.paths.tags_file())
+}
+
+fn tag_failure(request: &Request, error: TagError) -> Frame {
+    let code = match error {
+        TagError::Invalid(_) => ErrorCode::InvalidArgument,
+        TagError::NotFound => ErrorCode::NotFound,
+        TagError::Storage(_) => ErrorCode::IoError,
+    };
+    failure(request.id.clone(), code, &error.to_string())
+}
+
+/// `{}` → `{tags, assignments}`.
+fn tags_list(request: &Request, context: &Arc<CoreContext>, _: &TaskService) -> Frame {
+    match tag_store(context).load() {
+        Ok(library) => ok(request, serde_json::to_value(library).unwrap_or_default()),
+        Err(error) => tag_failure(request, error),
+    }
+}
+
+/// `{name, color, projectId?}` → the new tag.
+fn tags_create(request: &Request, context: &Arc<CoreContext>, _: &TaskService) -> Frame {
+    let (Some(name), Some(color)) = (text(request, "name"), text(request, "color")) else {
+        return invalid(request, "tags.create requires params.name and params.color");
+    };
+    match tag_store(context).create(&name, &color, text(request, "projectId").as_deref()) {
+        Ok(tag) => ok(request, serde_json::to_value(tag).unwrap_or_default()),
+        Err(error) => tag_failure(request, error),
+    }
+}
+
+/// `{id, name?, color?, scope?}` → the changed tag.
+fn tags_update(request: &Request, context: &Arc<CoreContext>, _: &TaskService) -> Frame {
+    let Some(id) = text(request, "id") else {
+        return invalid(request, "tags.update requires params.id");
+    };
+    let (name, color) = (text(request, "name"), text(request, "color"));
+    // `scope`: "all", or the project id a 仅当前项目 tag belongs to.
+    let scope = text(request, "scope");
+    let scope = scope.as_deref().map(|s| (s != "all").then_some(s));
+    match tag_store(context).update(&id, name.as_deref(), color.as_deref(), scope) {
+        Ok(tag) => ok(request, serde_json::to_value(tag).unwrap_or_default()),
+        Err(error) => tag_failure(request, error),
+    }
+}
+
+/// `{id}`: removes the tag from the library and from every row.
+fn tags_delete(request: &Request, context: &Arc<CoreContext>, _: &TaskService) -> Frame {
+    let Some(id) = text(request, "id") else {
+        return invalid(request, "tags.delete requires params.id");
+    };
+    match tag_store(context).delete(&id) {
+        Ok(()) => ok(request, json!({ "ok": true })),
+        Err(error) => tag_failure(request, error),
+    }
+}
+
+/// `{target, kind: "project"|"session", projectId?, tagIds}`: sets exactly
+/// which tags the sidebar row `target` carries.
+fn tags_assign(request: &Request, context: &Arc<CoreContext>, _: &TaskService) -> Frame {
+    let Some(target) = text(request, "target") else {
+        return invalid(request, "tags.assign requires params.target");
+    };
+    let tag_ids: Vec<String> = request
+        .params
+        .get("tagIds")
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let project_id = text(request, "projectId");
+    let kind = match text(request, "kind").as_deref() {
+        Some("project") => TagTarget::Project {
+            project_id: project_id.as_deref().unwrap_or(target.as_str()),
+        },
+        Some("session") => TagTarget::Session {
+            project_id: project_id.as_deref(),
+        },
+        _ => {
+            return invalid(
+                request,
+                "tags.assign requires params.kind project or session",
+            )
+        }
+    };
+    match tag_store(context).assign(&target, kind, &tag_ids) {
+        Ok(ids) => ok(request, json!({ "tagIds": ids })),
+        Err(error) => tag_failure(request, error),
     }
 }
 

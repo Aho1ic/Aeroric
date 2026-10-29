@@ -11,6 +11,7 @@
 
 pub mod mutations;
 pub mod service;
+pub mod tags;
 
 /// Re-exported so a caller compares locations with the same key the wire uses.
 pub use aeroric_protocol::ProjectTarget;
