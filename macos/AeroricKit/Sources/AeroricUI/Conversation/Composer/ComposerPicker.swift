@@ -144,6 +144,13 @@ struct PickerMenuList: View {
                     }
                 }
                 Spacer(minLength: AeroricSpace.s)
+                if let trailing = option.trailing {
+                    Text(trailing)
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
                 if option.selected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11, weight: .semibold))

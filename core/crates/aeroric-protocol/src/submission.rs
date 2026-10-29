@@ -27,6 +27,23 @@ pub struct AgentConfiguration {
     pub efforts: Vec<String>,
     pub permission_modes: Vec<String>,
     pub blocked_reasons: Vec<String>,
+    /// Per model (2026-10-29): the connection serving it, its context window
+    /// and known limits, for the grouped model menu. Absent for built-ins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_details: Vec<ModelDetail>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelDetail {
+    pub model: String,
+    /// The serving connection's label (the first one when several do).
+    pub connection: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    /// Known limits, e.g. 「不支持图片」.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limits: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

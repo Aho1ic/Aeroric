@@ -506,12 +506,22 @@ fn every_saved_connection_is_offered_per_gateway_harness() {
     let derived = doc.connection_configs();
     let via = ConnectionsDocument::via_id;
     let ids: Vec<String> = derived.iter().map(|c| c.id.clone()).collect();
-    let expected: Vec<String> = ["a", "b", "c"]
+    // 2026-10-29: every harness, 「全部第三方模型」 first, then per connection.
+    const ALL: [Harness; 4] = [Harness::Codex, Harness::Claude, Harness::Omp, Harness::Dsh];
+    let mut expected: Vec<String> = ALL
         .iter()
-        .flat_map(|id| [via(Harness::Codex, id), via(Harness::Claude, id)])
+        .map(|h| ConnectionsDocument::via_all_id(*h))
         .collect();
+    for id in ["a", "b", "c"] {
+        expected.extend(ALL.iter().map(|h| via(*h, id)));
+    }
     assert_eq!(ids, expected);
-    for id in &ids {
+    let all = doc
+        .config(&ConnectionsDocument::via_all_id(Harness::Dsh))
+        .expect("resolvable");
+    assert_eq!(all.target, ConfigTarget::Route { pool_id: None });
+    assert_eq!(all.label, "全部第三方模型");
+    for id in ids.iter().filter(|id| !id.ends_with("-all")) {
         // `via-<harness>-<16 hex>`: the connection id itself is not exposed.
         let hash = id.rsplit('-').next().unwrap();
         assert!(
@@ -533,15 +543,18 @@ fn every_saved_connection_is_offered_per_gateway_harness() {
     );
     assert!(doc.configs.is_empty(), "nothing is written");
 
-    // Gone with the connection, never for dsh, never for a typo; omp gets
-    // them too since it reaches the gateway (2026-10-27).
+    // Gone with the connection, never for a typo; omp gets them too since it
+    // reaches the gateway (2026-10-27), and dsh since 2026-10-29.
     assert_eq!(
         doc.config(&via(Harness::Omp, "b")).map(|c| c.harness),
         Some(Harness::Omp)
     );
     doc.connections[0].enabled = false;
     assert!(doc.config(&via(Harness::Codex, "a")).is_none());
-    assert!(doc.config(&via(Harness::Dsh, "b")).is_none());
+    assert_eq!(
+        doc.config(&via(Harness::Dsh, "b")).map(|c| c.harness),
+        Some(Harness::Dsh)
+    );
     assert!(doc.config("via-codex-missing").is_none());
     assert!(doc.config("via-").is_none());
     // A connection without a routable model offers nothing.

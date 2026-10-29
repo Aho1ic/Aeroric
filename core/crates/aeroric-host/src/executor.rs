@@ -227,10 +227,15 @@ impl CliPtyExecutor {
                 .map_err(|reason| ExecutorFailure::Spawn { reason })?,
             None => legacy_mapping(data_dir, agent),
         };
-        // The terminal path wires Claude and Codex only; an omp configuration
-        // runs as a native session (2026-10-27) and never as a Claude here.
+        // The terminal path wires Claude, Codex and (2026-10-29) dsh; an omp
+        // configuration runs as a native session (2026-10-27) and never here.
         match config {
-            Some(config) if !matches!(config.harness, Harness::Claude | Harness::Codex) => {
+            Some(config)
+                if !matches!(
+                    config.harness,
+                    Harness::Claude | Harness::Codex | Harness::Dsh
+                ) =>
+            {
                 Err(ExecutorFailure::Spawn {
                     reason: format!(
                         "agent configuration `{}` runs only as a native local session",
@@ -258,6 +263,39 @@ impl CliPtyExecutor {
             input.args.extend(codex_gateway_args(&base));
         }
         Ok(input)
+    }
+
+    fn dsh_gateway_patch(
+        &self,
+        config: &ConfigLaunch,
+        task_id: &str,
+        selected_model: Option<&str>,
+    ) -> Result<std::path::PathBuf, String> {
+        let base = crate::gateway::ensure_running(self.context.paths.data_dir())?;
+        let (base_url, api) = match config.protocol {
+            aeroric_core::agent_connections::model::WireProtocol::Responses => {
+                (format!("{base}/codex/v1"), "openai-responses")
+            }
+            _ => (format!("{base}/claude"), "anthropic-messages"),
+        };
+        let home = self
+            .context
+            .paths
+            .data_dir()
+            .join("agent-homes")
+            .join(&config.home_dir_name);
+        let model = selected_model
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .unwrap_or(&config.default_model);
+        aeroric_core::settings::dsh_home::prepare_gateway_home(
+            &home,
+            task_id,
+            &base_url,
+            api,
+            &config.models,
+            model,
+        )
     }
 
     /// Managed home for a configuration launch, isolated like the legacy wrappers
@@ -416,6 +454,10 @@ pub(crate) fn config_home_env(
 /// (a local path, or `~/…` on a remote machine).
 pub(crate) fn managed_home_ops(harness: Harness, home: &str) -> Vec<EnvOp> {
     match harness {
+        Harness::Dsh => vec![
+            EnvOp::Set("DSH_HOME".into(), home.to_string()),
+            EnvOp::Set("TMPDIR".into(), format!("{home}/tmp")),
+        ],
         Harness::Codex => vec![
             EnvOp::Set("CODEX_HOME".into(), home.to_string()),
             EnvOp::Unset("OPENAI_ORG_ID".into()),
@@ -445,6 +487,7 @@ pub(crate) fn managed_home_ops(harness: Harness, home: &str) -> Vec<EnvOp> {
 fn config_family(config: &ConfigLaunch) -> ProtocolFamily {
     match config.harness {
         Harness::Codex => ProtocolFamily::Codex,
+        Harness::Dsh => ProtocolFamily::Dsh,
         _ => ProtocolFamily::Claude,
     }
 }
@@ -530,6 +573,8 @@ pub(crate) fn gateway_ops(
             EnvOp::Set(GATEWAY_TOKEN_ENV.into(), token.to_string()),
             EnvOp::Unset("CODEX_API_KEY".into()),
         ],
+        // 2026-10-29: dsh's provider block names this variable (`apiKeyEnv`).
+        ProtocolFamily::Dsh => vec![EnvOp::Set("DEEPSEEK_API_KEY".into(), token.to_string())],
         _ => return Err("this agent family does not use the gateway yet".into()),
     })
 }
@@ -631,6 +676,24 @@ impl CliPtyExecutor {
         let router_token = config.map(|config| {
             aeroric_core::local_router::task_tokens::issue(task_id, Some(config.config_id.clone()))
         });
+        // dsh under a configuration (2026-10-29): its managed home's provider
+        // is the gateway, and this task's patch selects the model.
+        let mut plan = plan;
+        if let Some(config) = config.filter(|c| c.harness == Harness::Dsh) {
+            match self.dsh_gateway_patch(config, task_id, selected_model) {
+                Ok(patch) => {
+                    plan = plan
+                        .arg("--patch")
+                        .arg(patch.to_string_lossy().into_owned())
+                }
+                Err(reason) => {
+                    if let Some(token) = router_token.as_deref() {
+                        aeroric_core::local_router::task_tokens::revoke_token(token);
+                    }
+                    return Err(ExecutorFailure::Spawn { reason });
+                }
+            }
+        }
         let revoke_on_failure = |failure: ExecutorFailure| {
             if let Some(token) = router_token.as_deref() {
                 aeroric_core::local_router::task_tokens::revoke_token(token);

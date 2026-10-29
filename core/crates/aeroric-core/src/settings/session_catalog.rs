@@ -142,6 +142,7 @@ pub fn catalog_with(
             continue;
         }
         configurations.push(AgentConfiguration {
+            model_details: Vec::new(),
             id: agent.into(),
             version: revision.clone(),
             display_name: label.into(),
@@ -237,6 +238,7 @@ pub fn catalog_with(
             blocked.push("已存配置没有模型目录；不会查询 API 或假设默认模型。".into());
         }
         configurations.push(AgentConfiguration {
+            model_details: Vec::new(),
             id: profile.id.clone(),
             version: revision.clone(),
             display_name: profile.label.clone(),
@@ -294,6 +296,10 @@ fn agent_config_entries(
         if models.is_empty() {
             blocked.push("此 Agent 配置没有可用渠道提供的模型；不会假设默认模型。".to_string());
         }
+        let model_details = models
+            .iter()
+            .filter_map(|name| model_detail(document, config, name))
+            .collect();
         out.push(AgentConfiguration {
             id: catalog_id(&config.id),
             version: revision.to_string(),
@@ -305,8 +311,40 @@ fn agent_config_entries(
             efforts: vec![],
             permission_modes: vec!["ask".into(), "auto_edit".into(), "full_access".into()],
             blocked_reasons: blocked,
+            model_details,
         });
     }
+}
+
+/// Where a configuration's model comes from and what is known about it.
+fn model_detail(
+    document: &ConnectionsDocument,
+    config: &crate::agent_connections::model::AgentConfig,
+    name: &str,
+) -> Option<aeroric_protocol::submission::ModelDetail> {
+    let (candidates, _) = crate::agent_connections::routing::candidates(document, config, name);
+    let first = candidates.first()?;
+    let connection = document
+        .connections
+        .iter()
+        .find(|c| c.id == first.connection_id)?;
+    let entry = connection
+        .routable_models()
+        .find(|m| m.routing_name() == name)?;
+    let mut limits = Vec::new();
+    if !entry.inputs.is_empty()
+        && !entry
+            .inputs
+            .contains(&crate::agent_connections::model::InputKind::Image)
+    {
+        limits.push("不支持图片".to_string());
+    }
+    Some(aeroric_protocol::submission::ModelDetail {
+        model: name.to_string(),
+        connection: connection.label.clone(),
+        context_window: entry.context_window,
+        limits,
+    })
 }
 
 /// Admission is repeated immediately before a receipt and any task execution.
@@ -335,6 +373,7 @@ fn builtin_codex(revision: &str, sources: &AgentSources) -> Option<AgentConfigur
         Err(reason) => (Vec::new(), Vec::new(), vec![reason.clone()]),
     };
     Some(AgentConfiguration {
+        model_details: Vec::new(),
         id: "codex".into(),
         version: revision.to_string(),
         display_name: "Codex".into(),
@@ -352,6 +391,7 @@ fn builtin_codex(revision: &str, sources: &AgentSources) -> Option<AgentConfigur
 /// reasoning effort is not offered (it is fixed for a session).
 fn builtin_claude(revision: &str) -> AgentConfiguration {
     AgentConfiguration {
+        model_details: Vec::new(),
         id: "claude".into(),
         version: revision.to_string(),
         display_name: "Claude Code".into(),

@@ -3914,7 +3914,7 @@ use aeroric_core::sessions::{
 };
 
 /// 会话消息的家族分派——与宿主 `session.rs` 同一条四族链（P3-04 的 core 读侧）。
-fn parse_messages(lines: &[String], family: ProtocolFamily) -> Vec<SessionMessage> {
+pub(crate) fn parse_messages(lines: &[String], family: ProtocolFamily) -> Vec<SessionMessage> {
     match family {
         ProtocolFamily::Dsh => parse_dsh_session_lines(lines).unwrap_or_default(),
         ProtocolFamily::Omp => parse_omp_session_lines(lines).unwrap_or_default(),

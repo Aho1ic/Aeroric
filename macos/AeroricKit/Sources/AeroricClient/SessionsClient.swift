@@ -181,6 +181,15 @@ extension SessionsClient {
         )
     }
 
+    /// `session.moveSource` (2026-10-29): continue under another source.
+    /// Returns `native` (the session was carried over) or `handoff`.
+    public func moveSource(taskId: String, configId: String?, model: String) async throws -> String {
+        var params: [String: JSONValue] = ["taskId": .string(taskId), "model": .string(model)]
+        if let configId { params["configId"] = .string(configId) }
+        let frame = try await connection.request("session.moveSource", params: .object(params))
+        return frame.result["mode"]?.stringValue ?? "native"
+    }
+
     public func command(taskId: String, command: LiveCommand) async throws {
         _ = try await connection.request(LiveSessionContract.commandMethod,
                                          params: LiveSessionRequest.command(taskId: taskId, command: command))

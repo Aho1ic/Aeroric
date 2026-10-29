@@ -10,6 +10,8 @@ public struct PickerOption: Identifiable, Equatable, Sendable {
     public var systemImage: String?
     public var selected: Bool
     public var disabledReason: String?
+    /// A short note on the same line, right-aligned (2026-10-29: options stay one line).
+    public var trailing: String? = nil
 
     public init(id: String, title: String, detail: String? = nil, systemImage: String? = nil,
                 selected: Bool = false, disabledReason: String? = nil) {
@@ -132,11 +134,34 @@ public enum ComposerPickerOptions {
 
     public static func models(_ configuration: SessionConfiguration?, draft: NewSessionDraft) -> PickerMenu {
         guard let configuration else { return PickerMenu(sections: [], note: "先选择 Agent 配置。") }
-        let options = configuration.options.models.map {
-            PickerOption(id: $0, title: $0, systemImage: "cpu", selected: $0 == draft.task.model)
+        let sections = groupedModels(configuration) { $0 == draft.task.model }
+        let empty = sections.allSatisfy { $0.options.isEmpty }
+        return PickerMenu(sections: sections,
+                          note: empty ? "此配置没有已存模型目录；不会查询 API 或假设默认值。" : nil)
+    }
+
+    /// One section per serving connection when the configuration says (「全部
+    /// 第三方模型」), else one plain section; notes ride on the same line.
+    public static func groupedModels(_ configuration: SessionConfiguration, idPrefix: String = "",
+                                     selected: @escaping (String) -> Bool) -> [PickerSection] {
+        let option = { (model: String) in
+            var row = PickerOption(id: idPrefix + model, title: model, systemImage: "cpu", selected: selected(model))
+            row.trailing = configuration.modelNotes[model]
+            return row
         }
-        return PickerMenu(sections: [PickerSection(id: "models", title: nil, options: options)],
-                          note: options.isEmpty ? "此配置没有已存模型目录；不会查询 API 或假设默认值。" : nil)
+        let connections = configuration.modelConnections
+        let names = configuration.options.models
+        guard Set(names.compactMap { connections[$0] }).count > 1 else {
+            return [PickerSection(id: "models.\(configuration.id)", title: nil, options: names.map(option))]
+        }
+        var order: [String] = []
+        for name in names {
+            if let connection = connections[name], !order.contains(connection) { order.append(connection) }
+        }
+        return order.map { connection in
+            PickerSection(id: "models.\(configuration.id).\(connection)", title: connection,
+                          options: names.filter { connections[$0] == connection }.map(option))
+        }
     }
 
     /// nil when the configuration offers no effort levels: the capsule is hidden.

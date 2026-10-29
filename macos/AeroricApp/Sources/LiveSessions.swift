@@ -56,6 +56,12 @@ struct HostLiveSessionActions: LiveSessionActions {
         try await client().configure(taskId: taskID, model: model, permission: permission, effort: effort)
     }
 
+    func moveSource(taskID: String, configID: String?, model: String) async throws -> String {
+        let mode = try await client().moveSource(taskId: taskID, configId: configID, model: model)
+        await services.refreshWorkspace()
+        return mode
+    }
+
     func command(taskID: String, command: LiveCommand) async throws {
         try await client().command(taskId: taskID, command: command)
     }
@@ -150,6 +156,18 @@ extension AppServices {
             initialPrompt: task.prompt
         )
         facts.linkedFolders = linkedFolderBook.folders(of: task.projectID).filter(\.exists).map(\.path)
+        // 2026-10-29: other sources the session can move to.
+        let login = configurations.first { !AgentConfigCatalog.isCatalogID($0.id) }
+        let allThirdParty = configurations.first { $0.id == AgentConfigCatalog.catalogID("via-\(task.agent ?? "")-all") }
+        facts.onLogin = pinned == nil
+        if let allThirdParty, pinned?.id != allThirdParty.id {
+            facts.modelSources.append(LiveModelSource(
+                configID: String(allThirdParty.id.dropFirst(AgentConfigCatalog.prefix.count)),
+                title: allThirdParty.title, configuration: allThirdParty))
+        }
+        if pinned != nil, let login {
+            facts.modelSources.append(LiveModelSource(configID: nil, title: login.title, configuration: login))
+        }
         return facts
     }
 

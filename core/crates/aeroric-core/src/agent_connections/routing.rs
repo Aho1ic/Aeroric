@@ -78,7 +78,9 @@ pub fn reach_protocols(harness: Harness, protocols: &[WireProtocol]) -> Result<R
 /// configuration offers Responses and none Messages, else Messages — the
 /// gateway carries Messages to all three protocols.
 pub fn config_protocol(doc: &ConnectionsDocument, config: &AgentConfig) -> WireProtocol {
-    if config.harness != Harness::Omp {
+    // dsh picks like omp (2026-10-29): both read a provider block that takes
+    // Responses or Messages.
+    if !matches!(config.harness, Harness::Omp | Harness::Dsh) {
         return config.harness.native_protocol();
     }
     let behind: Vec<&Connection> = match &config.target {

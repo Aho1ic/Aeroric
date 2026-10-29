@@ -61,7 +61,9 @@ impl Harness {
     /// Q32-a: only these go through the gateway (omp since 2026-10-27, over the
     /// Claude or Codex entry — see `routing::config_protocol`).
     pub fn gateway_supported(self) -> bool {
-        matches!(self, Self::Claude | Self::Codex | Self::Omp)
+        // dsh since 2026-10-29: its managed home's provider points at the
+        // gateway (Chat Completions), like omp's models.yml.
+        matches!(self, Self::Claude | Self::Codex | Self::Omp | Self::Dsh)
     }
 }
 
@@ -334,13 +336,22 @@ impl ConnectionsDocument {
         )
     }
 
+    /// 「全部第三方模型」for `harness` (2026-10-29): every enabled connection,
+    /// routed by model name.
+    pub fn via_all_id(harness: Harness) -> String {
+        format!("{VIA_PREFIX}{}-all", harness.slug())
+    }
+
     /// A stored configuration, or the derived one a `via-` id names.
     pub fn config(&self, id: &str) -> Option<AgentConfig> {
         if let Some(config) = self.configs.iter().find(|c| c.id == id) {
             return Some(config.clone());
         }
-        let (slug, _) = id.strip_prefix(VIA_PREFIX)?.split_once('-')?;
+        let (slug, rest) = id.strip_prefix(VIA_PREFIX)?.split_once('-')?;
         let harness = Harness::from_slug(slug)?;
+        if rest == "all" {
+            return self.derived_all(harness);
+        }
         let connection = self
             .connections
             .iter()
@@ -351,15 +362,48 @@ impl ConnectionsDocument {
     /// One derived configuration per enabled connection and gateway harness
     /// that can reach at least one of its models, in connection order.
     pub fn connection_configs(&self) -> Vec<AgentConfig> {
+        // 2026-10-29: every harness (omp and dsh too), each with 「全部第三方
+        // 模型」 first, then one entry per connection.
+        const HARNESSES: [Harness; 4] =
+            [Harness::Codex, Harness::Claude, Harness::Omp, Harness::Dsh];
         let mut out = Vec::new();
+        for harness in HARNESSES {
+            if let Some(config) = self.derived_all(harness) {
+                out.push(config);
+            }
+        }
         for connection in self.connections.iter().filter(|c| c.enabled) {
-            for harness in [Harness::Codex, Harness::Claude] {
+            for harness in HARNESSES {
                 if let Some(config) = self.derived_config(harness, connection) {
                     out.push(config);
                 }
             }
         }
         out
+    }
+
+    fn derived_all(&self, harness: Harness) -> Option<AgentConfig> {
+        if !harness.gateway_supported() || !self.connections.iter().any(|c| c.enabled) {
+            return None;
+        }
+        let mut config = AgentConfig {
+            id: Self::via_all_id(harness),
+            label: "全部第三方模型".into(),
+            harness,
+            target: ConfigTarget::Route { pool_id: None },
+            default_model: String::new(),
+            default_reasoning: String::new(),
+            fallback_models: Vec::new(),
+        };
+        let offered = super::routing::offered_models(self, &config);
+        config.default_model = self
+            .connections
+            .iter()
+            .filter(|c| c.enabled)
+            .flat_map(|c| c.routable_models())
+            .map(|m| m.routing_name().to_string())
+            .find(|name| offered.contains(name))?;
+        Some(config)
     }
 
     fn derived_config(&self, harness: Harness, connection: &Connection) -> Option<AgentConfig> {

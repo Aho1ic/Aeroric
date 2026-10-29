@@ -20,6 +20,9 @@ public protocol LiveSessionActions {
     func revokeGrant(taskID: String, subject: String) async throws
     func configure(taskID: String, model: String?, permission: LivePermission?, effort: String?) async throws
     func command(taskID: String, command: LiveCommand) async throws
+    /// Continue under another model source (`configID` nil = the harness's own
+    /// login). Returns `native` or `handoff` (2026-10-29).
+    func moveSource(taskID: String, configID: String?, model: String) async throws -> String
     func close(taskID: String) async throws
     func export(taskID: String) async throws
     /// `/clear` (N4 D6): open the new-session page prefilled like this task.
@@ -30,6 +33,9 @@ public protocol LiveSessionActions {
 }
 
 extension LiveSessionActions {
+    public func moveSource(taskID: String, configID: String?, model: String) async throws -> String {
+        throw LiveSessionError.unsupported("这个宿主不支持换模型来源")
+    }
     public func historyWithStats(taskID: String) async throws
         -> (messages: [SessionMessage], stats: SessionTranscriptStats?) {
         (try await history(taskID: taskID), nil)
@@ -252,6 +258,14 @@ public final class LiveSessionStore {
 
     public func endSession() async {
         do { try await actions.close(taskID: taskID) } catch { errorText = "结束会话失败：\(error)" }
+    }
+
+    /// Moves the session to another source and model; the next message runs there.
+    public func moveSource(configID: String?, model newModel: String) async throws -> String {
+        let mode = try await actions.moveSource(taskID: taskID, configID: configID, model: newModel)
+        model?.setConfig(LiveConfig(model: newModel, permission: nil, effort: nil))
+        if let state = try? await actions.state(taskID: taskID) { self.state = state }
+        return mode
     }
 
     public func configure(model newModel: String? = nil, permission: LivePermission? = nil,

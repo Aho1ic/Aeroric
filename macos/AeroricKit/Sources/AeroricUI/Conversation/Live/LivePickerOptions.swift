@@ -22,6 +22,11 @@ public struct LiveSessionFacts: Equatable, Sendable {
     public var initialPrompt: String?
     /// The project's linked folders (2026-10-29); the info card lists them.
     public var linkedFolders: [String] = []
+    /// Other model sources of this harness the session can move to
+    /// (2026-10-29): 「全部第三方模型」 and, for a third-party session, the login.
+    public var modelSources: [LiveModelSource] = []
+    /// Whether the session runs on the harness's own login.
+    public var onLogin = true
 
     public init(agent: String?, configurationTitle: String? = nil, presetTitle: String? = nil,
                 workingDirectory: String? = nil,
@@ -63,6 +68,35 @@ public struct LiveSessionFacts: Equatable, Sendable {
 public enum LivePickerOptions {
     public static let permissionModes = ["ask", "auto_edit", "full_access"]
 
+    /// The current source's models, then every other source's (one line each,
+    /// grouped by connection). Ids of another source carry `<source>␟<model>`.
+    public static func allModels(_ facts: LiveSessionFacts, current: String?) -> PickerMenu {
+        var menu = models(facts.models, current: current)
+        for source in facts.modelSources {
+            let own = Set(facts.models)
+            var configuration = source.configuration
+            configuration.options.models = configuration.options.models.filter { !own.contains($0) }
+            guard !configuration.options.models.isEmpty else { continue }
+            var sections = ComposerPickerOptions.groupedModels(configuration, idPrefix: source.key + moveSeparator) { _ in false }
+            if source.isLogin, !sections.isEmpty {
+                sections[0].title = "本机登录 · 换过去时原样搬会话"
+            } else if sections.count == 1, sections[0].title == nil {
+                sections[0].title = source.title
+            }
+            menu.sections += sections
+        }
+        return menu
+    }
+
+    public static let moveSeparator = "\u{1F}"
+
+    /// `(source key, model)` for an option that belongs to another source.
+    public static func moveTarget(_ id: String) -> (source: String, model: String)? {
+        let parts = id.components(separatedBy: moveSeparator)
+        guard parts.count == 2 else { return nil }
+        return (parts[0], parts[1])
+    }
+
     public static func models(_ declared: [String], current: String?) -> PickerMenu {
         var names = declared
         if let current, !current.isEmpty, !names.contains(current) { names.insert(current, at: 0) }
@@ -90,5 +124,21 @@ public enum LivePickerOptions {
         }
         return PickerMenu(sections: [PickerSection(id: "efforts", title: nil, options: options)],
                           note: editable ? "下一轮生效" : reason)
+    }
+}
+
+/// A model source a session can move to (2026-10-29).
+public struct LiveModelSource: Equatable, Sendable {
+    /// The bare Agent configuration id; nil for the harness's own login.
+    public var configID: String?
+    public var title: String
+    public var configuration: SessionConfiguration
+    public var isLogin: Bool { configID == nil }
+    public var key: String { configID ?? "builtin" }
+
+    public init(configID: String?, title: String, configuration: SessionConfiguration) {
+        self.configID = configID
+        self.title = title
+        self.configuration = configuration
     }
 }

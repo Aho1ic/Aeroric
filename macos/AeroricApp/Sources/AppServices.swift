@@ -482,15 +482,23 @@ final class AppServices {
         do {
             let catalog = try await client.configurations(projectID: projectID)
             guard configurationReads[projectID] == read else { return }
-            projectConfigurations[projectID] = catalog.configurations.map {
-                SessionConfiguration(
-                    id: $0.id, version: $0.version, title: $0.displayName, agent: $0.agent,
+            projectConfigurations[projectID] = catalog.configurations.map { entry in
+                var configuration = SessionConfiguration(
+                    id: entry.id, version: entry.version, title: entry.displayName, agent: entry.agent,
                     model: nil, effort: nil,
-                    options: .init(agents: [$0.agent], models: $0.models, efforts: $0.efforts,
-                                   permissionModes: $0.permissionModes),
-                    harness: $0.harness, blockedReasons: $0.blockedReasons,
+                    options: .init(agents: [entry.agent], models: entry.models, efforts: entry.efforts,
+                                   permissionModes: entry.permissionModes),
+                    harness: entry.harness, blockedReasons: entry.blockedReasons,
                     requiresModel: true, requiresPermissionIdentity: true
                 )
+                for detail in entry.modelDetails ?? [] {
+                    configuration.modelConnections[detail.model] = detail.connection
+                    configuration.modelWindows[detail.model] = detail.contextWindow
+                    let notes = (detail.contextWindow.map { [UsageSummary.compact($0).uppercased()] } ?? [])
+                        + (detail.limits ?? [])
+                    if !notes.isEmpty { configuration.modelNotes[detail.model] = notes.joined(separator: " · ") }
+                }
+                return configuration
             }
             configurationReadStates[projectID] = .loaded
         } catch {

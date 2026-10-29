@@ -19,6 +19,10 @@ public struct LiveSessionView: View {
     @State private var confirmEnd = false
     @State private var confirmFullAccess = false
     @State private var modelPickerRequest = 0
+    /// A move across login types waiting for its confirmation, and the note
+    /// after a move (2026-10-29).
+    @State private var pendingMove: PendingMove?
+    @State private var moveNotice: String?
     @State private var permissionPickerRequest = 0
     @State private var atBottom = true
     /// Finished turns whose work the person unfolded.
@@ -319,6 +323,15 @@ public struct LiveSessionView: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            if let notice = moveNotice {
+                Label(notice, systemImage: "arrow.triangle.swap")
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, AeroricSpace.l)
+                    .accessibilityIdentifier("session.live.move-notice")
+            }
             if let problem = store.connectionProblem {
                 Label(problem, systemImage: "wifi.exclamationmark")
                     .font(.system(size: AeroricType.caption))
@@ -443,9 +456,38 @@ public struct LiveSessionView: View {
 
     private var modelPicker: some View {
         ComposerPicker(title: store.model?.config.model ?? "模型", systemImage: "cpu",
-                       menu: LivePickerOptions.models(facts.models, current: store.model?.config.model),
-                       identifier: "session.live.model") { configure(model: $0) }
+                       menu: LivePickerOptions.allModels(facts, current: store.model?.config.model),
+                       identifier: "session.live.model") { id in
+            guard let target = LivePickerOptions.moveTarget(id),
+                  let source = facts.modelSources.first(where: { $0.key == target.source }) else {
+                return configure(model: id)
+            }
+            let move = PendingMove(source: source, model: target.model)
+            // Crossing login types is asked first; between third-party sources it just moves.
+            if source.isLogin || facts.onLogin { pendingMove = move } else { perform(move) }
+        }
             .id("model-\(modelPickerRequest)")
+            .confirmationDialog(pendingMove.map { "换到\($0.source.isLogin ? "本机登录" : "第三方")的 \($0.model)？" } ?? "",
+                                isPresented: Binding(get: { pendingMove != nil }, set: { if !$0 { pendingMove = nil } }),
+                                presenting: pendingMove) { move in
+                Button("换过去") { perform(move) }
+                Button("取消", role: .cancel) {}
+            } message: { _ in
+                Text("当前会话会原样搬过去继续，原模型不再调用；新模型第一轮会读完整上下文。")
+            }
+    }
+
+    private func perform(_ move: PendingMove) {
+        Task { @MainActor in
+            do {
+                let mode = try await store.moveSource(configID: move.source.configID, model: move.model)
+                moveNotice = mode == "handoff"
+                    ? "已换到 \(move.model)：上下文超出新模型的窗口，完整记录已存为交接文件，下一条消息会带上"
+                    : "已换到 \(move.model)，下一条消息开始在新来源继续"
+            } catch {
+                store.errorText = "换模型失败：\(error)"
+            }
+        }
     }
 
     @ViewBuilder private var permissionPicker: some View {
@@ -567,4 +609,10 @@ private struct SessionDialogs: ViewModifier {
             Text(store.errorText ?? "")
         }
     }
+}
+
+/// A move across sources waiting for confirmation (2026-10-29).
+struct PendingMove: Equatable {
+    let source: LiveModelSource
+    let model: String
 }

@@ -17,7 +17,7 @@ use aeroric_core::settings::preferences;
 use aeroric_core::storage::Record;
 use aeroric_core::tasks::launch_plan::working_directory;
 use aeroric_core::tasks::session_owner::launch_family_of;
-use aeroric_core::tasks::{AgentFamilies, TaskService};
+use aeroric_core::tasks::{AgentFamilies, ProtocolFamily, TaskService};
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
 use aeroric_protocol::session_live::{
@@ -92,6 +92,7 @@ pub fn register_session_live_services(
     for (name, run) in methods {
         set.register(name, blocking(&live, run));
     }
+    set.register(MOVE_SOURCE_METHOD, blocking(&live, move_source));
     set.register(AUTO_CHECK_GET_METHOD, blocking(&live, auto_check_get));
     set.register(AUTO_CHECK_SET_METHOD, blocking(&live, auto_check_set));
     set.register(
@@ -351,6 +352,13 @@ fn prompt(live: &Live, request: &Request) -> Frame {
             ErrorCode::InvalidArgument,
             "session.prompt needs text",
         );
+    }
+    // A source move that could not carry the session over (2026-10-29) left a
+    // handoff: the next message starts a fresh run with it in front.
+    if live.driver(&p.task_id).is_none() {
+        if let Some(frame) = start_with_handoff(live, request, &p.task_id, &p.text) {
+            return frame;
+        }
     }
     let driver = match live.driver(&p.task_id) {
         Some(driver) => driver,
@@ -633,4 +641,470 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+// MARK: move a session to another model source (2026-10-29)
+
+/// `session.moveSource {taskId, configId?, model}`: the task continues under
+/// another source (an Agent configuration, or the harness's own login when
+/// `configId` is absent) with the conversation intact. When the session fits
+/// the new model's window it is copied into the new source's home and forked
+/// there (`native`); otherwise, or when this harness cannot be moved, the
+/// whole transcript is written to a handoff file and the next message starts
+/// a fresh session that is pointed at it (`handoff`). The old model is never
+/// called, so this works when its upstream is down or out of quota.
+pub const MOVE_SOURCE_METHOD: &str = "session.moveSource";
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MoveParams {
+    task_id: String,
+    #[serde(default)]
+    config_id: Option<String>,
+    model: String,
+}
+
+/// The fraction of the new window a carried-over context may fill (the rest
+/// is room for the next turns).
+const FIT_PERCENT: u64 = 85;
+/// The handoff's inline part may use this share of the new window.
+const DIGEST_PERCENT: u64 = 40;
+/// Characters per token for sizing text (mixed Chinese and English).
+const CHARS_PER_TOKEN: u64 = 2;
+const HANDOFF_KEY: &str = "pendingHandoff";
+
+fn move_source(live: &Live, request: &Request) -> Frame {
+    let p: MoveParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let invalid = |message: &str| failure(request.id.clone(), ErrorCode::InvalidArgument, message);
+    let Some((project, record)) = live.record(&p.task_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no task with that id in any known project",
+        );
+    };
+    let project_id = project
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let text = |key: &str| {
+        record
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let agent = text("agent").unwrap_or_default();
+    let family = launch_family_of(&record, live.families.as_ref());
+    let data = live.context.paths.data_dir().to_path_buf();
+    let config_id = p.config_id.clone().filter(|c| !c.trim().is_empty());
+    let target = match &config_id {
+        Some(id) => match aeroric_core::agent_connections::launch::resolve_config(&data, id) {
+            Ok(config) => Some(config),
+            Err(reason) => return invalid(&reason),
+        },
+        None => None,
+    };
+    if let Some(config) = &target {
+        if config.agent() != agent {
+            return invalid("只能换到同一个 Harness 的模型来源");
+        }
+    }
+    let model = p.model.trim().to_string();
+    if model.is_empty() {
+        return invalid("缺少要换到的模型");
+    }
+    let (session, path) = aeroric_core::tasks::session_owner::current_session(&record);
+    let lines: Vec<String> = path
+        .as_deref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|raw| raw.lines().map(str::to_string).collect())
+        .unwrap_or_default();
+    let used = context_used(&lines, family, path.as_deref());
+    let window = target_window(&data, config_id.as_deref(), &model);
+    let fits = match (used, window) {
+        (Some(used), Some(window)) => used * 100 <= window * FIT_PERCENT,
+        _ => true,
+    };
+    let source_home = home_of(&data, text("agentConfigId").as_deref(), family);
+    let target_home = home_of(&data, config_id.as_deref(), family);
+    let moved = match (fits, &session, &path, &source_home, &target_home) {
+        (true, Some(session), Some(path), Some(from), Some(to))
+            if matches!(family, ProtocolFamily::Claude | ProtocolFamily::Codex)
+                && aeroric_core::sessions::live::fork_source(session).is_none() =>
+        {
+            copy_transcript(std::path::Path::new(path), from, to, family)
+                .map(|copied| (session.clone(), copied))
+        }
+        _ => None,
+    };
+    // The task now runs under the new source; its process restarts on the next message.
+    let mut fields: Vec<(&str, Option<String>)> = vec![
+        ("agentConfigId", config_id.clone()),
+        ("selectedModel", Some(model.clone())),
+    ];
+    let mode = match &moved {
+        Some(_) => "native",
+        None => "handoff",
+    };
+    if moved.is_none() {
+        let messages = crate::services::parse_messages(&lines, family);
+        let file = match write_handoff_file(&data, &p.task_id, &messages) {
+            Ok(file) => file,
+            Err(reason) => return failure(request.id.clone(), ErrorCode::IoError, &reason),
+        };
+        let budget = window.unwrap_or(128_000) * DIGEST_PERCENT / 100 * CHARS_PER_TOKEN;
+        fields.push((
+            HANDOFF_KEY,
+            Some(handoff_digest(&messages, &file, budget as usize)),
+        ));
+    }
+    let task_id = p.task_id.clone();
+    let written = live.service.mutate(&project_id, |records, _now| {
+        let next = records
+            .iter()
+            .map(|record| {
+                if record.get("id").and_then(Value::as_str) != Some(task_id.as_str()) {
+                    return record.clone();
+                }
+                let mut record = record.clone();
+                for (key, value) in &fields {
+                    match value {
+                        Some(value) => {
+                            record
+                                .0
+                                .insert((*key).to_string(), Value::String(value.clone()));
+                        }
+                        None => {
+                            record.0.remove(*key);
+                        }
+                    }
+                }
+                record
+            })
+            .collect();
+        (next, true)
+    });
+    if let Err(error) = written {
+        return failure(request.id.clone(), ErrorCode::IoError, &error.to_string());
+    }
+    live.executor.close_session(&p.task_id);
+    let session_result = match &moved {
+        Some((session, copied)) => live.service.attach_session(
+            &project_id,
+            &p.task_id,
+            family,
+            &agent,
+            Some(&format!(
+                "{}{session}",
+                aeroric_core::sessions::live::FORK_PREFIX
+            )),
+            Some(&copied.to_string_lossy()),
+        ),
+        None => live
+            .service
+            .attach_session(&project_id, &p.task_id, family, &agent, None, None),
+    };
+    if let Err(error) = session_result {
+        return failure(request.id.clone(), ErrorCode::IoError, &error.to_string());
+    }
+    ok(
+        request,
+        json!({ "mode": mode, "contextUsed": used, "targetWindow": window }),
+    )
+}
+
+/// The tokens the session's last turn sent (what the new model must hold).
+/// Falls back to the transcript size when the transcript says nothing.
+fn context_used(lines: &[String], family: ProtocolFamily, path: Option<&str>) -> Option<u64> {
+    use aeroric_core::sessions::transcript_stats;
+    let stats = match family {
+        ProtocolFamily::Codex => transcript_stats::codex(lines),
+        ProtocolFamily::Claude => transcript_stats::claude(lines),
+        _ => None,
+    };
+    stats.and_then(|s| s.context_used).or_else(|| {
+        let bytes = std::fs::metadata(path?).ok()?.len();
+        Some(bytes / 4)
+    })
+}
+
+/// The model's context window as its connection declares it; unknown for a
+/// built-in login (its own models are large and the CLI compacts itself).
+fn target_window(data: &std::path::Path, config_id: Option<&str>, model: &str) -> Option<u64> {
+    let config_id = config_id?;
+    let doc = aeroric_core::agent_connections::store::load(
+        &aeroric_core::agent_connections::store::document_path(data),
+    )
+    .ok()?;
+    let config = doc.config(config_id)?;
+    let (candidates, _) =
+        aeroric_core::agent_connections::routing::candidates(&doc, &config, model);
+    candidates.iter().find_map(|c| {
+        doc.connections
+            .iter()
+            .find(|connection| connection.id == c.connection_id)?
+            .routable_models()
+            .find(|m| m.routing_name() == model)?
+            .context_window
+    })
+}
+
+/// Where a source keeps this harness's sessions: a configuration's managed
+/// home, or the CLI's own (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`, else `~/.claude`
+/// / `~/.codex`).
+fn home_of(
+    data: &std::path::Path,
+    config_id: Option<&str>,
+    family: ProtocolFamily,
+) -> Option<std::path::PathBuf> {
+    if let Some(id) = config_id {
+        let config = aeroric_core::agent_connections::launch::resolve_config(data, id).ok()?;
+        return Some(data.join("agent-homes").join(config.home_dir_name));
+    }
+    let (variable, folder) = match family {
+        ProtocolFamily::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
+        ProtocolFamily::Codex => ("CODEX_HOME", ".codex"),
+        _ => return None,
+    };
+    std::env::var_os(variable)
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(folder))
+        })
+}
+
+/// Copies the transcript into `to` where that CLI looks for it (Claude:
+/// `projects/<cwd>/<id>.jsonl`; Codex: `sessions/<y>/<m>/<d>/rollout-….jsonl`).
+/// The original stays where it is. `None` when the layout is not recognised.
+fn copy_transcript(
+    path: &std::path::Path,
+    from: &std::path::Path,
+    to: &std::path::Path,
+    family: ProtocolFamily,
+) -> Option<std::path::PathBuf> {
+    let relative = match path.strip_prefix(from) {
+        Ok(relative) => relative.to_path_buf(),
+        Err(_) => {
+            let parts: Vec<_> = path.components().rev().collect();
+            let keep = match family {
+                ProtocolFamily::Claude => 2,
+                _ => 4,
+            };
+            let root = match family {
+                ProtocolFamily::Claude => "projects",
+                _ => "sessions",
+            };
+            let mut relative = std::path::PathBuf::from(root);
+            for part in parts.iter().take(keep).rev() {
+                relative.push(part.as_os_str());
+            }
+            relative
+        }
+    };
+    let target = to.join(&relative);
+    if target == path {
+        return Some(target);
+    }
+    if !target.exists() {
+        std::fs::create_dir_all(target.parent()?).ok()?;
+        std::fs::copy(path, &target).ok()?;
+    }
+    Some(target)
+}
+
+/// The whole conversation as Markdown in Aeroric's data directory (never the
+/// user's repository): every message, tool call and result, untrimmed.
+fn write_handoff_file(
+    data: &std::path::Path,
+    task_id: &str,
+    messages: &[aeroric_core::sessions::SessionMessage],
+) -> Result<std::path::PathBuf, String> {
+    let dir = data.join("handoffs");
+    aeroric_core::settings::ensure_private_dir(&dir)?;
+    let file = dir.join(format!("{task_id}-{}.md", now_ms()));
+    aeroric_core::settings::atomic_write_private(&file, &render_transcript(messages))?;
+    Ok(file)
+}
+
+fn render_transcript(messages: &[aeroric_core::sessions::SessionMessage]) -> String {
+    use aeroric_core::sessions::SessionContent;
+    let mut out = String::from("# 上一段会话的完整记录\n\n");
+    for message in messages {
+        let who = if message.role == "user" {
+            "用户"
+        } else {
+            "Agent"
+        };
+        for block in &message.content {
+            match block {
+                SessionContent::Text { text } => out.push_str(&format!("## {who}\n\n{text}\n\n")),
+                SessionContent::ToolUse { name, input, .. } => {
+                    out.push_str(&format!("### 工具调用：{name}\n\n```\n{input}\n```\n\n"))
+                }
+                SessionContent::ToolResult { output, .. } => {
+                    out.push_str(&format!("### 工具结果\n\n```\n{output}\n```\n\n"))
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// The handoff's inline part: where the full record is, then the most recent
+/// conversation text (newest kept first) within `budget` characters.
+fn handoff_digest(
+    messages: &[aeroric_core::sessions::SessionMessage],
+    file: &std::path::Path,
+    budget: usize,
+) -> String {
+    use aeroric_core::sessions::SessionContent;
+    let header = format!(
+        "（Aeroric 交接）你接手的是另一个模型做到一半的任务。完整的对话记录（每条消息、工具调用与结果，未删减）在：\n{}\n需要细节时先读这个文件。下面是最近的对话：\n\n",
+        file.display()
+    );
+    let mut recent: Vec<String> = Vec::new();
+    let mut used = header.chars().count();
+    for message in messages.iter().rev() {
+        let who = if message.role == "user" {
+            "用户"
+        } else {
+            "Agent"
+        };
+        let text: String = message
+            .content
+            .iter()
+            .filter_map(|b| match b {
+                SessionContent::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.trim().is_empty() {
+            continue;
+        }
+        let entry = format!("【{who}】{text}\n\n");
+        let size = entry.chars().count();
+        if used + size > budget {
+            break;
+        }
+        used += size;
+        recent.push(entry);
+    }
+    recent.reverse();
+    format!(
+        "{header}{}---\n接下来的消息是用户的新要求：\n\n",
+        recent.concat()
+    )
+}
+
+/// After a `handoff` move: the first message starts a fresh run with the
+/// handoff in front, then the handoff is cleared. `None` when there is none.
+fn start_with_handoff(live: &Live, request: &Request, task_id: &str, text: &str) -> Option<Frame> {
+    let (project, record) = live.record(task_id)?;
+    let handoff = record.get(HANDOFF_KEY).and_then(Value::as_str)?.to_string();
+    let project_id = project.get("id").and_then(Value::as_str)?.to_string();
+    let task = task_id.to_string();
+    let _ = live.service.mutate(&project_id, |records, _now| {
+        let next = records
+            .iter()
+            .map(|r| {
+                let mut r = r.clone();
+                if r.get("id").and_then(Value::as_str) == Some(task.as_str()) {
+                    r.0.remove(HANDOFF_KEY);
+                }
+                r
+            })
+            .collect();
+        (next, true)
+    });
+    let operation_key = format!("session-handoff-{task_id}-{}", now_ms());
+    Some(
+        match live.service.start(
+            &project,
+            task_id,
+            &operation_key,
+            true,
+            Some(format!("{handoff}{text}")),
+            false,
+            Default::default(),
+            Default::default(),
+        ) {
+            Ok(_) => ok(request, json!({"accepted": true})),
+            Err(error) => failure(
+                request.id.clone(),
+                ErrorCode::InvalidArgument,
+                &error.to_string(),
+            ),
+        },
+    )
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+    use aeroric_core::sessions::{SessionContent, SessionMessage};
+
+    fn message(role: &str, text: &str) -> SessionMessage {
+        SessionMessage {
+            role: role.into(),
+            content: vec![SessionContent::Text { text: text.into() }],
+            message_id: None,
+        }
+    }
+
+    /// A window smaller than the conversation still gets a handoff that fits
+    /// (1M → 200K, 2026-10-29): the newest turns inline, the rest in the file.
+    #[test]
+    fn the_digest_fits_a_small_window_and_keeps_the_newest_turns() {
+        let mut messages = Vec::new();
+        for i in 0..200 {
+            messages.push(message("user", &format!("问题 {i} {}", "长".repeat(400))));
+            messages.push(message(
+                "assistant",
+                &format!("回答 {i} {}", "长".repeat(400)),
+            ));
+        }
+        let budget = 2_000;
+        let digest = handoff_digest(&messages, std::path::Path::new("/tmp/h.md"), budget);
+        assert!(
+            digest.chars().count() <= budget + 40,
+            "{}",
+            digest.chars().count()
+        );
+        assert!(digest.contains("回答 199"), "the newest turn is kept");
+        assert!(!digest.contains("问题 0 "), "the oldest falls to the file");
+        assert!(digest.contains("/tmp/h.md"));
+        let full = render_transcript(&messages);
+        assert!(
+            full.contains("问题 0 ") && full.contains("回答 199"),
+            "the file has everything"
+        );
+    }
+
+    /// Claude transcripts land under `projects/<cwd>/`, Codex rollouts keep
+    /// their dated folders; the original is left in place.
+    #[test]
+    fn a_transcript_is_copied_where_the_target_cli_looks() {
+        let root = std::env::temp_dir().join(format!("aeroric-move-{}", now_ms()));
+        let from = root.join("a");
+        let to = root.join("b");
+        let source = from.join("projects/-w/abc.jsonl");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "{}\n").unwrap();
+        let copied = copy_transcript(&source, &from, &to, ProtocolFamily::Claude).unwrap();
+        assert_eq!(copied, to.join("projects/-w/abc.jsonl"));
+        assert!(copied.exists() && source.exists());
+        let rollout = root.join("x/sessions/2026/10/29/rollout-1.jsonl");
+        std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+        std::fs::write(&rollout, "{}\n").unwrap();
+        let copied = copy_transcript(&rollout, &from, &to, ProtocolFamily::Codex).unwrap();
+        assert_eq!(copied, to.join("sessions/2026/10/29/rollout-1.jsonl"));
+        std::fs::remove_dir_all(root).ok();
+    }
 }

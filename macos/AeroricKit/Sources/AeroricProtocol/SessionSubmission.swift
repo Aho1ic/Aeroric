@@ -20,6 +20,15 @@ public struct NativeAgentConfiguration: Decodable, Equatable, Sendable {
     public let efforts: [String]
     public let permissionModes: [String]
     public let blockedReasons: [String]
+    /// Per model (2026-10-29): serving connection, context window, known limits.
+    public let modelDetails: [NativeModelDetail]?
+}
+
+public struct NativeModelDetail: Decodable, Equatable, Sendable {
+    public let model: String
+    public let connection: String
+    public let contextWindow: UInt64?
+    public let limits: [String]?
 }
 
 /// Mirrors aeroric_protocol::submission::SubmissionRequest. Fingerprinting is

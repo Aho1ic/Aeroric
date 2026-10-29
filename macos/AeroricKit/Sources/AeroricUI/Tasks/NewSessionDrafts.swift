@@ -36,6 +36,11 @@ public struct SessionConfiguration: Identifiable, Equatable, Sendable {
     public var blockedReasons: [String]
     public var requiresModel: Bool
     public var requiresPermissionIdentity: Bool
+    /// Third-party models (2026-10-29): the connection serving each, and a
+    /// one-line note (context window, known limits) for the menus.
+    public var modelConnections: [String: String] = [:]
+    public var modelNotes: [String: String] = [:]
+    public var modelWindows: [String: UInt64] = [:]
 
     public init(id: String, version: String, title: String, agent: String,
                 model: String?, effort: String?, options: TaskDraft.Options,

@@ -223,6 +223,23 @@ pub fn write_custom_provider_settings(
     crate::settings::atomic_write_private(&path, &out)
 }
 
+/// An Agent configuration's dsh home (2026-10-29): the managed layout plus a
+/// settings.yaml whose only provider is the local gateway, and this task's
+/// model patch selecting it. The task token arrives as `DEEPSEEK_API_KEY`,
+/// never in a file. Returns the patch to pass with `--patch`.
+pub fn prepare_gateway_home(
+    home: &Path,
+    task_id: &str,
+    base_url: &str,
+    api: &str,
+    models: &[String],
+    model: &str,
+) -> Result<PathBuf, String> {
+    ensure_dsh_home_at(home)?;
+    write_custom_provider_settings(home, base_url, models, api)?;
+    write_task_model_patch_in(home, task_id, "aeroric", model)
+}
+
 /// Refresh Aeroric's custom provider after access/model edits while preserving
 /// the DSH API protocol chosen when the profile was created.
 pub fn refresh_custom_provider_settings(
@@ -544,7 +561,7 @@ fn backup_path_for(compressed: &Path) -> PathBuf {
     base
 }
 
-pub(crate) fn ensure_dsh_home_at(home: &Path) -> Result<(), String> {
+pub fn ensure_dsh_home_at(home: &Path) -> Result<(), String> {
     if let Some(parent) = home.parent() {
         crate::settings::ensure_private_dir(parent)?;
     }
@@ -1042,5 +1059,38 @@ mod tests {
         assert!(session.join(&archive).is_file());
         assert!(session.join(format!("{archive}.2")).is_file());
         cleanup_temp_home(&home);
+    }
+}
+
+#[cfg(test)]
+mod gateway_home_tests {
+    use super::*;
+
+    /// The provider points at the gateway and names no key (2026-10-29).
+    #[test]
+    fn a_gateway_home_names_the_gateway_and_never_a_key() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-dsh-gw-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let home = root.join("home");
+        let patch = prepare_gateway_home(
+            &home,
+            "task-1",
+            "http://127.0.0.1:9/claude",
+            "anthropic-messages",
+            &["deepseek-v4.1-flash".to_string()],
+            "deepseek-v4.1-flash",
+        )
+        .unwrap();
+        let settings = fs::read_to_string(home.join("settings.yaml")).unwrap();
+        assert!(
+            settings.contains("baseURL: \"http://127.0.0.1:9/claude\""),
+            "{settings}"
+        );
+        assert!(settings.contains("apiKeyEnv: DEEPSEEK_API_KEY"));
+        assert!(!settings.contains("apiKey:"), "no key in the file");
+        let patch_text = fs::read_to_string(&patch).unwrap();
+        assert!(patch_text.contains("provider: \"aeroric\""), "{patch_text}");
+        fs::remove_dir_all(root).ok();
     }
 }
