@@ -117,14 +117,23 @@ extension AppServices {
 
     func liveFacts(for task: TaskStore.TaskEntry) -> LiveSessionFacts {
         let configurations = sessionConfigurations(projectID: task.projectID).filter { $0.agent == task.agent }
+        // 2026-10-28: the task's own configuration offers the models. A task
+        // pinned to an Agent configuration stores its bare id (`ds`) while the
+        // catalog lists `agent-config:ds`, so the pin never matched and every
+        // configuration's models were offered — an Agent configuration's
+        // model then ran on the CLI's own login (401). Unpinned tasks offer
+        // the built-in entries only.
+        let pinned = task.agentConfigID.flatMap { id in
+            configurations.first { $0.id == AgentConfigCatalog.catalogID(id) || $0.id == id }
+        }
+        let offered = pinned.map { [$0] } ?? configurations.filter { !AgentConfigCatalog.isCatalogID($0.id) }
         var models: [String] = []
         var efforts: [String] = []
-        for configuration in configurations {
+        for configuration in offered {
             for model in configuration.options.models where !models.contains(model) { models.append(model) }
             for effort in configuration.options.efforts where !efforts.contains(effort) { efforts.append(effort) }
         }
         let projectPath = taskStore.projects.first { $0.id == task.projectID }?.path
-        let pinned = task.agentConfigID.flatMap { id in configurations.first { $0.id == id } }
         return LiveSessionFacts(
             agent: task.agent, configurationTitle: pinned?.title ?? configurations.first?.title,
             presetTitle: pinned?.title,
@@ -273,3 +282,12 @@ final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate, @unchec
         Task { @MainActor in self.onOpen?(taskID) }
     }
 }
+
+/// How the session catalog names an Agent configuration (`agent-config:<id>`,
+/// `config_id_from_catalog` on the host side).
+enum AgentConfigCatalog {
+    static let prefix = "agent-config:"
+    static func catalogID(_ configID: String) -> String { prefix + configID }
+    static func isCatalogID(_ id: String) -> Bool { id.hasPrefix(prefix) }
+}
+

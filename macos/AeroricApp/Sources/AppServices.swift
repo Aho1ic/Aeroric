@@ -84,6 +84,8 @@ final class AppServices {
     @ObservationIgnored var liveStores: [String: LiveSessionStore] = [:]
     /// A window should select this (a clicked notification, `/clear`).
     var requestedSelection: String?
+    /// 分叉为新会话 on an imported session: the draft the window should open.
+    var requestedImportFork: ImportForkRequest?
     /// Task whose new-session draft `/clear` asked for (prefilled like it).
     var requestedNewSessionLike: String?
     /// Approval card to scroll to, per task (a clicked notification).
@@ -1100,6 +1102,28 @@ extension AppServices: WorkspaceStateProviding {
         }
     }
 
+    /// 接着聊 on an imported session (2026-10-28): open its folder as a project
+    /// first when it has none, bind a task to the agent's own session, then
+    /// show that task.
+    func continueImported(_ id: String, addingProject path: String?) async throws {
+        var projectID: String?
+        if let path {
+            projectID = try await openProject(at: path).id
+            await importBook.rescan()
+        }
+        let harness = importBook.session(id: id)?.agent ?? ""
+        let project = projectID ?? importBook.session(id: id)?.projectId
+        if let project { await loadSessionConfigurations(projectID: project) }
+        // The same default a new session takes for this harness: its built-in
+        // login first, then Agent configurations (NewSessionLayout).
+        let configuration = NewSessionLayout.firstConfiguration(
+            for: harness, in: sessionConfigurations(projectID: project))
+        let task = try await importBook.continueSession(
+            id: id, projectID: projectID, configuration: configuration)
+        await refreshWorkspace()
+        requestedSelection = SessionNavigation.task(task)
+    }
+
     /// "添加为项目…" on an unassigned import: open its cwd as a project, then
     /// re-list so the host re-assigns those sessions to it.
     func addProject(path: String) {
@@ -1177,3 +1201,11 @@ extension AppServices: SettingsStateProviding {
     }
     var keepingAwake: Bool { keepAwakeStore.active }
 }
+
+/// A new-session draft seeded from an imported session (2026-10-28).
+struct ImportForkRequest: Equatable {
+    var projectID: String?
+    var harness: String
+    var prompt: String
+}
+

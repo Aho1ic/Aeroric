@@ -32,7 +32,7 @@ fn invalid(request: &Request, message: &str) -> Frame {
 
 pub fn register(set: &mut ServiceSet, context: Arc<CoreContext>, tasks: Arc<TaskService>) {
     type Run = fn(&Request, &Arc<CoreContext>, &TaskService) -> Frame;
-    let methods: [(&str, Run); 7] = [
+    let methods: [(&str, Run); 8] = [
         ("project.update_meta", project_update_meta),
         ("project.group_names", project_group_names),
         ("project.remove", project_remove),
@@ -40,6 +40,7 @@ pub fn register(set: &mut ServiceSet, context: Arc<CoreContext>, tasks: Arc<Task
         ("task.rename", task_rename),
         ("task.delete", task_delete),
         ("task.fork", task_fork),
+        ("imports.continue", import_continue),
     ];
     for (name, run) in methods {
         let context = Arc::clone(&context);
@@ -392,5 +393,257 @@ fn task_fork(request: &Request, context: &Arc<CoreContext>, tasks: &TaskService)
     match result {
         Ok(new_id) => ok(request, json!({ "taskId": new_id })),
         Err(message) => failure(request.id.clone(), ErrorCode::InvalidArgument, &message),
+    }
+}
+
+/// 接着聊（2026-10-28）：an imported Claude / Codex / DeepSeek Harness / OMP
+/// session becomes an Aeroric task bound to the agent's own session, so the
+/// next send resumes it. The transcript stays where the agent keeps it; the
+/// import row then opens the task. Calling it again returns the same task.
+fn import_continue(request: &Request, context: &Arc<CoreContext>, tasks: &TaskService) -> Frame {
+    use aeroric_core::sessions::import::{native_session_id, ImportAgent, ImportStore};
+    let Some(id) = text(request, "id") else {
+        return invalid(request, "imports.continue requires params.id");
+    };
+    let store = ImportStore::new(context.paths.data_dir());
+    let Some(session) = store.index().into_iter().find(|s| s.id == id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no imported session with that id",
+        );
+    };
+    if let Some(task) = store.continued_task(&id) {
+        if let Some(project) = crate::services::find_project_of_task(context, &task) {
+            return ok(
+                request,
+                json!({ "taskId": task, "projectId": mutations::id_of(&project) }),
+            );
+        }
+    }
+    let (family, harness) = match session.agent {
+        ImportAgent::Claude => (ProtocolFamily::Claude, "claude"),
+        ImportAgent::Codex => (ProtocolFamily::Codex, "codex"),
+        ImportAgent::Dsh => (ProtocolFamily::Dsh, "dsh"),
+        ImportAgent::Omp => (ProtocolFamily::Omp, "omp"),
+        _ => {
+            return invalid(
+                request,
+                "这个 Agent 的会话不能在 Aeroric 里续接，请分叉为新会话",
+            )
+        }
+    };
+    let Some(project_id) = text(request, "projectId").or(session.project_id.clone()) else {
+        return invalid(request, "needs_project: 会话所在的文件夹还不是项目");
+    };
+    // The configuration the client picked for this harness, like a new
+    // session's (2026-10-28: without it the task ran on the CLI's own login
+    // whatever model was chosen later, and an Agent configuration's model went
+    // to the wrong account). The agent comes with it; the harness never changes.
+    let configuration = text(request, "configurationId");
+    let agent = text(request, "agent").unwrap_or_else(|| harness.to_string());
+    if aeroric_core::agents::families::built_in_session_family(&agent).is_some_and(|f| f != family)
+    {
+        return invalid(request, "所选配置与原会话的 Harness 不一致");
+    }
+    let result = (|| -> Result<String, String> {
+        let project = ProjectService::new(Arc::clone(context))
+            .list()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|record| mutations::id_of(record) == Some(project_id.as_str()))
+            .ok_or("项目不存在")?;
+        let native = native_session_id(&session).ok_or("读不到原会话的 id")?;
+        let new_id = format!("task-{}", uuid::Uuid::new_v4().simple());
+        tasks
+            .create(
+                &project,
+                NewTask {
+                    id: new_id.clone(),
+                    project_id: project_id.clone(),
+                    prompt: String::new(),
+                    agent: agent.clone(),
+                    permission_mode: text(request, "permissionMode")
+                        .unwrap_or_else(|| "ask".into()),
+                    immediate: false,
+                    selected_model: text(request, "model"),
+                    reasoning_effort: text(request, "effort"),
+                    speed: None,
+                    dsh_agent_preset: None,
+                    agent_config_id: configuration
+                        .as_deref()
+                        .and_then(aeroric_core::agent_connections::launch::config_id_from_catalog)
+                        .map(str::to_string),
+                    images: Vec::new(),
+                    texts: Vec::new(),
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        tasks
+            .attach_session(
+                &project_id,
+                &new_id,
+                family,
+                &agent,
+                Some(&native),
+                Some(&session.source_path.to_string_lossy()),
+            )
+            .map_err(|e| e.to_string())?;
+        let title: String = session.title.chars().take(60).collect();
+        tasks
+            .rename(&project_id, &new_id, &title)
+            .map_err(|e| e.to_string())?;
+        store
+            .set_continued(&id, &new_id)
+            .map_err(|e| e.to_string())?;
+        Ok(new_id)
+    })();
+    match result {
+        Ok(task) => ok(request, json!({ "taskId": task, "projectId": project_id })),
+        Err(message) => failure(request.id.clone(), ErrorCode::InvalidArgument, &message),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aeroric_core::location::{StorageLocation, StorageLocationProbe, VolumeKind};
+    use aeroric_core::paths::AppPaths;
+    use aeroric_core::sessions::import::{ImportAgent, ImportStore};
+    use aeroric_core::storage_lock::LeaseOwner;
+    use aeroric_core::tasks::{
+        CancelTarget, ExecutorFailure, LaunchRequest, NoLiveRuns, ResetOutcome, ResumeRequest,
+        TaskExecutor,
+    };
+    use std::path::Path;
+
+    struct Local;
+    impl StorageLocationProbe for Local {
+        fn probe(&self, path: &Path) -> StorageLocation {
+            StorageLocation::new(path, VolumeKind::Local)
+        }
+    }
+
+    /// Nothing is launched here: continuing only creates and binds the task.
+    struct NoExecutor;
+    impl TaskExecutor for NoExecutor {
+        fn launch(&self, _: &LaunchRequest) -> Result<(), ExecutorFailure> {
+            panic!("continuing must not launch")
+        }
+        fn resume(&self, _: &ResumeRequest) -> Result<(), ExecutorFailure> {
+            panic!("continuing must not resume yet")
+        }
+        fn cancel(&self, _: &str, _: &CancelTarget) -> Result<(), ExecutorFailure> {
+            panic!("no cancel")
+        }
+        fn complete(&self, _: &str, _: &str) -> Result<(), ExecutorFailure> {
+            panic!("no complete")
+        }
+        fn reset(&self, _: &str) -> Result<ResetOutcome, ExecutorFailure> {
+            panic!("no reset")
+        }
+    }
+
+    fn request(params: Value) -> Request {
+        serde_json::from_value(
+            json!({ "v": 1, "id": "r1", "method": "imports.continue", "params": params }),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn continuing_binds_a_task_to_the_agents_own_session_once() {
+        let root = std::env::temp_dir().join(format!("aeroric-continue-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project_dir = root.join("work-app");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let transcript = root.join("home/.claude/projects/-work-app/0b1c-uuid.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(
+            &transcript,
+            format!(
+                "{}\n",
+                json!({"type":"user","cwd": project_dir.to_string_lossy(),
+                       "message":{"role":"user","content":"修复登录页"}})
+            ),
+        )
+        .unwrap();
+        let context = Arc::new(
+            CoreContext::acquire(
+                AppPaths::with_data_dir(root.join("home"), Some(&root.join("data"))),
+                Arc::new(aeroric_core::clock::SystemClock),
+                &LeaseOwner {
+                    application: "continue-test".into(),
+                    version: "0-test".into(),
+                },
+                &Local,
+            )
+            .unwrap(),
+        );
+        ProjectService::new(Arc::clone(&context))
+            .open_local(&project_dir.to_string_lossy(), "p1", 1)
+            .unwrap();
+        let tasks = TaskService::new(
+            Arc::clone(&context),
+            Arc::new(crate::families::SettingsFamiliesCli::new(Arc::clone(
+                &context,
+            ))),
+            Arc::new(NoExecutor),
+            Arc::new(NoLiveRuns),
+        )
+        .unwrap();
+        let store = ImportStore::new(context.paths.data_dir());
+        store
+            .grant(ImportAgent::Claude, root.join("home/.claude"), 1)
+            .unwrap();
+        let project_path = project_dir.to_string_lossy().into_owned();
+        store.scan(&[("p1".to_string(), project_path)]).unwrap();
+        let imported = store.index()[0].id.clone();
+
+        let picked = json!({"id": imported, "configurationId": "agent-config:ds",
+                            "agent": "claude", "model": "deepseek-v4.1-flash"});
+        let reply = match import_continue(&request(picked), &context, &tasks) {
+            Frame::Success(success) => success.result,
+            other => panic!("{other:?}"),
+        };
+        let task = reply["taskId"].as_str().unwrap().to_string();
+        assert_eq!(reply["projectId"], "p1");
+        let records = aeroric_core::storage::tasks::load_tasks(&context, "p1").unwrap();
+        let record = records
+            .iter()
+            .find(|r| r.id() == Some(task.as_str()))
+            .unwrap();
+        assert_eq!(
+            record.get("claudeSessionId").and_then(Value::as_str),
+            Some("0b1c-uuid")
+        );
+        assert_eq!(
+            record.get("name").and_then(Value::as_str),
+            Some("修复登录页")
+        );
+        assert_eq!(
+            record.get("agentConfigId").and_then(Value::as_str),
+            Some("ds"),
+            "pinned to the picked configuration, like a new session"
+        );
+        assert_eq!(
+            record.get("selectedModel").and_then(Value::as_str),
+            Some("deepseek-v4.1-flash")
+        );
+        assert!(
+            store.visible().is_empty(),
+            "the import row now opens the task"
+        );
+
+        let again = match import_continue(&request(json!({"id": imported})), &context, &tasks) {
+            Frame::Success(success) => success.result,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            again["taskId"],
+            task.as_str(),
+            "continuing twice reuses the task"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

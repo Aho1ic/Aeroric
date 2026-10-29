@@ -96,7 +96,10 @@ pub async fn serve_connection(
     let (responses, mut outbox) = tokio::sync::mpsc::unbounded_channel::<Frame>();
     let write = tokio::spawn(async move {
         while let Some(response) = outbox.recv().await {
-            if codec::write_frame(&mut writer, &response).await.is_err() {
+            if codec::write_frame(&mut writer, &fit_frame(response))
+                .await
+                .is_err()
+            {
                 return;
             }
         }
@@ -105,7 +108,13 @@ pub async fn serve_connection(
     loop {
         let frame = match codec::read_frame(&mut reader).await {
             Ok(Some(frame)) => frame,
-            Ok(None) | Err(_) => break,
+            Ok(None) => break,
+            Err(e) => {
+                // 2026-10-29: the app restarts the host on any connection
+                // fault; say which frame rule closed it (never the bytes).
+                eprintln!("[aeroric-host] connection closed: {}", read_error_kind(&e));
+                break;
+            }
         };
         match frame {
             Frame::Request(request) if request.method == Connection::HANDSHAKE_METHOD => {
@@ -149,6 +158,31 @@ fn frame_kind(frame: &Frame) -> &'static str {
         Frame::Failure(_) => "a failure",
         Frame::Success(_) => "a success",
         Frame::Request(_) => "a request",
+    }
+}
+
+/// 2026-10-28: a reply too large for one frame fails THAT request instead of
+/// the connection. Before, `write_frame` refused it and the writer stopped, so
+/// every other request on the connection ended as "disconnected" (imported
+/// history, session pages) — one oversized answer took the whole App down.
+fn read_error_kind(error: &codec::CodecError) -> String {
+    match error {
+        codec::CodecError::Frame(frame) => format!("undecodable request ({frame})"),
+        other => other.to_string(),
+    }
+}
+
+fn fit_frame(frame: Frame) -> Frame {
+    let Frame::Success(success) = &frame else {
+        return frame;
+    };
+    match aeroric_protocol::envelope::encode_line(&frame) {
+        Ok(_) => frame,
+        Err(error) => failure(
+            success.id.clone(),
+            ErrorCode::IoError,
+            &format!("reply too large for one frame: {error}"),
+        ),
     }
 }
 
@@ -733,6 +767,51 @@ mod tests {
             matches!(&second, Frame::Success(s) if s.id == "1"),
             "{second:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_reply_fails_its_request_and_keeps_the_connection() {
+        let mut set = ServiceSet::new();
+        set.register(
+            "t.huge",
+            Arc::new(|request: Request, _call| {
+                Box::pin(async move {
+                    let big = "x".repeat(aeroric_protocol::envelope::MAX_FRAME_BYTES + 1);
+                    crate::services::ok(&request, json!({ "text": big }))
+                })
+            }),
+        );
+        set.register(
+            "t.small",
+            Arc::new(|request: Request, _call| {
+                Box::pin(async move { crate::services::ok(&request, json!({})) })
+            }),
+        );
+        let mut connection = Connection::new();
+        connection.mark_authenticated("test".into());
+        let context = Arc::new(CallContext {
+            services: Arc::new(set),
+            connection: Arc::new(tokio::sync::Mutex::new(connection)),
+        });
+        let (client, server) = tokio::net::UnixStream::pair().unwrap();
+        let (read, write) = server.into_split();
+        tokio::spawn(serve_connection(BufReader::new(read), write, context));
+        let (client_read, mut client_write) = client.into_split();
+        let mut reader = BufReader::new(client_read);
+        for (id, method) in [("1", "t.huge"), ("2", "t.small")] {
+            codec::write_frame(
+                &mut client_write,
+                &Frame::Request(request(id, method, &json!({}))),
+            )
+            .await
+            .unwrap();
+            let reply = codec::read_frame(&mut reader).await.unwrap().unwrap();
+            match (id, &reply) {
+                ("1", Frame::Failure(f)) => assert_eq!(f.error.code, ErrorCode::IoError),
+                ("2", Frame::Success(s)) => assert_eq!(s.id, "2"),
+                other => panic!("{other:?}"),
+            }
+        }
     }
 
     /// 每测试一个唯一目录（pid 不够——cargo test 并行同进程共享 pid）；

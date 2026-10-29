@@ -160,6 +160,9 @@ pub struct ImportPrefs {
     /// Sessions the agent archived that the user brought back.
     #[serde(default)]
     pub unarchived: std::collections::BTreeSet<String>,
+    /// 接着聊（2026-10-28）：导入会话 id → 接管它的 Aeroric 任务 id。接管后侧栏只显示任务。
+    #[serde(default)]
+    pub continued: std::collections::BTreeMap<String, String>,
 }
 
 /// One session found on disk for the import picker.
@@ -243,6 +246,7 @@ impl ImportStore {
         self.index()
             .into_iter()
             .filter(|session| !prefs.excluded.contains(&session.id))
+            .filter(|session| !prefs.continued.contains_key(&session.id))
             .map(|mut session| {
                 session.archived = prefs.archived.contains(&session.id)
                     || (archived_by_agent(&session) && !prefs.unarchived.contains(&session.id));
@@ -263,6 +267,22 @@ impl ImportStore {
             prefs.archived.remove(id);
             prefs.unarchived.insert(id.to_string());
         }
+        self.save_prefs(&prefs)
+    }
+
+    /// The task that took this imported session over, if any.
+    pub fn continued_task(&self, id: &str) -> Option<String> {
+        self.prefs().continued.get(id).cloned()
+    }
+
+    /// Record that `task` now carries the imported session on; the session
+    /// leaves the import list (its file is untouched).
+    pub fn set_continued(&self, id: &str, task: &str) -> Result<(), ImportError> {
+        if !self.index().iter().any(|session| session.id == id) {
+            return Err(ImportError::UnknownSession(id.to_string()));
+        }
+        let mut prefs = self.prefs();
+        prefs.continued.insert(id.to_string(), task.to_string());
         self.save_prefs(&prefs)
     }
 
@@ -515,6 +535,24 @@ pub fn sources_of(agent: ImportAgent, root: &Path) -> Vec<Source> {
                 ..Source::default()
             })
             .collect()
+    }
+}
+
+/// The agent's own id for an imported session, the one its resume flag takes:
+/// Claude's transcript stem, the uuid at the end of a Codex rollout, the
+/// header id of a DeepSeek Harness or OMP log. `None` for the agents Aeroric
+/// cannot resume (they fork instead).
+pub fn native_session_id(session: &ImportedSession) -> Option<String> {
+    let path = &session.source_path;
+    let stem = || path.file_stem().map(|s| s.to_string_lossy().into_owned());
+    match session.agent {
+        ImportAgent::Claude => stem().filter(|s| !s.is_empty()),
+        ImportAgent::Codex => stem()
+            .and_then(|s| s.get(s.len().saturating_sub(36)..).map(str::to_string))
+            .filter(|tail| tail.len() == 36 && tail.chars().filter(|c| *c == '-').count() == 4),
+        ImportAgent::Dsh => crate::sessions::dsh::read_dsh_session_header(path).map(|(id, _)| id),
+        ImportAgent::Omp => crate::sessions::omp::read_omp_session_header(path),
+        _ => None,
     }
 }
 

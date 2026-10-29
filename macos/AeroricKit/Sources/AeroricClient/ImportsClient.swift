@@ -155,6 +155,22 @@ public struct ImportsClient: Sendable {
             "imports.archive", params: .object(["id": .string(id), "archived": .bool(archived)]))
     }
 
+    /// 接着聊: an Aeroric task bound to the agent's own session (the same task
+    /// on a second call). `projectId` places a session that had none.
+    public func continueSession(id: String, projectId: String? = nil,
+                                configurationId: String? = nil, agent: String? = nil, model: String? = nil,
+                                effort: String? = nil, permissionMode: String? = nil) async throws -> String {
+        var params: [String: JSONValue] = ["id": .string(id)]
+        let optional: [String: String?] = ["projectId": projectId, "configurationId": configurationId, "agent": agent,
+                                           "model": model, "effort": effort, "permissionMode": permissionMode]
+        for (key, value) in optional { if let value { params[key] = .string(value) } }
+        let frame = try await connection.request("imports.continue", params: .object(params))
+        guard let task = frame.result["taskId"]?.stringValue else {
+            throw MalformedReply.malformed("imports.continue reply has no taskId")
+        }
+        return task
+    }
+
     /// Hides the session in Aeroric; the agent's own file is never touched.
     public func remove(id: String) async throws {
         _ = try await connection.request("imports.remove", params: .object(["id": .string(id)]))

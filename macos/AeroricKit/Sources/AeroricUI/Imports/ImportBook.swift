@@ -73,6 +73,21 @@ public final class ImportBook {
         await run("rescan") { try await $0.rescan() }
     }
 
+    /// 接着聊: the task that now carries the session; the import row leaves the list.
+    /// `configuration` pins the task like a new session's (its agent, default
+    /// model, effort and permission); nil keeps the CLI's own login.
+    public func continueSession(id: String, projectID: String? = nil,
+                                configuration: SessionConfiguration? = nil) async throws -> String {
+        guard let client else { throw ImportsClient.MalformedReply.malformed("imports unavailable") }
+        let permissions = configuration?.options.permissionModes ?? []
+        let task = try await client.continueSession(
+            id: id, projectId: projectID, configurationId: configuration?.id, agent: configuration?.agent,
+            model: configuration?.model ?? configuration?.options.models.first, effort: configuration?.effort,
+            permissionMode: permissions.contains("ask") ? "ask" : permissions.first)
+        await refresh()
+        return task
+    }
+
     public func messages(id: String) async throws -> [SessionMessage] {
         guard let client else { throw ImportsClient.MalformedReply.malformed("imports unavailable") }
         // The host pages long sessions so each reply fits one frame; walk the

@@ -1,5 +1,7 @@
 import Foundation
 import os
+
+private let supervisorLog = Logger(subsystem: "com.aeroric.native", category: "supervisor")
 import AeroricProtocol
 
 /// The `runtime.json` layout this client understands — the Swift mirror of core's
@@ -319,6 +321,9 @@ public actor HostSupervisor {
                 return
             } catch {
                 consecutiveFailures += 1
+                // 2026-10-29: the reason used to live only in the phase, so a
+                // host restarted mid-launch left no trace of why.
+                supervisorLog.error("host attempt ended: \(describe(error), privacy: .public)")
                 setPhase(.degraded(describe(error)))
             }
         }

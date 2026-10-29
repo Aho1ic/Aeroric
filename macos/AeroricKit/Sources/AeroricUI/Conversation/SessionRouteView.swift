@@ -20,6 +20,9 @@ public struct SessionRouteView: View {
     let canSend: Bool
     /// When set, the composer is replaced by this notice (imported sessions).
     let readOnlyNotice: String?
+    /// When set, the composer is replaced by this view (2026-10-28: the
+    /// imported session's 接着聊 capsule); wins over `readOnlyNotice`.
+    let readOnlyFooter: AnyView?
     @State private var messages: [SessionMessage] = []
     @State private var loading = false
     @State private var draft = ""
@@ -27,11 +30,13 @@ public struct SessionRouteView: View {
     @State private var errorText: String?
 
     public init(task: TaskStore.TaskEntry, actions: any SessionRouteActions, canSend: Bool,
-                pendingStore: PendingRequestStore = PendingRequestStore(), readOnlyNotice: String? = nil) {
+                pendingStore: PendingRequestStore = PendingRequestStore(), readOnlyNotice: String? = nil,
+                readOnlyFooter: AnyView? = nil) {
         self.task = task
         self.actions = actions
         self.canSend = canSend
         self.readOnlyNotice = readOnlyNotice
+        self.readOnlyFooter = readOnlyFooter
         _store = State(initialValue: pendingStore)
     }
 
@@ -42,7 +47,9 @@ public struct SessionRouteView: View {
     public var body: some View {
         TranscriptView(items: items, isLoading: loading, pending: store.pending, store: store,
                        onRespond: respond) {
-            if let readOnlyNotice {
+            if let readOnlyFooter {
+                readOnlyFooter
+            } else if let readOnlyNotice {
                 Label(readOnlyNotice, systemImage: "lock")
                     .font(.system(size: AeroricType.secondary))
                     .foregroundStyle(AeroricColor.textSecondary)

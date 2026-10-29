@@ -466,3 +466,39 @@ fn codex_archived_sessions_are_found_and_shown_archived_until_brought_back() {
     store.set_archived(&id, true).unwrap();
     assert!(shown(&store).archived);
 }
+
+#[test]
+fn a_continued_session_leaves_the_list_and_keeps_its_native_id() {
+    let scratch = Scratch::new("continue");
+    scratch.write(".claude/projects/-work-app/0b1c-uuid.jsonl", CLAUDE);
+    scratch.write(
+        ".codex/sessions/2026/10/01/rollout-2026-10-01T10-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl",
+        CODEX,
+    );
+    let store = scratch.store();
+    for agent in [ImportAgent::Claude, ImportAgent::Codex] {
+        store
+            .grant(agent, agent.default_root(&scratch.home()), 1)
+            .unwrap();
+    }
+    store.scan(&projects()).unwrap();
+    let index = store.index();
+    let claude = index
+        .iter()
+        .find(|s| s.agent == ImportAgent::Claude)
+        .unwrap();
+    let codex = index
+        .iter()
+        .find(|s| s.agent == ImportAgent::Codex)
+        .unwrap();
+    assert_eq!(native_session_id(claude).as_deref(), Some("0b1c-uuid"));
+    assert_eq!(
+        native_session_id(codex).as_deref(),
+        Some("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b")
+    );
+
+    store.set_continued(&claude.id, "task-1").unwrap();
+    assert_eq!(store.continued_task(&claude.id).as_deref(), Some("task-1"));
+    assert!(store.visible().iter().all(|s| s.id != claude.id));
+    assert_eq!(store.visible().len(), 1);
+}

@@ -381,6 +381,11 @@ struct TaskWorkspaceView: View {
             services.requestedNewSessionLike = nil
             openNewSession(like: taskID)
         }
+        .onChange(of: services.requestedImportFork) { _, request in
+            guard let request else { return }
+            services.requestedImportFork = nil
+            openImportFork(request)
+        }
     }
 
     /// `/clear` (N4 D6): the new-session page prefilled like this task; the
@@ -399,6 +404,23 @@ struct TaskWorkspaceView: View {
             }
             if let model = config?.model { draft.task.model = model }
             if let permission = config?.permission { draft.selectPermission(permission) }
+        }
+        selection = target
+    }
+
+    /// 分叉为新会话 from an import: the project's new-session page (the global
+    /// one for a session outside every project) with the chosen harness and the
+    /// session's recent turns as the opening prompt; nothing is sent yet.
+    private func openImportFork(_ request: ImportForkRequest) {
+        let target = request.projectID.map { SessionNavigation.draft(projectID: $0) } ?? SessionNavigation.globalDraft
+        guard let scope = SessionNavigation.draftScope(target) else { return }
+        let configuration = NewSessionLayout.firstConfiguration(
+            for: request.harness, in: services.sessionConfigurations(projectID: request.projectID))
+        draftBook.open(scope)
+        draftBook.edit(scope) { draft in
+            draft.selectHarness(request.harness)
+            if let configuration { draft.apply(configuration) }
+            draft.task.prompt = request.prompt
         }
         selection = target
     }
@@ -620,7 +642,19 @@ struct TaskWorkspaceView: View {
                 .accessibilityHidden(previewActive)
             }
             if let importedID = SessionNavigation.importedID(selection), !previewActive {
-                ImportedSessionPane(book: services.importBook, id: importedID)
+                let importProject = services.importBook.session(id: importedID)?.projectId
+                ImportedSessionPane(
+                    book: services.importBook, id: importedID,
+                    availability: NewSessionLayout.availability(services.sessionConfigurations(projectID: importProject)),
+                    preferredHarness: projectHarness(importProject) ?? defaultHarness,
+                    onContinue: { id, path in try await services.continueImported(id, addingProject: path) },
+                    onFork: { projectID, harness, prompt in
+                        services.requestedImportFork = ImportForkRequest(projectID: projectID, harness: harness, prompt: prompt)
+                    }
+                )
+                .task(id: importProject) {
+                    if let importProject { await services.loadSessionConfigurations(projectID: importProject) }
+                }
             }
             if previewActive, let id = resourceProjectID, let target = resourceBook.scene(id).target {
                 CentralResourcePreview(
@@ -1177,6 +1211,8 @@ struct TaskWorkspaceView: View {
                 LiveSessionView(store: services.liveStore(for: task.id), facts: services.liveFacts(for: task),
                                 focusApproval: services.approvalFocus[task.id])
                     .id("live.\(task.id)")
+                    // The model and effort pickers read the project's catalog.
+                    .task(id: task.projectID) { await services.loadSessionConfigurations(projectID: task.projectID) }
             case false?:
                 legacyTaskBody(task)
             case nil:
