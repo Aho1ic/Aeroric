@@ -21,6 +21,8 @@ public struct LiveSessionView: View {
     @State private var modelPickerRequest = 0
     @State private var permissionPickerRequest = 0
     @State private var atBottom = true
+    /// Finished turns whose work the person unfolded.
+    @State private var expandedTurns: Set<String> = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let infoCollapsedKey = "aeroric.session.infoCollapsed"
@@ -35,6 +37,11 @@ public struct LiveSessionView: View {
 
     private var historyItems: [TranscriptItem] {
         TranscriptBuilder.items(from: store.history, taskRunning: false)
+    }
+
+    /// 2026-10-29: history as turns, each with its timing from the transcript.
+    private var historyTurns: [TranscriptTurn] {
+        TranscriptTurns.attach(store.transcriptStats?.turns ?? [], to: TranscriptTurns.group(historyItems))
     }
 
     private var liveItems: [LiveItem] { store.model?.items ?? [] }
@@ -185,16 +192,25 @@ public struct LiveSessionView: View {
             let column = TranscriptGeometry.columnWidth(for: proxy.size.width)
             ScrollViewReader { scroller in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: AeroricSpace.l) {
+                    // 2026-10-29: finished turns are spaced apart; the live
+                    // turn below keeps the tighter row rhythm.
+                    LazyVStack(alignment: .leading, spacing: 40) {
                         if historyItems.isEmpty && liveItems.isEmpty && store.pending.isEmpty && openingPrompt == nil {
                             AeroricEmptyState(systemImage: store.loading ? "hourglass" : "text.bubble",
                                               title: store.loading ? "正在打开会话…" : "发一条消息开始",
                                               message: nil)
                                 .padding(.top, 60)
                         }
-                        ForEach(Array(historyItems.enumerated()), id: \.element.id) { offset, item in
-                            historyRow(item, offset: offset, column: column)
+                        let turns = historyTurns
+                        ForEach(turns) { turn in
+                            TranscriptTurnView(
+                                turn: turn, column: column,
+                                isLatest: turn.id == turns.last?.id && liveItems.isEmpty,
+                                expanded: Binding(get: { expandedTurns.contains(turn.id) },
+                                                  set: { if $0 { expandedTurns.insert(turn.id) } else { expandedTurns.remove(turn.id) } }),
+                                row: { item in historyRow(item, offset: 0, column: column) })
                         }
+                        VStack(alignment: .leading, spacing: AeroricSpace.l) {
                         if let opening = openingPrompt {
                             MessageBubble(role: "user", content: [.text(text: opening)], columnWidth: column)
                         }
@@ -217,6 +233,7 @@ public struct LiveSessionView: View {
                         if store.turnActive {
                             ProgressView().controlSize(.small).accessibilityIdentifier("session.live.working")
                         }
+                        }
                         Color.clear.frame(height: 1).id(Self.bottomID)
                             .onAppear { atBottom = true }
                             .onDisappear { atBottom = false }
@@ -225,10 +242,18 @@ public struct LiveSessionView: View {
                     .padding(.vertical, AeroricSpace.xxxl)
                     .frame(maxWidth: .infinity)
                 }
+                // 2026-10-29: no scroll bar; opens at the latest message, and
+                // lands there again once history arrives (a reload used to
+                // leave the page part-way up).
+                .scrollIndicators(.hidden)
+                .modifier(OpensAtLatest())
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    footer.frame(width: column).padding(.bottom, AeroricSpace.m).frame(maxWidth: .infinity)
+                    footer.frame(width: column).padding(.bottom, AeroricSpace.xs).frame(maxWidth: .infinity)
                 }
                 .onChange(of: liveItems) { _, _ in if atBottom { scroll(scroller, to: Self.bottomID) } }
+                .onChange(of: store.history.count) { old, _ in
+                    if old == 0 || atBottom { scroller.scrollTo(Self.bottomID, anchor: .bottom) }
+                }
                 .onChange(of: store.pending.count) { _, count in if count > 0 { scroll(scroller, to: Self.bottomID) } }
                 .onChange(of: focusApproval) { _, id in if let id { scroll(scroller, to: "approval.\(id)") } }
                 .onAppear { scroller.scrollTo(Self.bottomID, anchor: .bottom) }
@@ -299,22 +324,6 @@ public struct LiveSessionView: View {
                     .font(.system(size: AeroricType.caption))
                     .foregroundStyle(AeroricColor.warning)
             }
-            if let blocked = store.state?.resumeBlocked, store.state?.live == false {
-                Label(blocked, systemImage: "lock")
-                    .font(.system(size: AeroricType.secondary))
-                    .foregroundStyle(AeroricColor.textSecondary)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, AeroricSpace.l)
-                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-                    .glassSurface(.floatingCard, in: AeroricRadius.shape(AeroricRadius.l))
-                    .accessibilityIdentifier("session.live.resume-blocked")
-            } else {
-                // 2026-10-28: the 统计栏 sits right under the composer.
-                VStack(spacing: AeroricSpace.xs) {
-                    composer
-                    statsBar
-                }
-            }
             if store.turnActive, let text = LiveLoop.of(store.model?.turnToolSignatures ?? []).text {
                 Label(text, systemImage: "arrow.triangle.2.circlepath")
                     .font(.system(size: AeroricType.secondary))
@@ -354,15 +363,36 @@ public struct LiveSessionView: View {
                     }
                 }
             }
+            // 2026-10-29: notices above, then the composer (or why it is
+            // closed), and the 统计栏 always last, right under it — a session
+            // that has ended keeps its figures.
+            VStack(spacing: AeroricSpace.xs) {
+                if let blocked = store.state?.resumeBlocked, store.state?.live == false {
+                    Label(blocked, systemImage: "lock")
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.textSecondary)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, AeroricSpace.l)
+                        .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                        .glassSurface(.floatingCard, in: AeroricRadius.shape(AeroricRadius.l))
+                        .accessibilityIdentifier("session.live.resume-blocked")
+                } else {
+                    composer
+                }
+                statsBar
+            }
         }
     }
 
     private var statsBar: some View {
         let counts = turnAndStepCounts
-        return SessionStatsBar(
-            usage: store.model?.usage ?? UsageSummary(contextUsed: nil, contextLimit: nil,
-                                                      inputTokens: nil, outputTokens: nil),
-            stats: store.model?.stats ?? SessionStats(), turns: counts.turns, steps: counts.steps)
+        // Live figures while the page sees them; the transcript's otherwise
+        // (an ended session, or after the App or host restarted).
+        let live = store.model?.usage
+        let usage = live.flatMap { $0.isEmpty ? nil : $0 } ?? store.transcriptStats.map(UsageSummary.init(transcript:))
+            ?? UsageSummary(contextUsed: nil, contextLimit: nil, inputTokens: nil, outputTokens: nil)
+        let stats = store.transcriptStats.map(SessionStats.init(transcript:)) ?? store.model?.stats ?? SessionStats()
+        return SessionStatsBar(usage: usage, stats: stats, turns: counts.turns, steps: counts.steps)
     }
 
     @ViewBuilder private var composer: some View {

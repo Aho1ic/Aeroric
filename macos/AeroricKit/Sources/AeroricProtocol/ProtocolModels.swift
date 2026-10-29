@@ -197,6 +197,9 @@ public struct SessionPage: Equatable, Sendable {
     public var messages: [SessionMessage]
     public var nextCursor: String?
     public var hasMore: Bool
+    /// The whole session's 统计栏 figures, read from its transcript (first
+    /// page only; Codex and Claude).
+    public var stats: SessionTranscriptStats? = nil
 
     public static func decode(_ value: JSONValue) -> SessionPage? {
         guard let fields = value.objectValue,
@@ -215,8 +218,69 @@ public struct SessionPage: Equatable, Sendable {
         return SessionPage(
             sessionId: sessionId, family: family, messages: messages,
             nextCursor: fields["nextCursor"]?.stringValue,
-            hasMore: fields["hasMore"]?.boolValue ?? false
+            hasMore: fields["hasMore"]?.boolValue ?? false,
+            stats: fields["stats"].flatMap(SessionTranscriptStats.decode)
         )
+    }
+}
+
+/// `session.history`'s `stats` (2026-10-29): usage and timing for the whole
+/// session, so an ended or reopened session still fills the 统计栏.
+public struct SessionTranscriptStats: Equatable, Sendable {
+    public var inputTokens: UInt64?
+    public var cachedInputTokens: UInt64?
+    public var outputTokens: UInt64?
+    public var contextUsed: UInt64?
+    public var contextLimit: UInt64?
+    public var modelMs: UInt64
+    public var toolMs: UInt64
+    public var firstTokenMsTotal: UInt64
+    public var firstTokenSamples: Int
+    /// Oldest first: each turn's start, end and tokens (2026-10-29).
+    public var turns: [TurnStat] = []
+
+    public struct TurnStat: Equatable, Sendable {
+        public var startedAt: UInt64
+        public var endedAt: UInt64?
+        public var tokens: UInt64
+
+        public init(startedAt: UInt64, endedAt: UInt64?, tokens: UInt64) {
+            self.startedAt = startedAt
+            self.endedAt = endedAt
+            self.tokens = tokens
+        }
+    }
+
+    public init(inputTokens: UInt64? = nil, cachedInputTokens: UInt64? = nil, outputTokens: UInt64? = nil,
+                contextUsed: UInt64? = nil, contextLimit: UInt64? = nil, modelMs: UInt64 = 0, toolMs: UInt64 = 0,
+                firstTokenMsTotal: UInt64 = 0, firstTokenSamples: Int = 0) {
+        self.inputTokens = inputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.outputTokens = outputTokens
+        self.contextUsed = contextUsed
+        self.contextLimit = contextLimit
+        self.modelMs = modelMs
+        self.toolMs = toolMs
+        self.firstTokenMsTotal = firstTokenMsTotal
+        self.firstTokenSamples = firstTokenSamples
+    }
+
+    public static func decode(_ value: JSONValue) -> SessionTranscriptStats? {
+        guard let fields = value.objectValue else { return nil }
+        func count(_ key: String) -> UInt64? { fields[key]?.numberText.flatMap { UInt64($0) } }
+        var stats = SessionTranscriptStats(
+            inputTokens: count("inputTokens"), cachedInputTokens: count("cachedInputTokens"),
+            outputTokens: count("outputTokens"), contextUsed: count("contextUsed"),
+            contextLimit: count("contextLimit"), modelMs: count("modelMs") ?? 0, toolMs: count("toolMs") ?? 0,
+            firstTokenMsTotal: count("firstTokenMsTotal") ?? 0,
+            firstTokenSamples: Int(count("firstTokenSamples") ?? 0))
+        stats.turns = (fields["turns"]?.arrayValue ?? []).compactMap { item in
+            let row = item.objectValue ?? [:]
+            func n(_ key: String) -> UInt64? { row[key]?.numberText.flatMap { UInt64($0) } }
+            guard let started = n("startedAt") else { return nil }
+            return TurnStat(startedAt: started, endedAt: n("endedAt"), tokens: n("tokens") ?? 0)
+        }
+        return stats
     }
 }
 

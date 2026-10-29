@@ -164,6 +164,9 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
         // state stays in the sidebar footer and the counts in the menu bar.
         .background(AeroricColor.canvas.ignoresSafeArea())
         .foregroundStyle(AeroricColor.text)
+        // 2026-10-29 (owner preference): no scroll bars anywhere; every
+        // ScrollView / List below inherits this.
+        .scrollIndicators(.hidden)
         .environment(\.legacySurfacePreview,
                      LegacySurfacePreview.isAvailable && (legacyPreviewStored || LegacySurfacePreview.launchEnabled))
         // Arrow handling stays on the sidebar List; editors retain their

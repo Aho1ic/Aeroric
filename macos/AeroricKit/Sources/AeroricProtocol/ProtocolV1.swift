@@ -338,7 +338,10 @@ public enum ProtocolCodec {
         do {
             object = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
         } catch {
-            return .failure(.malformed(error.localizedDescription))
+            // The parser's own reason and position (never the content): the
+            // localized text alone ("isn't in the correct format") said nothing.
+            let detail = (error as NSError).userInfo[NSDebugDescriptionErrorKey] as? String
+            return .failure(.malformed("\(detail ?? error.localizedDescription) (\(data.count) B)"))
         }
         return frame(JSONValue.from(object))
     }

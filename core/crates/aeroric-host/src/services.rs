@@ -4418,6 +4418,18 @@ fn session_history(
     );
     let mut reply = serde_json::to_value(page).unwrap_or_default();
     reply["path"] = json!(path);
+    // 2026-10-29: the 统计栏 figures for the whole session, on the first page.
+    if before.is_none() {
+        use aeroric_core::sessions::transcript_stats;
+        let stats = match family {
+            ProtocolFamily::Codex => transcript_stats::codex(&lines),
+            ProtocolFamily::Claude => transcript_stats::claude(&lines),
+            _ => None,
+        };
+        if let Some(stats) = stats {
+            reply["stats"] = serde_json::to_value(stats).unwrap_or_default();
+        }
+    }
     ok(&request, reply)
 }
 

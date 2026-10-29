@@ -28,13 +28,26 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
 
     public var body: some View {
         HStack(spacing: 0) {
-            List(panes, selection: $paneID) { item in
-                Label(item.title, systemImage: item.systemImage)
-                    .tag(Optional(item.id))
-                    .accessibilityIdentifier("settings.nav.\(item.rawValue)")
+            // 2026-10-29: capsule rows, the main sidebar's look (was a
+            // system sidebar List with its rounded-rectangle selection).
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(panes) { item in
+                        HoverCapsuleRow(selected: paneID == item.id, height: 30,
+                                        action: { paneID = item.id }) {
+                            Label(item.title, systemImage: item.systemImage)
+                                .font(.system(size: AeroricType.body))
+                                .foregroundStyle(AeroricColor.text)
+                        }
+                        .accessibilityIdentifier("settings.nav.\(item.rawValue)")
+                    }
+                }
+                .padding(.horizontal, AeroricSpace.m)
+                .padding(.vertical, AeroricSpace.l)
             }
-            .listStyle(.sidebar)
+            .scrollIndicators(.hidden)
             .frame(width: 190)
+            .background(AeroricColor.sidebar)
             .accessibilityIdentifier("settings.nav")
             HairlineDivider(.vertical)
             ScrollView {
@@ -45,11 +58,14 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
                 }
                 .padding(AeroricSpace.xxxl)
                 .frame(maxWidth: 620, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // 2026-10-29: the column is centred in the pane (was pinned left).
+                .frame(maxWidth: .infinity, alignment: .center)
             }
             .background(AeroricColor.canvas)
         }
         .frame(minWidth: 680, minHeight: 460)
+        // Owner preference: no scroll bars anywhere (2026-10-29).
+        .scrollIndicators(.hidden)
     }
 
     @ViewBuilder private func content(_ pane: SettingsPane) -> some View {

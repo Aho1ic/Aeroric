@@ -27,8 +27,13 @@ struct HostLiveSessionActions: LiveSessionActions {
     }
 
     func history(taskID: String) async throws -> [AeroricUI.SessionMessage] {
+        try await historyWithStats(taskID: taskID).messages
+    }
+
+    func historyWithStats(taskID: String) async throws
+        -> (messages: [AeroricUI.SessionMessage], stats: SessionTranscriptStats?) {
         let page = try await client().fullHistory(taskId: taskID)
-        return page.messages.map(SessionBlockMapping.message)
+        return (page.messages.map(SessionBlockMapping.message), page.stats)
     }
 
     func prompt(taskID: String, text: String) async throws { try await client().prompt(taskId: taskID, text: text) }

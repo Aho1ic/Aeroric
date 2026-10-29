@@ -79,6 +79,7 @@ public struct SessionsClient: Sendable {
     public func fullHistory(taskId: String, maxPages: Int = 24) async throws -> SessionPage {
         var page = try await historyPage(taskId: taskId, cursor: nil)
         var messages = page.messages
+        let stats = page.stats
         var pages = 1
         while page.hasMore, let cursor = page.nextCursor, pages < maxPages {
             page = try await historyPage(taskId: taskId, cursor: cursor)
@@ -86,6 +87,7 @@ public struct SessionsClient: Sendable {
             pages += 1
         }
         page.messages = messages
+        page.stats = stats
         return page
     }
 

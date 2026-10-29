@@ -142,6 +142,12 @@ final class SocketTransport: @unchecked Sendable {
 /// the actor via Tasks; replies resolve the registry exactly once (see
 /// [`RequestRegistry`]); events are handed to the event sink.
 public actor HostConnection {
+    /// What the read queue hands the actor, in arrival order.
+    private enum Inbound: Sendable {
+        case bytes([UInt8])
+        case fault(ConnectionError)
+    }
+
     private let socketPath: String
     private let tokenProvider: @Sendable () throws -> String
     private let registry = RequestRegistry()
@@ -182,16 +188,28 @@ public actor HostConnection {
         let io = SocketTransport()
         io.open(fd: socket)
         transport = io
+        // 2026-10-29: one ordered stream from the read queue to the actor. A
+        // `Task` per chunk is not FIFO, so a reply spanning several 64 KiB
+        // reads could be reassembled out of order — the line then failed to
+        // parse, the connection faulted and the supervisor restarted the
+        // host (the session page went back to "loading").
+        let (inbound, sink) = AsyncStream<Inbound>.makeStream()
         io.startReading(
-            onBytes: { [weak self] bytes in
-                guard let self else { return }
-                Task { await self.ingest(bytes) }
-            },
-            onFault: { [weak self] fault in
-                guard let self else { return }
-                Task { await self.faulted(fault) }
+            onBytes: { bytes in sink.yield(.bytes(bytes)) },
+            onFault: { fault in
+                sink.yield(.fault(fault))
+                sink.finish()
             }
         )
+        Task { [weak self] in
+            for await item in inbound {
+                guard let self else { return }
+                switch item {
+                case let .bytes(bytes): await self.ingest(bytes)
+                case let .fault(fault): await self.faulted(fault)
+                }
+            }
+        }
 
         let token = try tokenProvider()
         let params: JSONValue = .object([

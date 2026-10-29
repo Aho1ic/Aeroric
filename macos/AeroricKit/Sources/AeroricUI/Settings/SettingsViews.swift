@@ -231,6 +231,9 @@ struct AppearanceSettingsPane: View {
                     .fixedSize()
                 }
             }
+            SettingsCard("字体") {
+                ConversationFontSettingsRow()
+            }
             SettingsCard("字号") {
                 sizeRow(.text, title: "正文", detail: "界面文字")
                 sizeRow(.conversation, title: "会话", detail: "会话里的消息正文与代码块")
@@ -248,7 +251,14 @@ struct AppearanceSettingsPane: View {
                 }
             }
         }
-        .onChange(of: themeRaw) { _, _ in AppTheme.applyStored() }
+        // After the pill's slide: switching the appearance redraws every
+        // window, which would cut the animation short.
+        .onChange(of: themeRaw) { _, _ in
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(320))
+                AppTheme.applyStored()
+            }
+        }
     }
 
     private func sizeRow(_ kind: AeroricTypeScale.Kind, title: String, detail: String) -> some View {

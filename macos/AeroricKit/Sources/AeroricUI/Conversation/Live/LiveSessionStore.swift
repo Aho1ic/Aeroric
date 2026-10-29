@@ -10,6 +10,8 @@ public protocol LiveSessionActions {
     func state(taskID: String) async throws -> LiveSessionState
     func updates(taskID: String, after: UInt64) async throws -> LiveUpdatesBatch
     func history(taskID: String) async throws -> [SessionMessage]
+    /// History plus the transcript's 统计栏 figures (2026-10-29).
+    func historyWithStats(taskID: String) async throws -> (messages: [SessionMessage], stats: SessionTranscriptStats?)
     func prompt(taskID: String, text: String) async throws
     func interrupt(taskID: String) async throws
     func respond(taskID: String, requestID: String, decision: LiveDecision, reason: String?) async throws
@@ -28,6 +30,10 @@ public protocol LiveSessionActions {
 }
 
 extension LiveSessionActions {
+    public func historyWithStats(taskID: String) async throws
+        -> (messages: [SessionMessage], stats: SessionTranscriptStats?) {
+        (try await history(taskID: taskID), nil)
+    }
     public func answer(taskID: String, questionID: String, value: String?, confirmed: Bool?, cancelled: Bool) async throws {
         throw LiveSessionError.unsupported("这个宿主不支持问答卡")
     }
@@ -69,6 +75,8 @@ public enum LiveSendResult: Equatable, Sendable {
 public final class LiveSessionStore {
     public let taskID: String
     public private(set) var history: [SessionMessage] = []
+    /// The whole session's usage and timing from its transcript.
+    public private(set) var transcriptStats: SessionTranscriptStats?
     public private(set) var model: LiveSessionModel?
     public private(set) var state: LiveSessionState?
     public private(set) var approvals = LiveApprovalMachine()
@@ -201,7 +209,10 @@ public final class LiveSessionStore {
     }
 
     private func reloadHistory() async {
-        if let messages = try? await actions.history(taskID: taskID) { history = messages }
+        if let page = try? await actions.historyWithStats(taskID: taskID) {
+            history = page.messages
+            if let stats = page.stats { transcriptStats = stats }
+        }
     }
 
     // MARK: - User actions

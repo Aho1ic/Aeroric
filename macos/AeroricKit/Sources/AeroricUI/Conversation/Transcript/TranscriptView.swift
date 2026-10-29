@@ -43,12 +43,14 @@ struct TranscriptView<Footer: View>: View {
                     .padding(.vertical, AeroricSpace.xxxl)
                     .frame(maxWidth: .infinity)
                 }
-                .scrollIndicators(.automatic)
+                // 2026-10-29: no scroll bar; opens at the latest message.
+                .scrollIndicators(.hidden)
+                .modifier(OpensAtLatest())
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     footer()
                         .frame(width: column)
-                        // 2026-10-28: the composer sits lower (was `l`).
-                        .padding(.bottom, AeroricSpace.s)
+                        // 2026-10-29: right against the bottom (was `s`).
+                        .padding(.bottom, AeroricSpace.xs)
                         .frame(maxWidth: .infinity)
                         .overlay(alignment: .top) {
                             if !atBottom && !items.isEmpty {
@@ -130,5 +132,22 @@ struct MessageBubble: View {
         .frame(maxWidth: .infinity, alignment: Self.alignment(role: role))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(isUser ? "用户" : "Agent")
+    }
+}
+
+/// Opens a transcript at its latest message while short content still starts
+/// at the top (2026-10-29). A plain `defaultScrollAnchor(.bottom)` also
+/// aligns content shorter than the viewport to the bottom: on a 27" screen a
+/// two-message session sat at the bottom of an empty page. macOS 14 has no
+/// per-role anchor; the views' own scroll-to-bottom on load covers it there.
+struct OpensAtLatest: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(.top, for: .alignment)
+        } else {
+            content
+        }
     }
 }

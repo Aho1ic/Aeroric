@@ -249,6 +249,25 @@ final class HostConnectionTests: XCTestCase {
         XCTAssertEqual(reply.result, .object(["pong": .bool(true)]))
     }
 
+    /// 2026-10-29: a reply spanning many 64 KiB reads arrives intact. Each
+    /// read used to reach the actor through its own `Task`, which is not FIFO:
+    /// chunks could be reassembled out of order, the line failed to parse and
+    /// the supervisor restarted the host.
+    func testLargeReplyReadInManyChunksStaysInOrder() async throws {
+        let text = String(repeating: "会话记录 0123456789 abcdefghij ", count: 22_000)
+        let server = makeServer()
+        server.start { line, sender in
+            if Self.echoHandshake(line, sender) { return }
+            guard let id = Self.requestID(of: line) else { return }
+            sender.full(Self.successLine(id: id, result: .object(["text": .string(text)])))
+        }
+        let connection = try await makeConnected(server)
+        for _ in 0 ..< 10 {
+            let reply = try await connection.request("history", timeout: .seconds(10))
+            XCTAssertEqual(reply.result["text"]?.stringValue, text)
+        }
+    }
+
     func testCoalescedDuplicateResponsesResolveOnce() async throws {
         let server = makeServer()
         server.start { line, sender in

@@ -53,6 +53,11 @@ public struct SlidingCapsulePicker<Option: Hashable>: View {
     private let size: Size
     private let identifier: String?
     @Namespace private var thumb
+    /// What the pill shows. Changed inside `withAnimation` before the binding
+    /// is written, so it slides whatever stores the value: a write through
+    /// `@AppStorage` lands outside the animation transaction and the pill
+    /// used to jump (外观 / 材质 / 字体, 2026-10-29).
+    @State private var shown: Option?
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
@@ -111,26 +116,34 @@ public struct SlidingCapsulePicker<Option: Hashable>: View {
         .accessibilityLabel(groupTitle)
         .accessibilityIdentifier(identifier ?? "")
         .opacity(isEnabled ? 1 : 0.5)
+        // A change from elsewhere (another window, a reset) slides too.
+        .onChange(of: selection) { _, value in
+            guard value != shown else { return }
+            if reduceMotion { shown = value } else { withAnimation(Self.slide) { shown = value } }
+        }
     }
 
     private func move(_ step: Int) -> KeyPress.Result {
-        guard let next = Self.neighbour(of: selection, step: step, in: segments) else { return .ignored }
+        guard let next = Self.neighbour(of: current, step: step, in: segments) else { return .ignored }
         choose(next)
         return .handled
     }
 
+    private var current: Option { shown ?? selection }
+
     private func choose(_ value: Option) {
-        guard value != selection else { return }
+        guard value != current else { return }
         if reduceMotion {
-            selection = value
+            shown = value
         } else {
-            withAnimation(Self.slide) { selection = value }
+            withAnimation(Self.slide) { shown = value }
         }
+        selection = value
     }
 
     private func button(_ segment: Segment) -> some View {
-        let selected = segment.value == selection
-        let titled = Self.showsTitle(segment, selection: selection, mode: titleMode)
+        let selected = segment.value == current
+        let titled = Self.showsTitle(segment, selection: current, mode: titleMode)
         return Button { choose(segment.value) } label: {
             HStack(spacing: AeroricSpace.s) {
                 if let asset = segment.asset {

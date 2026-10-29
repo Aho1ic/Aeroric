@@ -27,11 +27,15 @@ public enum AeroricColor {
 
     // MARK: Text
 
-    public static let text = dynamic(light: .rgb(0x0F1115), dark: .rgb(0xF2F3F5),
+    // 2026-10-29: dark text dimmed twice at the owner's request (was F2F3F5 /
+    // B8BCC2 / 8B9097, ~17:1 on the canvas, read as glaring): body 10.5:1,
+    // secondary 6.3:1, tertiary 4.5:1 (the floor for small text). The canvas
+    // is unchanged and the increased-contrast variants keep their values.
+    public static let text = dynamic(light: .rgb(0x0F1115), dark: .rgb(0xC2C5CA),
                                      lightContrast: .rgb(0x000000), darkContrast: .rgb(0xFFFFFF))
-    public static let textSecondary = dynamic(light: .rgb(0x61666B), dark: .rgb(0xB8BCC2),
+    public static let textSecondary = dynamic(light: .rgb(0x61666B), dark: .rgb(0x94989E),
                                               lightContrast: .rgb(0x353638), darkContrast: .rgb(0xE9ECF2))
-    public static let textTertiary = dynamic(light: .rgb(0x8A8F96), dark: .rgb(0x8B9097),
+    public static let textTertiary = dynamic(light: .rgb(0x8A8F96), dark: .rgb(0x7A7F85),
                                              lightContrast: .rgb(0x43454A), darkContrast: .rgb(0xCFD3D6))
 
     // MARK: Lines (alpha ladder, never solid greys)

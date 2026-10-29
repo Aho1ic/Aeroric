@@ -436,6 +436,12 @@ public struct UsageSummary: Equatable, Sendable {
 
     public static let highThreshold = 0.8
 
+    public init(transcript: SessionTranscriptStats) {
+        self.init(contextUsed: transcript.contextUsed, contextLimit: transcript.contextLimit,
+                  inputTokens: transcript.inputTokens, outputTokens: transcript.outputTokens,
+                  cachedInputTokens: transcript.cachedInputTokens)
+    }
+
     public init(contextUsed: UInt64?, contextLimit: UInt64?, inputTokens: UInt64?, outputTokens: UInt64?,
                 cachedInputTokens: UInt64? = nil) {
         self.contextUsed = contextUsed
@@ -509,8 +515,21 @@ public struct SessionStats: Equatable, Sendable {
     private var awaitingFirstToken = false
     private var toolStarts: [String: UInt64] = [:]
 
+    /// True when the figures cover the whole session (read from its
+    /// transcript), not just since the page opened.
+    public var wholeSession = false
+
     public init(outputBaseline: UInt64 = 0) {
         self.outputBaseline = outputBaseline
+    }
+
+    public init(transcript: SessionTranscriptStats) {
+        modelMs = transcript.modelMs
+        toolMs = transcript.toolMs
+        firstTokenMsTotal = transcript.firstTokenMsTotal
+        firstTokenSamples = transcript.firstTokenSamples
+        outputTokens = transcript.outputTokens
+        wholeSession = true
     }
 
     public var averageFirstTokenMs: UInt64? {

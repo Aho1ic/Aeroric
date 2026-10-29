@@ -14,12 +14,22 @@ public struct NativeTerminalView: NSViewRepresentable {
     public func makeNSView(context: Context) -> TerminalView {
         let view = coordinator.renderer
         Self.applyFont(size: AeroricTypeScale.shared.terminalSize, to: view)
+        Self.hideScroller(in: view)
         return view
     }
 
     public func updateNSView(_ nsView: TerminalView, context: Context) {
         // 字节/输入全走 coordinator；这里只跟随终端字号档位（M3）。
         Self.applyFont(size: AeroricTypeScale.shared.terminalSize, to: nsView)
+        Self.hideScroller(in: nsView)
+    }
+
+    /// Owner preference (2026-10-29): no scroll bars. SwiftTerm draws its own
+    /// `NSScroller` as a direct subview; wheel and trackpad scrolling stay.
+    static func hideScroller(in view: TerminalView) {
+        for case let scroller as NSScroller in view.subviews where !scroller.isHidden {
+            scroller.isHidden = true
+        }
     }
 
     /// JetBrains Mono when the app bundle registered it, else the system mono.

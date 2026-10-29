@@ -1,5 +1,6 @@
 import CoreText
 import Foundation
+import AeroricUI
 
 /// Process-local registration only: no font installation, network or user
 /// Library writes. Xcode copies the existing OFL fonts into the app bundle:
@@ -8,6 +9,8 @@ enum AppFontRegistration {
     static let bundled = ["JetBrainsMono-Variable", "Fredoka-Variable"]
 
     static func registerBundledFonts() {
+        // Chinese fonts the user downloaded in Settings (2026-10-29).
+        FontDownloads.registerInstalled()
         for name in bundled {
             guard let url = Bundle.main.url(forResource: name, withExtension: "ttf") else {
                 NSLog("Aeroric: bundled font %@ is missing; system fallback remains active.", name)

@@ -14,18 +14,14 @@ struct SessionStatsBar: View {
     @State private var open: Panel?
 
     var body: some View {
+        // 2026-10-29: always all three, whatever the session's state; an
+        // unknown figure reads "—" rather than hiding its chip.
         HStack(spacing: AeroricSpace.s) {
-            if turns > 0 || steps > 0 {
-                chip(.stats, systemImage: "gauge.with.dots.needle.33percent", text: SessionStatsText.statsChip(
-                    turns: turns, steps: steps, tokensPerSecond: stats.tokensPerSecond)) { statsCard }
-            }
-            if let total = usage.totalTokens {
-                chip(.tokens, systemImage: "cylinder", text: SessionStatsText.tokensChip(
-                    total: total, hitRate: usage.cacheHitRate)) { tokensCard }
-            }
-            if let fraction = usage.fraction {
-                contextChip(fraction)
-            }
+            chip(.stats, systemImage: "gauge.with.dots.needle.33percent", text: SessionStatsText.statsChip(
+                turns: turns, steps: steps, tokensPerSecond: stats.tokensPerSecond)) { statsCard }
+            chip(.tokens, systemImage: "cylinder", text: SessionStatsText.tokensChip(
+                total: usage.totalTokens, hitRate: usage.cacheHitRate)) { tokensCard }
+            contextChip(usage.fraction)
         }
         .frame(maxWidth: .infinity)
         .font(.system(size: AeroricType.caption))
@@ -57,18 +53,19 @@ struct SessionStatsBar: View {
         .accessibilityLabel(text)
     }
 
-    private func contextChip(_ fraction: Double) -> some View {
+    private func contextChip(_ fraction: Double?) -> some View {
         let tint = usage.isHigh ? AeroricColor.warning : AeroricColor.textSecondary
+        let text = SessionStatsText.contextChip(fraction: fraction, used: usage.contextUsed)
         return Button { open = open == .context ? nil : .context } label: {
             HStack(spacing: AeroricSpace.s) {
                 ZStack {
                     Circle().stroke(AeroricColor.separator2, lineWidth: 2)
-                    Circle().trim(from: 0, to: fraction)
+                    Circle().trim(from: 0, to: fraction ?? 0)
                         .stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                 }
                 .frame(width: 11, height: 11)
-                Text("\(Int((fraction * 100).rounded()))%").monospacedDigit()
+                Text(text).monospacedDigit()
             }
             .foregroundStyle(tint)
             .padding(.horizontal, AeroricSpace.m + 2)
@@ -79,7 +76,7 @@ struct SessionStatsBar: View {
         }
         .buttonStyle(.plain)
         .popover(isPresented: binding(.context), arrowEdge: .top) { contextCard(fraction) }
-        .accessibilityLabel("上下文已用 \(Int((fraction * 100).rounded()))%")
+        .accessibilityLabel("上下文已用 \(text)")
     }
 
     // MARK: Cards
@@ -90,7 +87,7 @@ struct SessionStatsBar: View {
             row("工具调用用时", stats.toolMs > 0 ? SessionStatsText.duration(stats.toolMs) : nil)
             row("首 token 平均（TTFT）", stats.averageFirstTokenMs.map(SessionStatsText.duration))
             row("输出速度（TPS）", stats.tokensPerSecond.map { "\(Int($0.rounded())) tok/s" })
-            if stats.turns < turns {
+            if !stats.wholeSession, stats.turns < turns {
                 Text("用时从本次打开会话起统计")
                     .font(.system(size: AeroricType.caption))
                     .foregroundStyle(AeroricColor.textTertiary)
@@ -109,11 +106,11 @@ struct SessionStatsBar: View {
         }
     }
 
-    private func contextCard(_ fraction: Double) -> some View {
+    private func contextCard(_ fraction: Double?) -> some View {
         VStack(alignment: .leading, spacing: AeroricSpace.m) {
             HStack {
                 Text("上下文已用").foregroundStyle(AeroricColor.textSecondary)
-                Text("\(Int((fraction * 100).rounded()))%").fontWeight(.medium)
+                Text(fraction.map { "\(Int(($0 * 100).rounded()))%" } ?? "—").fontWeight(.medium)
                 Spacer(minLength: AeroricSpace.l)
                 if let used = usage.contextUsed, let limit = usage.contextLimit {
                     Text("~\(SessionStatsText.compact(used)) / \(SessionStatsText.compact(limit))").monospacedDigit()
@@ -124,7 +121,8 @@ struct SessionStatsBar: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(AeroricColor.layer3)
                     Capsule().fill(usage.isHigh ? AeroricColor.warning : AeroricColor.accent)
-                        .frame(width: max(4, proxy.size.width * fraction))
+                        .frame(width: max(4, proxy.size.width * (fraction ?? 0)))
+                        .opacity(fraction == nil ? 0 : 1)
                 }
             }
             .frame(height: 6)
@@ -176,10 +174,18 @@ enum SessionStatsText {
         return base + " · \(Int(tokensPerSecond.rounded())) tok/s"
     }
 
-    static func tokensChip(total: UInt64, hitRate: Double?) -> String {
+    static func tokensChip(total: UInt64?, hitRate: Double?) -> String {
+        guard let total else { return "— tok" }
         let base = "\(compact(total).uppercased()) tok"
         guard let hitRate else { return base }
         return base + " · 缓存命中 \(Int((hitRate * 100).rounded()))%"
+    }
+
+    /// `17%`; without a known window the used count (`43.6K`); else `—`.
+    static func contextChip(fraction: Double?, used: UInt64?) -> String {
+        if let fraction { return "\(Int((fraction * 100).rounded()))%" }
+        if let used { return compact(used) }
+        return "—"
     }
 
     /// `3 分 16 秒`, `38.4 秒`, `0.8 秒`.
