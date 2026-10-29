@@ -195,6 +195,7 @@ impl Env {
 
     fn launch_request(&self, task: &str, agent: &str, config: Option<&str>) -> LaunchRequest {
         LaunchRequest {
+            linked_folders: Vec::new(),
             task_id: task.into(),
             project_id: "project".into(),
             operation_key: format!("op-{task}"),
@@ -223,6 +224,7 @@ impl Env {
 
     fn resume_request(&self, task: &str, agent: &str, config: Option<&str>) -> ResumeRequest {
         ResumeRequest {
+            linked_folders: Vec::new(),
             task_id: task.into(),
             project_id: "project".into(),
             operation_key: format!("op-{task}"),

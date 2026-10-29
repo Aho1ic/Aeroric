@@ -99,6 +99,7 @@ fn setup() -> Setup {
 
 fn launch(task_id: &str, family: ProtocolFamily) -> LaunchRequest {
     LaunchRequest {
+        linked_folders: Vec::new(),
         task_id: task_id.into(),
         project_id: "p1".into(),
         operation_key: "op".into(),
@@ -163,12 +164,14 @@ async fn codex_in_a_local_workspace_goes_to_the_driver_and_the_rest_to_the_pty_e
         .unwrap();
     s.executor
         .launch(&LaunchRequest {
+            linked_folders: Vec::new(),
             agent_config_id: Some("cfg".into()),
             ..launch("t3", ProtocolFamily::Codex)
         })
         .unwrap();
     s.executor
         .launch(&LaunchRequest {
+            linked_folders: Vec::new(),
             working_directory: WorkingDirectory::Ssh {
                 connection_id: "c".into(),
                 remote_path: "/r".into(),
@@ -267,6 +270,7 @@ async fn resuming_an_open_session_rebinds_it_instead_of_starting_another() {
         json!({"threadId": "th1", "turn": {"id": "u1", "status": "completed"}}),
     );
     let resume = ResumeRequest {
+        linked_folders: Vec::new(),
         task_id: "t1".into(),
         project_id: "p1".into(),
         operation_key: "op2".into(),
@@ -338,6 +342,7 @@ async fn each_configuration_gets_its_own_server_and_shares_it_across_tasks() {
         tokio::runtime::Handle::current(),
     );
     let with = |task: &str, config: Option<&str>| LaunchRequest {
+        linked_folders: Vec::new(),
         agent_config_id: config.map(str::to_string),
         prompt: String::new(),
         ..launch(task, ProtocolFamily::Codex)
@@ -370,6 +375,7 @@ async fn a_paginated_codex_session_resumes_on_the_driver() {
     .unwrap();
     let s = setup();
     let request = ResumeRequest {
+        linked_folders: Vec::new(),
         task_id: "t9".into(),
         project_id: "p1".into(),
         operation_key: "op".into(),

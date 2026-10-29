@@ -9,6 +9,7 @@
 //! Nothing in here knows about windows, emitters, or React listeners. The rail shape a
 //! client draws is derived from [`service::Rail`], never the other way round.
 
+pub mod linked;
 pub mod mutations;
 pub mod service;
 pub mod tags;

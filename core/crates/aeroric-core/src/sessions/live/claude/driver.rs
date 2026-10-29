@@ -29,6 +29,8 @@ use crate::tasks::{ProtocolFamily, TaskStatus};
 pub struct ClaudeStart {
     pub task_id: String,
     pub cwd: String,
+    /// `--add-dir` for each linked folder.
+    pub extra_dirs: Vec<String>,
     pub model: Option<String>,
     pub permission: String,
     pub effort: Option<String>,
@@ -66,6 +68,8 @@ pub struct ClaudeSessionSpec {
     pub generation: u64,
     pub agent: String,
     pub cwd: String,
+    /// Linked folders (2026-10-29): extra working directories.
+    pub extra_dirs: Vec<String>,
     pub permission: String,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -95,6 +99,7 @@ struct State {
     generation: u64,
     agent: String,
     cwd: String,
+    extra_dirs: Vec<String>,
     config_dir: Option<std::path::PathBuf>,
     session_id: Option<String>,
     alive: bool,
@@ -133,6 +138,7 @@ impl ClaudeSession {
             generation: spec.generation,
             agent: spec.agent,
             cwd: spec.cwd,
+            extra_dirs: spec.extra_dirs,
             config_dir: spec.config_dir,
             session_id: spec.session_id,
             alive: false,
@@ -398,6 +404,7 @@ impl Actor {
             ClaudeStart {
                 task_id: self.task_id.clone(),
                 cwd: state.cwd.clone(),
+                extra_dirs: state.extra_dirs.clone(),
                 model: state.model.clone(),
                 permission: state.permission.clone(),
                 effort: state.effort.clone(),

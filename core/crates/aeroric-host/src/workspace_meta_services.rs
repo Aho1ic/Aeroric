@@ -33,7 +33,10 @@ fn invalid(request: &Request, message: &str) -> Frame {
 
 pub fn register(set: &mut ServiceSet, context: Arc<CoreContext>, tasks: Arc<TaskService>) {
     type Run = fn(&Request, &Arc<CoreContext>, &TaskService) -> Frame;
-    let methods: [(&str, Run); 13] = [
+    let methods: [(&str, Run); 16] = [
+        ("project.linked_folders", project_linked_folders),
+        ("project.link_folder", project_link_folder),
+        ("project.unlink_folder", project_unlink_folder),
         ("tags.list", tags_list),
         ("tags.create", tags_create),
         ("tags.update", tags_update),
@@ -66,6 +69,69 @@ pub fn register(set: &mut ServiceSet, context: Arc<CoreContext>, tasks: Arc<Task
                 })
             }),
         );
+    }
+}
+
+// MARK: linked folders (2026-10-29)
+
+fn folder_rows(folders: &[String]) -> Value {
+    Value::Array(
+        folders
+            .iter()
+            .map(|path| {
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.clone());
+                json!({ "path": path, "name": name, "exists": std::path::Path::new(path).is_dir() })
+            })
+            .collect(),
+    )
+}
+
+/// `{}` → `{projects: {<projectId>: [{path, name, exists}]}}`, projects with links only.
+fn project_linked_folders(request: &Request, context: &Arc<CoreContext>, _: &TaskService) -> Frame {
+    let service = ProjectService::new(Arc::clone(context));
+    match service.list() {
+        Ok(projects) => {
+            let mut out = serde_json::Map::new();
+            for project in &projects {
+                let folders = aeroric_core::projects::linked::stored(project);
+                if let (Some(id), false) = (mutations::id_of(project), folders.is_empty()) {
+                    out.insert(id.to_string(), folder_rows(&folders));
+                }
+            }
+            ok(request, json!({ "projects": out }))
+        }
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
+    }
+}
+
+/// `{projectId, path}` → `{folders}`; refused with the reason the rule gives.
+fn project_link_folder(request: &Request, context: &Arc<CoreContext>, _: &TaskService) -> Frame {
+    let (Some(project_id), Some(path)) = (text(request, "projectId"), text(request, "path")) else {
+        return invalid(
+            request,
+            "project.link_folder requires params.projectId and params.path",
+        );
+    };
+    match ProjectService::new(Arc::clone(context)).link_folder(&project_id, &path) {
+        Ok(folders) => ok(request, json!({ "folders": folder_rows(&folders) })),
+        Err(message) => invalid(request, &message),
+    }
+}
+
+/// `{projectId, path}` → `{folders}`.
+fn project_unlink_folder(request: &Request, context: &Arc<CoreContext>, _: &TaskService) -> Frame {
+    let (Some(project_id), Some(path)) = (text(request, "projectId"), text(request, "path")) else {
+        return invalid(
+            request,
+            "project.unlink_folder requires params.projectId and params.path",
+        );
+    };
+    match ProjectService::new(Arc::clone(context)).unlink_folder(&project_id, &path) {
+        Ok(folders) => ok(request, json!({ "folders": folder_rows(&folders) })),
+        Err(message) => failure(request.id.clone(), ErrorCode::IoError, &message),
     }
 }
 

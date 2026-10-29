@@ -42,6 +42,9 @@ public struct ProjectSidebar: View {
     /// Q1-a) and the two tag sheets.
     @Environment(TagBook.self) private var tagBook: TagBook?
     @State private var tagFilter: String?
+    /// Linked folders (2026-10-29).
+    @Environment(LinkedFolderBook.self) private var linkedBook: LinkedFolderBook?
+    @State private var linkingProject: SidebarItem?
     @State private var draftTag: TagDraftTarget?
     @State private var managingTags = false
 
@@ -152,6 +155,11 @@ public struct ProjectSidebar: View {
                 if !name.isEmpty { onProjectAction(project.id, .group(name)) }
             }
             Button("取消", role: .cancel) {}
+        }
+        .sheet(item: $linkingProject) { project in
+            if let linkedBook {
+                LinkedFoldersSheet(project: project, book: linkedBook, onClose: { linkingProject = nil })
+            }
         }
         .sheet(item: $draftTag) { target in
             if let tagBook { TagEditorSheet(target: target, book: tagBook, onClose: { draftTag = nil }) }
@@ -466,6 +474,12 @@ public struct ProjectSidebar: View {
             renamingProject = project
         }
         tagMenu(project, isProject: true, projectID: project.id)
+        if linkedBook != nil, !project.id.isEmpty {
+            let count = linkedBook?.folders(of: project.id).count ?? 0
+            Button(count > 0 ? "关联文件夹（\(count)）…" : "关联文件夹…", systemImage: "folder.badge.gearshape") {
+                linkingProject = project
+            }
+        }
         Menu("修改颜色") {
             ForEach(ProjectColor.all) { color in
                 Button {

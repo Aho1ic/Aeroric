@@ -96,6 +96,9 @@ pub struct LaunchRequest {
     /// DSH-only window facts; `None` for every other family.
     pub dsh_window: Option<DshWindowFacts>,
     pub working_directory: WorkingDirectory,
+    /// The project's linked folders that exist (2026-10-29, L1): extra
+    /// working directories for the Agent. Empty for a remote project.
+    pub linked_folders: Vec<String>,
     pub terminal_size: Option<(u16, u16)>,
 }
 
@@ -151,6 +154,9 @@ pub struct ResumeRequest {
     /// CLI resumes with the original prompt available.
     pub prompt: Option<String>,
     pub working_directory: WorkingDirectory,
+    /// The project's linked folders that exist (2026-10-29, L1): extra
+    /// working directories for the Agent. Empty for a remote project.
+    pub linked_folders: Vec<String>,
     pub terminal_size: Option<(u16, u16)>,
 }
 

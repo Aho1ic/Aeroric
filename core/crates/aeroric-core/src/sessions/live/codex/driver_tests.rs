@@ -11,6 +11,7 @@ struct Harness {
 
 fn spec() -> CodexSessionSpec {
     CodexSessionSpec {
+        extra_dirs: Vec::new(),
         task_id: "t1".into(),
         project_id: "p1".into(),
         generation: 3,
@@ -402,6 +403,7 @@ async fn a_launcher_refusal_fails_the_task_with_its_reason() {
 #[tokio::test]
 async fn a_resumed_session_opens_its_thread_and_settles_done() {
     let mut h = start(CodexSessionSpec {
+        extra_dirs: Vec::new(),
         thread_id: Some("th1".into()),
         ..spec()
     });

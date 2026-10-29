@@ -150,6 +150,7 @@ pub fn launch_request(
     // the bug ADR-028 exists to prevent.
     let session_prefix = family_prefix(owner.family);
     Some(LaunchRequest {
+        linked_folders: linked_folders(&working_directory, project),
         task_id: string(record, "id")?,
         project_id: string(record, "projectId")?,
         operation_key: operation_key.to_string(),
@@ -197,6 +198,7 @@ pub fn resume_request(
     let takes_prompt = launch != ProtocolFamily::Dsh
         && matches!(working_directory, WorkingDirectory::Local { .. });
     Some(ResumeRequest {
+        linked_folders: linked_folders(&working_directory, project),
         task_id: string(record, "id")?,
         project_id: string(record, "projectId")?,
         operation_key: operation_key.to_string(),
@@ -347,6 +349,14 @@ pub fn merge_reset_session(record: &Record, snapshot: &ResetOutcome) -> Record {
         ),
     );
     next
+}
+
+/// A local project's linked folders that exist (2026-10-29, L1–L2).
+fn linked_folders(working_directory: &WorkingDirectory, project: &Record) -> Vec<String> {
+    match working_directory {
+        WorkingDirectory::Local { .. } => crate::projects::linked::usable(project),
+        _ => Vec::new(),
+    }
 }
 
 #[cfg(test)]

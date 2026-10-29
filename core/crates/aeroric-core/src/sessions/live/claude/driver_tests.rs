@@ -70,6 +70,7 @@ struct Harness {
 
 fn spec() -> ClaudeSessionSpec {
     ClaudeSessionSpec {
+        extra_dirs: Vec::new(),
         task_id: "t1".into(),
         project_id: "p".into(),
         generation: 1,
@@ -368,6 +369,7 @@ async fn a_launcher_refusal_fails_the_task() {
 #[tokio::test]
 async fn the_session_records_its_transcript_under_the_config_dir() {
     let mut h = start(ClaudeSessionSpec {
+        extra_dirs: Vec::new(),
         cwd: "/w/my.app".into(),
         config_dir: Some("/homes/cfg".into()),
         ..spec()
@@ -387,6 +389,7 @@ async fn the_session_records_its_transcript_under_the_config_dir() {
 #[tokio::test]
 async fn resuming_without_a_prompt_settles_done_and_the_first_prompt_resumes() {
     let mut h = start(ClaudeSessionSpec {
+        extra_dirs: Vec::new(),
         session_id: Some("old".into()),
         ..spec()
     });

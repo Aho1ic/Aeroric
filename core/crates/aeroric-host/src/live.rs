@@ -609,12 +609,19 @@ fn omp_launcher(context: Arc<CoreContext>, key: OmpKey) -> OmpLauncher {
             spec.env.retain(|(existing, _)| existing != name);
             spec.unset_env.push((*name).to_string());
         }
-        let args = aeroric_core::agents::launch::omp_rpc_args(
+        let mut args = aeroric_core::agents::launch::omp_rpc_args(
             &start.permission,
             &start.cwd,
             start.model.as_deref(),
             start.effort.as_deref(),
             start.resume.as_deref(),
+        );
+        // Linked folders (2026-10-29).
+        args.extend(
+            start
+                .extra_dirs
+                .iter()
+                .map(|dir| format!("--add-dir={dir}")),
         );
         spawn_checked(&spec, omp_version_supported, &args, "omp")
     })
@@ -702,12 +709,19 @@ fn omp_config_launcher(context: Arc<CoreContext>, config_id: String) -> OmpLaunc
                     format!("aeroric/{m}")
                 }
             });
-        let args = aeroric_core::agents::launch::omp_rpc_args(
+        let mut args = aeroric_core::agents::launch::omp_rpc_args(
             &start.permission,
             &start.cwd,
             model.as_deref(),
             start.effort.as_deref(),
             start.resume.as_deref(),
+        );
+        // Linked folders (2026-10-29).
+        args.extend(
+            start
+                .extra_dirs
+                .iter()
+                .map(|dir| format!("--add-dir={dir}")),
         );
         let own = token.clone();
         match spawn_checked(&spec, omp_version_supported, &args, "omp") {
@@ -856,6 +870,10 @@ pub fn claude_args(start: &ClaudeStart, passes_model: bool) -> Vec<String> {
             None => args.extend(["--resume".to_string(), session.clone()]),
         }
     }
+    // Linked folders (2026-10-29): extra directories the tools may use.
+    for dir in &start.extra_dirs {
+        args.extend(["--add-dir".to_string(), dir.clone()]);
+    }
     args
 }
 
@@ -957,4 +975,26 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod linked_folder_args {
+    use super::*;
+
+    /// Linked folders reach Claude as `--add-dir` (2026-10-29).
+    #[test]
+    fn claude_gets_each_linked_folder_as_add_dir() {
+        let start = ClaudeStart {
+            cwd: "/w".into(),
+            permission: "ask".into(),
+            extra_dirs: vec!["/shared".into(), "/docs".into()],
+            ..ClaudeStart::default()
+        };
+        let args = claude_args(&start, false);
+        let joined = args.join(" ");
+        assert!(
+            joined.ends_with("--add-dir /shared --add-dir /docs"),
+            "{joined}"
+        );
+    }
 }

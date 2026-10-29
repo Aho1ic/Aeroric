@@ -116,6 +116,10 @@ struct SessionInfoCard: View {
             row("权限", (config?.permission ?? state?.permission).map(ComposerPickerOptions.permissionTitle) ?? "—")
             if let effort = config?.effort ?? state?.effort { row("推理强度", ComposerPickerOptions.effortTitle(effort)) }
             row("工作目录", facts.workingDirectory.map(ComposerPickerOptions.abbreviatedPath) ?? "—")
+            if !facts.linkedFolders.isEmpty {
+                // Q3-a: what this harness gets from the project's linked folders.
+                row("关联文件夹", LinkedFolderReach.text(count: facts.linkedFolders.count, agent: facts.agent))
+            }
             if let branch = facts.branch { row("分支", branch) }
             row("会话 id", state?.sessionId ?? "—", copyable: state?.sessionId != nil)
             row("开始时间", facts.startedAt?.formatted(Self.dateFormat) ?? "—")

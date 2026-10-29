@@ -306,6 +306,7 @@ async fn wsl_workspace_is_retired_and_ssh_workspace_executes_via_saved_connectio
     );
 
     let base_request = |wd: WorkingDirectory, family: ProtocolFamily| LaunchRequest {
+        linked_folders: Vec::new(),
         task_id: "t-remote".to_string(),
         project_id: "p-remote".to_string(),
         operation_key: "op-1".to_string(),

@@ -86,6 +86,7 @@ fn start() -> Harness {
     let log = SharedLog::new("t1");
     let session = OmpSession::start(
         OmpSessionSpec {
+            extra_dirs: Vec::new(),
             task_id: "t1".into(),
             project_id: "p".into(),
             generation: 1,

@@ -34,6 +34,8 @@ pub struct CodexSessionSpec {
     pub generation: u64,
     pub agent: String,
     pub cwd: String,
+    /// Linked folders (2026-10-29): extra working directories.
+    pub extra_dirs: Vec<String>,
     pub permission: String,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -64,6 +66,7 @@ struct State {
     generation: u64,
     agent: String,
     cwd: String,
+    extra_dirs: Vec<String>,
     thread_id: Option<String>,
     /// Routed on the current server generation.
     subscribed: bool,
@@ -104,6 +107,7 @@ impl CodexSession {
             generation: spec.generation,
             agent: spec.agent,
             cwd: spec.cwd,
+            extra_dirs: spec.extra_dirs,
             thread_id: spec.thread_id,
             subscribed: false,
             active_turn: None,
@@ -475,7 +479,10 @@ impl Actor {
             params.insert("threadId".into(), json!(thread));
             params.insert("input".into(), input.clone());
             params.insert("approvalPolicy".into(), json!(policy.approval));
-            params.insert("sandboxPolicy".into(), policy.sandbox_policy);
+            params.insert(
+                "sandboxPolicy".into(),
+                with_writable_roots(policy.sandbox_policy, &state.extra_dirs),
+            );
             if let Some(model) = &state.model {
                 params.insert("model".into(), json!(model));
             }
@@ -779,3 +786,34 @@ fn request_key(id: &Value) -> String {
 #[cfg(test)]
 #[path = "driver_tests.rs"]
 mod tests;
+
+/// A workspace-write turn may also write the linked folders (2026-10-29);
+/// full access needs nothing and read-only stays read-only.
+fn with_writable_roots(mut policy: Value, extra_dirs: &[String]) -> Value {
+    if policy["type"] == "workspaceWrite" && !extra_dirs.is_empty() {
+        policy["writableRoots"] = json!(extra_dirs);
+    }
+    policy
+}
+
+#[cfg(test)]
+mod linked_tests {
+    use super::*;
+
+    #[test]
+    fn linked_folders_become_writable_roots_only_for_workspace_write() {
+        let dirs = vec!["/shared".to_string()];
+        assert_eq!(
+            with_writable_roots(json!({"type": "workspaceWrite"}), &dirs),
+            json!({"type": "workspaceWrite", "writableRoots": ["/shared"]})
+        );
+        assert_eq!(
+            with_writable_roots(json!({"type": "readOnly"}), &dirs),
+            json!({"type": "readOnly"})
+        );
+        assert_eq!(
+            with_writable_roots(json!({"type": "workspaceWrite"}), &[]),
+            json!({"type": "workspaceWrite"})
+        );
+    }
+}

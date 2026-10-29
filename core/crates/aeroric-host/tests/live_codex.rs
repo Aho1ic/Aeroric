@@ -317,6 +317,7 @@ fn a_wrapped_pty_executor_refuses_local_built_in_claude_and_codex() {
     );
     pty.mark_wrapped();
     let request = |family, agent: &str| LaunchRequest {
+        linked_folders: Vec::new(),
         task_id: "g1".into(),
         project_id: "p".into(),
         operation_key: "op".into(),

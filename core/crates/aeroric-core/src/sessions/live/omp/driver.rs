@@ -33,6 +33,8 @@ pub struct OmpStart {
     pub task_id: String,
     pub agent: String,
     pub cwd: String,
+    /// `--add-dir` for each linked folder.
+    pub extra_dirs: Vec<String>,
     pub model: Option<String>,
     pub permission: String,
     pub effort: Option<String>,
@@ -72,6 +74,8 @@ pub struct OmpSessionSpec {
     pub generation: u64,
     pub agent: String,
     pub cwd: String,
+    /// Linked folders (2026-10-29): extra working directories.
+    pub extra_dirs: Vec<String>,
     pub permission: String,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -102,6 +106,7 @@ struct State {
     generation: u64,
     agent: String,
     cwd: String,
+    extra_dirs: Vec<String>,
     session_id: Option<String>,
     /// What `--resume` gets: the session file once known, else the id we were given.
     resume: Option<String>,
@@ -143,6 +148,7 @@ impl OmpSession {
             generation: spec.generation,
             agent: spec.agent,
             cwd: spec.cwd,
+            extra_dirs: spec.extra_dirs,
             session_id: None,
             resume: spec.session.filter(|s| !s.trim().is_empty()),
             alive: false,
@@ -448,6 +454,7 @@ impl Actor {
                 task_id: self.task_id.clone(),
                 agent: state.agent.clone(),
                 cwd: state.cwd.clone(),
+                extra_dirs: state.extra_dirs.clone(),
                 model: state.model.clone(),
                 permission: state.permission.clone(),
                 effort: state.effort.clone(),

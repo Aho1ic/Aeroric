@@ -60,6 +60,8 @@ final class AppServices {
     let agentUpgradeBook = AgentUpgradeBook()
     /// Project and session tags (2026-10-29).
     let tagBook = TagBook()
+    /// Linked folders (2026-10-29).
+    let linkedFolderBook = LinkedFolderBook()
     /// SSH hosts (连接 page, open-remote-project sheet), 2026-10-27.
     let sshHostsStore = SshHostsStore()
     /// The sidebar's "打开远程项目…" asks the workspace to show its sheet.
@@ -234,6 +236,7 @@ final class AppServices {
                     self.importBook.onProjectsChanged = { [weak self] in await self?.refreshWorkspace() }
                     self.sshHostsStore.attach(client: SshClient(connection: connection))
                     self.tagBook.attach(client: WorkspaceClient(connection: connection))
+                    self.linkedFolderBook.attach(client: WorkspaceClient(connection: connection))
                     self.agentUpgradeBook.attach(
                         client: AgentUpgradeClient(connection: connection),
                         capabilityEnabled: advertised[AgentUpgradeClient.capability] == true
@@ -1006,10 +1009,23 @@ extension AppServices: WorkspaceStateProviding {
     func loadFiles(projectID: String, path: String) async {
         guard let connection = attachedConnection else { return }
         fileTreeStore.setLoading(path, loading: true)
-        let entries = (try? await ProjectResourcesClient(connection: connection).directory(projectID: projectID, path: path)) ?? []
-        fileTreeStore.ingestChildren(of: path, entries: entries.map {
-            FileTreeStore.Node(name: $0.name, path: $0.path, isDir: $0.isDir, isSymlink: $0.isSymlink)
-        })
+        // A node under a linked folder is read from that folder (2026-10-29).
+        let target = LinkedFolderPath.request(projectID: projectID, path: path)
+        let entries = (try? await ProjectResourcesClient(connection: connection)
+            .directory(projectID: target.projectID, path: target.path)) ?? []
+        var nodes = entries.map {
+            FileTreeStore.Node(name: $0.name, path: LinkedFolderPath.child(of: path, hostPath: $0.path),
+                               isDir: $0.isDir, isSymlink: $0.isSymlink)
+        }
+        if path.isEmpty {
+            // The project's linked folders follow its own entries, marked as links.
+            nodes += linkedFolderBook.folders(of: projectID).map { folder in
+                FileTreeStore.Node(name: folder.exists ? folder.name : "\(folder.name) · 找不到",
+                                   path: LinkedFolderPath.node(folder: folder.path),
+                                   isDir: folder.exists, isSymlink: true)
+            }
+        }
+        fileTreeStore.ingestChildren(of: path, entries: nodes)
     }
 
     func loadGitDiff(projectPath: String, change: GitStore.Change) async {

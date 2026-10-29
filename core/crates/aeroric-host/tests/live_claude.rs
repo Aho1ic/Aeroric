@@ -226,6 +226,7 @@ fn env(version: &str) -> Env {
 
 fn launch(env: &Env, task: &str, config: Option<&str>) -> LaunchRequest {
     LaunchRequest {
+        linked_folders: Vec::new(),
         task_id: task.into(),
         project_id: "p".into(),
         operation_key: "op".into(),
@@ -308,6 +309,7 @@ async fn the_built_in_claude_starts_in_control_mode_and_runs_a_turn() {
 async fn a_resumed_session_starts_with_resume_on_its_first_prompt() {
     let env = env("2.1.299");
     let resume = ResumeRequest {
+        linked_folders: Vec::new(),
         task_id: "t2".into(),
         project_id: "p".into(),
         operation_key: "op".into(),

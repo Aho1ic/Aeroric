@@ -404,6 +404,7 @@ async fn an_old_gateway_task_continues_its_thread_on_the_driver() {
         tokio::runtime::Handle::current(),
     );
     let resume = |config: &str| ResumeRequest {
+        linked_folders: Vec::new(),
         task_id: format!("task-{config}"),
         project_id: "p".into(),
         operation_key: "op".into(),
@@ -436,6 +437,7 @@ async fn an_old_gateway_task_continues_its_thread_on_the_driver() {
 
     executor
         .resume(&ResumeRequest {
+            linked_folders: Vec::new(),
             family: ProtocolFamily::Omp,
             ..resume(&env.codex_config)
         })

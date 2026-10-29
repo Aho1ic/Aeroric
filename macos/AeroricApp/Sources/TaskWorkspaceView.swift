@@ -1092,10 +1092,14 @@ struct TaskWorkspaceView: View {
                 FileBrowserView(
                     store: services.fileTreeStore,
                     onExpand: { path in Task { await services.loadFiles(projectID: projectID, path: path) } },
-                    onOpen: { path in openPreview(.init(projectID: projectID, path: path, kind: .file)) }
+                    onOpen: { path in
+                        let target = LinkedFolderPath.request(projectID: projectID, path: path)
+                        openPreview(.init(projectID: target.projectID, path: target.path, kind: .file))
+                    }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .task(id: projectID) {
+                // Linking or unlinking a folder redraws the tree's top level.
+                .task(id: "\(projectID)|\(services.linkedFolderBook.folders(of: projectID).map(\.path))") {
                     services.fileTreeStore.reset(projectID: projectID)
                     await services.loadFiles(projectID: projectID, path: "")
                 }
@@ -1230,6 +1234,25 @@ struct TaskWorkspaceView: View {
 
     @ViewBuilder
     private func legacyTaskBody(_ task: TaskStore.TaskEntry) -> some View {
+        let linked = services.linkedFolderBook.folders(of: task.projectID).filter(\.exists).count
+        VStack(spacing: 0) {
+        if let hint = LinkedFolderReach.hint(count: linked, agent: task.agent) {
+            // Q3-a (2026-10-29): DeepSeek Harness takes no extra directories.
+            Label(hint, systemImage: "info.circle")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.warning)
+                .padding(.horizontal, AeroricSpace.l)
+                .padding(.vertical, AeroricSpace.xs)
+                .background(AeroricColor.warning.opacity(0.14), in: Capsule(style: .continuous))
+                .padding(.top, AeroricSpace.s)
+                .accessibilityIdentifier("session.linked-folders.hint")
+        }
+        legacyTaskBodyContent(task)
+        }
+    }
+
+    @ViewBuilder
+    private func legacyTaskBodyContent(_ task: TaskStore.TaskEntry) -> some View {
         // ADR-043: no terminal/native mode switch. A task the host does not run
         // structurally is DSH (conversation over its own PTY) or an unmigrated
         // custom wrapper (terminal only).

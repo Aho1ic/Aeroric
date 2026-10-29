@@ -284,6 +284,51 @@ impl ProjectService {
         self.persist(next, true)
     }
 
+    /// Links a folder (2026-10-29): validated against the project's own path
+    /// and its other links; stored as the canonical path. Returns the list.
+    pub fn link_folder(&self, project_id: &str, path: &str) -> Result<Vec<String>, String> {
+        let projects = self.list().map_err(|e| e.to_string())?;
+        let project = projects
+            .iter()
+            .find(|p| mutations::id_of(p) == Some(project_id))
+            .ok_or("项目不存在")?;
+        let mut folders = super::linked::stored(project);
+        let root = mutations::text(project, "path")
+            .unwrap_or_default()
+            .to_string();
+        folders.push(super::linked::validate(&root, &folders, path)?);
+        self.write_linked(&projects, project_id, &folders)?;
+        Ok(folders)
+    }
+
+    /// Unlinks a folder (matching the stored path exactly).
+    pub fn unlink_folder(&self, project_id: &str, path: &str) -> Result<Vec<String>, String> {
+        let projects = self.list().map_err(|e| e.to_string())?;
+        let project = projects
+            .iter()
+            .find(|p| mutations::id_of(p) == Some(project_id))
+            .ok_or("项目不存在")?;
+        let folders: Vec<String> = super::linked::stored(project)
+            .into_iter()
+            .filter(|p| p != path)
+            .collect();
+        self.write_linked(&projects, project_id, &folders)?;
+        Ok(folders)
+    }
+
+    fn write_linked(
+        &self,
+        projects: &[Record],
+        project_id: &str,
+        folders: &[String],
+    ) -> Result<(), String> {
+        let value = (!folders.is_empty()).then(|| serde_json::json!(folders));
+        let next = mutations::set_meta(projects, project_id, super::linked::KEY, value);
+        self.persist(next, true)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     pub fn toggle_hidden(&self, project_id: &str) -> Result<Applied, ProjectError> {
         self.require_project(project_id)?;
         let next = mutations::toggle_hidden(&self.list()?, project_id);

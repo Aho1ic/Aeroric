@@ -278,6 +278,7 @@ impl StructuredExecutor {
                     generation: spec.generation,
                     agent: spec.agent.clone(),
                     cwd: spec.cwd.clone(),
+                    extra_dirs: spec.extra_dirs.clone(),
                     permission: spec.permission.clone(),
                     model: spec.model.clone(),
                     effort: spec.effort.clone(),
@@ -296,6 +297,7 @@ impl StructuredExecutor {
                     generation: spec.generation,
                     agent: spec.agent.clone(),
                     cwd: spec.cwd.clone(),
+                    extra_dirs: spec.extra_dirs.clone(),
                     permission: spec.permission.clone(),
                     model: spec.model.clone(),
                     effort: spec.effort.clone(),
@@ -315,6 +317,7 @@ impl StructuredExecutor {
                     generation: spec.generation,
                     agent: spec.agent.clone(),
                     cwd: spec.cwd.clone(),
+                    extra_dirs: spec.extra_dirs.clone(),
                     permission: spec.permission.clone(),
                     model: spec.model.clone(),
                     effort: spec.effort.clone(),
@@ -332,6 +335,7 @@ impl StructuredExecutor {
                     generation: spec.generation,
                     agent: spec.agent.clone(),
                     cwd: spec.cwd.clone(),
+                    extra_dirs: spec.extra_dirs.clone(),
                     permission: spec.permission.clone(),
                     model: spec.model.clone(),
                     effort: spec.effort.clone(),
@@ -406,6 +410,7 @@ impl TaskExecutor for StructuredExecutor {
                 generation: request.generation,
                 agent: request.agent.clone(),
                 cwd: local_path(&request.working_directory),
+                extra_dirs: request.linked_folders.clone(),
                 permission: request.permission_mode_wire.clone(),
                 model: request
                     .selected_model
@@ -457,6 +462,7 @@ impl TaskExecutor for StructuredExecutor {
                 generation: request.generation,
                 agent: request.agent.clone(),
                 cwd: local_path(&request.working_directory),
+                extra_dirs: request.linked_folders.clone(),
                 permission: request.permission_mode_wire.clone(),
                 model: request
                     .selected_model

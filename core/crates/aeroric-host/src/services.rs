@@ -4615,10 +4615,21 @@ fn find_project_root(
         // Preserve this batch's existing missing/corrupt registry -> NotFound.
         return Ok(None);
     };
+    // A linked folder is browsed as `<project id>#linked:<path>` (2026-10-29):
+    // only a folder the project actually lists is served.
+    let (project_id, linked) = match project_id.split_once("#linked:") {
+        Some((id, path)) => (id, Some(path)),
+        None => (project_id, None),
+    };
     for record in projects {
         if mutations::text(&record, "id") == Some(project_id) {
             require_local_record(&record)?;
-            return Ok(mutations::text(&record, "path").map(str::to_string));
+            return Ok(match linked {
+                Some(path) => aeroric_core::projects::linked::stored(&record)
+                    .into_iter()
+                    .find(|stored| stored == path),
+                None => mutations::text(&record, "path").map(str::to_string),
+            });
         }
     }
     Ok(None)

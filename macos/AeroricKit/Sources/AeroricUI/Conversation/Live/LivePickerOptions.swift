@@ -20,6 +20,8 @@ public struct LiveSessionFacts: Equatable, Sendable {
     public var downgradeHelp: String?
     /// The prompt the task started with (shown until history has it).
     public var initialPrompt: String?
+    /// The project's linked folders (2026-10-29); the info card lists them.
+    public var linkedFolders: [String] = []
 
     public init(agent: String?, configurationTitle: String? = nil, presetTitle: String? = nil,
                 workingDirectory: String? = nil,
