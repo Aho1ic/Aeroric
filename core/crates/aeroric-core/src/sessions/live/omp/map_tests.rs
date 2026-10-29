@@ -47,7 +47,8 @@ fn streamed_text_and_thinking_then_the_completed_message_with_usage() {
             context_used: None,
             context_limit: None,
             input_tokens: Some(12),
-            output_tokens: Some(3)
+            output_tokens: Some(3),
+            cached_input_tokens: None
         }
     );
     assert_eq!(

@@ -15,15 +15,9 @@ public struct ContentBlock: View {
     public var body: some View {
         switch block {
         case let .text(text):
-            Markdown(text)
-                .markdownTheme(.aeroric(AeroricType.conversation))
-                .markdownImageProvider(NoImageProvider())
-                .markdownInlineImageProvider(NoInlineImageProvider())
-                .textSelection(.enabled)
-                .environment(\.openURL, OpenURLAction { url in
-                    Self.isAllowedLinkScheme(url) ? .systemAction : .discarded
-                })
-                .accessibilityIdentifier("session.content.text")
+            // 2026-10-28: one native text view per message, so a selection
+            // can span paragraphs and code blocks (SelectableMarkdown).
+            SelectableMarkdown(text: text, size: AeroricType.conversation)
         case let .thinking(thinking):
             FlatDisclosureRow(symbol: "brain", title: "思考", summary: Self.summary(thinking),
                               expanded: $expanded, identifier: "session.content.thinking-toggle") {
@@ -195,7 +189,12 @@ extension Theme {
         .text {
             ForegroundColor(AeroricColor.text)
             FontSize(size)
+            // 2026-10-28: body text is regular — Chinese renders as PingFang SC
+            // Regular (the system face's own CJK fallback), never bold.
+            FontWeight(.regular)
         }
+        // **重点** one step above the body instead of semibold.
+        .strong { FontWeight(.medium) }
         .code {
             FontFamily(.custom("JetBrainsMono-Regular"))
             FontSize(.em(0.92))

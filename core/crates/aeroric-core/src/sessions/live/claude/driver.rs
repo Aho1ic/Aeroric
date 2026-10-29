@@ -108,6 +108,7 @@ struct State {
     context_limit: Option<u64>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    cached_input_tokens: Option<u64>,
     idle_since: u64,
     closed: bool,
 }
@@ -145,6 +146,7 @@ impl ClaudeSession {
             context_limit: None,
             input_tokens: None,
             output_tokens: None,
+            cached_input_tokens: None,
             idle_since: now_ms(),
             closed: false,
         }));
@@ -276,6 +278,7 @@ impl SessionDriver for ClaudeSession {
             context_limit: state.context_limit,
             input_tokens: state.input_tokens,
             output_tokens: state.output_tokens,
+            cached_input_tokens: state.cached_input_tokens,
             latest_seq: self.log.latest_seq(),
             resume_blocked: None,
             questions: Vec::new(),
@@ -672,6 +675,7 @@ impl Actor {
                     context_limit: usage.get("maxTokens").and_then(Value::as_u64),
                     input_tokens: None,
                     output_tokens: None,
+                    cached_input_tokens: None,
                 };
                 self.remember(&update);
                 self.push(update);
@@ -692,11 +696,13 @@ impl Actor {
                 context_limit,
                 input_tokens,
                 output_tokens,
+                cached_input_tokens,
             } => {
                 state.context_used = context_used.or(state.context_used);
                 state.context_limit = context_limit.or(state.context_limit);
                 state.input_tokens = input_tokens.or(state.input_tokens);
                 state.output_tokens = output_tokens.or(state.output_tokens);
+                state.cached_input_tokens = cached_input_tokens.or(state.cached_input_tokens);
             }
             _ => {}
         }

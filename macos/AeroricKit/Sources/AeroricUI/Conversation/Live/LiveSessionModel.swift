@@ -232,6 +232,8 @@ public struct LiveSessionModel: Equatable, Sendable {
     public private(set) var plan: [LivePlanEntry] = []
     public private(set) var subagents: [LiveSubagent] = []
     public private(set) var usage: UsageSummary
+    /// 2026-10-28 统计栏: timings measured from the updates this page saw.
+    public private(set) var stats = SessionStats()
     public private(set) var config: LiveConfig
     public private(set) var turnActive: Bool
     /// A05: the last finished turn's working-tree changes. Kept apart from
@@ -252,7 +254,9 @@ public struct LiveSessionModel: Equatable, Sendable {
         permissionLocked = state.permissionLocked
         plan = state.plan
         usage = UsageSummary(contextUsed: state.contextUsed, contextLimit: state.contextLimit,
-                             inputTokens: state.inputTokens, outputTokens: state.outputTokens)
+                             inputTokens: state.inputTokens, outputTokens: state.outputTokens,
+                             cachedInputTokens: state.cachedInputTokens)
+        stats = SessionStats(outputBaseline: state.outputTokens ?? 0)
         config = LiveConfig(model: state.model, permission: state.permission, effort: state.effort)
         turnActive = state.turnActive
     }
@@ -303,6 +307,7 @@ public struct LiveSessionModel: Equatable, Sendable {
 
     /// Returns true when the update ended a turn.
     private mutating func reduce(_ update: LiveSessionUpdate) -> Bool {
+        stats.observe(update.kind, atMs: update.atMs)
         switch update.kind {
         case .turnStarted:
             turnActive = true
@@ -385,9 +390,11 @@ public struct LiveSessionModel: Equatable, Sendable {
             questions.removeAll { $0.id == id }
         case let .notice(level, message):
             items.append(.info(id: "seq\(update.seq)", level: level, message: message))
-        case let .usage(used, limit, input, output):
+        case let .usage(used, limit, input, output, cached):
             usage = UsageSummary(contextUsed: used ?? usage.contextUsed, contextLimit: limit ?? usage.contextLimit,
-                                 inputTokens: input ?? usage.inputTokens, outputTokens: output ?? usage.outputTokens)
+                                 inputTokens: input ?? usage.inputTokens, outputTokens: output ?? usage.outputTokens,
+                                 cachedInputTokens: cached ?? usage.cachedInputTokens)
+            stats.outputTokens = usage.outputTokens ?? stats.outputTokens
         case let .configChanged(model, permission, effort):
             setConfig(LiveConfig(model: model, permission: permission, effort: effort))
         case let .error(message, recoverable):
@@ -423,14 +430,36 @@ public struct UsageSummary: Equatable, Sendable {
     public var contextLimit: UInt64?
     public var inputTokens: UInt64?
     public var outputTokens: UInt64?
+    /// The prompt-cache share of `inputTokens` (Codex `cachedInputTokens`,
+    /// Claude `cache_read_input_tokens`); nil when the agent does not say.
+    public var cachedInputTokens: UInt64?
 
     public static let highThreshold = 0.8
 
-    public init(contextUsed: UInt64?, contextLimit: UInt64?, inputTokens: UInt64?, outputTokens: UInt64?) {
+    public init(contextUsed: UInt64?, contextLimit: UInt64?, inputTokens: UInt64?, outputTokens: UInt64?,
+                cachedInputTokens: UInt64? = nil) {
         self.contextUsed = contextUsed
         self.contextLimit = contextLimit
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
+        self.cachedInputTokens = cachedInputTokens
+    }
+
+    /// Input plus output, the 统计栏's headline count.
+    public var totalTokens: UInt64? {
+        guard inputTokens != nil || outputTokens != nil else { return nil }
+        return (inputTokens ?? 0) + (outputTokens ?? 0)
+    }
+
+    /// 0…1 share of input served from the cache.
+    public var cacheHitRate: Double? {
+        guard let cached = cachedInputTokens, let input = inputTokens, input > 0 else { return nil }
+        return min(1, Double(cached) / Double(input))
+    }
+
+    public var uncachedInputTokens: UInt64? {
+        guard let input = inputTokens else { return nil }
+        return input - min(input, cachedInputTokens ?? 0)
     }
 
     /// 0…1, nil when either side is unknown.
@@ -459,3 +488,73 @@ public struct UsageSummary: Equatable, Sendable {
         }
     }
 }
+
+/// The 会话统计 card (2026-10-28): how the model and the tools spent this
+/// session's time, measured from the live updates' host timestamps. Turns and
+/// steps for the whole session come from history (`SessionStatsBar`); these
+/// timings start when the page first saw the session.
+public struct SessionStats: Equatable, Sendable {
+    public var turns = 0
+    public var steps = 0
+    public var modelMs: UInt64 = 0
+    public var toolMs: UInt64 = 0
+    public var firstTokenMsTotal: UInt64 = 0
+    public var firstTokenSamples = 0
+    /// Cumulative output tokens (the usage line), and where they stood on open.
+    public var outputTokens: UInt64?
+    public var outputBaseline: UInt64 = 0
+
+    private var turnStartMs: UInt64?
+    private var turnToolMs: UInt64 = 0
+    private var awaitingFirstToken = false
+    private var toolStarts: [String: UInt64] = [:]
+
+    public init(outputBaseline: UInt64 = 0) {
+        self.outputBaseline = outputBaseline
+    }
+
+    public var averageFirstTokenMs: UInt64? {
+        firstTokenSamples > 0 ? firstTokenMsTotal / UInt64(firstTokenSamples) : nil
+    }
+
+    /// Output tokens per second of model time since the page opened.
+    public var tokensPerSecond: Double? {
+        guard modelMs >= 500, let output = outputTokens, output > outputBaseline else { return nil }
+        return Double(output - outputBaseline) / (Double(modelMs) / 1000)
+    }
+
+    mutating func observe(_ kind: LiveUpdateKind, atMs: UInt64) {
+        switch kind {
+        case .turnStarted:
+            turns += 1
+            turnStartMs = atMs
+            turnToolMs = 0
+            awaitingFirstToken = true
+        case .turnEnded:
+            if let start = turnStartMs, atMs >= start {
+                let spent = atMs - start
+                modelMs += spent - min(spent, turnToolMs)
+            }
+            turnStartMs = nil
+            awaitingFirstToken = false
+            toolStarts.removeAll()
+        case .messageChunk, .thoughtChunk:
+            if awaitingFirstToken, let start = turnStartMs, atMs >= start {
+                firstTokenMsTotal += atMs - start
+                firstTokenSamples += 1
+                awaitingFirstToken = false
+            }
+        case let .toolCall(id, _, _, _):
+            steps += 1
+            toolStarts[id] = atMs
+        case let .toolCallUpdate(id, status, _, _):
+            guard status != .running, let start = toolStarts.removeValue(forKey: id),
+                  atMs >= start else { break }
+            toolMs += atMs - start
+            turnToolMs += atMs - start
+        default:
+            break
+        }
+    }
+}
+

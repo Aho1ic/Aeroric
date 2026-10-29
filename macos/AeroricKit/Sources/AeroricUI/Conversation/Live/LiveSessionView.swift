@@ -39,6 +39,26 @@ public struct LiveSessionView: View {
 
     private var liveItems: [LiveItem] { store.model?.items ?? [] }
 
+    /// The whole session's turns (the person's own messages) and tool steps:
+    /// history plus the live rows history has not taken over yet.
+    private var turnAndStepCounts: (turns: Int, steps: Int) {
+        var turns = 0
+        var steps = 0
+        for message in store.history {
+            let hasText = message.content.contains { if case .text = $0 { return true }; return false }
+            if message.role == "user" && hasText { turns += 1 }
+            steps += message.content.filter { if case .toolUse = $0 { return true }; return false }.count
+        }
+        for item in liveItems {
+            switch item {
+            case .userEcho: turns += 1
+            case .tool: steps += 1
+            default: break
+            }
+        }
+        return (turns, steps)
+    }
+
     /// 2026-10-27: the prompt the task was started with, shown as the first
     /// user bubble until history or a live echo carries a user message.
     private var openingPrompt: String? {
@@ -289,7 +309,11 @@ public struct LiveSessionView: View {
                     .glassSurface(.floatingCard, in: AeroricRadius.shape(AeroricRadius.l))
                     .accessibilityIdentifier("session.live.resume-blocked")
             } else {
-                composer
+                // 2026-10-28: the 统计栏 sits right under the composer.
+                VStack(spacing: AeroricSpace.xs) {
+                    composer
+                    statsBar
+                }
             }
             if store.turnActive, let text = LiveLoop.of(store.model?.turnToolSignatures ?? []).text {
                 Label(text, systemImage: "arrow.triangle.2.circlepath")
@@ -330,9 +354,15 @@ public struct LiveSessionView: View {
                     }
                 }
             }
-            UsageBar(usage: store.model?.usage ?? UsageSummary(contextUsed: nil, contextLimit: nil,
-                                                                inputTokens: nil, outputTokens: nil))
         }
+    }
+
+    private var statsBar: some View {
+        let counts = turnAndStepCounts
+        return SessionStatsBar(
+            usage: store.model?.usage ?? UsageSummary(contextUsed: nil, contextLimit: nil,
+                                                      inputTokens: nil, outputTokens: nil),
+            stats: store.model?.stats ?? SessionStats(), turns: counts.turns, steps: counts.steps)
     }
 
     @ViewBuilder private var composer: some View {

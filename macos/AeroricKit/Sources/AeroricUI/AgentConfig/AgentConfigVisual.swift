@@ -62,6 +62,9 @@ public extension AgentConfigText {
 
     /// The store's probe text starts with 成功 on success.
     static func probeSucceeded(_ probe: String) -> Bool { probe.hasPrefix("成功") }
+    /// 2026-10-28: while the probe runs its text is "测试中…"; that is not a failure.
+    static let probeRunning = "测试中…"
+    static func probeRunning(_ probe: String) -> Bool { probe == probeRunning }
 }
 
 // MARK: - Building blocks

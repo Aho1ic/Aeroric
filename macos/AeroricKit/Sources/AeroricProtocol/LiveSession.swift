@@ -61,7 +61,9 @@ public enum LiveUpdateKind: Equatable, Sendable {
     case question(LivePendingQuestion)
     case questionResolved(id: String, outcome: String)
     case notice(level: String, message: String)
-    case usage(contextUsed: UInt64?, contextLimit: UInt64?, inputTokens: UInt64?, outputTokens: UInt64?)
+    /// `cachedInputTokens` (2026-10-28): the prompt-cache share of `inputTokens`.
+    case usage(contextUsed: UInt64?, contextLimit: UInt64?, inputTokens: UInt64?, outputTokens: UInt64?,
+               cachedInputTokens: UInt64? = nil)
     case configChanged(model: String?, permission: String?, effort: String?)
     case error(message: String, recoverable: Bool)
     /// A05: what the working tree changed during one turn (host git snapshot).
@@ -194,6 +196,7 @@ public struct LiveSessionState: Equatable, Sendable {
     public var contextLimit: UInt64?
     public var inputTokens: UInt64?
     public var outputTokens: UInt64?
+    public var cachedInputTokens: UInt64? = nil
     public var latestSeq: UInt64
     /// Why this session cannot continue natively (e.g. a Codex paginated session).
     public var resumeBlocked: String? = nil
@@ -335,7 +338,8 @@ extension LiveUpdateKind {
             return .notice(level: level, message: message)
         case "usage":
             return .usage(contextUsed: uint(f["contextUsed"]), contextLimit: uint(f["contextLimit"]),
-                          inputTokens: uint(f["inputTokens"]), outputTokens: uint(f["outputTokens"]))
+                          inputTokens: uint(f["inputTokens"]), outputTokens: uint(f["outputTokens"]),
+                          cachedInputTokens: uint(f["cachedInputTokens"]))
         case "configChanged":
             return .configChanged(model: string(f, "model"), permission: string(f, "permission"), effort: string(f, "effort"))
         case "error":
@@ -416,6 +420,7 @@ extension LiveSessionState {
         )
         state.questions = (f["questions"]?.arrayValue ?? []).compactMap { LivePendingQuestion.decode($0.fields, askedAt: 0) }
         state.permissionLocked = f["permissionLocked"]?.boolValue ?? false
+        state.cachedInputTokens = uint(f["cachedInputTokens"])
         return state
     }
 }

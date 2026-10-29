@@ -443,7 +443,7 @@ public final class AgentConfigStore {
 
     public func testConnection(model: String) async {
         guard let id = selectedConnection else { return }
-        probe = "测试中…"
+        probe = AgentConfigText.probeRunning
         do {
             let result = try await backend.testConnection(connectionId: id, model: model)
             let verdict = (200..<300).contains(Int(result.status)) ? "成功" : "失败（HTTP \(result.status)）"

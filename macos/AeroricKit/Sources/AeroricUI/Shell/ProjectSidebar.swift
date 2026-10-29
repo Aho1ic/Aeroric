@@ -254,9 +254,10 @@ public struct ProjectSidebar: View {
         let rows = sessions(of: project)
         ProjectRow(item: project, sessionCount: rows.count, expanded: expanded,
                    selected: selection == project.id, height: shell.projectRowHeight,
+                   // 2026-10-28: a click on the project folds or unfolds its
+                   // sessions; the task board stays under 任务.
                    onSelect: {
-                       selection = project.id
-                       expandedProjects.insert(project.id)
+                       if expanded { expandedProjects.remove(project.id) } else { expandedProjects.insert(project.id) }
                    },
                    onToggle: {
                        if expanded { expandedProjects.remove(project.id) } else { expandedProjects.insert(project.id) }
@@ -717,7 +718,8 @@ private struct SessionRow: View {
             if showsMore {
                 // The ⋯ button is laid over this slot (SessionTreeRow).
                 Color.clear.frame(width: 20, height: 20)
-            } else if let updatedAt = item.updatedAt {
+            } else if let updatedAt = item.updatedAt, !item.imported {
+                // An imported row leaves the date out (2026-10-28): that room is for its tags.
                 Text(RelativeTime.short(updatedAt))
                     .font(.system(size: AeroricType.caption).monospacedDigit())
                     .foregroundStyle(AeroricColor.textTertiary)

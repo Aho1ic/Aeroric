@@ -193,7 +193,8 @@ fn a_result_ends_the_turn_with_running_totals() {
             context_used: None,
             context_limit: None,
             input_tokens: Some(100),
-            output_tokens: Some(5)
+            output_tokens: Some(5),
+            cached_input_tokens: Some(90)
         }]
     );
     let (second, failed) = m.map(&json!({"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": "s",

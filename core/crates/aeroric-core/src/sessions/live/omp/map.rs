@@ -177,6 +177,7 @@ impl OmpMapper {
                             context_limit: None,
                             input_tokens: input,
                             output_tokens: output,
+                            cached_input_tokens: None,
                         });
                     }
                 }

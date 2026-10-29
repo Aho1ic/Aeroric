@@ -49,6 +49,7 @@ struct ToolCallLine: View {
                 .contentShape(Capsule(style: .continuous))
             }
             .buttonStyle(.plain)
+            .modifier(LeadingReveal(active: call.state == .running))
             .onHover { hovered = $0 }
             .accessibilityLabel("\(call.name)，\(stateLabel)")
             .accessibilityIdentifier("session.tool.\(index)")
@@ -177,3 +178,42 @@ private struct ShimmerText: View {
         }
     }
 }
+
+/// 2026-10-28: a tool line that appears while it runs fades in from left to
+/// right (~0.45 s). Lines loaded from history, and everything under Reduce
+/// Motion, appear at once.
+struct LeadingReveal: ViewModifier {
+    let active: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var progress: CGFloat
+
+    static let feather: CGFloat = 48
+
+    init(active: Bool) {
+        self.active = active
+        _progress = State(initialValue: active ? 0 : 1)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .mask(alignment: .leading) {
+                GeometryReader { proxy in
+                    HStack(spacing: 0) {
+                        Rectangle()
+                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: Self.feather)
+                    }
+                    .frame(width: proxy.size.width * progress + Self.feather, alignment: .leading)
+                }
+            }
+            .onAppear {
+                guard progress < 1 else { return }
+                if reduceMotion {
+                    progress = 1
+                } else {
+                    withAnimation(.easeOut(duration: 0.45)) { progress = 1 }
+                }
+            }
+    }
+}
+

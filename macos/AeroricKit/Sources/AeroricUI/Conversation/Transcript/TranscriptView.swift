@@ -47,7 +47,8 @@ struct TranscriptView<Footer: View>: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     footer()
                         .frame(width: column)
-                        .padding(.bottom, AeroricSpace.l)
+                        // 2026-10-28: the composer sits lower (was `l`).
+                        .padding(.bottom, AeroricSpace.s)
                         .frame(maxWidth: .infinity)
                         .overlay(alignment: .top) {
                             if !atBottom && !items.isEmpty {

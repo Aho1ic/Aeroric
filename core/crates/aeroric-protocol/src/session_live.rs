@@ -230,6 +230,10 @@ pub enum SessionUpdateKind {
         input_tokens: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output_tokens: Option<u64>,
+        /// Input tokens served from the provider's prompt cache (2026-10-28,
+        /// the session page's 缓存命中); a share of `input_tokens`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cached_input_tokens: Option<u64>,
     },
     ConfigChanged {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -338,6 +342,8 @@ pub struct SessionState {
     pub context_limit: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<u64>,
     pub latest_seq: u64,
     /// Set when this session cannot be continued natively (e.g. a Codex
     /// paginated session): the page shows this instead of the composer.
@@ -566,6 +572,7 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
             context_limit: Some(200_000),
             input_tokens: Some(1500),
             output_tokens: Some(300),
+            cached_input_tokens: None,
         },
         K::ConfigChanged {
             model: Some("gpt-5".into()),
@@ -659,6 +666,7 @@ pub fn fixture_state() -> SessionState {
         context_limit: Some(200_000),
         input_tokens: Some(1500),
         output_tokens: Some(300),
+        cached_input_tokens: None,
         latest_seq: 16,
         resume_blocked: None,
         questions: vec![],

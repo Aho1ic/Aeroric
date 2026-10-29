@@ -138,6 +138,7 @@ pub fn map_notification(
             context_limit: u64_at(params, &["tokenUsage", "modelContextWindow"]),
             input_tokens: u64_at(params, &["tokenUsage", "total", "inputTokens"]),
             output_tokens: u64_at(params, &["tokenUsage", "total", "outputTokens"]),
+            cached_input_tokens: u64_at(params, &["tokenUsage", "total", "cachedInputTokens"]),
         }),
         "error" => one(K::Error {
             message: params
@@ -168,7 +169,13 @@ pub fn map_notification(
         | "account/rateLimits/updated"
         | "mcpServer/startupStatus/updated"
         | "thread/name/updated" => (vec![], None),
-        _ => one(unknown(method, params)),
+        // 2026-10-28: Codex 0.163 sends 87 notification kinds and grows more
+        // each release (`thread/goal/cleared`,
+        // `item/commandExecution/terminalInteraction`, `thread/realtime/*`…).
+        // A notification the page does not render is protocol bookkeeping, not
+        // conversation content, so it is not shown as "未识别的内容". An item
+        // of an unknown type still is (`map_item`): that is content.
+        _ => (vec![], None),
     }
 }
 

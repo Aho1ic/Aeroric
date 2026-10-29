@@ -306,12 +306,22 @@ struct ConnectionsPane: View {
                 ForEach(AgentConfigText.modelBadges(model), id: \.self) { StatusChip(text: $0) }
                 Spacer(minLength: AeroricSpace.m)
                 if testedModel == model.upstreamId, let probe = store.probe {
-                    let ok = AgentConfigText.probeSucceeded(probe)
-                    StatusChip(text: ok ? "测试通过" : "测试失败", systemImage: ok ? "checkmark" : "xmark",
-                               tint: ok ? AeroricColor.success : AeroricColor.danger)
-                        .help(probe)
+                    if AgentConfigText.probeRunning(probe) {
+                        HStack(spacing: AeroricSpace.xs) {
+                            ProgressView().controlSize(.mini)
+                            Text("测试中").font(.system(size: AeroricType.caption))
+                                .foregroundStyle(AeroricColor.textSecondary)
+                        }
                         .transition(.opacity)
-                        .accessibilityIdentifier("agent-config.test-result")
+                        .accessibilityIdentifier("agent-config.test-running")
+                    } else {
+                        let ok = AgentConfigText.probeSucceeded(probe)
+                        StatusChip(text: ok ? "测试通过" : "测试失败", systemImage: ok ? "checkmark" : "xmark",
+                                   tint: ok ? AeroricColor.success : AeroricColor.danger)
+                            .help(probe)
+                            .transition(.opacity)
+                            .accessibilityIdentifier("agent-config.test-result")
+                    }
                 }
                 Button { test(model.upstreamId) } label: { Image(systemName: "bolt.horizontal") }
                     .buttonStyle(.borderless)
@@ -329,7 +339,7 @@ struct ConnectionsPane: View {
                 }
             }
             if testedModel == model.upstreamId, let probe = store.probe, !AgentConfigText.probeSucceeded(probe),
-               probe != "测试中…" {
+               !AgentConfigText.probeRunning(probe) {
                 // The reason, in the row rather than only in a tooltip.
                 Text(probe)
                     .font(.system(size: AeroricType.caption))

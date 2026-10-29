@@ -31,6 +31,8 @@ pub struct ClaudeMapper {
     todo_tools: HashSet<String>,
     input_tokens: u64,
     output_tokens: u64,
+    /// Prompt-cache reads, summed like `input_tokens`.
+    cached_input_tokens: u64,
     /// Prompt plus reply of the latest API call: what the window holds now.
     /// Fallback for when `get_context_usage` answers nothing (gateways).
     last_context: Option<u64>,
@@ -355,6 +357,7 @@ impl ClaudeMapper {
             + count("cache_read_input_tokens")
             + count("cache_creation_input_tokens");
         self.output_tokens += count("output_tokens");
+        self.cached_input_tokens += count("cache_read_input_tokens");
         let failed = message
             .get("is_error")
             .and_then(Value::as_bool)
@@ -391,6 +394,7 @@ impl ClaudeMapper {
                 context_limit: None,
                 input_tokens: Some(self.input_tokens),
                 output_tokens: Some(self.output_tokens),
+                cached_input_tokens: Some(self.cached_input_tokens),
             }],
             Some(ClaudeSignal::TurnResult { failed, error }),
         )

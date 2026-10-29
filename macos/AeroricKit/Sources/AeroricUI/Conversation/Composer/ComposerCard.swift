@@ -157,9 +157,11 @@ public struct ComposerCard<Footer: View>: View {
             let ready = sendState == .ready && isEditable
                 && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             Button(action: onSend) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(ready ? AeroricColor.onPrimary : AeroricColor.textTertiary)
+                PaperPlane()
+                    .stroke(ready ? AeroricColor.onPrimary : AeroricColor.textTertiary,
+                            style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                    .frame(width: 14, height: 14)
+                    .offset(x: -0.5, y: 0.5)
                     .frame(width: 30, height: 30)
                     .background(ready ? AeroricColor.primary : AeroricColor.layer3, in: Circle())
             }
@@ -177,3 +179,21 @@ public struct ComposerCard<Footer: View>: View {
         return nil
     }
 }
+
+/// The send glyph (2026-10-28, user's reference): an outlined paper plane
+/// pointing up-right with a notch at its tail, drawn on a 24-unit grid
+/// (3,11 → 22,2 → 13,21 → 11,13 → back).
+struct PaperPlane: Shape {
+    func path(in rect: CGRect) -> Path {
+        let unit = min(rect.width, rect.height) / 24
+        let point = { (x: CGFloat, y: CGFloat) in CGPoint(x: rect.minX + x * unit, y: rect.minY + y * unit) }
+        var path = Path()
+        path.move(to: point(3, 11))
+        path.addLine(to: point(22, 2))
+        path.addLine(to: point(13, 21))
+        path.addLine(to: point(11, 13))
+        path.closeSubpath()
+        return path
+    }
+}
+

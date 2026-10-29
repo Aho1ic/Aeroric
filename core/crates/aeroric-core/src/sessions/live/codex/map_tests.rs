@@ -140,7 +140,8 @@ fn plan_usage_and_errors() {
             context_used: Some(1200),
             context_limit: Some(200000),
             input_tokens: Some(5000),
-            output_tokens: Some(400)
+            output_tokens: Some(400),
+            cached_input_tokens: Some(0)
         }]
     );
     let (error, _) = map_notification(
@@ -157,11 +158,18 @@ fn plan_usage_and_errors() {
 }
 
 #[test]
-fn unknown_notifications_and_items_are_kept_not_dropped() {
-    let (updates, _) = map_notification("thread/realtime/started", &json!({"x": 1}));
-    assert!(
-        matches!(&updates[0], SessionUpdateKind::Unknown { kind, .. } if kind == "thread/realtime/started")
-    );
+fn unknown_notifications_are_quiet_but_unknown_items_are_kept() {
+    for method in [
+        "thread/realtime/started",
+        "item/commandExecution/terminalInteraction",
+        "thread/goal/cleared",
+    ] {
+        let (updates, _) = map_notification(method, &json!({"x": 1}));
+        assert!(
+            updates.is_empty(),
+            "{method} is bookkeeping, not 未识别的内容"
+        );
+    }
     let (updates, _) = map_notification(
         "item/started",
         &json!({"item": {"type": "hologram", "id": "h"}}),
@@ -284,6 +292,17 @@ fn codex_methods_exist_in_the_snapshot() {
         assert!(
             notifications.iter().any(|m| m == method),
             "{method} missing from snapshot"
+        );
+    }
+}
+
+#[test]
+fn thread_goal_notifications_are_bookkeeping() {
+    for method in ["thread/goal/updated", "thread/goal/cleared"] {
+        let (updates, _) = map_notification(method, &json!({"threadId": "th"}));
+        assert!(
+            updates.is_empty(),
+            "{method} is not shown as unknown content"
         );
     }
 }

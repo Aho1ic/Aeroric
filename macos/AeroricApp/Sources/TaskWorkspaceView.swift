@@ -897,7 +897,12 @@ struct TaskWorkspaceView: View {
     private func composer(_ scope: SessionDraftScope) -> some View {
         let project = services.taskStore.projects.first { $0.id == scope.projectID }
         let value = draftBook[scope] ?? NewSessionDraft(submissionID: "unopened")
-        let configurations = services.sessionConfigurations(projectID: scope.projectID)
+        // 2026-10-28: no project chosen yet still offers every harness — the
+        // first local project's catalog stands in (the configurations are the
+        // user's, not the project's); submitting still asks for a project.
+        let catalogProjectID = scope.projectID
+            ?? services.taskStore.projects.first { !$0.path.hasPrefix("ssh://") }?.id
+        let configurations = services.sessionConfigurations(projectID: catalogProjectID)
         let reasons = sessionBlockingReasons(value, scope: scope)
         return NewSessionHome(
             draft: Binding(
@@ -919,12 +924,10 @@ struct TaskWorkspaceView: View {
             // S5: the project's 默认 Harness, else the global default.
             preferredHarness: projectHarness(scope.projectID) ?? defaultHarness
         )
-        .task(id: [scope.projectID ?? "", services.configurationEpoch.uuidString,
+        .task(id: [catalogProjectID ?? "", services.configurationEpoch.uuidString,
                    services.agentCatalogEpoch.uuidString]) {
-            if let projectID = scope.projectID {
-                await services.loadSessionConfigurations(projectID: projectID)
-                await services.loadBranches(projectID: projectID)
-            }
+            if let catalogProjectID { await services.loadSessionConfigurations(projectID: catalogProjectID) }
+            if let projectID = scope.projectID { await services.loadBranches(projectID: projectID) }
         }
     }
 
