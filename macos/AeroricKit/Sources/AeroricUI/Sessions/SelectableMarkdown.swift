@@ -21,8 +21,13 @@ struct SelectableMarkdown: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSTextView {
-        // TextKit 1: code-block backgrounds are `NSTextBlock`s.
-        let view = NSTextView(usingTextLayoutManager: false)
+        // TextKit 1: code-block backgrounds are `NSTextBlock`s; our own
+        // layout manager rounds the inline-code backgrounds (2026-10-29).
+        let layout = MarkdownLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        context.coordinator.storage.addLayoutManager(layout)
+        layout.addTextContainer(container)
+        let view = NSTextView(frame: .zero, textContainer: container)
         view.isEditable = false
         view.isSelectable = true
         view.drawsBackground = false
@@ -76,6 +81,8 @@ struct SelectableMarkdown: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
+        /// The text view does not own its storage; this keeps it alive.
+        let storage = NSTextStorage()
         var renderedKey = ""
         var measured: (key: String, size: CGSize)?
 
@@ -134,6 +141,7 @@ enum MarkdownAttributed {
             out.append(NSAttributedString(string: text, attributes: attributes(for: run, intent: intent,
                                                                                 isCode: isCode, size: size, fonts: fonts)))
         }
+        padInlineCode(out)
         for (index, block) in blocks.enumerated() where block.shape != .code {
             let end = index + 1 < blocks.count ? blocks[index + 1].start : out.length
             guard end > block.start else { continue }
@@ -142,6 +150,22 @@ enum MarkdownAttributed {
                              range: NSRange(location: block.start, length: end - block.start))
         }
         return out
+    }
+
+    /// Room around each inline-code chip (2026-10-29): kern after the
+    /// character before it and after its own last character, so the
+    /// rounded background `MarkdownLayoutManager` draws never touches text.
+    static func padInlineCode(_ out: NSMutableAttributedString) {
+        let whole = NSRange(location: 0, length: out.length)
+        out.enumerateAttribute(.inlineCode, in: whole) { value, range, _ in
+            guard value != nil, range.length > 0 else { return }
+            out.addAttribute(.kern, value: MarkdownLayoutManager.chipKern,
+                             range: NSRange(location: NSMaxRange(range) - 1, length: 1))
+            if range.location > 0 {
+                out.addAttribute(.kern, value: MarkdownLayoutManager.chipKern,
+                                 range: NSRange(location: range.location - 1, length: 1))
+            }
+        }
     }
 
     enum BlockShape: Equatable {
@@ -212,14 +236,16 @@ enum MarkdownAttributed {
         let inline = run.inlinePresentationIntent ?? []
         if isCode {
             let paragraph = NSMutableParagraphStyle()
-            let box = NSTextBlock()
-            box.backgroundColor = NSColor(AeroricColor.layer1)
+            let box = RoundedCodeBlock()
             box.setContentWidth(100, type: .percentageValueType)
-            box.setWidth(10, type: .absoluteValueType, for: .padding)
+            box.setWidth(16, type: .absoluteValueType, for: .padding, edge: .minX)
+            box.setWidth(16, type: .absoluteValueType, for: .padding, edge: .maxX)
+            box.setWidth(RoundedCodeBlock.inset, type: .absoluteValueType, for: .padding, edge: .minY)
+            box.setWidth(RoundedCodeBlock.inset, type: .absoluteValueType, for: .padding, edge: .maxY)
             box.setWidth(4, type: .absoluteValueType, for: .margin, edge: .minY)
             box.setWidth(8, type: .absoluteValueType, for: .margin, edge: .maxY)
             paragraph.textBlocks = [box]
-            paragraph.lineSpacing = 2
+            paragraph.lineSpacing = RoundedCodeBlock.lineSpacing
             attributes[.paragraphStyle] = paragraph
             attributes[.font] = monospaced(size - 1)
             attributes[.foregroundColor] = NSColor(AeroricColor.textSecondary)
@@ -246,7 +272,7 @@ enum MarkdownAttributed {
         }
         if inline.contains(.code) {
             attributes[.font] = monospaced(size * 0.92)
-            attributes[.backgroundColor] = NSColor(AeroricColor.layer2)
+            attributes[.inlineCode] = true
         }
         if let link = run.link {
             attributes[.link] = link
@@ -265,5 +291,78 @@ enum MarkdownAttributed {
     /// JetBrains Mono when the app registered it, else the system mono.
     private static func monospaced(_ size: CGFloat) -> NSFont {
         NSFont(name: "JetBrainsMono-Regular", size: size) ?? .monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+}
+
+extension NSAttributedString.Key {
+    /// Marks inline code; drawn as a rounded chip, not a flat highlight.
+    static let inlineCode = NSAttributedString.Key("aeroric.inlineCode")
+}
+
+/// Code blocks with large rounded corners and a hairline edge (2026-10-29).
+/// TextKit adds line spacing under a block's last line too, so the drawn
+/// box stops that much short of the block: the text sits in the middle.
+final class RoundedCodeBlock: NSTextBlock {
+    static let lineSpacing: CGFloat = 3
+    static let inset: CGFloat = 12
+    static let radius: CGFloat = 14
+
+    override func drawBackground(withFrame frameRect: NSRect, in controlView: NSView?,
+                                 characterRange charRange: NSRange, layoutManager: NSLayoutManager) {
+        // The whole block's frame, so a partial redraw keeps its corners.
+        var frame = frameRect
+        if let storage = layoutManager.textStorage {
+            let blockRange = storage.range(of: self, at: charRange.location)
+            if blockRange.length > 0 {
+                let glyphs = layoutManager.glyphRange(forCharacterRange: blockRange, actualCharacterRange: nil)
+                frame = layoutManager.boundsRect(for: self, glyphRange: glyphs)
+            }
+        }
+        frame.size.height -= Self.lineSpacing
+        let box = NSBezierPath(roundedRect: frame.insetBy(dx: 0.5, dy: 0.5),
+                               xRadius: Self.radius, yRadius: Self.radius)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: frameRect).addClip()
+        NSColor(AeroricColor.layer1).setFill()
+        box.fill()
+        NSColor(AeroricColor.separator2).setStroke()
+        box.lineWidth = 1
+        box.stroke()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+}
+
+/// Draws inline code as rounded chips (2026-10-29); everything else is the
+/// stock TextKit 1 layout.
+final class MarkdownLayoutManager: NSLayoutManager {
+    /// Kern added on each side of a chip (see `padInlineCode`).
+    static let chipKern: CGFloat = 10
+    /// How far a chip reaches into that room; the rest is the gap to text.
+    static let chipPad: CGFloat = 6
+
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        // Chips first, so a selection is still drawn over them.
+        defer { super.drawBackground(forGlyphRange: glyphsToShow, at: origin) }
+        guard let storage = textStorage, let container = textContainers.first else { return }
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        storage.enumerateAttribute(.inlineCode, in: characters) { value, range, _ in
+            guard value != nil else { return }
+            let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                    in: container) { rect, _ in
+                var chip = rect.offsetBy(dx: origin.x, dy: origin.y)
+                // Left: reach into the kern before; right: give back the
+                // part of the last character's kern that is the gap.
+                chip.origin.x -= Self.chipPad
+                chip.size.width += Self.chipPad - (Self.chipKern - Self.chipPad)
+                chip = chip.insetBy(dx: 0, dy: 1)
+                let path = NSBezierPath(roundedRect: chip, xRadius: 6, yRadius: 6)
+                NSColor(AeroricColor.layer2).setFill()
+                path.fill()
+                NSColor(AeroricColor.separator1).setStroke()
+                path.lineWidth = 1
+                path.stroke()
+            }
+        }
     }
 }

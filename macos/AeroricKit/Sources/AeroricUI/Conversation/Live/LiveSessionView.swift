@@ -260,6 +260,7 @@ public struct LiveSessionView: View {
                 .modifier(OpensAtLatest())
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     footer.frame(width: column).padding(.bottom, AeroricSpace.xs).frame(maxWidth: .infinity)
+                        .background(alignment: .top) { FooterFade() }
                 }
                 .onChange(of: liveItems) { _, _ in if atBottom { scroll(scroller, to: Self.bottomID) } }
                 .onChange(of: store.history.count) { old, _ in
@@ -622,4 +623,22 @@ private struct SessionDialogs: ViewModifier {
 struct PendingMove: Equatable {
     let source: LiveModelSource
     let model: String
+}
+
+/// The page colour behind the composer and 统计栏, fading in just above
+/// them (2026-10-29): text scrolling down slips out of sight instead of
+/// showing through the glass composer.
+private struct FooterFade: View {
+    static let height: CGFloat = 36
+
+    var body: some View {
+        VStack(spacing: 0) {
+            LinearGradient(colors: [AeroricColor.canvas.opacity(0), AeroricColor.canvas],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: Self.height)
+            AeroricColor.canvas
+        }
+        .padding(.top, -Self.height)
+        .allowsHitTesting(false)
+    }
 }
