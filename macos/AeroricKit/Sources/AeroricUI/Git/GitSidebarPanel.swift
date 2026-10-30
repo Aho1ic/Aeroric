@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Git page's words and status marks (2026-10-30), kept out of the view
+/// The Git panel's words and status marks (2026-10-30), kept out of the view
 /// so they can be tested.
 public enum GitPageText {
     public static func commitTitle(stagedCount: Int) -> String {
@@ -66,17 +66,17 @@ public enum GitPageText {
     }
 }
 
-/// Git page (2026-10-30, design approved): branch capsule, 更改 / 历史 /
-/// 贮藏, staged and unstaged files with hover actions, a commit box and the
-/// selected file's diff. Push and pull come in the next batch.
-public struct GitPage: View {
+/// Git in the session's side panel (2026-10-30, design approved; replaces
+/// the Git page): branch capsule and sync capsules on top, then the commit
+/// box, staged and unstaged files, and folded 贮藏 / 历史. A file opens its
+/// diff in the centre column.
+public struct GitSidebarPanel: View {
     let store: GitStore
     let onAction: (GitAction) -> Void
-    let onSelect: (GitStore.Change) -> Void
+    let onOpenDiff: (GitStore.Change) -> Void
     /// Asks the host for a commit message from the staged diff.
     let onGenerate: () async -> String?
 
-    @State private var tab = "changes"
     @State private var selected: String?
     @State private var message = ""
     @State private var generating = false
@@ -88,34 +88,36 @@ public struct GitPage: View {
     @State private var confirmPush = false
     @State private var confirmPull = false
     @State private var confirmPublish = false
+    @State private var showsStash = false
+    @State private var showsHistory = false
 
     public init(store: GitStore, onAction: @escaping (GitAction) -> Void,
-                onSelect: @escaping (GitStore.Change) -> Void, onGenerate: @escaping () async -> String?) {
+                onOpenDiff: @escaping (GitStore.Change) -> Void, onGenerate: @escaping () async -> String?) {
         self.store = store
         self.onAction = onAction
-        self.onSelect = onSelect
+        self.onOpenDiff = onOpenDiff
         self.onGenerate = onGenerate
     }
 
     private var busy: Bool { store.working != nil }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: AeroricSpace.m) {
+        VStack(alignment: .leading, spacing: 0) {
             header
-            if let error = store.actionError {
-                errorBanner(error)
-            }
-            Group {
-                switch tab {
-                case "history": history
-                case "stash": stash
-                default: changes
+            if let error = store.actionError { errorLine(error) }
+            HairlineDivider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: AeroricSpace.s) {
+                    commitBox
+                    changes
+                    fold("贮藏", count: store.stashEntries.count, isOpen: $showsStash) { stash }
+                    fold("历史", count: nil, isOpen: $showsHistory) { history }
                 }
+                .padding(AeroricSpace.m)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .scrollIndicators(.hidden)
         }
-        .padding(AeroricSpace.l)
-        .background(AeroricColor.canvas)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .alert("放弃这个文件的改动？", isPresented: Binding(get: { discarding != nil }, set: { if !$0 { discarding = nil } }),
                presenting: discarding) { change in
             Button("放弃改动", role: .destructive) {
@@ -132,65 +134,41 @@ public struct GitPage: View {
         } message: { entry in
             Text("「\(entry.message)」里的改动会被删掉，无法撤销。")
         }
-        // After a write the list reloads: keep the picked file (it may have
-        // moved between 已暂存 and 未暂存) and reload its diff.
-        .onChange(of: store.changes) { _, changes in
-            guard let id = selected else { return }
-            let path = changes.first(where: { $0.id == id })?.path ?? GitPageText.path(ofChangeID: id)
-            if let kept = changes.first(where: { $0.id == id }) ?? changes.first(where: { $0.path == path }) {
-                selected = kept.id
-                onSelect(kept)
-            } else {
-                selected = nil
-            }
-        }
-        .accessibilityIdentifier("git.page")
+        .accessibilityIdentifier("git.panel")
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: AeroricSpace.m) {
+        HStack(spacing: AeroricSpace.s) {
             branchMenu
-            CapsuleSlider(selection: $tab, groupTitle: "Git 内容", segments: [
-                .init(value: "changes", title: GitPageText.tabTitle("更改", count: store.changes.count), systemImage: "plusminus"),
-                .init(value: "history", title: "历史", systemImage: "clock.arrow.circlepath"),
-                .init(value: "stash", title: GitPageText.tabTitle("贮藏", count: store.stashEntries.count),
-                      systemImage: "tray.and.arrow.down"),
-            ])
-            .fixedSize()
-            Spacer(minLength: AeroricSpace.m)
+            Spacer(minLength: AeroricSpace.xs)
             if let working = store.working {
-                HStack(spacing: AeroricSpace.s) {
-                    ProgressView().controlSize(.small)
-                    Text(working).foregroundStyle(AeroricColor.textSecondary)
-                }
-                .font(.system(size: AeroricType.caption))
-                .lineLimit(1)
-                .fixedSize()
+                ProgressView().controlSize(.small).help(working)
             }
             remoteButtons
         }
+        .padding(.horizontal, AeroricSpace.m)
+        .frame(height: 40)
     }
 
-    /// 获取 · 拉取 N · 推送 N, or 发布分支 before the branch has a remote.
+    /// 获取 · ↓ N · ↑ N, or 发布 before the branch has a remote.
     @ViewBuilder private var remoteButtons: some View {
         let ahead = store.ahead ?? 0
         let behind = store.behind ?? 0
-        HStack(spacing: AeroricSpace.s) {
-            remoteButton("获取", systemImage: "arrow.clockwise", help: "从远端取回最新状态，不改动你的文件") {
-                onAction(.fetch(prune: false))
-            }
-            .disabled(busy || store.upstream == nil)
+        HStack(spacing: AeroricSpace.xs) {
+            NativeIconButton(systemImage: "arrow.clockwise", label: "获取：从远端取回最新状态，不改动你的文件",
+                             identifier: "git.fetch") { onAction(.fetch(prune: false)) }
+                .disabled(busy || store.upstream == nil)
             if let upstream = store.upstream {
-                remoteButton(behind > 0 ? "拉取 \(behind)" : "拉取", systemImage: "arrow.down",
-                             help: behind > 0 ? "从 \(upstream) 拉取 \(behind) 个提交" : "已是最新") { confirmPull = true }
+                countButton("\(behind)", systemImage: "arrow.down",
+                            help: behind > 0 ? "从 \(upstream) 拉取 \(behind) 个提交" : "已是最新") { confirmPull = true }
                     .disabled(busy || behind == 0)
-                remoteButton(ahead > 0 ? "推送 \(ahead)" : "推送", systemImage: "arrow.up",
-                             help: ahead > 0 ? "推送 \(ahead) 个提交到 \(upstream)" : "没有要推送的提交") { confirmPush = true }
+                countButton("\(ahead)", systemImage: "arrow.up",
+                            help: ahead > 0 ? "推送 \(ahead) 个提交到 \(upstream)" : "没有要推送的提交") { confirmPush = true }
                     .disabled(busy || ahead == 0)
             } else if store.currentBranch != nil {
-                remoteButton("发布分支", systemImage: "arrow.up", help: "在 origin 上新建同名分支") { confirmPublish = true }
+                countButton("发布", systemImage: "arrow.up", help: "在 origin 上新建同名分支") { confirmPublish = true }
                     .disabled(busy || store.commits.isEmpty)
             }
         }
@@ -216,14 +194,15 @@ public struct GitPage: View {
         }
     }
 
-    private func remoteButton(_ title: String, systemImage: String, help: String,
-                              action: @escaping () -> Void) -> some View {
+    private func countButton(_ title: String, systemImage: String, help: String,
+                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: systemImage).monospacedDigit()
         }
         .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
         .fixedSize()
         .help(help)
+        .accessibilityLabel(help)
     }
 
     private var branchMenu: some View {
@@ -237,23 +216,29 @@ public struct GitPage: View {
                 }
             }
             Button("新建分支…", systemImage: "plus") { creatingBranch = true }
+            if store.upstream == nil, store.currentBranch != nil {
+                Button("发布分支…", systemImage: "arrow.up") { confirmPublish = true }
+                    .disabled(store.commits.isEmpty)
+            }
         } label: {
-            HStack(spacing: AeroricSpace.s) {
+            HStack(spacing: AeroricSpace.xs) {
                 Image(systemName: "arrow.triangle.branch")
                 Text(store.currentBranch ?? "无分支").fontWeight(.medium)
+                    .lineLimit(1).truncationMode(.middle)
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(AeroricColor.textTertiary)
             }
             .font(.system(size: AeroricType.secondary))
-            .lineLimit(1)
-            .padding(.horizontal, AeroricSpace.l)
-            .frame(height: 28)
+            .padding(.horizontal, AeroricSpace.m)
+            .frame(height: 26)
             .glassSurface(.floatingCard, in: Capsule(style: .continuous))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .fixedSize()
+        .frame(maxWidth: 150, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
         .disabled(busy)
+        .help(store.currentBranch ?? "无分支")
         .popover(isPresented: $creatingBranch, arrowEdge: .bottom) { newBranchForm }
         .accessibilityIdentifier("git.branch")
     }
@@ -262,6 +247,7 @@ public struct GitPage: View {
         VStack(alignment: .leading, spacing: AeroricSpace.m) {
             Text("从 \(store.currentBranch ?? "当前提交") 新建并切换")
                 .font(.system(size: AeroricType.secondary, weight: .semibold))
+                .lineLimit(1)
             CapsuleField(systemImage: "arrow.triangle.branch", placeholder: "分支名", text: $newBranch)
                 .frame(width: 240)
                 .onSubmit(createBranch)
@@ -285,11 +271,11 @@ public struct GitPage: View {
         creatingBranch = false
     }
 
-    private func errorBanner(_ error: String) -> some View {
+    private func errorLine(_ error: String) -> some View {
         HStack(spacing: AeroricSpace.s) {
             Image(systemName: "exclamationmark.triangle")
             Text(error).lineLimit(1).truncationMode(.tail)
-            Spacer(minLength: AeroricSpace.s)
+            Spacer(minLength: AeroricSpace.xs)
             Button { store.actionError = nil } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
                 .buttonStyle(.plain)
                 .accessibilityLabel("关闭")
@@ -297,39 +283,75 @@ public struct GitPage: View {
         .font(.system(size: AeroricType.caption))
         .foregroundStyle(AeroricColor.danger)
         .padding(.horizontal, AeroricSpace.l)
-        .frame(height: 28)
+        .frame(height: 26)
         .background(AeroricColor.danger.opacity(0.12), in: Capsule(style: .continuous))
+        .padding(.horizontal, AeroricSpace.s)
+        .padding(.bottom, AeroricSpace.xs)
         .help(error)
         .accessibilityIdentifier("git.error")
     }
 
     // MARK: - Changes
 
-    private var changes: some View {
-        HStack(spacing: AeroricSpace.m) {
-            VStack(spacing: AeroricSpace.m) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: AeroricSpace.xs) {
-                        if let notice = store.changesReadState.notice, store.changes.isEmpty {
-                            Text(notice).font(.system(size: AeroricType.secondary))
-                                .foregroundStyle(AeroricColor.textSecondary).padding(AeroricSpace.m)
-                        } else if store.changes.isEmpty {
-                            PaneEmptyState(systemImage: "checkmark.circle", title: "工作区干净", hint: "没有要提交的改动")
-                                .padding(.top, AeroricSpace.xxl)
-                        } else {
-                            group("已暂存", store.stagedChanges, all: "全部取消", allAction: .unstageAll)
-                            group("未暂存", store.unstagedChanges, all: "全部暂存", allAction: .stageAll)
-                        }
+    private var commitBox: some View {
+        let staged = store.stagedChanges.count
+        let canCommit = staged > 0 && !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !busy
+        return VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            TextField("提交说明", text: $message, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: AeroricType.secondary))
+                .lineLimit(1...5)
+                .accessibilityIdentifier("git.commit-message")
+            HStack(spacing: AeroricSpace.s) {
+                Spacer(minLength: 0)
+                Button {
+                    generating = true
+                    Task { @MainActor in
+                        if let text = await onGenerate() { message = text }
+                        generating = false
                     }
-                    .padding(AeroricSpace.s)
+                } label: {
+                    HStack(spacing: AeroricSpace.xs) {
+                        if generating { ProgressView().controlSize(.mini) } else { Image(systemName: "sparkles") }
+                        Text("生成")
+                    }
                 }
-                .scrollIndicators(.hidden)
-                commitBox
+                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                .fixedSize()
+                .disabled(staged == 0 || generating || busy)
+                .help("让 Codex 根据已暂存的改动写提交说明")
+                Button(GitPageText.commitTitle(stagedCount: staged)) {
+                    onAction(.commit(message: message.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    message = ""
+                }
+                .buttonStyle(AeroricCapsuleButtonStyle(.primary, compact: true))
+                .disabled(!canCommit)
+                .fixedSize()
+                .accessibilityIdentifier("git.commit")
             }
-            .frame(width: 320)
-            .padding(AeroricSpace.s)
-            .background(AeroricColor.layer1, in: AeroricRadius.shape(AeroricRadius.l))
-            diffPane
+        }
+        .padding(AeroricSpace.m)
+        .background(AeroricColor.layer2, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(AeroricColor.separator2))
+    }
+
+    @ViewBuilder private var changes: some View {
+        if let notice = store.changesReadState.notice, store.changes.isEmpty {
+            Text(notice).font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary).lineLimit(2)
+                .padding(.horizontal, AeroricSpace.s)
+        } else if store.changes.isEmpty {
+            Label("工作区干净，没有要提交的改动", systemImage: "checkmark.circle")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+                .lineLimit(1)
+                .padding(.horizontal, AeroricSpace.s)
+                .padding(.vertical, AeroricSpace.xs)
+        } else {
+            VStack(alignment: .leading, spacing: AeroricSpace.xxs) {
+                group("已暂存", store.stagedChanges, all: "全部取消", allAction: .unstageAll)
+                group("未暂存", store.unstagedChanges, all: "全部暂存", allAction: .stageAll)
+            }
         }
     }
 
@@ -346,13 +368,13 @@ public struct GitPage: View {
             }
             .font(.system(size: AeroricType.caption))
             .lineLimit(1)
-            .padding(.horizontal, AeroricSpace.m)
+            .padding(.horizontal, AeroricSpace.s)
             .padding(.top, AeroricSpace.s)
             ForEach(items) { change in
                 GitChangeRow(change: change, selected: selected == change.id, busy: busy,
                              onSelect: {
                                  selected = change.id
-                                 onSelect(change)
+                                 onOpenDiff(change)
                              },
                              onToggle: { onAction(change.staged ? .unstage(path: change.path) : .stage(path: change.path)) },
                              onDiscard: change.staged ? nil : { discarding = change })
@@ -360,140 +382,102 @@ public struct GitPage: View {
         }
     }
 
-    private var commitBox: some View {
-        let staged = store.stagedChanges.count
-        let canCommit = staged > 0 && !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !busy
-        return VStack(alignment: .leading, spacing: AeroricSpace.s) {
-            TextField("提交信息", text: $message, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: AeroricType.secondary))
-                .lineLimit(1...5)
-                .accessibilityIdentifier("git.commit-message")
-            HStack(spacing: AeroricSpace.s) {
-                Button {
-                    generating = true
-                    Task { @MainActor in
-                        if let text = await onGenerate() { message = text }
-                        generating = false
-                    }
-                } label: {
-                    HStack(spacing: AeroricSpace.xs) {
-                        if generating { ProgressView().controlSize(.mini) } else { Image(systemName: "sparkles") }
-                        Text("生成")
-                    }
-                }
-                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
-                .disabled(staged == 0 || generating || busy)
-                .help("让 Codex 根据已暂存的改动写提交信息")
-                Spacer()
-                Button(GitPageText.commitTitle(stagedCount: staged)) {
-                    onAction(.commit(message: message.trimmingCharacters(in: .whitespacesAndNewlines)))
-                    message = ""
-                }
-                .buttonStyle(AeroricCapsuleButtonStyle(.primary, compact: true))
-                .disabled(!canCommit)
-                .fixedSize()
-                .accessibilityIdentifier("git.commit")
-            }
-        }
-        .padding(AeroricSpace.m)
-        .background(AeroricColor.layer2, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(AeroricColor.separator2))
-    }
+    // MARK: - Stash and history
 
-    private var diffPane: some View {
-        VStack(alignment: .leading, spacing: AeroricSpace.s) {
-            if let change = store.changes.first(where: { $0.id == selected }) {
-                Text(change.path)
-                    .font(.system(size: AeroricType.caption))
-                    .foregroundStyle(AeroricColor.textSecondary)
-                    .lineLimit(1).truncationMode(.middle)
-                GitDiffText(text: store.diffText)
-            } else {
-                PaneEmptyState(systemImage: "doc.text.magnifyingglass", title: "选一个文件", hint: "这里显示它的改动")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .padding(AeroricSpace.m)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(AeroricColor.layer1, in: AeroricRadius.shape(AeroricRadius.l))
-    }
-
-    // MARK: - History and stash
-
-    private var history: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if let notice = store.historyReadState.notice, store.commits.isEmpty {
-                    Text(notice).foregroundStyle(AeroricColor.textSecondary).padding(AeroricSpace.l)
-                } else if store.commits.isEmpty {
-                    PaneEmptyState(systemImage: "clock.arrow.circlepath", title: "还没有提交", hint: "这个仓库的历史为空")
-                        .padding(.top, AeroricSpace.xxl)
+    private func fold<Content: View>(_ title: String, count: Int?, isOpen: Binding<Bool>,
+                                     @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.xs) {
+            HairlineDivider().padding(.vertical, AeroricSpace.xs)
+            Button { withAnimation(.snappy) { isOpen.wrappedValue.toggle() } } label: {
+                HStack(spacing: AeroricSpace.xs) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .rotationEffect(.degrees(isOpen.wrappedValue ? 90 : 0))
+                        .frame(width: 10)
+                    Text(count.map { GitPageText.tabTitle(title, count: $0) } ?? title)
+                    Spacer()
                 }
-                ForEach(store.commits) { commit in
-                    HStack(spacing: AeroricSpace.m) {
-                        Text(commit.shortHash).font(.system(size: AeroricType.caption).monospaced())
-                            .foregroundStyle(AeroricColor.accent)
-                        Text(commit.message).lineLimit(1)
-                        Spacer(minLength: AeroricSpace.m)
-                        Text("\(commit.author) · \(commit.date)").foregroundStyle(AeroricColor.textTertiary)
-                            .font(.system(size: AeroricType.caption)).lineLimit(1).fixedSize()
-                    }
-                    .font(.system(size: AeroricType.secondary))
-                    .padding(.horizontal, AeroricSpace.l)
-                    .frame(height: 32)
-                }
+                .font(.system(size: AeroricType.secondary, weight: .medium))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .contentShape(Rectangle())
             }
-            .padding(AeroricSpace.s)
+            .buttonStyle(.plain)
+            .padding(.horizontal, AeroricSpace.s)
+            if isOpen.wrappedValue { content() }
         }
-        .scrollIndicators(.hidden)
-        .background(AeroricColor.layer1, in: AeroricRadius.shape(AeroricRadius.l))
     }
 
     private var stash: some View {
-        VStack(alignment: .leading, spacing: AeroricSpace.m) {
+        VStack(alignment: .leading, spacing: AeroricSpace.xs) {
             HStack(spacing: AeroricSpace.s) {
-                CapsuleField(systemImage: "text.cursor", placeholder: "贮藏说明（可选）", text: $stashNote)
-                    .frame(maxWidth: 320)
-                Button("贮藏当前更改") {
+                CapsuleField(placeholder: "贮藏说明（可选）", text: $stashNote, height: 28)
+                Button("贮藏") {
                     onAction(.stashPush(message: stashNote.trimmingCharacters(in: .whitespaces)))
                     stashNote = ""
                 }
-                .buttonStyle(AeroricCapsuleButtonStyle(.tinted))
+                .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
                 .disabled(store.changes.isEmpty || busy)
                 .fixedSize()
+                .help("把当前改动先收起来，稍后再恢复")
             }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if store.stashEntries.isEmpty {
-                        PaneEmptyState(systemImage: "tray", title: "没有贮藏", hint: "把手头的改动先收起来，稍后再恢复")
-                            .padding(.top, AeroricSpace.xxl)
-                    }
-                    ForEach(store.stashEntries) { entry in
-                        HStack(spacing: AeroricSpace.m) {
-                            Text(entry.message.isEmpty ? "贮藏 \(entry.index)" : entry.message).lineLimit(1)
-                            Spacer(minLength: AeroricSpace.m)
-                            Button("恢复") { onAction(.stashApply(index: entry.index)) }
-                                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
-                            Button("删除") { dropping = entry }
-                                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
-                        }
+            if store.stashEntries.isEmpty {
+                Text("没有贮藏").font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary).padding(.horizontal, AeroricSpace.s)
+            }
+            ForEach(store.stashEntries) { entry in
+                HStack(spacing: AeroricSpace.xs) {
+                    Text(entry.message.isEmpty ? "贮藏 \(entry.index)" : entry.message)
+                        .lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: AeroricSpace.xs)
+                    Button("恢复") { onAction(.stashApply(index: entry.index)) }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true)).fixedSize()
+                    Button("删除") { dropping = entry }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true)).fixedSize()
+                }
+                .font(.system(size: AeroricType.secondary))
+                .padding(.horizontal, AeroricSpace.s)
+                .frame(height: 30)
+                .help(entry.message)
+                .disabled(busy)
+            }
+        }
+    }
+
+    @ViewBuilder private var history: some View {
+        if let notice = store.historyReadState.notice, store.commits.isEmpty {
+            Text(notice).font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary).padding(.horizontal, AeroricSpace.s)
+        } else if store.commits.isEmpty {
+            Text("还没有提交").font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary).padding(.horizontal, AeroricSpace.s)
+        }
+        LazyVStack(alignment: .leading, spacing: AeroricSpace.xs) {
+            ForEach(store.commits) { commit in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(commit.message.split(separator: "\n").first.map(String.init) ?? commit.message)
                         .font(.system(size: AeroricType.secondary))
-                        .padding(.horizontal, AeroricSpace.l)
-                        .frame(height: 36)
-                        .disabled(busy)
+                        .foregroundStyle(AeroricColor.text)
+                        .lineLimit(1)
+                    HStack(spacing: AeroricSpace.s) {
+                        Text(commit.shortHash).font(.system(size: AeroricType.caption).monospaced())
+                            .foregroundStyle(AeroricColor.accent)
+                        Text("\(commit.author) · \(commit.date)")
+                            .font(.system(size: AeroricType.caption))
+                            .foregroundStyle(AeroricColor.textTertiary)
+                            .lineLimit(1)
                     }
                 }
-                .padding(AeroricSpace.s)
+                .padding(.horizontal, AeroricSpace.s)
+                .help(commit.message)
             }
-            .scrollIndicators(.hidden)
-            .background(AeroricColor.layer1, in: AeroricRadius.shape(AeroricRadius.l))
         }
     }
 }
 
-/// One changed file: its mark, name and folder; on hover, discard (unstaged
-/// only) and stage / unstage.
+/// One changed file: its mark, name and folder. Stage / unstage and discard
+/// (unstaged only) show on hover and stay on the selected row; the context
+/// menu offers the same, since hover alone was hard to reach (2026-10-30
+/// acceptance report).
 struct GitChangeRow: View {
     let change: GitStore.Change
     let selected: Bool
@@ -515,7 +499,7 @@ struct GitChangeRow: View {
             Text(parts.directory).foregroundStyle(AeroricColor.textTertiary)
                 .font(.system(size: AeroricType.caption)).lineLimit(1).truncationMode(.head)
             Spacer(minLength: 0)
-            if hovered && !busy {
+            if (hovered || selected) && !busy {
                 if let onDiscard {
                     icon("arrow.uturn.backward", help: "放弃改动", action: onDiscard)
                 }
@@ -523,8 +507,8 @@ struct GitChangeRow: View {
             }
         }
         .font(.system(size: AeroricType.secondary))
-        .padding(.horizontal, AeroricSpace.m)
-        .frame(height: 28)
+        .padding(.horizontal, AeroricSpace.s)
+        .frame(height: 26)
         .background {
             if selected || hovered {
                 Capsule(style: .continuous).fill(selected ? AeroricColor.selection : AeroricColor.hover)
@@ -533,6 +517,16 @@ struct GitChangeRow: View {
         .contentShape(Capsule(style: .continuous))
         .onTapGesture(perform: onSelect)
         .onHover { hovered = $0 }
+        .contextMenu {
+            Button("查看改动", systemImage: "plusminus", action: onSelect)
+            Button(change.staged ? "取消暂存" : "暂存", systemImage: change.staged ? "minus" : "plus", action: onToggle)
+                .disabled(busy)
+            if let onDiscard {
+                Divider()
+                Button("放弃改动…", systemImage: "arrow.uturn.backward", role: .destructive, action: onDiscard)
+                    .disabled(busy)
+            }
+        }
         .help(change.path)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -557,45 +551,5 @@ struct GitChangeRow: View {
         case .renamed: AeroricColor.accent
         case .other: AeroricColor.textTertiary
         }
-    }
-}
-
-/// A unified diff with added and removed lines tinted.
-struct GitDiffText: View {
-    let text: String
-
-    var body: some View {
-        let lines = text.isEmpty ? [] : text.components(separatedBy: "\n")
-        ScrollView([.vertical, .horizontal]) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    Text(line.isEmpty ? " " : line)
-                        .font(.system(size: AeroricType.caption).monospaced())
-                        .foregroundStyle(Self.color(line))
-                        .padding(.horizontal, AeroricSpace.s)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Self.tint(line))
-                }
-            }
-            .textSelection(.enabled)
-            .fixedSize(horizontal: true, vertical: false)
-        }
-        .scrollIndicators(.hidden)
-        .accessibilityIdentifier("git.diff")
-    }
-
-    static func color(_ line: String) -> Color {
-        if line.hasPrefix("+++") || line.hasPrefix("---") { return AeroricColor.textTertiary }
-        if line.hasPrefix("+") { return AeroricColor.success }
-        if line.hasPrefix("-") { return AeroricColor.danger }
-        if line.hasPrefix("@@") { return AeroricColor.accent }
-        return AeroricColor.textSecondary
-    }
-
-    static func tint(_ line: String) -> Color {
-        if line.hasPrefix("+++") || line.hasPrefix("---") { return .clear }
-        if line.hasPrefix("+") { return AeroricColor.success.opacity(0.10) }
-        if line.hasPrefix("-") { return AeroricColor.danger.opacity(0.10) }
-        return .clear
     }
 }

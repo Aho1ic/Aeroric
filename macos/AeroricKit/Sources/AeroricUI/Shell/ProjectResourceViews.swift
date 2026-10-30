@@ -2,9 +2,11 @@ import AeroricClient
 import QuickLook
 import SwiftUI
 
-/// Repository panel lists (M3): a file tree and the change list with inline
-/// diffs. Read-only; selecting a file or "在中栏打开" forwards one typed
-/// target to the centre preview. Files vs changes is chosen by the panel tabs.
+/// The session panel's file tree (M3; writes 2026-10-30). Selecting a file
+/// or double-clicking forwards one typed target to the centre preview. New
+/// file / new folder in the header, the rest from the context menu; names
+/// are typed in place. Linked folders are listed after the project's own
+/// entries and stay read-only.
 public struct ProjectResourceInspector: View {
     let book: ProjectResourceBook
     let projectID: String
@@ -12,25 +14,37 @@ public struct ProjectResourceInspector: View {
     let onOpen: (ResourcePreviewTarget) -> Void
     let onLoadDirectory: (String) -> Void
     let onRefresh: () -> Void
-    let onToggleChange: (ResourceGitChange) -> Void
+    /// Applies a create / rename / move to the Trash; nil on success, else
+    /// the reason to show. Nil keeps the tree read-only.
+    let onEdit: ((FileEdit) async -> String?)?
     /// The project's folder on this Mac; nil for remote projects, which have
     /// no local file for Quick Look.
     let localRoot: String?
     /// Space shows the system Quick Look panel for the selected file.
     @State private var quickLookURL: URL?
+    @State private var naming: FileNaming?
+    @State private var nameText = ""
+    @State private var trashing: FilesClient.FileEntry?
+    @State private var editError: String?
+    @State private var submitting = false
+    @FocusState private var nameFocused: Bool
 
     public init(book: ProjectResourceBook, projectID: String, projectName: String,
                 onOpen: @escaping (ResourcePreviewTarget) -> Void,
                 onLoadDirectory: @escaping (String) -> Void, onRefresh: @escaping () -> Void,
-                onToggleChange: @escaping (ResourceGitChange) -> Void = { _ in },
+                onEdit: ((FileEdit) async -> String?)? = nil,
                 localRoot: String? = nil) {
         self.book = book; self.projectID = projectID; self.projectName = projectName
         self.onOpen = onOpen; self.onLoadDirectory = onLoadDirectory; self.onRefresh = onRefresh
-        self.onToggleChange = onToggleChange; self.localRoot = localRoot
+        self.onEdit = onEdit; self.localRoot = localRoot
     }
 
+    /// The local file behind a tree path: inside the project, or inside a
+    /// linked folder. Nil for remote projects.
     private func localURL(_ path: String?) -> URL? {
-        guard let localRoot, let path else { return nil }
+        guard let path else { return nil }
+        if let absolute = LinkedFolderPath.absolute(path) { return URL(fileURLWithPath: absolute) }
+        guard let localRoot else { return nil }
         return URL(fileURLWithPath: localRoot).appendingPathComponent(path)
     }
 
@@ -42,10 +56,6 @@ public struct ProjectResourceInspector: View {
         return .handled
     }
 
-    /// Selected changed file, for Quick Look in the change list.
-    private var expandedChangePath: String? {
-        scene.changes.first { $0.id == scene.expandedChange }?.path
-    }
     private var scene: ProjectResourceScene { book.scene(projectID) }
     /// 2026-10-27: the tree reads as a compact outline (was 26pt plus the
     /// sidebar list's own medium-row padding, which spread files far apart).
@@ -55,30 +65,35 @@ public struct ProjectResourceInspector: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            if let editError { errorLine(editError) }
             HairlineDivider()
-            ZStack {
-                fileList
-                    .opacity(scene.section == .files ? 1 : 0)
-                    .allowsHitTesting(scene.section == .files)
-                    .accessibilityHidden(scene.section != .files)
-                gitList
-                    .opacity(scene.section == .git ? 1 : 0)
-                    .allowsHitTesting(scene.section == .git)
-                    .accessibilityHidden(scene.section != .git)
-            }
+            fileList
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .alert("把「\(trashing?.name ?? "")」移到废纸篓？",
+               isPresented: Binding(get: { trashing != nil }, set: { if !$0 { trashing = nil } }),
+               presenting: trashing) { node in
+            Button("移到废纸篓", role: .destructive) { submit(.trash(path: node.path)) }
+            Button("取消", role: .cancel) {}
+        } message: { node in
+            Text(node.isDir ? "文件夹和里面的内容可以在访达的废纸篓里找回。" : "可以在访达的废纸篓里找回。")
+        }
     }
 
     private var header: some View {
         HStack(spacing: AeroricSpace.s) {
-            Image(systemName: scene.section == .files ? "folder" : "arrow.triangle.branch")
-                .foregroundStyle(AeroricColor.textTertiary)
-            Text(scene.section == .files ? projectName : (scene.branches.first(where: \.current)?.name ?? "分支未知"))
+            Image(systemName: "folder").foregroundStyle(AeroricColor.textTertiary)
+            Text(projectName)
                 .font(.system(size: AeroricType.secondary, weight: .medium))
                 .lineLimit(1).truncationMode(.middle)
                 .help(projectName)
             Spacer(minLength: AeroricSpace.xs)
+            if onEdit != nil {
+                NativeIconButton(systemImage: "doc.badge.plus", label: "新建文件",
+                                 identifier: "resources.new-file") { begin(.create(parent: newItemParent, directory: false)) }
+                NativeIconButton(systemImage: "folder.badge.plus", label: "新建文件夹",
+                                 identifier: "resources.new-folder") { begin(.create(parent: newItemParent, directory: true)) }
+            }
             NativeIconButton(systemImage: "arrow.clockwise", label: "刷新\(projectName)资源",
                              identifier: "resources.refresh", action: onRefresh)
         }
@@ -86,7 +101,34 @@ public struct ProjectResourceInspector: View {
         .frame(height: 36)
     }
 
-    // MARK: - Files
+    /// Header buttons create next to the selected file, else at the root.
+    private var newItemParent: String {
+        guard let selected = scene.listSelection else { return "" }
+        let parent = FileEditText.parent(of: selected)
+        return FileEditText.writable(parent) ? parent : ""
+    }
+
+    private func errorLine(_ error: String) -> some View {
+        HStack(spacing: AeroricSpace.s) {
+            Image(systemName: "exclamationmark.triangle")
+            Text(error).lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: AeroricSpace.xs)
+            Button { editError = nil } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("关闭")
+        }
+        .font(.system(size: AeroricType.caption))
+        .foregroundStyle(AeroricColor.danger)
+        .padding(.horizontal, AeroricSpace.l)
+        .frame(height: 26)
+        .background(AeroricColor.danger.opacity(0.12), in: Capsule(style: .continuous))
+        .padding(.horizontal, AeroricSpace.s)
+        .padding(.bottom, AeroricSpace.xs)
+        .help(error)
+        .accessibilityIdentifier("resources.error")
+    }
+
+    // MARK: - Tree
 
     private struct TreeRow: Identifiable {
         var id: String { node.path }
@@ -103,7 +145,8 @@ public struct ProjectResourceInspector: View {
         return children("", depth: 0)
     }
     /// Single click only selects (2026-10-26 C); double click or Return opens
-    /// a tab through the list's primary action.
+    /// a tab through the list's primary action. Folders carry a tag only so
+    /// the context menu knows which row was clicked; they never stay selected.
     private var fileSelection: Binding<String?> {
         Binding(get: { scene.listSelection }, set: { path in
             guard let path, rows.contains(where: { $0.id == path && !$0.node.isDir }) else { return }
@@ -118,66 +161,22 @@ public struct ProjectResourceInspector: View {
     private var fileList: some View {
         VStack(alignment: .leading, spacing: 0) {
             readNotice(scene.directoryStates[""] ?? .notLoaded, hasCache: scene.directories[""] != nil)
-            if scene.directoryStates[""] == .loaded, scene.directories[""]?.isEmpty == true {
+            if scene.directoryStates[""] == .loaded, scene.directories[""]?.isEmpty == true, naming == nil {
                 AeroricEmptyState(systemImage: "folder", title: "目录为空")
             }
             NativeSelectionList(selection: fileSelection) {
-                ForEach(rows) { row in
-                    if row.node.isDir {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Button {
-                                let expanded = scene.expandedPaths.contains(row.id)
-                                book.edit(projectID) {
-                                    if expanded { $0.expandedPaths.remove(row.id) }
-                                    else { $0.expandedPaths.insert(row.id) }
-                                }
-                                if !expanded, scene.directories[row.id] == nil { onLoadDirectory(row.id) }
-                            } label: {
-                                HStack(spacing: AeroricSpace.xs) {
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 9, weight: .semibold))
-                                        .foregroundStyle(AeroricColor.textTertiary)
-                                        .rotationEffect(.degrees(scene.expandedPaths.contains(row.id) ? 90 : 0))
-                                        .frame(width: 10)
-                                    resourceName(row.node.name, symbol: row.node.isSymlink ? "link" : "folder.fill",
-                                                 tint: AeroricColor.accent.opacity(0.75), folder: true)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.borderless)
-                            .help(row.node.path)
-                            .accessibilityLabel("\(row.node.name)，目录")
-                            if scene.expandedPaths.contains(row.id) {
-                                if let status = scene.directoryStates[row.id], status != .loaded {
-                                    readNotice(status, hasCache: scene.directories[row.id] != nil)
-                                    Button("重试此目录") { onLoadDirectory(row.id) }.buttonStyle(.link)
-                                } else if scene.directories[row.id]?.isEmpty == true {
-                                    Text("空目录")
-                                        .font(.system(size: AeroricType.caption))
-                                        .foregroundStyle(AeroricColor.textTertiary)
-                                        .padding(.leading, Self.indent + 14)
-                                        .frame(height: Self.rowHeight)
-                                }
-                            }
-                        }
-                        .modifier(TreeIndent(depth: row.depth, indent: Self.indent))
-                        .tag(Optional<String>.none)
+                if case let .create(parent, directory) = naming, parent.isEmpty {
+                    nameField(placeholder: directory ? "文件夹名" : "文件名", depth: 0)
                         .listRowInsets(insets)
-                    } else {
-                        resourceName(row.node.name,
-                                     symbol: row.node.isSymlink ? "link" : FileSymbol.symbol(forFile: row.node.name),
-                                     tint: AeroricColor.textTertiary)
-                            .padding(.leading, 14)
-                            .modifier(TreeIndent(depth: row.depth, indent: Self.indent))
-                            .tag(Optional(row.id))
-                            .help(row.node.path)
-                            .accessibilityLabel("\(row.node.name)，只读预览，\(row.node.path)")
-                            .listRowInsets(insets)
-                    }
+                }
+                ForEach(rows) { row in
+                    if row.node.isDir { folderRow(row) } else { fileRow(row) }
                 }
                 .listRowSeparator(.hidden)
             }
-            .contextMenu(forSelectionType: String?.self, menu: { _ in EmptyView() }, primaryAction: { paths in
+            .contextMenu(forSelectionType: String?.self, menu: { paths in
+                menu(for: paths.compactMap { $0 }.first)
+            }, primaryAction: { paths in
                 guard let path = paths.compactMap({ $0 }).first,
                       rows.contains(where: { $0.id == path && !$0.node.isDir }) else { return }
                 onOpen(.init(projectID: projectID, path: path, kind: .file))
@@ -186,143 +185,156 @@ public struct ProjectResourceInspector: View {
             .quickLookPreview($quickLookURL, in: fileURLs)
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .scrollIndicators(.hidden)
             .environment(\.defaultMinListRowHeight, Self.rowHeight)
             .environment(\.sidebarRowSize, .small)
             .accessibilityIdentifier("resources.files")
         }
     }
 
-    // MARK: - Changes
-
-    private var gitList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: AeroricSpace.xxs) {
-                readNotice(scene.branchState, hasCache: !scene.branches.isEmpty)
-                readNotice(scene.gitState, hasCache: !scene.changes.isEmpty)
-                if scene.gitState == .loaded, scene.changes.isEmpty {
-                    AeroricEmptyState(systemImage: "checkmark.circle", title: "没有改动", message: "工作区与最近一次提交一致。")
-                }
-                changeGroup("已暂存", changes: scene.changes.filter(\.staged))
-                changeGroup("未暂存", changes: scene.changes.filter { !$0.staged && $0.status != "?" })
-                changeGroup("未跟踪", changes: scene.changes.filter { !$0.staged && $0.status == "?" })
-            }
-            .padding(.horizontal, AeroricSpace.s)
-            .padding(.vertical, AeroricSpace.s)
-        }
-        .focusable()
-        .focusEffectDisabled()
-        .onKeyPress(.space) { toggleQuickLook(expandedChangePath) }
-        .quickLookPreview($quickLookURL, in: scene.changes.compactMap { localURL($0.path) })
-        .accessibilityIdentifier("resources.git")
-    }
-
-    @ViewBuilder private func changeGroup(_ title: String, changes: [ResourceGitChange]) -> some View {
-        if !changes.isEmpty {
-            SectionHeader("\(title) · \(changes.count)")
-                .padding(.horizontal, AeroricSpace.s)
-                .padding(.top, AeroricSpace.m)
-            ForEach(changes) { change in
-                changeRow(change)
-                if scene.expandedChange == change.id { inlineDiff(change) }
-            }
-        }
-    }
-
-    private func changeRow(_ change: ResourceGitChange) -> some View {
-        let badge = ChangeBadge(status: change.status)
-        let name = (change.path as NSString).lastPathComponent
-        let directory = (change.path as NSString).deletingLastPathComponent
-        return HoverCapsuleRow(selected: scene.expandedChange == change.id, height: Self.rowHeight) {
-            onToggleChange(change)
-        } label: {
-            HStack(spacing: AeroricSpace.s) {
-                Text(badge.letter)
-                    .font(.system(size: AeroricType.caption, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Self.badgeColor(badge))
-                    .frame(width: 16, height: 16)
-                    .background(Self.badgeColor(badge).opacity(0.14), in: AeroricRadius.shape(AeroricRadius.xs))
-                Text(name)
-                    .font(.system(size: AeroricType.secondary))
-                    .foregroundStyle(AeroricColor.text)
-                    .lineLimit(1)
-                if !directory.isEmpty {
-                    Text(directory)
-                        .font(.system(size: AeroricType.caption))
-                        .foregroundStyle(AeroricColor.textTertiary)
-                        .lineLimit(1).truncationMode(.head)
-                }
-                Spacer(minLength: 0)
-            }
-        }
-        .help(change.path)
-        .accessibilityLabel("\(badge.label)，\(change.path)")
-        .accessibilityIdentifier("resources.change.\(change.id)")
-    }
-
-    @ViewBuilder private func inlineDiff(_ change: ResourceGitChange) -> some View {
-        let diff = scene.inlineDiffs[change.id] ?? InlineDiff()
-        VStack(alignment: .leading, spacing: AeroricSpace.s) {
-            if let notice = diff.state.notice {
-                Text(notice)
-                    .font(.system(size: AeroricType.caption))
-                    .foregroundStyle(AeroricColor.textSecondary)
+    private func folderRow(_ row: TreeRow) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if naming == .rename(path: row.id) {
+                nameField(placeholder: "文件夹名", depth: 0)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(diff.lines) { line in
-                            Text(line.text.isEmpty ? " " : line.text)
-                                .font(.system(size: AeroricType.code - 1, design: .monospaced))
-                                .foregroundStyle(Self.lineColor(line.kind))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Self.lineBackground(line.kind))
-                        }
+                Button {
+                    let expanded = scene.expandedPaths.contains(row.id)
+                    book.edit(projectID) {
+                        if expanded { $0.expandedPaths.remove(row.id) } else { $0.expandedPaths.insert(row.id) }
                     }
-                    .textSelection(.enabled)
+                    if !expanded, scene.directories[row.id] == nil { onLoadDirectory(row.id) }
+                } label: {
+                    HStack(spacing: AeroricSpace.xs) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(AeroricColor.textTertiary)
+                            .rotationEffect(.degrees(scene.expandedPaths.contains(row.id) ? 90 : 0))
+                            .frame(width: 10)
+                        resourceName(row.node.name, symbol: row.node.isSymlink ? "link" : "folder.fill",
+                                     tint: AeroricColor.accent.opacity(0.75), folder: true)
+                    }
+                    .contentShape(Rectangle())
                 }
-                if diff.totalLines > diff.lines.count {
-                    Text("仅显示前 \(diff.lines.count) 行，共 \(diff.totalLines) 行")
+                .buttonStyle(.borderless)
+                .help(row.node.path)
+                .accessibilityLabel("\(row.node.name)，目录")
+            }
+            if case let .create(parent, directory) = naming, parent == row.id {
+                nameField(placeholder: directory ? "文件夹名" : "文件名", depth: 1)
+            }
+            if scene.expandedPaths.contains(row.id) {
+                if let status = scene.directoryStates[row.id], status != .loaded {
+                    readNotice(status, hasCache: scene.directories[row.id] != nil)
+                    Button("重试此目录") { onLoadDirectory(row.id) }.buttonStyle(.link)
+                } else if scene.directories[row.id]?.isEmpty == true {
+                    Text("空目录")
                         .font(.system(size: AeroricType.caption))
                         .foregroundStyle(AeroricColor.textTertiary)
+                        .padding(.leading, Self.indent + 14)
+                        .frame(height: Self.rowHeight)
                 }
             }
-            Button("在中栏打开") {
-                onOpen(.init(projectID: projectID, path: change.path,
-                             kind: change.status == "?" ? .untracked : change.staged ? .stagedDiff : .unstagedDiff))
+        }
+        .modifier(TreeIndent(depth: row.depth, indent: Self.indent))
+        .tag(Optional(row.id))
+        .listRowInsets(insets)
+    }
+
+    @ViewBuilder private func fileRow(_ row: TreeRow) -> some View {
+        Group {
+            if naming == .rename(path: row.id) {
+                nameField(placeholder: "文件名", depth: 0)
+            } else {
+                resourceName(row.node.name,
+                             symbol: row.node.isSymlink ? "link" : FileSymbol.symbol(forFile: row.node.name),
+                             tint: AeroricColor.textTertiary)
+                    .padding(.leading, 14)
+                    .help(row.node.path)
+                    .accessibilityLabel("\(row.node.name)，\(row.node.path)")
             }
-            .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
-            .accessibilityIdentifier("resources.change.open-centre")
         }
-        .padding(AeroricSpace.m)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AeroricColor.layer1, in: AeroricRadius.shape(AeroricRadius.s))
-        .overlay { AeroricRadius.shape(AeroricRadius.s).strokeBorder(AeroricColor.separator1, lineWidth: 1) }
-        .padding(.leading, AeroricSpace.xxxl)
-        .padding(.vertical, AeroricSpace.xxs)
-        .accessibilityIdentifier("resources.change.diff")
+        .modifier(TreeIndent(depth: row.depth, indent: Self.indent))
+        .tag(Optional(row.id))
+        .listRowInsets(insets)
     }
 
-    static func badgeColor(_ badge: ChangeBadge) -> Color {
-        switch badge {
-        case .modified: AeroricColor.warning
-        case .added, .untracked: AeroricColor.success
-        case .deleted: AeroricColor.danger
-        case .renamed: AeroricColor.accent
-        case .other: AeroricColor.textSecondary
+    // MARK: - Writes
+
+    @ViewBuilder private func menu(for path: String?) -> some View {
+        let node = path.flatMap { path in rows.first(where: { $0.id == path })?.node }
+        let folder = node.map { $0.isDir ? $0.path : FileEditText.parent(of: $0.path) } ?? ""
+        let canWrite = onEdit != nil && FileEditText.writable(folder)
+        if canWrite {
+            Button("新建文件", systemImage: "doc.badge.plus") { begin(.create(parent: folder, directory: false)) }
+            Button("新建文件夹", systemImage: "folder.badge.plus") { begin(.create(parent: folder, directory: true)) }
+        }
+        if let node {
+            let writable = onEdit != nil && FileEditText.writable(node.path)
+            if writable {
+                Button("重命名", systemImage: "pencil") { begin(.rename(path: node.path)) }
+            }
+            Divider()
+            if !node.isDir, let url = localURL(node.path) {
+                Button("快速查看", systemImage: "eye") { quickLookURL = url }
+            }
+            if let url = localURL(node.path) {
+                Button("在访达中显示", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            }
+            Button("复制路径", systemImage: "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(localURL(node.path)?.path ?? node.path, forType: .string)
+            }
+            if writable {
+                Divider()
+                Button("移到废纸篓…", systemImage: "trash", role: .destructive) { trashing = node }
+            }
         }
     }
 
-    static func lineColor(_ kind: ResourcePreviewLine.Kind) -> Color {
-        switch kind {
-        case .metadata: AeroricColor.textTertiary
-        default: AeroricColor.text
+    private func begin(_ next: FileNaming) {
+        editError = nil
+        switch next {
+        case let .rename(path): nameText = FileEditText.name(of: path)
+        case let .create(parent, _):
+            nameText = ""
+            if !parent.isEmpty, !scene.expandedPaths.contains(parent) {
+                book.edit(projectID) { _ = $0.expandedPaths.insert(parent) }
+                if scene.directories[parent] == nil { onLoadDirectory(parent) }
+            }
+        }
+        naming = next
+    }
+
+    private func nameField(placeholder: String, depth: Int) -> some View {
+        CapsuleField(placeholder: placeholder, text: $nameText, height: Self.rowHeight)
+            .focused($nameFocused)
+            .onSubmit(commitName)
+            .onExitCommand { naming = nil }
+            .disabled(submitting)
+            .padding(.leading, CGFloat(depth) * Self.indent + 10)
+            .onAppear { DispatchQueue.main.async { nameFocused = true } }
+            .accessibilityIdentifier("resources.name-field")
+    }
+
+    private func commitName() {
+        let name = nameText.trimmingCharacters(in: .whitespaces)
+        guard let naming, !name.isEmpty else { self.naming = nil; return }
+        switch naming {
+        case let .create(parent, directory): submit(.create(parent: parent, name: name, directory: directory))
+        case let .rename(path):
+            guard name != FileEditText.name(of: path) else { self.naming = nil; return }
+            submit(.rename(path: path, newName: name))
         }
     }
 
-    static func lineBackground(_ kind: ResourcePreviewLine.Kind) -> Color {
-        switch kind {
-        case .added: AeroricColor.success.opacity(0.14)
-        case .removed: AeroricColor.danger.opacity(0.14)
-        default: .clear
+    private func submit(_ edit: FileEdit) {
+        guard let onEdit else { return }
+        submitting = true
+        Task { @MainActor in
+            let error = await onEdit(edit)
+            submitting = false
+            editError = error
+            if error == nil { naming = nil }
         }
     }
 
@@ -357,6 +369,12 @@ public struct ProjectResourceInspector: View {
                 .padding(.vertical, AeroricSpace.s)
         }
     }
+}
+
+/// What the tree is asking a name for.
+enum FileNaming: Equatable {
+    case create(parent: String, directory: Bool)
+    case rename(path: String)
 }
 
 public struct CentralResourcePreview: View {

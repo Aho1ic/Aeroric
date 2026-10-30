@@ -63,6 +63,14 @@ public enum LinkedFolderPath {
         return ("\(projectID)#linked:\(folder)", String(path[path.index(after: bar)...]))
     }
 
+    /// The folder on this Mac behind a linked tree path; nil for project paths.
+    public static func absolute(_ path: String) -> String? {
+        guard path.hasPrefix(prefix), let bar = path.firstIndex(of: "|") else { return nil }
+        let folder = String(path[path.index(path.startIndex, offsetBy: prefix.count) ..< bar])
+        let relative = String(path[path.index(after: bar)...])
+        return relative.isEmpty ? folder : "\(folder)/\(relative)"
+    }
+
     /// A child path the host returned for `parent`, re-rooted into the tree.
     public static func child(of parent: String, hostPath: String) -> String {
         guard parent.hasPrefix(prefix), let bar = parent.firstIndex(of: "|") else { return hostPath }

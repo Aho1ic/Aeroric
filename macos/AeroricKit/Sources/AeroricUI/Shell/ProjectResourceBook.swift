@@ -280,7 +280,65 @@ public final class ProjectResourceBook {
         }
     }
 
-    public func loadDirectory(projectID: String, path: String, reader: (any ProjectResourceReading)?) async {
+    /// After a rename or a move to the Trash in the file tree (2026-10-30),
+    /// tabs on that path or inside that folder follow the new name or close.
+    /// Returns the tab in front when it changed and needs reading again.
+    @discardableResult
+    public func followEdit(projectID: String, edit fileEdit: FileEdit) -> ResourcePreviewTarget? {
+        func inside(_ path: String, _ root: String) -> Bool { path == root || path.hasPrefix(root + "/") }
+        let value = scene(projectID)
+        let frontAffected: (String) -> Bool = { root in
+            value.previewActive && value.target.map { inside($0.path, root) } == true
+        }
+        switch fileEdit {
+        case .create:
+            return nil
+        case let .trash(path):
+            for tab in value.tabs where inside(tab.path, path) { close(tab) }
+            guard frontAffected(path) else { return nil }
+            let now = scene(projectID)
+            return now.previewActive ? now.target : nil
+        case let .rename(path, newName):
+            guard value.tabs.contains(where: { inside($0.path, path) }) else { return nil }
+            let newPath = FileEditText.child(of: FileEditText.parent(of: path), name: newName)
+            func moved(_ target: ResourcePreviewTarget) -> ResourcePreviewTarget {
+                guard inside(target.path, path) else { return target }
+                return .init(projectID: target.projectID, path: newPath + target.path.dropFirst(path.count),
+                             kind: target.kind)
+            }
+            func rekey<V>(_ map: [ResourcePreviewTarget: V]) -> [ResourcePreviewTarget: V] {
+                Dictionary(map.map { (moved($0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
+            }
+            edit(projectID) { scene in
+                scene.tabs = scene.tabs.map(moved)
+                scene.drafts = rekey(scene.drafts)
+                scene.draftBases = rekey(scene.draftBases)
+                scene.positions = rekey(scene.positions)
+                scene.positionOrder = scene.positionOrder.map(moved)
+                scene.target = scene.target.map(moved)
+            }
+            saveTabs(projectID: projectID)
+            return frontAffected(path) ? scene(projectID).target : nil
+        }
+    }
+
+    /// Where the host reads a tree path: a node under a linked folder
+    /// (2026-10-29) is asked of that folder, everything else of the project.
+    nonisolated public static func hostRequest(projectID: String, path: String) -> (projectID: String, path: String) {
+        LinkedFolderPath.request(projectID: projectID, path: path)
+    }
+
+    /// The project's linked folders as root rows; they are read-only here.
+    nonisolated public static func linkedEntries(_ folders: [LinkedFolder]) -> [FilesClient.FileEntry] {
+        folders.map { folder in
+            FilesClient.FileEntry(name: folder.exists ? folder.name : "\(folder.name) · 找不到",
+                                  path: LinkedFolderPath.node(folder: folder.path),
+                                  isDir: folder.exists, isSymlink: true, modifiedAtMs: nil)
+        }
+    }
+
+    public func loadDirectory(projectID: String, path: String, reader: (any ProjectResourceReading)?,
+                              linked: [LinkedFolder] = []) async {
         guard !Task.isCancelled else { return }
         let request = UUID()
         edit(projectID) { $0.directoryRequests[path] = request; $0.directoryStates[path] = .loading }
@@ -289,7 +347,13 @@ public final class ProjectResourceBook {
             return
         }
         do {
-            let entries = try await reader.directory(projectID: projectID, path: path)
+            let host = Self.hostRequest(projectID: projectID, path: path)
+            var entries = try await reader.directory(projectID: host.projectID, path: host.path).map { entry in
+                var entry = entry
+                entry.path = LinkedFolderPath.child(of: path, hostPath: entry.path)
+                return entry
+            }
+            if path.isEmpty { entries += Self.linkedEntries(linked) }
             try Task.checkCancellation()
             guard scene(projectID).directoryRequests[path] == request else { return }
             edit(projectID) { $0.directories[path] = entries; $0.directoryStates[path] = .loaded }
@@ -361,7 +425,8 @@ public final class ProjectResourceBook {
         do {
             let text: String
             if target.kind == .file {
-                text = try await reader.text(projectID: target.projectID, path: target.path)
+                let host = Self.hostRequest(projectID: target.projectID, path: target.path)
+                text = try await reader.text(projectID: host.projectID, path: host.path)
             } else {
                 text = try await reader.diff(projectPath: projectPath, path: target.path, staged: target.kind == .stagedDiff)
             }

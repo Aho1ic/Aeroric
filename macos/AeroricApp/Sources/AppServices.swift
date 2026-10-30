@@ -37,11 +37,10 @@ final class AppServices {
     /// P5-03：项目/任务镜像（宿主快照 → TaskStore）。
     let taskStore = TaskStore()
     /// AP4: 全业务域 Store 挂载（统一由 AppServices 持有，消除仅存于库目录的断链）。
-    let fileTreeStore = FileTreeStore()
     let documentStore = DocumentStore()
+    let gitStore = GitStore()
     /// B2 (2026-10-30): built-in skills; actions attach once the host is up.
     let builtinSkillBook = BuiltinSkillBook()
-    let gitStore = GitStore()
     let diagnosticsStore = DiagnosticsStore()
     let debugSessionStore = DebugSessionStore()
     let breakpointStore = BreakpointStore()
@@ -53,8 +52,6 @@ final class AppServices {
     let extensionStore = ExtensionStore()
     let remoteStore = RemoteStore(client: nil)
     let maintenanceStore = MaintenanceStore(client: nil)
-    /// AP7:会话控制簿记(能力探测结果 + 控制裁决)。
-    let agentToolsStore = AgentToolsStore()
     /// B1:旧版自定义 Agent 清理(设置 → Agents)。按握手广告的能力决定可用性。
     let legacyCleanupStore = LegacyCleanupStore()
     /// Imported Claude/Codex sessions (M4); gated on the host's `imports` capability.
@@ -71,8 +68,6 @@ final class AppServices {
     let keepAwakeStore = KeepAwakeStore()
     /// Canvas boards and node layout (M5); gated on the host's `canvas` capability.
     let canvasBook = CanvasBook()
-    /// AP7:外部协议只读状态(OAuth/沙箱/工具/媒体/语音)。
-    let externalProtocolStore = ExternalProtocolStore()
     /// P5-01/P5-02：模式控制器（迁移默认按旧客户端存在性）。
     /// P5-03：类型化 workspace 调用（连接附着后创建）。
     private(set) var workspaceClient: WorkspaceClient?
@@ -257,21 +252,13 @@ final class AppServices {
                     self.notifier.install()
                     self.notifier.onOpen = { [weak self] taskID in self?.openFromNotification(taskID: taskID) }
                     self.startStatusPump()
-                // B2: built-in skills for the recipe cards and Agent 配置 → 技能.
-                await MainActor.run { self.attachBuiltinSkills() }
-                }
-                // AP7:能力探测走宿主真值。没有适配器面时 `capabilities()` 抛错,
-                // store 保持「未探测」——UI 因此什么都不显示,而不是显示一堆注定
-                // 失败的按钮。
-                if let report = try? await AdapterClient(connection: connection).capabilities() {
-                    await MainActor.run {
-                        self.agentToolsStore.attach(report)
-                    }
                 }
                 await self.refreshWorkspace()
                 // 2026-10-28: the local Codex / Claude logins are read in the
                 // background at launch, so 连接 → 本机登录 is ready when opened.
                 Task { @MainActor in await self.agentConfigStore.detectOfficial() }
+                // B2: built-in skills for the recipe cards and Agent 配置 → 技能.
+                await MainActor.run { self.attachBuiltinSkills() }
             }
         )
         self.supervisor = supervisor
@@ -947,7 +934,7 @@ extension AppServices: WorkspaceStateProviding {
     /// (see `WorkspaceSection`).
     var sidebarItems: [SidebarItem] {
         // The canvas row appears only when the host can store boards.
-        let sections = WorkspaceSection.allCases.filter { $0 != .canvas || canvasBook.isAvailable }.map { section in
+        let sections = WorkspaceSection.allCases.filter { $0.listed && ($0 != .canvas || canvasBook.isAvailable) }.map { section in
             SidebarItem(
                 id: section.sidebarID,
                 title: section.title,
@@ -1021,29 +1008,6 @@ extension AppServices: WorkspaceStateProviding {
         }
     }
 
-    /// Files page (read-only): one directory level of `projectID`.
-    func loadFiles(projectID: String, path: String) async {
-        guard let connection = attachedConnection else { return }
-        fileTreeStore.setLoading(path, loading: true)
-        // A node under a linked folder is read from that folder (2026-10-29).
-        let target = LinkedFolderPath.request(projectID: projectID, path: path)
-        let entries = (try? await ProjectResourcesClient(connection: connection)
-            .directory(projectID: target.projectID, path: target.path)) ?? []
-        var nodes = entries.map {
-            FileTreeStore.Node(name: $0.name, path: LinkedFolderPath.child(of: path, hostPath: $0.path),
-                               isDir: $0.isDir, isSymlink: $0.isSymlink)
-        }
-        if path.isEmpty {
-            // The project's linked folders follow its own entries, marked as links.
-            nodes += linkedFolderBook.folders(of: projectID).map { folder in
-                FileTreeStore.Node(name: folder.exists ? folder.name : "\(folder.name) · 找不到",
-                                   path: LinkedFolderPath.node(folder: folder.path),
-                                   isDir: folder.exists, isSymlink: true)
-            }
-        }
-        fileTreeStore.ingestChildren(of: path, entries: nodes)
-    }
-
     /// The Git page's writes (2026-10-30, first batch). One at a time; the page
     /// reloads after each, and a failure shows on the page.
     func performGit(projectPath: String, action: GitAction) async {
@@ -1101,16 +1065,6 @@ extension AppServices: WorkspaceStateProviding {
 
     private static func gitWorking(_ action: GitAction) -> String {
         switch action {
-    /// Hands the skill book its host calls (re-run on every attach).
-    func attachBuiltinSkills() {
-        guard let connection = attachedConnection else { return }
-        builtinSkillBook.actions = HostBuiltinSkillActions(client: BuiltinSkillsClient(connection: connection))
-        builtinSkillBook.loginOnGateway = { [weak self] harness in
-            self?.agentConfigStore.loginGateway[harness]?.active ?? false
-        }
-        Task { @MainActor in await builtinSkillBook.refresh() }
-    }
-
         case .stage, .stageAll: "正在暂存…"
         case .unstage, .unstageAll: "正在取消暂存…"
         case .commit: "正在提交…"
@@ -1147,12 +1101,23 @@ extension AppServices: WorkspaceStateProviding {
         }
     }
 
+    /// Hands the skill book its host calls (re-run on every attach).
+    func attachBuiltinSkills() {
+        guard let connection = attachedConnection else { return }
+        builtinSkillBook.actions = HostBuiltinSkillActions(client: BuiltinSkillsClient(connection: connection))
+        builtinSkillBook.loginOnGateway = { [weak self] harness in
+            self?.agentConfigStore.loginGateway[harness]?.active ?? false
+        }
+        Task { @MainActor in await builtinSkillBook.refresh() }
+    }
+
     /// Files page writes (2026-10-30): create, rename, move to the Trash; the
     /// folder that changed reloads, a failure shows above the tree.
-    func applyFileEdit(projectID: String, edit: FileEdit) async {
-        guard let connection = attachedConnection else { return }
+    /// The side panel's file tree writes (2026-10-30). Nil on success, else
+    /// the reason to show; the caller re-reads the folder.
+    func applyFileEdit(projectID: String, edit: FileEdit) async -> String? {
+        guard let connection = attachedConnection else { return "宿主未连接" }
         let files = FilesClient(connection: connection)
-        fileTreeStore.actionError = nil
         do {
             switch edit {
             case let .create(parent, name, directory):
@@ -1162,7 +1127,6 @@ extension AppServices: WorkspaceStateProviding {
                 } else {
                     try await files.createFile(projectId: projectID, path: path)
                 }
-                _ = fileTreeStore.expand(parent)
             case let .rename(path, newName):
                 try await files.renamePath(projectId: projectID, path: path, newName: newName)
             case let .trash(path):
@@ -1174,19 +1138,9 @@ extension AppServices: WorkspaceStateProviding {
             case .rename: "重命名失败"
             case .trash: "移到废纸篓失败"
             }
-            fileTreeStore.actionError = "\(action)：\(Self.gitReason(error))"
+            return "\(action)：\(Self.gitReason(error))"
         }
-        await loadFiles(projectID: projectID, path: edit.parent)
-    }
-
-    func loadGitDiff(projectPath: String, change: GitStore.Change) async {
-        guard let connection = attachedConnection else { return }
-        do {
-            gitStore.setDiff(try await GitClient(connection: connection)
-                .fileDiff(projectPath: projectPath, filePath: change.path, staged: change.staged))
-        } catch {
-            gitStore.setDiff("读取 diff 失败：\(Self.gitReason(error))")
-        }
+        return nil
     }
 
     private static func gitReason(_ error: Error) -> String {
@@ -1333,32 +1287,6 @@ extension AppServices: WorkspaceStateProviding {
         guard taskSnapshotReadState == .loaded else { return nil }
         return ActivityCounts(
             running: taskStore.tasks.filter { ["pending", "running", "detached"].contains($0.status) }.count,
-
-
-/// `builtinSkills.*` for the skill book (B2).
-@MainActor
-struct HostBuiltinSkillActions: BuiltinSkillActions {
-    let client: BuiltinSkillsClient
-
-    func list() async throws -> [BuiltinSkillBook.Item] {
-        try await client.list().map {
-            BuiltinSkillBook.Item(id: $0.id, group: $0.group, title: $0.title, detail: $0.detail, symbol: $0.symbol,
-                                  needs: $0.needs, enabled: $0.enabled, shadowedBy: $0.shadowedBy, missing: $0.missing)
-        }
-    }
-
-    func setEnabled(id: String, enabled: Bool) async throws {
-        try await client.setEnabled(id: id, enabled: enabled)
-    }
-
-    func projectsWithCopies() async throws -> [BuiltinSkillBook.ProjectCopies] {
-        try await client.projectsWithCopies().map { .init(path: $0.path, name: $0.name, count: $0.count) }
-    }
-
-    func removeFromProject(path: String) async throws -> Int {
-        try await client.removeFromProject(projectPath: path)
-    }
-}
             waiting: taskStore.tasks.filter { $0.status == "input_required" }.count
         )
     }
@@ -1375,7 +1303,7 @@ struct HostBuiltinSkillActions: BuiltinSkillActions {
     /// “更多” menu included); the canvas only when the host can store boards.
     static func sectionCommands(canvasAvailable: Bool) -> [PaletteCommand] {
         WorkspaceSection.allCases
-            .filter { $0 != .canvas || canvasAvailable }
+            .filter { $0.listed && ($0 != .canvas || canvasAvailable) }
             .map { PaletteCommand(id: $0.sidebarID, title: "前往：\($0.title)") }
     }
 }
@@ -1405,3 +1333,29 @@ struct ImportForkRequest: Equatable {
     var prompt: String
 }
 
+
+
+/// `builtinSkills.*` for the skill book (B2).
+@MainActor
+struct HostBuiltinSkillActions: BuiltinSkillActions {
+    let client: BuiltinSkillsClient
+
+    func list() async throws -> [BuiltinSkillBook.Item] {
+        try await client.list().map {
+            BuiltinSkillBook.Item(id: $0.id, group: $0.group, title: $0.title, detail: $0.detail, symbol: $0.symbol,
+                                  needs: $0.needs, enabled: $0.enabled, shadowedBy: $0.shadowedBy, missing: $0.missing)
+        }
+    }
+
+    func setEnabled(id: String, enabled: Bool) async throws {
+        try await client.setEnabled(id: id, enabled: enabled)
+    }
+
+    func projectsWithCopies() async throws -> [BuiltinSkillBook.ProjectCopies] {
+        try await client.projectsWithCopies().map { .init(path: $0.path, name: $0.name, count: $0.count) }
+    }
+
+    func removeFromProject(path: String) async throws -> Int {
+        try await client.removeFromProject(projectPath: path)
+    }
+}

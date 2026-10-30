@@ -33,9 +33,6 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     case canvas
     /// G: connections, pools, routes and agent configurations.
     case agentConfigs
-    case files
-    case git
-    case ide
     case connections
     case infrastructure
     case database
@@ -43,7 +40,6 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     case extensions
     case remote
     case operations
-    case agentTools
 
     /// The row label. A plain `String` (not a `LocalizedStringKey`) because
     /// the sidebar row model carries text, not view builders.
@@ -53,9 +49,6 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .attention: "需要我处理"
         case .canvas: "画布"
         case .agentConfigs: "Agent 配置"
-        case .files: "文件"
-        case .git: "Git"
-        case .ide: "IDE"
         case .connections: "SSH"
         case .infrastructure: "设施"
         case .database: "数据库"
@@ -63,7 +56,6 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .extensions: "扩展"
         case .remote: "远控"
         case .operations: "运维"
-        case .agentTools: "Agent 工具"
         }
     }
 
@@ -79,9 +71,6 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .attention: "bell.badge"
         case .canvas: "square.on.square.dashed"
         case .agentConfigs: "slider.horizontal.3"
-        case .files: "folder"
-        case .git: "arrow.triangle.branch"
-        case .ide: "ladybug"
         case .connections: "network"
         case .infrastructure: "shippingbox"
         case .database: "cylinder"
@@ -89,7 +78,6 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .extensions: "puzzlepiece.extension"
         case .remote: "antenna.radiowaves.left.and.right"
         case .operations: "gauge.with.dots.needle.67percent"
-        case .agentTools: "wrench.and.screwdriver"
         }
     }
 
@@ -102,9 +90,6 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     var status: ToolSectionStatus {
         switch self {
         case .tasks, .attention, .canvas, .agentConfigs: .wired
-        case .files: .partial("只读：浏览当前项目的目录，点文件预览。新建、重命名、删除与编辑下一批接入。")
-        case .git: .partial("只读：查看当前项目的更改、逐文件 diff、分支与历史。暂存、提交、推送等写操作下一批接入。")
-        case .ide: .comingSoon("问题列表、符号大纲与调试会话。")
         case .connections: .wired
         case .infrastructure: .comingSoon("Docker 容器与镜像、端口占用、Conda 环境。")
         case .database: .comingSoon("SQLite、Redis、MongoDB 的浏览与查询。")
@@ -112,15 +97,25 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .extensions: .comingSoon("技能、MCP 服务器与 Hook 的管理。")
         case .remote: .comingSoon("与手机配对、设备管理与远程访问审计。")
         case .operations: .comingSoon("用量统计、诊断与通知中心。")
-        case .agentTools: .partial("能力来自宿主对外部 Agent 的探测；具体操作由外部 Agent 自己执行。")
         }
     }
 
     var group: SidebarGroup {
         switch self {
         case .tasks, .attention, .canvas, .agentConfigs: .work
-        case .files, .git, .ide, .database, .notebook, .agentTools: .tools
+        case .database, .notebook: .tools
         case .connections, .infrastructure, .extensions, .remote, .operations: .system
+        }
+    }
+
+    /// Whether the row is offered in the sidebar and the command palette.
+    /// 2026-10-30: files and Git moved into the session's side panel, IDE
+    /// and Agent tools were dropped; database and notebook stay hidden until
+    /// they are built, so the 工具 group shows nothing.
+    var listed: Bool {
+        switch self {
+        case .database, .notebook: false
+        default: true
         }
     }
 
@@ -171,7 +166,8 @@ struct TaskWorkspaceView: View {
     /// Q17: codeg auxiliary panel tabs.
     @State private var auxiliaryTab: AuxiliaryTab = .details
     @AppStorage(NewSessionLayout.defaultHarnessKey) private var defaultHarness = "codex"
-    enum AuxiliaryTab: Hashable { case details, files, changes, history }
+    /// 2026-10-30: 改动 and Git 日志 became one Git tab (the Git page moved here).
+    enum AuxiliaryTab: Hashable { case details, files, git }
 
     /// Which surface the selected navigation row names. A project row or an
     /// empty selection is the task surface — the app's default view.
@@ -279,8 +275,11 @@ struct TaskWorkspaceView: View {
 
     private func sessionHandlers<Content: View>(_ content: Content) -> some View {
         content
-        .onChange(of: auxiliaryTab, initial: true) { _, _ in syncAuxiliarySection() }
-        .onChange(of: resourceProjectID) { _, _ in syncAuxiliarySection() }
+        .onChange(of: linkedFolderPaths) { _, _ in
+            // Linking or unlinking a folder redraws the tree's top level.
+            guard let project = resourceProject, resourceBook.scene(project.id).directories[""] != nil else { return }
+            Task { await loadDirectory("", in: project) }
+        }
         .onChange(of: selectedTask?.status) { _, status in
             // Q25: a hook-reported wait expands the dock and gives the
             // terminal focus. It never answers or confirms anything.
@@ -435,8 +434,8 @@ struct TaskWorkspaceView: View {
                               identifier: "auxiliary.tab-slider", segments: [
                     .init(value: .details, title: "详情", systemImage: "info.circle"),
                     .init(value: .files, title: "文件", systemImage: "folder"),
-                    .init(value: .changes, title: "改动", systemImage: "plusminus"),
-                    .init(value: .history, title: "Git 日志", systemImage: "clock.arrow.circlepath"),
+                    .init(value: .git, title: GitPageText.tabTitle("Git", count: services.gitStore.changes.count),
+                          systemImage: "arrow.triangle.branch"),
                 ])
                 .fixedSize()
                 Spacer(minLength: 0)
@@ -454,26 +453,15 @@ struct TaskWorkspaceView: View {
                     .allowsHitTesting(auxiliaryTab == .details)
                     .accessibilityHidden(auxiliaryTab != .details)
                 resourceInspector
-                    .opacity(auxiliaryTab == .files || auxiliaryTab == .changes ? 1 : 0)
-                    .allowsHitTesting(auxiliaryTab == .files || auxiliaryTab == .changes)
-                    .accessibilityHidden(auxiliaryTab != .files && auxiliaryTab != .changes)
-                auxiliaryHistory
-                    .opacity(auxiliaryTab == .history ? 1 : 0)
-                    .allowsHitTesting(auxiliaryTab == .history)
-                    .accessibilityHidden(auxiliaryTab != .history)
+                    .opacity(auxiliaryTab == .files ? 1 : 0)
+                    .allowsHitTesting(auxiliaryTab == .files)
+                    .accessibilityHidden(auxiliaryTab != .files)
+                auxiliaryGit
+                    .opacity(auxiliaryTab == .git ? 1 : 0)
+                    .allowsHitTesting(auxiliaryTab == .git)
+                    .accessibilityHidden(auxiliaryTab != .git)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    /// Files and Changes share the existing per-project resource book; the
-    /// tab only chooses which of its two lists is in front.
-    private func syncAuxiliarySection() {
-        guard let id = resourceProjectID else { return }
-        switch auxiliaryTab {
-        case .files: resourceBook.edit(id) { $0.section = .files }
-        case .changes: resourceBook.edit(id) { $0.section = .git }
-        case .details, .history: break
         }
     }
 
@@ -527,56 +515,34 @@ struct TaskWorkspaceView: View {
             .formatted(date: .abbreviated, time: .shortened)
     }
 
-    /// Read-only commit list from the existing `GitStore` snapshot. No new
-    /// Git query is issued here; the state notice says when nothing is loaded.
-    private var auxiliaryHistory: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let notice = services.gitStore.historyReadState.notice {
-                Text(notice)
-                    .font(.system(size: AeroricType.caption))
-                    .foregroundStyle(AeroricColor.textSecondary)
-                    .padding(AeroricSpace.l)
+    /// Git for the project in front (2026-10-30): the panel that replaced
+    /// the Git page. A file's diff opens as a centre tab.
+    @ViewBuilder private var auxiliaryGit: some View {
+        if let project = resourceProject {
+            GitSidebarPanel(
+                store: services.gitStore,
+                onAction: { action in Task { await services.performGit(projectPath: project.path, action: action) } },
+                onOpenDiff: { change in
+                    openPreview(.init(projectID: project.id, path: change.path,
+                                      kind: change.status == "?" ? .untracked
+                                          : change.staged ? .stagedDiff : .unstagedDiff))
+                },
+                onGenerate: { await services.generateCommitMessage(projectPath: project.path) }
+            )
+            .task(id: gitRefreshKey) {
+                guard auxiliaryTab == .git, showsAuxiliary || showsAuxiliaryOverlay else { return }
+                await services.refreshGit(projectPath: project.path)
             }
-            if let branches = resourceProjectID.map({ resourceBook.scene($0).branches }), !branches.isEmpty {
-                DisclosureGroup {
-                    ForEach(branches, id: \.name) { branch in
-                        Label(branch.name, systemImage: branch.current ? "checkmark" : "arrow.triangle.branch")
-                            .font(.system(size: AeroricType.secondary, weight: branch.current ? .semibold : .regular))
-                            .foregroundStyle(branch.current ? AeroricColor.text : AeroricColor.textSecondary)
-                            .lineLimit(1)
-                    }
-                } label: {
-                    Text("分支 · \(branches.count)").font(AeroricType.sectionLabel()).foregroundStyle(AeroricColor.textTertiary)
-                }
-                .padding(.horizontal, AeroricSpace.l)
-                .padding(.vertical, AeroricSpace.s)
-                .accessibilityIdentifier("auxiliary.history.branches")
-                HairlineDivider()
-            }
-            List(services.gitStore.commits) { commit in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(commit.message.split(separator: "\n").first.map(String.init) ?? commit.message)
-                        .font(.system(size: AeroricType.secondary, weight: .medium))
-                        .foregroundStyle(AeroricColor.text)
-                        .lineLimit(2)
-                    HStack(spacing: AeroricSpace.s) {
-                        Text(commit.shortHash)
-                            .font(.system(size: AeroricType.caption, design: .monospaced))
-                            .foregroundStyle(AeroricColor.accent)
-                        Text("\(commit.author) · \(commit.date)")
-                            .font(.system(size: AeroricType.caption))
-                            .foregroundStyle(AeroricColor.textTertiary)
-                            .lineLimit(1)
-                    }
-                }
-                .padding(.vertical, AeroricSpace.xs)
-                .help(commit.hash)
-                .listRowSeparator(.hidden)
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
+        } else {
+            PaneEmptyState(systemImage: "folder.badge.questionmark",
+                           title: resourceProjectID == nil ? "未选择项目" : "原项目不可用",
+                           hint: "Git 显示当前会话所在项目的仓库。")
         }
-        .accessibilityIdentifier("auxiliary.history")
+    }
+
+    /// Re-read Git when its tab comes to front or the project changes.
+    private var gitRefreshKey: String {
+        "\(resourceProject?.path ?? "")|\(auxiliaryTab == .git)|\(showsAuxiliary || showsAuxiliaryOverlay)"
     }
 
     private var centralContent: some View {
@@ -663,7 +629,9 @@ struct TaskWorkspaceView: View {
                     projectAvailable: resourceProject != nil,
                     onRetry: { loadPreview(target) },
                     onOpenFile: { openPreview(.init(projectID: id, path: target.path, kind: .file)) },
-                    onSave: target.kind == .file ? { text in Task { await saveTab(target, text: text) } } : nil
+                    // Linked folders stay read-only (2026-10-30).
+                    onSave: target.kind == .file && FileEditText.writable(target.path)
+                        ? { text in Task { await saveTab(target, text: text) } } : nil
                 )
                 .id(target)
             }
@@ -826,7 +794,8 @@ struct TaskWorkspaceView: View {
             guard let reader else { return false }
             let parent = (target.path as NSString).deletingLastPathComponent
             let name = (target.path as NSString).lastPathComponent
-            guard let entries = try? await reader.directory(projectID: projectID, path: parent) else { return false }
+            let host = ProjectResourceBook.hostRequest(projectID: projectID, path: parent)
+            guard let entries = try? await reader.directory(projectID: host.projectID, path: host.path) else { return false }
             return entries.contains { $0.name == name }
         }
     }
@@ -840,18 +809,9 @@ struct TaskWorkspaceView: View {
                     ProjectResourceInspector(
                         book: resourceBook, projectID: id, projectName: project.name,
                         onOpen: openPreview,
-                        onLoadDirectory: { path in
-                            Task { await resourceBook.loadDirectory(
-                                projectID: id, path: path, reader: services.projectResourceReader
-                            ) }
-                        },
+                        onLoadDirectory: { path in Task { await loadDirectory(path, in: project) } },
                         onRefresh: { Task { await refreshResources(project) } },
-                        onToggleChange: { change in
-                            Task { await resourceBook.toggleInlineDiff(
-                                change, projectID: id, projectPath: project.path,
-                                reader: services.projectResourceReader
-                            ) }
-                        },
+                        onEdit: { edit in await applyFileEdit(edit, in: project) },
                         localRoot: FileManager.default.fileExists(atPath: project.path) ? project.path : nil
                     )
                     .opacity(resourceProjectID == id ? 1 : 0)
@@ -869,14 +829,12 @@ struct TaskWorkspaceView: View {
     private struct ResourceLoadKey: Equatable {
         let projectID: String?
         let projectPath: String?
-        let section: ResourceListSection?
         let visible: Bool
         let configurationEpoch: UUID
     }
     private var resourceLoadKey: ResourceLoadKey {
         ResourceLoadKey(
             projectID: resourceProjectID, projectPath: resourceProject?.path,
-            section: resourceProjectID.map { resourceBook.scene($0).section },
             // Resizing an already-visible inspector must not cancel reads.
             visible: showsAuxiliary || showsAuxiliaryOverlay,
             configurationEpoch: services.configurationEpoch
@@ -884,22 +842,31 @@ struct TaskWorkspaceView: View {
     }
     private func loadCurrentResources() async {
         guard showsAuxiliary || showsAuxiliaryOverlay, let project = resourceProject else { return }
-        let scene = resourceBook.scene(project.id)
-        if scene.section == .files, (scene.directoryStates[""] ?? .notLoaded).needsAutomaticLoad {
-            await resourceBook.loadDirectory(projectID: project.id, path: "", reader: services.projectResourceReader)
-        } else if scene.section == .git, scene.gitState.needsAutomaticLoad || scene.branchState.needsAutomaticLoad {
-            await resourceBook.loadGit(projectID: project.id, projectPath: project.path, reader: services.projectResourceReader)
+        if (resourceBook.scene(project.id).directoryStates[""] ?? .notLoaded).needsAutomaticLoad {
+            await loadDirectory("", in: project)
         }
     }
     private func refreshResources(_ project: TaskStore.ProjectEntry) async {
-        if resourceBook.scene(project.id).section == .files {
-            // Refresh every already-expanded directory; never scan the tree.
-            for path in resourceBook.scene(project.id).expandedPaths.sorted() {
-                await resourceBook.loadDirectory(projectID: project.id, path: path, reader: services.projectResourceReader)
-            }
-        } else {
-            await resourceBook.loadGit(projectID: project.id, projectPath: project.path, reader: services.projectResourceReader)
+        // Refresh every already-expanded directory; never scan the tree.
+        for path in resourceBook.scene(project.id).expandedPaths.sorted() {
+            await loadDirectory(path, in: project)
         }
+    }
+    /// One level of the tree; the root also lists the project's linked folders.
+    private func loadDirectory(_ path: String, in project: TaskStore.ProjectEntry) async {
+        await resourceBook.loadDirectory(projectID: project.id, path: path, reader: services.projectResourceReader,
+                                         linked: services.linkedFolderBook.folders(of: project.id))
+    }
+    private var linkedFolderPaths: [String] {
+        resourceProjectID.map { services.linkedFolderBook.folders(of: $0).map(\.path) } ?? []
+    }
+    /// A tree write (2026-10-30): apply it, re-read the folder, and let open
+    /// tabs follow a rename or close on a move to the Trash.
+    private func applyFileEdit(_ edit: FileEdit, in project: TaskStore.ProjectEntry) async -> String? {
+        if let error = await services.applyFileEdit(projectID: project.id, edit: edit) { return error }
+        await loadDirectory(edit.parent, in: project)
+        if let front = resourceBook.followEdit(projectID: project.id, edit: edit) { loadPreview(front) }
+        return nil
     }
     private func openPreview(_ target: ResourcePreviewTarget) {
         // Synchronous local guard before hiding any task/IME surface.
@@ -1109,60 +1076,11 @@ struct TaskWorkspaceView: View {
         .accessibilityIdentifier("tasks.workspace")
     }
 
-    /// The project the Git page reads: the window's project context.
-    private var gitProjectPath: String? {
-        services.taskStore.projects.first { $0.id == projectContextID }?.path
-    }
-
     @ViewBuilder
     private var sectionContent: some View {
         switch activeSection {
         case .tasks, .attention, .canvas, .agentConfigs, .connections:
             EmptyView() // Mounted directly by centralContent.
-        case .files:
-            if let projectID = projectContextID, gitProjectPath != nil {
-                // 2026-10-30: create, rename and move to the Trash; linked folders stay read-only.
-                FileBrowserView(
-                    store: services.fileTreeStore,
-                    title: services.taskStore.projects.first(where: { $0.id == projectID })?.name ?? "",
-                    onExpand: { path in Task { await services.loadFiles(projectID: projectID, path: path) } },
-                    onOpen: { path in
-                        let target = LinkedFolderPath.request(projectID: projectID, path: path)
-                        openPreview(.init(projectID: target.projectID, path: target.path, kind: .file))
-                    },
-                    onEdit: { edit in Task { await services.applyFileEdit(projectID: projectID, edit: edit) } }
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // Linking or unlinking a folder redraws the tree's top level.
-                .task(id: "\(projectID)|\(services.linkedFolderBook.folders(of: projectID).map(\.path))") {
-                    services.fileTreeStore.reset(projectID: projectID)
-                    await services.loadFiles(projectID: projectID, path: "")
-                }
-            } else {
-                PaneEmptyState(systemImage: "folder", title: "先选一个项目", hint: "文件页浏览侧栏当前项目的目录。")
-            }
-        case .git:
-            if let path = gitProjectPath {
-                GitPage(store: services.gitStore,
-                        onAction: { action in Task { await services.performGit(projectPath: path, action: action) } },
-                        onSelect: { change in Task { await services.loadGitDiff(projectPath: path, change: change) } },
-                        onGenerate: { await services.generateCommitMessage(projectPath: path) })
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .task(id: path) { await services.refreshGit(projectPath: path) }
-            } else {
-                PaneEmptyState(systemImage: "folder", title: "先选一个项目", hint: "Git 页显示侧栏当前项目的仓库。")
-            }
-        case .ide:
-            HSplitView {
-                ProblemsView(store: services.diagnosticsStore)
-                    .frame(minWidth: 260, maxWidth: 400, maxHeight: .infinity)
-                DebugPanel(
-                    sessionStore: services.debugSessionStore,
-                    breakpointStore: services.breakpointStore,
-                    debugId: "default"
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
         case .infrastructure:
             HSplitView {
                 DockerPanel(store: services.infrastructureStore)
@@ -1216,14 +1134,6 @@ struct TaskWorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        case .agentTools:
-            // AP7:外部 Agent 的能力面。八个区块全是**展示**:执行者是外部 Agent,
-            // 原生端不代跑工具、不代申请系统权限。
-            AgentToolsPanel(
-                store: services.externalProtocolStore,
-                controls: services.agentToolsStore
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
