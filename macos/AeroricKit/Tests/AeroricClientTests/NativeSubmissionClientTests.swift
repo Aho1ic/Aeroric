@@ -4,18 +4,23 @@ import AeroricProtocol
 
 /// Static contract fixture / pure decoders only. No connection, host, home or UI.
 final class NativeSubmissionClientTests: XCTestCase {
-    private var request: NativeTaskSubmission {
+    private var request: NativeTaskSubmission { submission() }
+
+    private func submission(clarify: Bool = false) -> NativeTaskSubmission {
         NativeTaskSubmission(
             submissionId: "fixture-submission", projectId: "fixture-project",
             configurationId: "custom-fixture", configurationVersion: "fixture-v1",
             agent: "custom-fixture", prompt: "目标：保留\n原文 / \\\"",
-            permissionMode: "ask", permissionAgent: "custom-fixture", selectedModel: "fixture/model"
+            permissionMode: "ask", permissionAgent: "custom-fixture", selectedModel: "fixture/model",
+            clarify: clarify
         )
     }
 
-    private func accepted() -> JSONValue {
+    private func accepted(_ request: NativeTaskSubmission? = nil) -> JSONValue {
+        let request = request ?? self.request
         let fields = request.json.fields.filter {
-            !["prompt", "attachments", "worktree", "recipeId", "team", "review", "evolution"].contains($0.key)
+            !["prompt", "attachments", "worktree", "recipeId", "team", "review", "evolution", "clarify"]
+                .contains($0.key)
         }
         return .object(fields.merging([
             "state": .string("accepted"), "taskId": .string(request.submissionId),
@@ -23,6 +28,7 @@ final class NativeSubmissionClientTests: XCTestCase {
                 ("configuration", true), ("model", true), ("effort", false), ("permission", true),
                 ("attachments", false), ("worktree", false), ("recipe", false),
                 ("team", false), ("review", false), ("evolution", false),
+                ("clarify", request.clarify),
             ].map { .object(["option": .string($0.0), "applied": .bool($0.1)]) }),
         ], uniquingKeysWith: { _, new in new }))
     }
@@ -62,6 +68,25 @@ final class NativeSubmissionClientTests: XCTestCase {
         ignoredOptions[1] = .object(["option": .string("model"), "applied": .bool(false)])
         ignored["options"] = .array(ignoredOptions)
         XCTAssertThrowsError(try WorkspaceClient.decodeSubmissionReceipt(.object(ignored), request: request))
+    }
+
+    /// B4-CU-01: core always reports clarify, so both values must round-trip.
+    func testAcceptedReceiptCarriesClarifyEitherWay() throws {
+        for clarify in [false, true] {
+            let request = submission(clarify: clarify)
+            XCTAssertEqual(try WorkspaceClient.decodeSubmissionReceipt(accepted(request), request: request).state,
+                           "accepted")
+            let lookup: JSONValue = .object([
+                "schemaVersion": .number("1"), "submissionId": .string(request.submissionId),
+                "fingerprint": .string(request.fingerprint), "receipt": accepted(request),
+            ])
+            XCTAssertEqual(try WorkspaceClient.decodeSubmissionLookup(lookup, request: request)?.state, "accepted")
+            var flipped = accepted(request).fields
+            var options = try XCTUnwrap(flipped["options"]?.arrayValue)
+            options[10] = .object(["option": .string("clarify"), "applied": .bool(!clarify)])
+            flipped["options"] = .array(options)
+            XCTAssertThrowsError(try WorkspaceClient.decodeSubmissionReceipt(.object(flipped), request: request))
+        }
     }
 
     func testMissingReceiptRemainsUnknownAndWrongLookupNeverClearsInput() throws {

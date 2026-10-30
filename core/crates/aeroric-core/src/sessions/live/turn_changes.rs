@@ -29,6 +29,33 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(20);
 
 type Snapshot = mpsc::Receiver<Option<Tree>>;
 
+/// B4-1: what a turn changed, with the two tree ids it was diffed between
+/// (`git diff <before> <after>` in `top` shows it).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnDiff {
+    pub top: PathBuf,
+    pub before: String,
+    pub after: String,
+    pub files: Vec<TurnFileChange>,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+/// B4-1: a watched turn's snapshot is done — `diff` is what it changed
+/// (`None`: nothing, or not a repository), `checking` whether the project's
+/// checks run on it next.
+#[derive(Clone, Debug)]
+pub struct TurnSettled {
+    pub task_id: String,
+    pub turn_id: String,
+    pub reason: TurnEndReason,
+    pub diff: Option<TurnDiff>,
+    pub checking: bool,
+}
+
+pub type TurnHook = Arc<dyn Fn(TurnSettled) + Send + Sync>;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Tree {
     top: PathBuf,
@@ -45,6 +72,8 @@ pub struct TurnChangeTracker {
     started: Mutex<HashMap<String, Snapshot>>,
     /// Runs the project's checks after a completed turn that changed files.
     pub checks: Arc<AutoChecker>,
+    /// B4-1: told when each watched turn's snapshot is done.
+    hook: Mutex<Option<TurnHook>>,
 }
 
 impl TurnChangeTracker {
@@ -61,7 +90,12 @@ impl TurnChangeTracker {
             cwds: Mutex::default(),
             started: Mutex::default(),
             checks,
+            hook: Mutex::new(None),
         })
+    }
+
+    pub fn set_hook(&self, hook: TurnHook) {
+        *self.hook.lock() = Some(hook);
     }
 
     /// Where `task_id`'s agent works; set when its session starts.
@@ -93,21 +127,48 @@ impl TurnChangeTracker {
         let task_id = task_id.to_string();
         let turn_id = turn_id.to_string();
         std::thread::spawn(move || {
-            let Ok(Some(before)) = before.recv_timeout(GIT_TIMEOUT) else {
-                return;
-            };
-            let Some(after) = snapshot(&before.top) else {
-                return;
-            };
-            let Some(kind) = changes(&before, &after, &turn_id) else {
-                return;
-            };
-            if let Some(log) = this.registry.log(&task_id) {
-                let update = log.push(kind, now_ms());
-                this.inner.update(&update);
+            let mut diff = None;
+            let mut checking = false;
+            let found = (|| {
+                let before = before.recv_timeout(GIT_TIMEOUT).ok()??;
+                let after = snapshot(&before.top)?;
+                let kind = changes(&before, &after, &turn_id)?;
+                Some((before, after, kind))
+            })();
+            if let Some((before, after, kind)) = found {
+                if let SessionUpdateKind::TurnChanges {
+                    files,
+                    additions,
+                    deletions,
+                    ..
+                } = &kind
+                {
+                    diff = Some(TurnDiff {
+                        top: before.top.clone(),
+                        before: before.id.clone(),
+                        after: after.id.clone(),
+                        files: files.clone(),
+                        additions: *additions,
+                        deletions: *deletions,
+                    });
+                }
+                if let Some(log) = this.registry.log(&task_id) {
+                    let update = log.push(kind, now_ms());
+                    this.inner.update(&update);
+                }
+                if let (TurnEndReason::Completed, Some((project_id, cwd))) = (reason, watched) {
+                    checking = this.checks.start(&task_id, &project_id, &turn_id, &cwd);
+                }
             }
-            if let (TurnEndReason::Completed, Some((project_id, cwd))) = (reason, watched) {
-                this.checks.start(&task_id, &project_id, &turn_id, &cwd);
+            let hook = this.hook.lock().clone();
+            if let Some(hook) = hook {
+                hook(TurnSettled {
+                    task_id,
+                    turn_id,
+                    reason,
+                    diff,
+                    checking,
+                });
             }
         });
     }

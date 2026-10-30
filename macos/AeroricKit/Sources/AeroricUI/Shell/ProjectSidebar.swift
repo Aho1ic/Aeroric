@@ -823,6 +823,13 @@ private struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: AeroricSpace.s) {
+            if let kind = item.childKind {
+                Image(systemName: kind == "review" ? "eye" : "arrow.triangle.branch")
+                    .font(.system(size: 9))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .padding(.leading, AeroricSpace.l)
+                    .accessibilityLabel(kind == "review" ? "审查会话" : "侧支")
+            }
             HarnessLogo(harness: item.harness, agent: item.agent, size: 14)
             Text(item.title)
                 .font(.system(size: AeroricType.body))

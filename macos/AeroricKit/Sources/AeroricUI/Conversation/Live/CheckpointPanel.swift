@@ -14,13 +14,19 @@ public struct CheckpointPanel: View {
     let onStartBranch: () -> Void
     let onReturnBranch: () -> Void
     let onOpenTask: (String) -> Void
+    /// B4-1: the task's review loop; nil while it is read (or on a host without one).
+    let review: ReviewPanelModel?
+    let onReview: (ReviewPanelAction) -> Void
     @State private var constraint = ""
 
     public init(checkpoint: LiveCheckpoint?, errorText: String?, isBranch: Bool,
                 onAddConstraint: @escaping (String) -> Void,
                 onSetObligation: @escaping (_ id: String, _ state: String) -> Void,
                 onStartBranch: @escaping () -> Void, onReturnBranch: @escaping () -> Void,
-                onOpenTask: @escaping (String) -> Void) {
+                onOpenTask: @escaping (String) -> Void,
+                review: ReviewPanelModel? = nil, onReview: @escaping (ReviewPanelAction) -> Void = { _ in }) {
+        self.review = review
+        self.onReview = onReview
         self.checkpoint = checkpoint
         self.errorText = errorText
         self.isBranch = isBranch
@@ -65,6 +71,9 @@ public struct CheckpointPanel: View {
                         .foregroundStyle(AeroricColor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, AeroricSpace.s)
+                }
+                if let review {
+                    ReviewPanelSection(model: review, onAction: onReview)
                 }
                 CheckpointSectionLabel(title: "加一条约束")
                 HStack(spacing: AeroricSpace.m) {

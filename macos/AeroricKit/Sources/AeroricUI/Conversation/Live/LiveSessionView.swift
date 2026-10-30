@@ -323,6 +323,12 @@ public struct LiveSessionView: View {
             })
         case let .branchReturned(_, result):
             BranchResultCard(result: result, onSend: { text in Task { _ = try? await store.send(text) } })
+        case let .review(_, card):
+            ReviewCard(card: card, paused: store.reviewPaused,
+                       onSend: { Task { await store.sendReview() } },
+                       onRetry: { Task { await store.retryReview() } },
+                       onPause: { paused in Task { await store.setReviewPaused(paused) } },
+                       onOpen: { store.openTask($0) })
         case let .unknown(_, kind):
             LiveNoticeRow(message: "未识别的内容：\(kind)", recoverable: true)
         }
@@ -383,6 +389,16 @@ public struct LiveSessionView: View {
             if !store.turnActive, let changes = store.model?.lastTurnChanges {
                 HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.s) {
                     LiveTurnChangesRow(changes: changes)
+                    Button {
+                        Task { await store.requestReview() }
+                    } label: {
+                        Label("请人审查", systemImage: "eye")
+                    }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .fixedSize()
+                    .disabled(store.model?.reviewOpen == true)
+                    .help("让另一族的 Agent 只读审查上一轮改动")
+                    .accessibilityIdentifier("session.live.review.request")
                     if let selection = store.autoCheck {
                         LiveAutoCheckMenu(selection: selection) { next in
                             Task { await store.setAutoCheck(next) }

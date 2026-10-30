@@ -33,11 +33,15 @@ use crate::services::{find_project_of_task, ok};
 
 pub use wire::CAPABILITY;
 
+mod review;
+
 struct Live {
     executor: Arc<StructuredExecutor>,
     families: Arc<dyn AgentFamilies>,
     service: Arc<TaskService>,
     context: Arc<CoreContext>,
+    /// This host is the product binary (`aeroric-cli`), not a test harness.
+    product: bool,
 }
 
 type Run = fn(&Live, &Request) -> Frame;
@@ -56,6 +60,7 @@ pub fn settle_orphaned_sessions(
         families,
         service,
         context,
+        product: false,
     }
     .settle_orphaned()
 }
@@ -67,11 +72,19 @@ pub fn register_session_live_services(
     service: Arc<TaskService>,
     context: Arc<CoreContext>,
 ) {
+    // B4′: sessions get the context server only from the product binary
+    // (a test harness is not an `aeroric-cli` that can serve it).
+    let product = std::env::current_exe().is_ok_and(|exe| {
+        exe.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n == "aeroric-cli")
+    });
     let live = Arc::new(Live {
         executor,
         families,
         service,
         context,
+        product,
     });
     live.executor
         .set_auto_check_policy(Arc::new(SettingsAutoChecks(Arc::clone(&live.context))));
@@ -125,20 +138,14 @@ pub fn register_session_live_services(
     set.register(CONTEXT_SEARCH_METHOD, blocking(&live, context_search));
     set.register(CONTEXT_READ_METHOD, blocking(&live, context_read));
     set.register(CONTEXT_HANDOFF_METHOD, blocking(&live, context_handoff));
-    // B4′: sessions get the context server only from the product binary
-    // (a test harness is not an `aeroric-cli` that can serve it).
-    if let Ok(exe) = std::env::current_exe() {
-        let is_cli = exe
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n == "aeroric-cli");
-        if is_cli {
-            live.executor.set_context_program(
-                exe.to_string_lossy().into_owned(),
-                live.context.paths.data_dir().to_string_lossy().into_owned(),
-            );
-        }
+    if let (true, Ok(exe)) = (live.product, std::env::current_exe()) {
+        live.executor.set_context_program(
+            exe.to_string_lossy().into_owned(),
+            live.context.paths.data_dir().to_string_lossy().into_owned(),
+        );
     }
+    // B4-1: the review loop (only the product asks whether a harness is installed).
+    review::install(set, &live, live.product);
 }
 
 // MARK: B4′ side branches (2026-10-30)
@@ -888,6 +895,24 @@ impl Live {
             .into_iter()
             .find(|record| record.get("id").and_then(Value::as_str) == Some(task_id))?;
         Some((project, record))
+    }
+
+    fn probe_installed(&self) -> bool {
+        self.product
+    }
+
+    /// B4-1: [`Live::reopen`] for a caller with no request to answer.
+    fn reopen_quiet(&self, task_id: &str) -> Result<Arc<dyn SessionDriver>, String> {
+        let (project, record) = self.record(task_id).ok_or("会话不存在")?;
+        let session_id = aeroric_core::tasks::session_owner::current_session(&record)
+            .0
+            .ok_or("这个会话还没有可续接的对话")?;
+        let operation_key = format!("session-prompt-{task_id}-{}", now_ms());
+        self.service
+            .resume(&project, task_id, &session_id, &operation_key, true, None)
+            .map_err(|e| e.to_string())?;
+        self.driver(task_id)
+            .ok_or_else(|| "会话没有打开".to_string())
     }
 
     /// N3 D3: reopen a task's Codex session through the regular resume path

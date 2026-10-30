@@ -172,6 +172,9 @@ struct TaskWorkspaceView: View {
     @State private var checkpoint: LiveCheckpoint?
     @State private var checkpointBranchOf: String?
     @State private var checkpointError: String?
+    /// B4-1: the selected task's review loop, read with its checkpoint.
+    @State private var reviewPanel: ReviewPanelModel?
+    @State private var reviewPanelTask: String?
 
     /// Which surface the selected navigation row names. A project row or an
     /// empty selection is the task surface — the app's default view.
@@ -580,7 +583,20 @@ struct TaskWorkspaceView: View {
                         }
                     }
                 },
-                onOpenTask: { id in services.requestedSelection = SessionNavigation.task(id) }
+                onOpenTask: { id in services.requestedSelection = SessionNavigation.task(id) },
+                review: reviewPanelTask == taskID ? reviewPanel : nil,
+                onReview: { action in
+                    switch action {
+                    case let .open(id):
+                        services.requestedSelection = SessionNavigation.task(id)
+                    case let .setEnabled(on):
+                        Task { await checkpointAction { try await $0.setReview(taskId: taskID, enabled: on) } }
+                    case let .pick(choice):
+                        Task { await checkpointAction { try await $0.setReview(taskId: taskID, reviewer: choice) } }
+                    case .request:
+                        Task { await checkpointAction { try await $0.reviewAction("review.request", taskId: taskID) } }
+                    }
+                }
             )
             .task(id: progressRefreshKey) {
                 guard auxiliaryTab == .progress, showsAuxiliary || showsAuxiliaryOverlay else { return }
@@ -609,6 +625,18 @@ struct TaskWorkspaceView: View {
         } catch {
             checkpointError = "读取检查点失败：\(error)"
         }
+        // B4-1: the review loop beside it; who can review is read once per task.
+        guard let review = try? await client.review(taskId: taskID) else { return }
+        var next = ReviewPanelModel(settings: review.settings, card: review.card, reviewOf: review.reviewOf)
+        if let known = reviewPanel, reviewPanelTask == taskID {
+            next.candidates = known.candidates
+            next.auto = known.auto
+        } else if review.settings != nil, let who = try? await client.reviewers(taskId: taskID) {
+            next.candidates = who.candidates
+            next.auto = who.auto
+        }
+        reviewPanel = next
+        reviewPanelTask = taskID
     }
 
     private func checkpointAction(_ run: (SessionsClient) async throws -> Void) async {
@@ -644,6 +672,7 @@ struct TaskWorkspaceView: View {
             } else if activeSection == .attention {
                 AttentionListView(
                     items: AttentionQueue.items(services.taskStore.tasks, checkFailures: services.checkFailures,
+                                                reviews: services.reviewNeeds,
                                                 nowMs: UInt64(Date().timeIntervalSince1970 * 1000)),
                     projectName: { id in services.taskStore.projects.first { $0.id == id }?.name },
                     onOpen: { selection = SessionNavigation.task($0) }

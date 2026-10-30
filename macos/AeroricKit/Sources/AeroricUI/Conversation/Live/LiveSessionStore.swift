@@ -36,6 +36,17 @@ public protocol LiveSessionActions {
     func checkpoint(taskID: String) async throws -> LiveCheckpoint?
     /// B4′: accept the clarification card's ticked criteria and start the task.
     func acceptClarification(taskID: String, acceptance: [LiveAcceptance], constraints: [String]) async throws
+    /// B4-1: whether the task's review loop holds findings for the user.
+    func reviewPaused(taskID: String) async throws -> Bool
+    func setReviewPaused(taskID: String, _ paused: Bool) async throws
+    /// B4-1: review the task's last changed turn now.
+    func requestReview(taskID: String) async throws
+    /// B4-1: send findings a paused loop held back.
+    func sendReview(taskID: String) async throws
+    /// B4-1: run a failed or interrupted round again.
+    func retryReview(taskID: String) async throws
+    /// Show another task (a reviewer, a parent).
+    func openTask(_ taskID: String)
 }
 
 extension LiveSessionActions {
@@ -64,6 +75,20 @@ extension LiveSessionActions {
     public func acceptClarification(taskID: String, acceptance: [LiveAcceptance], constraints: [String]) async throws {
         throw LiveSessionError.unsupported("这个宿主不支持开工前澄清")
     }
+    public func reviewPaused(taskID: String) async throws -> Bool { false }
+    public func setReviewPaused(taskID: String, _ paused: Bool) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持审查回环")
+    }
+    public func requestReview(taskID: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持审查回环")
+    }
+    public func sendReview(taskID: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持审查回环")
+    }
+    public func retryReview(taskID: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持审查回环")
+    }
+    public func openTask(_ taskID: String) {}
 }
 
 /// A05: which checks the task's project runs after a turn that changed files.
@@ -107,6 +132,8 @@ public final class LiveSessionStore {
     public var errorText: String?
     /// A05: nil until read, or when the host does not offer auto checks.
     public private(set) var autoCheck: LiveAutoCheckSelection?
+    /// B4-1: findings wait for the user before going to the writer.
+    public private(set) var reviewPaused = false
 
     @ObservationIgnored private let actions: any LiveSessionActions
     @ObservationIgnored private var baseline = 0
@@ -155,6 +182,7 @@ public final class LiveSessionStore {
             errorText = "读取会话失败：\(error)"
         }
         autoCheck = try? await actions.autoCheck(taskID: taskID)
+        reviewPaused = (try? await actions.reviewPaused(taskID: taskID)) ?? false
     }
 
     public func setAutoCheck(_ selection: LiveAutoCheckSelection) async {
@@ -264,6 +292,32 @@ public final class LiveSessionStore {
         model?.echo(text)
         try await actions.prompt(taskID: taskID, text: text)
         return .sent
+    }
+
+    /// B4-1: the review card's and the turn-change row's actions.
+    public func requestReview() async {
+        do { try await actions.requestReview(taskID: taskID) } catch { errorText = "请人审查失败：\(error)" }
+    }
+
+    public func sendReview() async {
+        do { try await actions.sendReview(taskID: taskID) } catch { errorText = "发出审查意见失败：\(error)" }
+    }
+
+    public func retryReview() async {
+        do { try await actions.retryReview(taskID: taskID) } catch { errorText = "重新审查失败：\(error)" }
+    }
+
+    public func setReviewPaused(_ paused: Bool) async {
+        do {
+            try await actions.setReviewPaused(taskID: taskID, paused)
+            reviewPaused = paused
+        } catch {
+            errorText = "保存审查设置失败：\(error)"
+        }
+    }
+
+    public func openTask(_ id: String) {
+        actions.openTask(id)
     }
 
     /// B4′: start the task with the clarification card's ticked criteria.

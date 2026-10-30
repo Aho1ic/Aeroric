@@ -12,6 +12,8 @@ public enum AttentionQueue {
         case interrupted
         /// The latest auto-check run after a turn failed (A05).
         case checksFailed
+        /// B4-1: a review loop stopped for the user's decision.
+        case reviewNeedsYou
 
         public var text: String {
             switch self {
@@ -19,6 +21,7 @@ public enum AttentionQueue {
             case .failed: "失败了"
             case .interrupted: "被中断"
             case .checksFailed: "检查没通过"
+            case .reviewNeedsYou: "审查要你定"
             }
         }
     }
@@ -49,7 +52,7 @@ public enum AttentionQueue {
     /// Waiting first (they block an agent), then the newest. A task is listed
     /// once: its own status wins over a failed check, which then shows as detail.
     public static func items(_ tasks: [TaskStore.TaskEntry], checkFailures: [String: CheckFailure] = [:],
-                             nowMs: UInt64) -> [Item] {
+                             reviews: [String: CheckFailure] = [:], nowMs: UInt64) -> [Item] {
         tasks.compactMap { task -> Item? in
             guard !task.archived else { return nil }
             let updated = task.updatedAtMs ?? task.createdAtMs ?? 0
@@ -63,8 +66,11 @@ public enum AttentionQueue {
                 return Item(task: task, reason: task.status == "failed" ? .failed : .interrupted,
                             detail: check?.summary, atMs: updated)
             default:
-                guard let check else { return nil }
-                return Item(task: task, reason: .checksFailed, detail: check.summary, atMs: check.atMs)
+                if let check {
+                    return Item(task: task, reason: .checksFailed, detail: check.summary, atMs: check.atMs)
+                }
+                guard let review = reviews[task.id] else { return nil }
+                return Item(task: task, reason: .reviewNeedsYou, detail: review.summary, atMs: review.atMs)
             }
         }
         .sorted { lhs, rhs in

@@ -14,6 +14,7 @@ pub mod error;
 pub mod event;
 pub mod legacy_cleanup;
 pub mod project;
+pub mod review;
 pub mod session;
 pub mod session_live;
 pub mod submission;

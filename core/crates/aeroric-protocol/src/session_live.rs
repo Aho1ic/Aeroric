@@ -286,6 +286,11 @@ pub enum SessionUpdateKind {
     BranchReturned {
         result: crate::checkpoint::BranchResult,
     },
+    /// B4-1: a step of a review loop; the latest update of a `reviewId`
+    /// replaces the card.
+    Review {
+        review: crate::review::ReviewCard,
+    },
     Error {
         message: String,
         recoverable: bool,
@@ -663,6 +668,28 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
                 returned_ms: 1_761_350_400_500,
             },
         },
+        K::Review {
+            review: crate::review::ReviewCard {
+                review_id: "rv-1".into(),
+                round: 1,
+                state: crate::review::ReviewState::WaitingCoder,
+                turn_id: "u1".into(),
+                reviewer_task_id: Some("task-3".into()),
+                reviewer_label: "Claude Code · sonnet".into(),
+                same_family: false,
+                findings: vec![crate::review::Finding {
+                    id: "r1".into(),
+                    severity: crate::review::Severity::Blocker,
+                    text: "重试没有上限，可能死循环".into(),
+                    file: Some("src/client.rs".into()),
+                    line: Some(88),
+                    decision: Some(crate::review::Decision::Adopt),
+                    reason: None,
+                }],
+                summary: Some("超时逻辑可行，重试上限缺测试".into()),
+                raw: None,
+            },
+        },
         K::Unknown {
             kind: "item/futureThing".into(),
             payload: json!({"x": 1}),
@@ -980,6 +1007,18 @@ pub fn schema() -> Value {
             json!({"result": {"type": "object", "required": ["taskId", "title", "summary", "returnedMs"]}}),
         ),
         update_variant(
+            "review",
+            json!(["review"]),
+            json!({"review": {"type": "object", "required": ["reviewId", "round", "state", "turnId"],
+                "properties": {"reviewId": s, "round": {"type": "integer", "minimum": 1},
+                "state": {"enum": ["reviewing", "waitingSend", "waitingCoder", "passed", "settled", "escalated", "interrupted", "failed"]},
+                "turnId": s, "reviewerTaskId": s, "reviewerLabel": s, "sameFamily": {"type": "boolean"},
+                "findings": {"type": "array", "items": {"type": "object", "required": ["id", "severity", "text"],
+                    "properties": {"id": s, "severity": {"enum": ["blocker", "major", "minor"]}, "text": s, "file": s,
+                    "line": {"type": "integer"}, "decision": {"enum": ["adopt", "reject", "ask"]}, "reason": s}}},
+                "summary": s, "raw": s}}}),
+        ),
+        update_variant(
             "error",
             json!(["message", "recoverable"]),
             json!({"message": s, "recoverable": {"type": "boolean"}}),
@@ -1090,6 +1129,7 @@ mod tests {
             "handoff",
             "clarification",
             "branchReturned",
+            "review",
             "error",
             "unknown",
         ] {

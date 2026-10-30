@@ -290,6 +290,53 @@ extension SessionsClient {
         ]))
     }
 
+    /// B4-1: a task's review settings, its latest loop, and the task it
+    /// reviews when it is a reviewer (`review.get`).
+    public func review(taskId: String) async throws
+        -> (settings: LiveReviewSettings?, card: LiveReviewCard?, reviewOf: String?) {
+        let frame = try await connection.request("review.get", params: .object(["taskId": .string(taskId)]))
+        return (LiveReviewSettings.decode(frame.result["settings"]),
+                frame.result["card"].flatMap(LiveReviewCard.decode),
+                frame.result["reviewOf"]?.stringValue)
+    }
+
+    /// B4-1: change a task's review settings; answers the settings in force.
+    @discardableResult
+    public func setReview(taskId: String, enabled: Bool? = nil, reviewer: LiveReviewerChoice? = nil,
+                          paused: Bool? = nil) async throws -> LiveReviewSettings? {
+        var params: [String: JSONValue] = ["taskId": .string(taskId)]
+        if let enabled { params["enabled"] = .bool(enabled) }
+        if let reviewer { params["reviewer"] = reviewer.json }
+        if let paused { params["paused"] = .bool(paused) }
+        let frame = try await connection.request("review.set", params: .object(params))
+        return LiveReviewSettings.decode(frame.result["settings"])
+    }
+
+    /// B4-1: who could review the task, and whom `auto` picks.
+    public func reviewers(taskId: String) async throws
+        -> (candidates: [LiveReviewerCandidate], auto: LiveReviewerCandidate?) {
+        let frame = try await connection.request("review.reviewers", params: .object(["taskId": .string(taskId)]))
+        return ((frame.result["candidates"]?.arrayValue ?? []).compactMap { LiveReviewerCandidate.decode($0) },
+                LiveReviewerCandidate.decode(frame.result["auto"]))
+    }
+
+    /// B4-1: `review.request` / `review.send` / `review.retry`.
+    public func reviewAction(_ method: String, taskId: String) async throws {
+        _ = try await connection.request(method, params: .object(["taskId": .string(taskId)]))
+    }
+
+    /// B4-1: loops that need the user (`review.attention`): task id → card.
+    public func reviewAttention() async throws -> [String: LiveReviewCard] {
+        let frame = try await connection.request("review.attention", params: .object([:]))
+        var result: [String: LiveReviewCard] = [:]
+        for row in frame.result["items"]?.arrayValue ?? [] {
+            guard let task = row["taskId"]?.stringValue, let card = row["card"].flatMap(LiveReviewCard.decode)
+            else { continue }
+            result[task] = card
+        }
+        return result
+    }
+
     /// Tasks whose latest auto-check run failed (`session.autoCheck.failures`):
     /// task id → (summary, finished at ms).
     public func autoCheckFailures() async throws -> [String: (summary: String, atMs: UInt64)] {

@@ -1221,3 +1221,150 @@ async fn a_handoff_move_starts_a_new_session_instead_of_resuming() {
     let brief = fresh["params"]["developerInstructions"].as_str().unwrap();
     assert!(brief.starts_with("# 交接清单"), "{brief}");
 }
+
+/// B4-1 (2026-10-30): with the review loop on, a Codex turn that changed a
+/// file is reviewed by a read-only Claude task marked `reviewOf`, which sees
+/// the diff and not the conversation; its blocker goes back to the Codex
+/// session, and rejecting it settles the loop into the attention queue.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_changed_turn_is_reviewed_by_another_family_and_answered() {
+    let mut host = Host::start(true).await;
+    let workspace = host._root.join("workspace");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    host.start_task("修复超时");
+    let set = host
+        .call("review.set", json!({"taskId": "task-1", "enabled": true}))
+        .await
+        .unwrap();
+    assert_eq!(set["settings"]["reviewer"], "auto");
+    let reviewers = host
+        .call("review.reviewers", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(reviewers["auto"]["agent"], "claude", "{reviewers}");
+
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(&start, json!({"thread": {"id": "th-1"}}));
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-1", "turn": {"id": "u1"}}),
+    );
+    peer.notify(
+        "item/agentMessage/delta",
+        json!({"threadId": "th-1", "itemId": "m1", "delta": "我的私下推理"}),
+    );
+    // Give the turn-start snapshot time before the file changes.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    std::fs::write(workspace.join("client.rs"), "loop { retry() }\n").unwrap();
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": "u1", "status": "completed"}}),
+    );
+
+    let (claude, mut reviewer) = tokio::time::timeout(WAIT, host.claude_peers.recv())
+        .await
+        .expect("a reviewer started")
+        .expect("launcher");
+    assert_eq!(claude.permission, "plan");
+    let id = reviewer.expect_control("initialize").await;
+    reviewer.control_ok(&id, json!({"commands": []}));
+    let asked = reviewer.next().await;
+    let prompt = asked["message"]["content"].as_str().unwrap().to_string();
+    assert!(prompt.starts_with("[Aeroric 审查]"), "{prompt}");
+    assert!(
+        prompt.contains("client.rs") && prompt.contains("retry()"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("私下推理"));
+    reviewer.send(
+        json!({"type": "system", "subtype": "init", "session_id": "rv-s", "model": "sonnet"}),
+    );
+    reviewer.send(json!({"type": "assistant", "session_id": "rv-s", "message": {"id": "a1", "content": [
+        {"type": "text", "text": "```json\n{\"verdict\":\"changes\",\"findings\":[{\"id\":\"r1\",\"severity\":\"blocker\",\"file\":\"client.rs\",\"line\":1,\"text\":\"重试没有上限\"}]}\n```"}]}}));
+    reviewer.send(
+        json!({"type": "result", "subtype": "success", "is_error": false,
+        "session_id": "rv-s", "usage": {"input_tokens": 1, "output_tokens": 1}}),
+    );
+
+    let answer = peer.expect("turn/start").await;
+    let text = answer["params"]["input"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(text.starts_with("[Aeroric 审查意见]"), "{text}");
+    assert!(text.contains("重试没有上限"));
+    let reviewer_task = host
+        .call("review.get", json!({"taskId": "task-1"}))
+        .await
+        .unwrap()["card"]["reviewerTaskId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let record = host.record_of(&reviewer_task);
+    assert_eq!(record["reviewOf"], "task-1");
+    assert_eq!(record["permissionMode"], "plan");
+    assert!(record["name"].as_str().unwrap().ends_with("（审查）"));
+    // A reviewer is never reviewed itself.
+    let not = host
+        .call(
+            "review.set",
+            json!({"taskId": reviewer_task, "enabled": true}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(not["message"], "这个会话不能被审查");
+
+    peer.reply(&answer, json!({"turn": {"id": "u2"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-1", "turn": {"id": "u2"}}),
+    );
+    peer.notify(
+        "item/agentMessage/delta",
+        json!({"threadId": "th-1", "itemId": "m2", "delta":
+            "```json\n{\"responses\":[{\"id\":\"r1\",\"decision\":\"reject\",\"reason\":\"调用方已限流\"}]}\n```"}),
+    );
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": "u2", "status": "completed"}}),
+    );
+    let deadline = std::time::Instant::now() + WAIT;
+    let card = loop {
+        let got = host
+            .call("review.get", json!({"taskId": "task-1"}))
+            .await
+            .unwrap();
+        if got["card"]["state"] == "settled" {
+            break got["card"].clone();
+        }
+        assert!(std::time::Instant::now() < deadline, "{got}");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(card["findings"][0]["decision"], "reject");
+    assert_eq!(card["findings"][0]["reason"], "调用方已限流");
+    let attention = host.call("review.attention", json!({})).await.unwrap();
+    assert_eq!(attention["items"][0]["taskId"], "task-1");
+    let updates = host
+        .call("session.updates", json!({"taskId": "task-1", "after": 0}))
+        .await
+        .unwrap();
+    assert!(types(&updates).iter().any(|t| t == "review"));
+}

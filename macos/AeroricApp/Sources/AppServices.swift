@@ -98,6 +98,8 @@ final class AppServices {
     var agentCatalogEpoch = UUID()
     /// A05 → A19: task id → its latest auto-check run, when that run failed.
     var checkFailures: [String: AttentionQueue.CheckFailure] = [:]
+    /// B4-1 → A19: task id → its review loop, when that loop needs the user.
+    var reviewNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// Group names the 移动到分组 menu offers (host `project.group_names`).
     var projectGroupNames: [String] = []
     @ObservationIgnored private var projectListRetries = 0
@@ -409,7 +411,9 @@ final class AppServices {
                     agentConfigID: task.agentConfigID,
                     harness: task.harness,
                     sessionID: task.sessionId,
-                    model: task.model
+                    model: task.model,
+                    parentTaskID: task.parentTaskID,
+                    childKind: task.childKind
                 ))
                 if let generation = task.generation {
                     pendingGenerations[task.id] = generation
@@ -953,8 +957,8 @@ extension AppServices: WorkspaceStateProviding {
                 children: [
                     SidebarItem(id: SessionNavigation.draft(projectID: project.id),
                                 title: "新建会话", systemImage: "plus", group: .projects),
-                ] + taskStore.tasks.filter { task in task.projectID == project.id && !task.archived }
-                    .sorted { ($0.starred ? 0 : 1, $1.updatedAtMs ?? 0) < ($1.starred ? 0 : 1, $0.updatedAtMs ?? 0) }
+                ] + Self.nestedTasks(taskStore.tasks.filter { task in task.projectID == project.id && !task.archived }
+                    .sorted { ($0.starred ? 0 : 1, $1.updatedAtMs ?? 0) < ($1.starred ? 0 : 1, $0.updatedAtMs ?? 0) })
                     .map { task in Self.taskItem(task, group: .projects) }
                     + importBook.sessions(inProject: project.id).map(Self.importedItem),
                 color: project.color, defaultAgent: project.defaultAgent, projectGroup: project.group
@@ -1151,7 +1155,7 @@ extension AppServices: WorkspaceStateProviding {
 
     /// A19 badge: how many tasks need the user; nil renders no zero.
     var attentionCount: Int? {
-        let count = AttentionQueue.items(taskStore.tasks, checkFailures: checkFailures,
+        let count = AttentionQueue.items(taskStore.tasks, checkFailures: checkFailures, reviews: reviewNeeds,
                                          nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
         return count > 0 ? count : nil
     }
@@ -1166,11 +1170,29 @@ extension AppServices: WorkspaceStateProviding {
     }
 
     static func taskItem(_ task: TaskStore.TaskEntry, group: SidebarGroup) -> SidebarItem {
-        SidebarItem(id: SessionNavigation.task(task.id), title: task.title,
-                    systemImage: "bubble.left", group: group,
-                    status: task.status, pinned: task.starred, agent: task.agent,
-                    updatedAt: task.updatedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) },
-                    harness: task.harness, sessionID: task.sessionID)
+        var item = SidebarItem(id: SessionNavigation.task(task.id), title: task.title,
+                               systemImage: "bubble.left", group: group,
+                               status: task.status, pinned: task.starred, agent: task.agent,
+                               updatedAt: task.updatedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) },
+                               harness: task.harness, sessionID: task.sessionID)
+        item.childKind = task.parentTaskID == nil ? nil : task.childKind
+        return item
+    }
+
+    /// B4-1: a reviewer or a side branch right under its parent (oldest
+    /// first); one whose parent is not in `tasks` stays where it sorted.
+    static func nestedTasks(_ tasks: [TaskStore.TaskEntry]) -> [TaskStore.TaskEntry] {
+        let ids = Set(tasks.map(\.id))
+        let children = Dictionary(grouping: tasks.filter { $0.parentTaskID.map(ids.contains) == true }) {
+            $0.parentTaskID ?? ""
+        }
+        var out: [TaskStore.TaskEntry] = []
+        for var task in tasks where task.parentTaskID.map(ids.contains) != true {
+            task.parentTaskID = nil
+            out.append(task)
+            out += (children[task.id] ?? []).sorted { ($0.createdAtMs ?? 0) < ($1.createdAtMs ?? 0) }
+        }
+        return out
     }
 
     /// A pinned Agent preset's title, from any project's loaded catalogue.

@@ -20,6 +20,8 @@ public enum LiveItem: Identifiable, Equatable, Sendable {
     case clarification(id: String, LiveClarification)
     /// B4′: a side branch's result card.
     case branchReturned(id: String, LiveBranchResult)
+    /// B4-1: a review loop's card (one per `reviewId`, updated in place).
+    case review(id: String, LiveReviewCard)
     /// Protocol content this build does not render (INV-12: shown, not dropped).
     case unknown(id: String, kind: String)
 
@@ -35,6 +37,7 @@ public enum LiveItem: Identifiable, Equatable, Sendable {
         case let .handoff(id, _, _): "handoff:\(id)"
         case let .clarification(id, _): "clarify:\(id)"
         case let .branchReturned(id, _): "branch:\(id)"
+        case let .review(id, _): "review:\(id)"
         case let .unknown(id, _): "unknown:\(id)"
         }
     }
@@ -248,6 +251,10 @@ public struct LiveSessionModel: Equatable, Sendable {
     /// A05: the last finished turn's working-tree changes. Kept apart from
     /// `items`, which history replaces after a turn.
     public private(set) var lastTurnChanges: LiveTurnChanges?
+    /// B4-1: a review loop of this session is still moving.
+    public var reviewOpen: Bool {
+        items.contains { if case let .review(_, card) = $0 { return card.isOpen } else { return false } }
+    }
     /// A05: the latest project check (kept apart from `items` like the changes).
     public private(set) var lastAutoCheck: LiveAutoCheck?
     /// A14: host time (ms) of the newest update applied; nil until one arrives.
@@ -419,6 +426,16 @@ public struct LiveSessionModel: Equatable, Sendable {
             items.append(.clarification(id: "seq\(update.seq)", clarification))
         case let .branchReturned(result):
             items.append(.branchReturned(id: "seq\(update.seq)", result))
+        case let .review(card):
+            let same = items.firstIndex {
+                if case let .review(id, _) = $0 { return id == card.reviewId }
+                return false
+            }
+            if let same {
+                items[same] = .review(id: card.reviewId, card)
+            } else {
+                items.append(.review(id: card.reviewId, card))
+            }
         case let .unknown(kind, _):
             items.append(.unknown(id: "seq\(update.seq)", kind: kind))
         }

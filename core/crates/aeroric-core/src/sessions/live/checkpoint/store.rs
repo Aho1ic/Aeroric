@@ -51,6 +51,28 @@ pub fn save(dir: &Path, checkpoint: &Checkpoint) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// B4-1: another per-task file kept the same way (`<dir>/<task_id>.json`).
+pub fn read_task_file(dir: &Path, task_id: &str) -> Result<Option<Vec<u8>>, StoreError> {
+    match std::fs::read(path(dir, task_id)?) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+pub fn write_task_file(dir: &Path, task_id: &str, bytes: &[u8]) -> Result<(), StoreError> {
+    let path = path(dir, task_id)?;
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".{task_id}.tmp"));
+    {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
 pub fn remove(dir: &Path, task_id: &str) -> Result<(), StoreError> {
     match std::fs::remove_file(path(dir, task_id)?) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),

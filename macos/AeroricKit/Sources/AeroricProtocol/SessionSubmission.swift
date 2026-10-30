@@ -166,6 +166,8 @@ public struct NativeSubmissionReceipt: Decodable, Equatable, Sendable {
                 "effort": request.reasoningEffort != nil, "permission": true,
                 "attachments": false, "worktree": false, "recipe": false,
                 "team": false, "review": false, "evolution": false,
+                // B4-CU-01: core reports clarify on every accepted receipt.
+                "clarify": request.clarify,
             ]
             guard taskId == request.submissionId, reasons.isEmpty,
                   request.attachments.isEmpty, request.worktree == nil, request.recipeId == nil,

@@ -18,10 +18,10 @@ final class LiveSessionContractTests: XCTestCase {
 
     func testEveryUpdateKindInTheFixtureDecodesAsKnown() throws {
         let batch = try LiveUpdatesBatch.decode(try fixture()["updates"] ?? .null)
-        XCTAssertEqual(batch.updates.count, 25)
-        XCTAssertEqual(batch.latestSeq, 25)
+        XCTAssertEqual(batch.updates.count, 26)
+        XCTAssertEqual(batch.latestSeq, 26)
         XCTAssertNil(batch.gapOldestAvailable)
-        XCTAssertEqual(batch.updates.map(\.seq), Array(1...25))
+        XCTAssertEqual(batch.updates.map(\.seq), Array(1...26))
         let handoff = batch.updates.compactMap { update -> (String, LiveCheckpoint)? in
             if case let .handoff(reason, checkpoint) = update.kind { return (reason, checkpoint) } else { return nil }
         }.first
@@ -35,6 +35,12 @@ final class LiveSessionContractTests: XCTestCase {
         XCTAssertTrue(batch.updates.map(\.kind).contains(.branchReturned(LiveBranchResult(
             taskId: "task-2", title: "查 reqwest 超时语义", summary: "reqwest 的 timeout 覆盖整个请求，连接超时另设",
             returnedMs: 1_761_350_400_500))))
+        XCTAssertTrue(batch.updates.map(\.kind).contains(.review(LiveReviewCard(
+            reviewId: "rv-1", round: 1, state: "waitingCoder", turnId: "u1", reviewerTaskId: "task-3",
+            reviewerLabel: "Claude Code · sonnet",
+            findings: [LiveReviewFinding(id: "r1", severity: "blocker", text: "重试没有上限，可能死循环",
+                                         file: "src/client.rs", line: 88, decision: "adopt")],
+            summary: "超时逻辑可行，重试上限缺测试"))))
         XCTAssertEqual(batch.updates[0], LiveSessionUpdate(taskId: "task-1", seq: 1, atMs: 1_761_350_400_000,
                                                            kind: .turnStarted(turnId: "u1")))
         let kinds = batch.updates.map(\.kind)

@@ -138,6 +138,9 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
     /// The agent's own session id, for 复制 Session ID; nil before it has one.
     public var sessionID: String?
     /// Project rows: the folder icon's tint (a `ProjectColor` id), default
+    /// B4-1: a reviewer (`review`) or side branch (`branch`) shown indented
+    /// under its parent session; nil for a top-level row.
+    public var childKind: String?
     /// Agent configuration id and group (更多 menu, 2026-10-28).
     public var color: String?
     public var defaultAgent: String?

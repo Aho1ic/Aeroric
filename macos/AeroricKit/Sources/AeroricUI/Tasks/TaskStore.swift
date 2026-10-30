@@ -45,6 +45,10 @@ public final class TaskStore {
         public var harness: String?
         public var sessionID: String?
         public var model: String?
+        /// B4-1: the task a reviewer reviews or a side branch came from.
+        public var parentTaskID: String?
+        /// `review` | `branch` when `parentTaskID` is set.
+        public var childKind: String?
 
         public init(
             id: String,
@@ -64,8 +68,12 @@ public final class TaskStore {
             agentConfigID: String? = nil,
             harness: String? = nil,
             sessionID: String? = nil,
-            model: String? = nil
+            model: String? = nil,
+            parentTaskID: String? = nil,
+            childKind: String? = nil
         ) {
+            self.parentTaskID = parentTaskID
+            self.childKind = childKind
             self.model = model
             self.prompt = prompt
             self.agentConfigID = agentConfigID

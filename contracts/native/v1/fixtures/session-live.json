@@ -88,7 +88,7 @@
     "turnActive": true
   },
   "updates": {
-    "latestSeq": 25,
+    "latestSeq": 26,
     "updates": [
       {
         "atMs": 1761350400000,
@@ -392,26 +392,51 @@
       },
       {
         "atMs": 1761350400022,
+        "review": {
+          "findings": [
+            {
+              "decision": "adopt",
+              "file": "src/client.rs",
+              "id": "r1",
+              "line": 88,
+              "severity": "blocker",
+              "text": "重试没有上限，可能死循环"
+            }
+          ],
+          "reviewId": "rv-1",
+          "reviewerLabel": "Claude Code · sonnet",
+          "reviewerTaskId": "task-3",
+          "round": 1,
+          "state": "waitingCoder",
+          "summary": "超时逻辑可行，重试上限缺测试",
+          "turnId": "u1"
+        },
+        "seq": 23,
+        "taskId": "task-1",
+        "type": "review"
+      },
+      {
+        "atMs": 1761350400023,
         "kind": "item/futureThing",
         "payload": {
           "x": 1
         },
-        "seq": 23,
+        "seq": 24,
         "taskId": "task-1",
         "type": "unknown"
       },
       {
-        "atMs": 1761350400023,
+        "atMs": 1761350400024,
         "messageId": "m1",
-        "seq": 24,
+        "seq": 25,
         "taskId": "task-1",
         "text": "我来看看",
         "type": "messageCompleted"
       },
       {
-        "atMs": 1761350400024,
+        "atMs": 1761350400025,
         "reason": "completed",
-        "seq": 25,
+        "seq": 26,
         "taskId": "task-1",
         "turnId": "u1",
         "type": "turnEnded"

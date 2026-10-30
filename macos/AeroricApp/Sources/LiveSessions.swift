@@ -97,6 +97,30 @@ struct HostLiveSessionActions: LiveSessionActions {
     func acceptClarification(taskID: String, acceptance: [LiveAcceptance], constraints: [String]) async throws {
         try await client().acceptClarification(taskId: taskID, acceptance: acceptance, constraints: constraints)
     }
+
+    func reviewPaused(taskID: String) async throws -> Bool {
+        try await client().review(taskId: taskID).settings?.paused ?? false
+    }
+
+    func setReviewPaused(taskID: String, _ paused: Bool) async throws {
+        try await client().setReview(taskId: taskID, paused: paused)
+    }
+
+    func requestReview(taskID: String) async throws {
+        try await client().reviewAction("review.request", taskId: taskID)
+    }
+
+    func sendReview(taskID: String) async throws {
+        try await client().reviewAction("review.send", taskId: taskID)
+    }
+
+    func retryReview(taskID: String) async throws {
+        try await client().reviewAction("review.retry", taskId: taskID)
+    }
+
+    func openTask(_ taskID: String) {
+        services.requestedSelection = SessionNavigation.task(taskID)
+    }
 }
 
 extension AppServices {
@@ -212,6 +236,16 @@ extension AppServices {
         guard let client = sessionsClient, let list = try? await client.autoCheckFailures() else { return }
         let next = list.mapValues { AttentionQueue.CheckFailure(summary: $0.summary, atMs: $0.atMs) }
         if next != checkFailures { checkFailures = next }
+        // B4-1: review loops that need the user join the same queue; a loop
+        // keeps the time it was first seen so the queue order holds still.
+        guard let reviews = try? await client.reviewAttention() else { return }
+        let now = UInt64(Date().timeIntervalSince1970 * 1000)
+        var nextReviews: [String: AttentionQueue.CheckFailure] = [:]
+        for (task, card) in reviews {
+            nextReviews[task] = AttentionQueue.CheckFailure(summary: ReviewText.summary(card),
+                                                            atMs: reviewNeeds[task]?.atMs ?? now)
+        }
+        if nextReviews != reviewNeeds { reviewNeeds = nextReviews }
     }
 
     func refreshDowngrades() async {

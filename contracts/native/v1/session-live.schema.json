@@ -910,6 +910,108 @@
             },
             {
               "properties": {
+                "review": {
+                  "properties": {
+                    "findings": {
+                      "items": {
+                        "properties": {
+                          "decision": {
+                            "enum": [
+                              "adopt",
+                              "reject",
+                              "ask"
+                            ]
+                          },
+                          "file": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "line": {
+                            "type": "integer"
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "severity": {
+                            "enum": [
+                              "blocker",
+                              "major",
+                              "minor"
+                            ]
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "severity",
+                          "text"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "raw": {
+                      "type": "string"
+                    },
+                    "reviewId": {
+                      "type": "string"
+                    },
+                    "reviewerLabel": {
+                      "type": "string"
+                    },
+                    "reviewerTaskId": {
+                      "type": "string"
+                    },
+                    "round": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "sameFamily": {
+                      "type": "boolean"
+                    },
+                    "state": {
+                      "enum": [
+                        "reviewing",
+                        "waitingSend",
+                        "waitingCoder",
+                        "passed",
+                        "settled",
+                        "escalated",
+                        "interrupted",
+                        "failed"
+                      ]
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reviewId",
+                    "round",
+                    "state",
+                    "turnId"
+                  ],
+                  "type": "object"
+                },
+                "type": {
+                  "const": "review"
+                }
+              },
+              "required": [
+                "type",
+                "review"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "message": {
                   "type": "string"
                 },

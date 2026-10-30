@@ -126,6 +126,8 @@ pub struct StructuredExecutor {
     turn_changes: Arc<super::turn_changes::TurnChangeTracker>,
     /// B4′: every task's checkpoint, derived from its updates.
     checkpoints: Arc<super::checkpoint::CheckpointSink>,
+    /// B4-1: the review loops, between the host's sink and the checkpoints.
+    reviews: Arc<super::review::ReviewLoop>,
     /// B4′: how to start the context server (`program`, `data_dir`); unset
     /// gives sessions none (tests, and hosts that opt out).
     context_program: Mutex<Option<(String, String)>>,
@@ -147,7 +149,11 @@ impl StructuredExecutor {
         let registry: Arc<DriverRegistry> = Arc::default();
         // Beneath the turn-change tracker, so it also sees the updates that
         // tracker appends after a turn (turnChanges, autoCheck).
+        let reviews = super::review::ReviewLoop::new(sink);
+        reviews.set_registry(Arc::clone(&registry));
+        let sink: Arc<dyn LiveStatusSink> = Arc::clone(&reviews) as Arc<dyn LiveStatusSink>;
         let checkpoints = super::checkpoint::CheckpointSink::new(sink);
+        reviews.set_checkpoints(Arc::downgrade(&checkpoints));
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&checkpoints) as Arc<dyn LiveStatusSink>;
         let turn_changes = super::turn_changes::TurnChangeTracker::new(sink, Arc::clone(&registry));
         checkpoints.set_registry(Arc::clone(&registry));
@@ -157,6 +163,12 @@ impl StructuredExecutor {
                 .map(|cp| cp.acceptance_checks(task))
                 .unwrap_or_default()
         }));
+        let weak = Arc::downgrade(&reviews);
+        turn_changes.set_hook(Arc::new(move |settled| {
+            if let Some(reviews) = weak.upgrade() {
+                reviews.turn_settled(settled);
+            }
+        }));
         let sink: Arc<dyn LiveStatusSink> =
             Arc::new(super::turn_changes::TrackingSink(Arc::clone(&turn_changes)));
         let executor = Arc::new(Self {
@@ -165,6 +177,7 @@ impl StructuredExecutor {
             sink,
             turn_changes,
             checkpoints,
+            reviews,
             context_program: Mutex::new(None),
             context_tokens: Arc::default(),
             runtime: runtime.clone(),
@@ -264,6 +277,11 @@ impl StructuredExecutor {
     /// B4′: the tasks' checkpoints (the host sets where they are kept).
     pub fn checkpoints(&self) -> &Arc<super::checkpoint::CheckpointSink> {
         &self.checkpoints
+    }
+
+    /// B4-1: the review loops (the host sets their host and directory).
+    pub fn reviews(&self) -> &Arc<super::review::ReviewLoop> {
+        &self.reviews
     }
 
     /// Tasks whose latest check run failed (the attention queue).

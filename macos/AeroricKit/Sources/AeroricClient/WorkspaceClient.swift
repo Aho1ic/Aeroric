@@ -135,6 +135,10 @@ public struct WorkspaceClient: Sendable {
         public var harness: String? = nil
         /// The model the task was started with, if one was chosen.
         public var model: String? = nil
+        /// B4-1: the task this one reviews (`reviewOf`) or branched from (`branchOf`).
+        public var parentTaskID: String? = nil
+        /// `review` | `branch` when `parentTaskID` is set.
+        public var childKind: String? = nil
     }
 
     /// 展示标题：记录无 title 字段时取 prompt 首行（展示推导，非业务推断）。
@@ -189,7 +193,9 @@ public struct WorkspaceClient: Sendable {
             prompt: record["prompt"]?.stringValue,
             agentConfigID: record["agentConfigId"]?.stringValue,
             harness: harness(record),
-            model: record["selectedModel"]?.stringValue
+            model: record["selectedModel"]?.stringValue,
+            parentTaskID: record["reviewOf"]?.stringValue ?? record["branchOf"]?.stringValue,
+            childKind: record["reviewOf"] != nil ? "review" : (record["branchOf"] != nil ? "branch" : nil)
         )
     }
 
