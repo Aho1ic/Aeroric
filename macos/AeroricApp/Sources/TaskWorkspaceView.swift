@@ -760,6 +760,22 @@ struct TaskWorkspaceView: View {
             presentSaveFailure("宿主未连接")
             return false
         }
+        // 2026-10-30: check the disk first; someone (often an Agent) may have
+        // changed the file since it was opened.
+        if let base = resourceBook.draftBase(target),
+           let disk = try? await reader.text(projectID: target.projectID, path: target.path),
+           ProjectResourceBook.saveConflicts(disk: disk, base: base) {
+            switch askSaveConflict(target) {
+            case .overwrite:
+                break
+            case .reload:
+                resourceBook.discardDraft(target)
+                loadPreview(target)
+                return false
+            case .cancel:
+                return false
+            }
+        }
         do {
             try await reader.write(projectID: target.projectID, path: target.path, content: text)
             resourceBook.markSaved(target, text: text)
@@ -767,6 +783,23 @@ struct TaskWorkspaceView: View {
         } catch {
             presentSaveFailure(error.localizedDescription)
             return false
+        }
+    }
+
+    private enum SaveConflictChoice { case cancel, reload, overwrite }
+
+    private func askSaveConflict(_ target: ResourcePreviewTarget) -> SaveConflictChoice {
+        let alert = NSAlert()
+        alert.messageText = "文件在你打开后被改过了"
+        alert.informativeText = "「\(FileEditText.name(of: target.path))」可能被 Agent 或别的程序改过。直接保存会覆盖那些改动。"
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "放弃我的修改，重新读取")
+        let overwrite = alert.addButton(withTitle: "覆盖保存")
+        overwrite.hasDestructiveAction = true
+        switch alert.runModal() {
+        case .alertSecondButtonReturn: return .reload
+        case .alertThirdButtonReturn: return .overwrite
+        default: return .cancel
         }
     }
 
@@ -1088,14 +1121,16 @@ struct TaskWorkspaceView: View {
             EmptyView() // Mounted directly by centralContent.
         case .files:
             if let projectID = projectContextID, gitProjectPath != nil {
-                // Read-only for now: browse and preview; no create/rename/delete handler.
+                // 2026-10-30: create, rename and move to the Trash; linked folders stay read-only.
                 FileBrowserView(
                     store: services.fileTreeStore,
+                    title: services.taskStore.projects.first(where: { $0.id == projectID })?.name ?? "",
                     onExpand: { path in Task { await services.loadFiles(projectID: projectID, path: path) } },
                     onOpen: { path in
                         let target = LinkedFolderPath.request(projectID: projectID, path: path)
                         openPreview(.init(projectID: target.projectID, path: target.path, kind: .file))
-                    }
+                    },
+                    onEdit: { edit in Task { await services.applyFileEdit(projectID: projectID, edit: edit) } }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Linking or unlinking a folder redraws the tree's top level.

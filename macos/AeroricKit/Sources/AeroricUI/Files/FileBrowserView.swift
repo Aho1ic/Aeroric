@@ -1,181 +1,270 @@
 import AeroricClient
 import SwiftUI
 
-/// P6-01 Action 4：文件浏览器视图（树懒加载＋操作菜单）。树懒加载（首次
-/// 展开才拉子目录）；操作走 FilesOperationSheet（新建/重命名/删除——删除
-/// 进废纸篓）。
+/// A change the file tree asks the App to make (2026-10-30). Removing goes
+/// to the Trash; the page offers no permanent delete.
+public enum FileEdit: Equatable, Sendable {
+    case create(parent: String, name: String, directory: Bool)
+    case rename(path: String, newName: String)
+    case trash(path: String)
+
+    /// The folder whose listing changes.
+    public var parent: String {
+        switch self {
+        case let .create(parent, _, _): parent
+        case let .rename(path, _), let .trash(path): FileEditText.parent(of: path)
+        }
+    }
+}
+
+/// The file tree's words and paths, kept out of the view so they can be tested.
+public enum FileEditText {
+    public static func child(of parent: String, name: String) -> String {
+        parent.isEmpty ? name : "\(parent)/\(name)"
+    }
+
+    public static func parent(of path: String) -> String {
+        guard let slash = path.lastIndex(of: "/") else { return "" }
+        return String(path[..<slash])
+    }
+
+    /// Linked folders are read-only here: they belong to other folders on the Mac.
+    public static func writable(_ path: String) -> Bool {
+        !path.hasPrefix(LinkedFolderPath.prefix)
+    }
+
+    public static func formTitle(_ operation: FilesOperation, parentName: String) -> String {
+        let place = parentName.isEmpty ? "项目根目录" : parentName
+        switch operation {
+        case .createFile: return "在 \(place) 里新建文件"
+        case .createDirectory: return "在 \(place) 里新建文件夹"
+        case let .rename(path): return "重命名「\(name(of: path))」"
+        case .delete: return ""
+        }
+    }
+
+    public static func name(of path: String) -> String {
+        guard let slash = path.lastIndex(of: "/") else { return path }
+        return String(path[path.index(after: slash)...])
+    }
+}
+
+/// Files page tree (2026-10-30, design approved): capsule rows indented by
+/// depth; on hover a "…" menu to create inside a folder, rename, or move to
+/// the Trash (confirmed); ＋文件 / ＋文件夹 create at the project root.
 public struct FileBrowserView: View {
     let store: FileTreeStore
+    let title: String
     public var onExpand: ((_ path: String) -> Void)?
-    public var onOperation: ((_ operation: FilesOperation, _ path: String) -> Void)?
     /// A file row was clicked (directories toggle instead).
     public var onOpen: ((_ path: String) -> Void)?
+    /// Nil keeps the tree read-only.
+    public var onEdit: ((FileEdit) -> Void)?
 
-    public init(
-        store: FileTreeStore,
-        onExpand: ((_ path: String) -> Void)? = nil,
-        onOperation: ((_ operation: FilesOperation, _ path: String) -> Void)? = nil,
-        onOpen: ((_ path: String) -> Void)? = nil
-    ) {
+    @State private var naming: FilesOperation?
+    @State private var name = ""
+    @State private var trashing: FileTreeStore.Node?
+
+    public init(store: FileTreeStore, title: String = "", onExpand: ((_ path: String) -> Void)? = nil,
+                onOpen: ((_ path: String) -> Void)? = nil, onEdit: ((FileEdit) -> Void)? = nil) {
         self.store = store
+        self.title = title
         self.onExpand = onExpand
-        self.onOperation = onOperation
         self.onOpen = onOpen
+        self.onEdit = onEdit
     }
 
     public var body: some View {
-        List {
-            rootRows(path: "")
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            header
+            if let error = store.actionError {
+                HStack(spacing: AeroricSpace.s) {
+                    Image(systemName: "exclamationmark.triangle")
+                    Text(error).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button { store.actionError = nil } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
+                        .buttonStyle(.plain).accessibilityLabel("关闭")
+                }
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.danger)
+                .padding(.horizontal, AeroricSpace.m)
+                .frame(height: 26)
+                .background(AeroricColor.danger.opacity(0.12), in: Capsule(style: .continuous))
+                .help(error)
+            }
+            if let naming { nameForm(naming) }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    rows(path: "", depth: 0)
+                }
+                .padding(.vertical, AeroricSpace.xs)
+            }
+            .scrollIndicators(.hidden)
         }
-        .listStyle(.plain)
+        .padding(AeroricSpace.m)
+        .alert("把「\(trashing?.name ?? "")」移到废纸篓？", isPresented: Binding(get: { trashing != nil }, set: { if !$0 { trashing = nil } }),
+               presenting: trashing) { node in
+            Button("移到废纸篓", role: .destructive) { onEdit?(.trash(path: node.path)) }
+            Button("取消", role: .cancel) {}
+        } message: { node in
+            Text(node.isDir ? "文件夹和里面的内容可以在访达的废纸篓里找回。" : "可以在访达的废纸篓里找回。")
+        }
         .accessibilityIdentifier("files.browser")
     }
 
-    @ViewBuilder
-    private func rootRows(path: String) -> some View {
-        if let nodes = store.visibleChildren(of: path) {
-            ForEach(nodes) { node in
-                FileRow(
-                    node: node,
-                    isExpanded: store.expandedPaths.contains(node.path),
-                    isLoading: store.isLoading(node.path),
-                    onToggle: {
-                        if store.toggleExpanded(node.path) {
-                            onExpand?(node.path)
-                        }
-                    },
-                    onOperation: { operation in
-                        onOperation?(operation, node.path)
-                    },
-                    onOpen: onOpen.map { open in { open(node.path) } },
-                    allowsOperations: onOperation != nil
-                )
-                if store.expandedPaths.contains(node.path) {
-                    FileTreeBranch(store: store, path: node.path, onExpand: onExpand, onOperation: onOperation,
-                                   onOpen: onOpen)
-                }
+    private var header: some View {
+        HStack(spacing: AeroricSpace.s) {
+            Text(title).font(.system(size: AeroricType.secondary, weight: .semibold))
+                .foregroundStyle(AeroricColor.textSecondary).lineLimit(1)
+            Spacer(minLength: AeroricSpace.s)
+            if onEdit != nil {
+                Button { begin(.createFile(path: "")) } label: { Label("文件", systemImage: "doc.badge.plus") }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true)).fixedSize()
+                    .help("在项目根目录新建文件")
+                Button { begin(.createDirectory(path: "")) } label: { Label("文件夹", systemImage: "folder.badge.plus") }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true)).fixedSize()
+                    .help("在项目根目录新建文件夹")
             }
-        } else if store.isLoading(path) {
-            ProgressView()
-                .padding(.leading, 24)
         }
     }
-}
 
-/// 树分支（递归用独立 struct：@ViewBuilder 递归函数的 opaque type 自引用
-/// 无法编译——SwiftUI 递归的标准出路）。
-struct FileTreeBranch: View {
-    let store: FileTreeStore
-    let path: String
-    var onExpand: ((_ path: String) -> Void)?
-    var onOperation: ((_ operation: FilesOperation, _ path: String) -> Void)?
-    var onOpen: ((_ path: String) -> Void)?
-
-    var body: some View {
-        FileBrowserBranchRows(store: store, path: path, onExpand: onExpand, onOperation: onOperation, onOpen: onOpen)
+    private func begin(_ operation: FilesOperation) {
+        if case let .rename(path) = operation { name = FileEditText.name(of: path) } else { name = "" }
+        naming = operation
     }
-}
 
-struct FileBrowserBranchRows: View {
-    let store: FileTreeStore
-    let path: String
-    var onExpand: ((_ path: String) -> Void)?
-    var onOperation: ((_ operation: FilesOperation, _ path: String) -> Void)?
-    var onOpen: ((_ path: String) -> Void)?
-
-    var body: some View {
-        if let nodes = store.visibleChildren(of: path) {
-            ForEach(nodes) { node in
-                FileRow(
-                    node: node,
-                    isExpanded: store.expandedPaths.contains(node.path),
-                    isLoading: store.isLoading(node.path),
-                    onToggle: {
-                        if store.toggleExpanded(node.path) {
-                            onExpand?(node.path)
-                        }
-                    },
-                    onOperation: { operation in
-                        onOperation?(operation, node.path)
-                    },
-                    onOpen: onOpen.map { open in { open(node.path) } },
-                    allowsOperations: onOperation != nil
-                )
-                if store.expandedPaths.contains(node.path) {
-                    FileBrowserBranchRows(
-                        store: store, path: node.path, onExpand: onExpand, onOperation: onOperation, onOpen: onOpen
-                    )
-                }
+    private func nameForm(_ operation: FilesOperation) -> some View {
+        let parentName: String = {
+            switch operation {
+            case let .createFile(path), let .createDirectory(path): FileEditText.name(of: path)
+            default: ""
             }
-        } else if store.isLoading(path) {
-            ProgressView()
-                .padding(.leading, 24)
+        }()
+        return VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            Text(FileEditText.formTitle(operation, parentName: parentName))
+                .font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textSecondary).lineLimit(1)
+            CapsuleField(placeholder: operation == .createDirectory(path: parentPath(operation)) ? "文件夹名" : "文件名",
+                         text: $name)
+                .onSubmit { submit(operation) }
+            HStack(spacing: AeroricSpace.s) {
+                Spacer()
+                Button("取消") { naming = nil }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                Button(isRename(operation) ? "重命名" : "创建") { submit(operation) }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.primary, compact: true))
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(AeroricSpace.m)
+        .background(AeroricColor.layer2, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(AeroricColor.separator2))
+    }
+
+    private func parentPath(_ operation: FilesOperation) -> String {
+        switch operation {
+        case let .createFile(path), let .createDirectory(path), let .rename(path), let .delete(path): path
         }
     }
+
+    private func isRename(_ operation: FilesOperation) -> Bool {
+        if case .rename = operation { return true }
+        return false
+    }
+
+    private func submit(_ operation: FilesOperation) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        switch operation {
+        case let .createFile(parent): onEdit?(.create(parent: parent, name: trimmed, directory: false))
+        case let .createDirectory(parent): onEdit?(.create(parent: parent, name: trimmed, directory: true))
+        case let .rename(path): onEdit?(.rename(path: path, newName: trimmed))
+        case .delete: break
+        }
+        naming = nil
+        name = ""
+    }
+
+    private func rows(path: String, depth: Int) -> AnyView {
+        if let nodes = store.visibleChildren(of: path) {
+            return AnyView(ForEach(nodes) { node in
+                FileRow(node: node, depth: depth,
+                        isExpanded: store.expandedPaths.contains(node.path),
+                        isLoading: store.isLoading(node.path),
+                        editable: onEdit != nil && FileEditText.writable(node.path),
+                        onToggle: { if store.toggleExpanded(node.path) { onExpand?(node.path) } },
+                        onOpen: { onOpen?(node.path) },
+                        onOperation: { operation in
+                            if case .delete = operation { trashing = node } else { begin(operation) }
+                        })
+                if store.expandedPaths.contains(node.path) {
+                    rows(path: node.path, depth: depth + 1)
+                }
+            })
+        }
+        if store.isLoading(path) {
+            return AnyView(ProgressView().controlSize(.small).padding(.leading, CGFloat(depth) * 14 + 24))
+        }
+        return AnyView(EmptyView())
+    }
 }
 
-/// P6-01 Action 4：单行（懒加载箭头＋symlink 标记＋操作菜单）。
+/// One row of the tree: chevron for folders, icon, name; a "…" menu on hover.
 public struct FileRow: View {
     let node: FileTreeStore.Node
-    var isExpanded: Bool
-    var isLoading: Bool
-    var onToggle: () -> Void
-    var onOperation: (FilesOperation) -> Void
-    var onOpen: (() -> Void)?
-    /// Without an operation handler the "…" menu would offer actions that do nothing.
-    var allowsOperations: Bool
-
-    public init(
-        node: FileTreeStore.Node,
-        isExpanded: Bool,
-        isLoading: Bool,
-        onToggle: @escaping () -> Void,
-        onOperation: @escaping (FilesOperation) -> Void,
-        onOpen: (() -> Void)? = nil,
-        allowsOperations: Bool = true
-    ) {
-        self.node = node
-        self.isExpanded = isExpanded
-        self.isLoading = isLoading
-        self.onToggle = onToggle
-        self.onOperation = onOperation
-        self.onOpen = onOpen
-        self.allowsOperations = allowsOperations
-    }
+    let depth: Int
+    let isExpanded: Bool
+    let isLoading: Bool
+    let editable: Bool
+    let onToggle: () -> Void
+    let onOpen: () -> Void
+    let onOperation: (FilesOperation) -> Void
+    @State private var hovered = false
 
     public var body: some View {
-        HStack(spacing: 6) {
-            if node.isDir {
-                Button {
-                    onToggle()
-                } label: {
-                    Image(systemName: isLoading ? "loading" : (isExpanded ? "chevron.down" : "chevron.right"))
-                        .font(.caption2)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("files.toggle.\(node.path)")
-                Image(systemName: "folder")
-                    .foregroundStyle(AeroricColor.accent)
-            } else {
-                Image(systemName: node.isSymlink ? "link" : "doc")
-                    .foregroundStyle(AeroricColor.textSecondary)
-                    .padding(.leading, 14)
-            }
-            Text(node.name)
-                .lineLimit(1)
-            Spacer()
-            if allowsOperations { Menu("…") {
+        HStack(spacing: AeroricSpace.s) {
+            Group {
                 if node.isDir {
-                    Button("新建文件…") { onOperation(.createFile(path: node.path)) }
-                    Button("新建文件夹…") { onOperation(.createDirectory(path: node.path)) }
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                } else {
+                    Color.clear
                 }
-                Button("重命名…") { onOperation(.rename(path: node.path)) }
-                Button("删除（进废纸篓）", role: .destructive) { onOperation(.delete(path: node.path)) }
             }
-            .accessibilityIdentifier("files.menu.\(node.path)") }
+            .frame(width: 10)
+            Image(systemName: node.isDir ? "folder" : (node.isSymlink ? "link" : "doc"))
+                .foregroundStyle(node.isDir ? AeroricColor.accent : AeroricColor.textSecondary)
+                .frame(width: 16)
+            Text(node.name).lineLimit(1).truncationMode(.middle)
+            if isLoading { ProgressView().controlSize(.mini) }
+            Spacer(minLength: 0)
+            if editable && hovered {
+                Menu {
+                    if node.isDir {
+                        Button("新建文件…", systemImage: "doc.badge.plus") { onOperation(.createFile(path: node.path)) }
+                        Button("新建文件夹…", systemImage: "folder.badge.plus") { onOperation(.createDirectory(path: node.path)) }
+                        Divider()
+                    }
+                    Button("重命名…", systemImage: "pencil") { onOperation(.rename(path: node.path)) }
+                    Button("移到废纸篓…", systemImage: "trash", role: .destructive) { onOperation(.delete(path: node.path)) }
+                } label: {
+                    Image(systemName: "ellipsis").frame(width: 20, height: 20)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityIdentifier("files.menu.\(node.path)")
+            }
         }
-        .contentShape(Rectangle())
-        .onTapGesture { if node.isDir { onToggle() } else { onOpen?() } }
+        .font(.system(size: AeroricType.secondary))
+        .padding(.leading, CGFloat(depth) * 14 + AeroricSpace.s)
+        .padding(.trailing, AeroricSpace.s)
+        .frame(height: 28)
+        .background { if hovered { Capsule(style: .continuous).fill(AeroricColor.hover) } }
+        .contentShape(Capsule(style: .continuous))
+        .onTapGesture { if node.isDir { onToggle() } else { onOpen() } }
+        .onHover { hovered = $0 }
+        .help(node.path)
         .accessibilityIdentifier("files.row.\(node.path)")
     }
 }

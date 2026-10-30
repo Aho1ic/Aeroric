@@ -32,6 +32,8 @@ public final class FileTreeStore {
     public private(set) var expandedPaths: Set<String> = []
     /// 加载中标记（防重复触发）。
     public private(set) var loadingPaths: Set<String> = []
+    /// Why the last create / rename / trash failed (2026-10-30), until dismissed.
+    public var actionError: String?
 
     public init() {}
 
@@ -51,6 +53,12 @@ public final class FileTreeStore {
 
     /// 展开/收起（懒加载触发点：首次展开返回 true＝需要拉子目录）。
     @discardableResult
+    /// Opens `path` (no-op when open); true when its children should load.
+    public func expand(_ path: String) -> Bool {
+        guard !path.isEmpty, !expandedPaths.contains(path) else { return false }
+        return toggleExpanded(path)
+    }
+
     public func toggleExpanded(_ path: String) -> Bool {
         if expandedPaths.contains(path) {
             expandedPaths.remove(path)

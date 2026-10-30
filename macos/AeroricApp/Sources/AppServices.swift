@@ -1133,6 +1133,38 @@ extension AppServices: WorkspaceStateProviding {
         }
     }
 
+    /// Files page writes (2026-10-30): create, rename, move to the Trash; the
+    /// folder that changed reloads, a failure shows above the tree.
+    func applyFileEdit(projectID: String, edit: FileEdit) async {
+        guard let connection = attachedConnection else { return }
+        let files = FilesClient(connection: connection)
+        fileTreeStore.actionError = nil
+        do {
+            switch edit {
+            case let .create(parent, name, directory):
+                let path = FileEditText.child(of: parent, name: name)
+                if directory {
+                    try await files.createDirectory(projectId: projectID, path: path)
+                } else {
+                    try await files.createFile(projectId: projectID, path: path)
+                }
+                _ = fileTreeStore.expand(parent)
+            case let .rename(path, newName):
+                try await files.renamePath(projectId: projectID, path: path, newName: newName)
+            case let .trash(path):
+                try await files.deletePath(projectId: projectID, path: path)
+            }
+        } catch {
+            let action = switch edit {
+            case .create: "新建失败"
+            case .rename: "重命名失败"
+            case .trash: "移到废纸篓失败"
+            }
+            fileTreeStore.actionError = "\(action)：\(Self.gitReason(error))"
+        }
+        await loadFiles(projectID: projectID, path: edit.parent)
+    }
+
     func loadGitDiff(projectPath: String, change: GitStore.Change) async {
         guard let connection = attachedConnection else { return }
         do {

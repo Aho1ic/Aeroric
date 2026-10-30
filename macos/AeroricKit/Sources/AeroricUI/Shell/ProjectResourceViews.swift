@@ -391,9 +391,11 @@ public struct CentralResourcePreview: View {
                     Text("\(projectName) · \(editable ? "文件" : target.kind.label)")
                     Spacer()
                     if editable, book.isDirty(target) {
+                        Text("已修改").foregroundStyle(AeroricColor.textTertiary)
                         Button("保存") { onSave?(draft.wrappedValue) }
                             .keyboardShortcut("s")
-                            .controlSize(.small)
+                            .buttonStyle(AeroricCapsuleButtonStyle(.primary, compact: true))
+                            .fixedSize()
                             .accessibilityIdentifier("preview.save")
                     }
                     NativeIconButton(systemImage: "arrow.clockwise", label: "重新读取此预览",

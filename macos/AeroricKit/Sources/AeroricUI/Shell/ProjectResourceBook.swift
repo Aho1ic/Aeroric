@@ -185,6 +185,26 @@ public final class ProjectResourceBook {
             value.drafts[target] = text
         }
     }
+    /// The text the draft started from: what was on disk when editing began.
+    public func draftBase(_ target: ResourcePreviewTarget) -> String? {
+        let value = scene(target.projectID)
+        return value.draftBases[target] ?? value.previewText
+    }
+
+    /// Drops the edit so a reload shows the file as it is on disk.
+    public func discardDraft(_ target: ResourcePreviewTarget) {
+        edit(target.projectID) { value in
+            value.drafts[target] = nil
+            value.draftBases[target] = nil
+        }
+    }
+
+    /// Saving over a file someone else changed since it was opened needs a
+    /// decision (2026-10-30); an unchanged disk saves straight away.
+    public static func saveConflicts(disk: String, base: String) -> Bool {
+        disk != base
+    }
+
     /// After a successful save the draft becomes the new clean text.
     public func markSaved(_ target: ResourcePreviewTarget, text: String) {
         edit(target.projectID) { value in
