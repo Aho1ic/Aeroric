@@ -469,6 +469,8 @@ pub fn claude_permission_mode(permission: &str) -> &'static str {
     match permission {
         "full_access" => "bypassPermissions",
         "auto_edit" => "acceptEdits",
+        // B4′: the clarification turn reads, it does not write.
+        "plan" => "plan",
         _ => "default",
     }
 }

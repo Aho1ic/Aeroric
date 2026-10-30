@@ -79,6 +79,9 @@ pub enum Command {
     Backup(BackupCmd),
     /// 转发真实 PTY 字节（termios raw RAII；SIGWINCH→resize；退出 detach 不 cancel）。
     Attach { task_id: String },
+    /// Aeroric 上下文 MCP 服务（stdio）。由 Aeroric 给自己的会话启动，令牌从
+    /// `AERORIC_CONTEXT_TOKEN` 读，只能访问令牌所属任务的项目。
+    McpContext,
 }
 
 #[derive(Subcommand, Debug)]

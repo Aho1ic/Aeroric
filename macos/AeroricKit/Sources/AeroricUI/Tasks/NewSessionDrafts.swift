@@ -15,6 +15,9 @@ public struct SessionCapabilities: Equatable, Sendable {
     public var team = false
     public var review = false
     public var evolution = false
+    /// B4′ 开工前澄清: the first turn only proposes acceptance criteria. Wired
+    /// to the host, so it is not among the not-yet-wired `enabledNames`.
+    public var clarify = false
     public init() {}
     public var enabledNames: [String] {
         [(team, "团队协作"), (review, "独立审查"), (evolution, "任务工具进化")]

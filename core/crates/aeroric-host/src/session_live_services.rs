@@ -75,6 +75,10 @@ pub fn register_session_live_services(
     });
     live.executor
         .set_auto_check_policy(Arc::new(SettingsAutoChecks(Arc::clone(&live.context))));
+    // B4′: checkpoints live beside the other per-task files.
+    live.executor
+        .checkpoints()
+        .set_dir(live.context.paths.data_dir().join("checkpoints"));
     // Before any session method can answer: the previous host's drivers are gone.
     live.settle_orphaned();
     let methods: [(&str, Run); 10] = [
@@ -100,6 +104,590 @@ pub fn register_session_live_services(
         AUTO_CHECK_FAILURES_METHOD,
         blocking(&live, auto_check_failures),
     );
+    set.register(cp_wire::GET_METHOD, blocking(&live, checkpoint_get));
+    set.register(
+        cp_wire::ADD_CONSTRAINT_METHOD,
+        blocking(&live, checkpoint_add_constraint),
+    );
+    set.register(
+        cp_wire::SET_OBLIGATION_METHOD,
+        blocking(&live, checkpoint_set_obligation),
+    );
+    set.register(
+        cp_wire::CLARIFY_ACCEPT_METHOD,
+        blocking(&live, clarify_accept),
+    );
+    set.register(cp_wire::BRANCH_START_METHOD, blocking(&live, branch_start));
+    set.register(
+        cp_wire::BRANCH_RETURN_METHOD,
+        blocking(&live, branch_return),
+    );
+    set.register(CONTEXT_SEARCH_METHOD, blocking(&live, context_search));
+    set.register(CONTEXT_READ_METHOD, blocking(&live, context_read));
+    set.register(CONTEXT_HANDOFF_METHOD, blocking(&live, context_handoff));
+    // B4′: sessions get the context server only from the product binary
+    // (a test harness is not an `aeroric-cli` that can serve it).
+    if let Ok(exe) = std::env::current_exe() {
+        let is_cli = exe
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n == "aeroric-cli");
+        if is_cli {
+            live.executor.set_context_program(
+                exe.to_string_lossy().into_owned(),
+                live.context.paths.data_dir().to_string_lossy().into_owned(),
+            );
+        }
+    }
+}
+
+// MARK: B4′ side branches (2026-10-30)
+
+/// The record field naming a side branch's parent task.
+const BRANCH_OF_FIELD: &str = "branchOf";
+
+/// `branch.start {taskId}`: a side branch — a fork of the task's session,
+/// marked with its parent so its conclusion can come back. `{taskId}` of the branch.
+fn branch_start(live: &Live, request: &Request) -> Frame {
+    let p: TaskParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let Some((project, _)) = live.record(&p.task_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no task with that id in any known project",
+        );
+    };
+    let branch = match crate::workspace_meta_services::fork_task(
+        &live.context,
+        &live.service,
+        &p.task_id,
+        "侧支",
+    ) {
+        Ok(id) => id,
+        Err(crate::workspace_meta_services::ForkError::NotFound(message)) => {
+            return failure(request.id.clone(), ErrorCode::NotFound, message)
+        }
+        Err(crate::workspace_meta_services::ForkError::Invalid(message)) => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::InvalidArgument,
+                &format!("{message}（侧支目前只支持 Claude Code 与 Codex）"),
+            )
+        }
+    };
+    let project_id = project
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let parent = p.task_id.clone();
+    let id = branch.clone();
+    let written = live.service.mutate(&project_id, |records, _now| {
+        let next = records
+            .iter()
+            .map(|record| {
+                let mut record = record.clone();
+                if record.get("id").and_then(Value::as_str) == Some(id.as_str()) {
+                    record
+                        .0
+                        .insert(BRANCH_OF_FIELD.into(), Value::String(parent.clone()));
+                }
+                record
+            })
+            .collect();
+        (next, true)
+    });
+    if let Err(error) = written {
+        return failure(request.id.clone(), ErrorCode::IoError, &error.to_string());
+    }
+    ok(request, json!({"taskId": branch}))
+}
+
+/// `branch.return {taskId}` (the branch): its last answer goes back to the
+/// parent as a result card and onto the parent's checkpoint; the branch's
+/// process stays in the branch.
+fn branch_return(live: &Live, request: &Request) -> Frame {
+    let p: TaskParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let Some((_, record)) = live.record(&p.task_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no task with that id in any known project",
+        );
+    };
+    let Some(parent) = record
+        .get(BRANCH_OF_FIELD)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "这个会话不是侧支",
+        );
+    };
+    let Some(answer) = context_messages(live, &record)
+        .into_iter()
+        .rev()
+        .find(|(role, _)| role == "assistant")
+        .map(|(_, text)| text)
+    else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "侧支还没有回答可以带回",
+        );
+    };
+    let title = context_title(&record);
+    let title = title.trim_end_matches("（侧支）").to_string();
+    let result = cp_wire::BranchResult {
+        task_id: p.task_id.clone(),
+        title,
+        summary: answer.chars().take(2000).collect(),
+        files: 0,
+        additions: 0,
+        deletions: 0,
+        returned_ms: now_ms(),
+    };
+    live.executor
+        .checkpoints()
+        .add_branch(&parent, result.clone());
+    if let Some(log) = live.executor.registry().log(&parent) {
+        log.push(
+            aeroric_protocol::session_live::SessionUpdateKind::BranchReturned {
+                result: result.clone(),
+            },
+            now_ms(),
+        );
+    }
+    ok(request, json!({"parentTaskId": parent, "result": result}))
+}
+
+// MARK: B4′ context server (2026-10-30)
+
+/// Called by `aeroric-cli mcp-context` on behalf of an agent; every call
+/// carries the token its session was started with.
+pub const CONTEXT_SEARCH_METHOD: &str = "context.searchSessions";
+pub const CONTEXT_READ_METHOD: &str = "context.readSession";
+pub const CONTEXT_HANDOFF_METHOD: &str = "context.readHandoff";
+/// A transcript bigger than this is skipped by the search (not truncated).
+const CONTEXT_MAX_FILE: u64 = 32 * 1024 * 1024;
+const CONTEXT_SNIPPET: usize = 80;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ContextParams {
+    token: String,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    all_projects: bool,
+    #[serde(default)]
+    task_id: Option<String>,
+    #[serde(default)]
+    from: Option<usize>,
+}
+
+/// `(task_id, project_id)` the token was issued for.
+fn context_scope(
+    live: &Live,
+    request: &Request,
+) -> Result<(ContextParams, String, String), Box<Frame>> {
+    let p: ContextParams = params(request)?;
+    match live.executor.context_tokens().resolve(&p.token) {
+        Some((task, project)) => Ok((p, task, project)),
+        None => Err(Box::new(failure(
+            request.id.clone(),
+            ErrorCode::Unauthenticated,
+            "上下文令牌无效或会话已结束",
+        ))),
+    }
+}
+
+/// The text blocks of a task's current session, in order (role, text).
+fn context_messages(live: &Live, record: &Record) -> Vec<(String, String)> {
+    let (_, path) = aeroric_core::tasks::session_owner::current_session(record);
+    let Some(path) = path else {
+        return Vec::new();
+    };
+    let too_big = std::fs::metadata(&path)
+        .map(|m| m.len() > CONTEXT_MAX_FILE)
+        .unwrap_or(true);
+    if too_big {
+        return Vec::new();
+    }
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let lines: Vec<String> = raw.lines().map(str::to_string).collect();
+    let family = launch_family_of(record, live.families.as_ref());
+    crate::services::parse_messages(&lines, family)
+        .into_iter()
+        .filter_map(|m| {
+            let text: Vec<String> = m
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    aeroric_core::sessions::SessionContent::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            (!text.is_empty()).then(|| (m.role.clone(), text.join("\n")))
+        })
+        .collect()
+}
+
+fn context_title(record: &Record) -> String {
+    let text = |k: &str| {
+        record
+            .get(k)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
+    text("name")
+        .or_else(|| text("prompt"))
+        .map(|s| s.chars().take(60).collect())
+        .unwrap_or_else(|| "未命名会话".into())
+}
+
+/// Around the first match: `CONTEXT_SNIPPET` chars each side, on char bounds.
+fn context_snippet(text: &str, at: usize, len: usize) -> String {
+    let start = text[..at]
+        .char_indices()
+        .rev()
+        .nth(CONTEXT_SNIPPET)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let end = text[at + len..]
+        .char_indices()
+        .nth(CONTEXT_SNIPPET)
+        .map(|(i, _)| at + len + i)
+        .unwrap_or(text.len());
+    let mut out = String::new();
+    if start > 0 {
+        out.push('…');
+    }
+    out.push_str(text[start..end].trim());
+    if end < text.len() {
+        out.push('…');
+    }
+    out
+}
+
+/// `context.searchSessions {token, query, limit?, allProjects?}`: sessions of
+/// the token's project whose text contains `query` (case-insensitive). Other
+/// projects are not searched in this version (Q-F18: needs the user's opt-in,
+/// which has no switch yet).
+fn context_search(live: &Live, request: &Request) -> Frame {
+    let (p, task_id, project_id) = match context_scope(live, request) {
+        Ok(scope) => scope,
+        Err(frame) => return *frame,
+    };
+    if p.all_projects {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "跨项目检索需要用户在 Aeroric 里授权，当前未开启；只能检索本项目的会话",
+        );
+    }
+    let query = p.query.unwrap_or_default();
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "query 不能为空",
+        );
+    }
+    let limit = p.limit.unwrap_or(10).clamp(1, 50);
+    let records = match live.service.load(&project_id) {
+        Ok(snapshot) => snapshot.records,
+        Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
+    };
+    let mut hits = Vec::new();
+    'records: for record in &records {
+        let Some(id) = record.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        for (index, (role, text)) in context_messages(live, record).iter().enumerate() {
+            let lower = text.to_lowercase();
+            // Lowercasing can move byte offsets; match on the original when it does.
+            let found = if lower.len() == text.len() {
+                lower.find(&needle).map(|at| (at, needle.len()))
+            } else {
+                text.find(query.trim()).map(|at| (at, query.trim().len()))
+            };
+            if let Some((at, len)) = found {
+                hits.push(json!({
+                    "taskId": id,
+                    "title": context_title(record),
+                    "current": id == task_id,
+                    "messageIndex": index,
+                    "role": role,
+                    "snippet": context_snippet(text, at, len),
+                }));
+                if hits.len() >= limit {
+                    break 'records;
+                }
+            }
+        }
+    }
+    ok(request, json!({"query": query, "hits": hits}))
+}
+
+/// `context.readSession {token, taskId?, from?, limit?}`: a session's text
+/// messages in this project (the token's own task by default).
+fn context_read(live: &Live, request: &Request) -> Frame {
+    let (p, task_id, project_id) = match context_scope(live, request) {
+        Ok(scope) => scope,
+        Err(frame) => return *frame,
+    };
+    let wanted = p.task_id.unwrap_or(task_id);
+    let records = match live.service.load(&project_id) {
+        Ok(snapshot) => snapshot.records,
+        Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
+    };
+    let Some(record) = records
+        .iter()
+        .find(|r| r.get("id").and_then(Value::as_str) == Some(wanted.as_str()))
+    else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "本项目没有这个会话",
+        );
+    };
+    let messages = context_messages(live, record);
+    let limit = p.limit.unwrap_or(40).clamp(1, 200);
+    let from = p
+        .from
+        .unwrap_or_else(|| messages.len().saturating_sub(limit));
+    let page: Vec<Value> = messages
+        .iter()
+        .enumerate()
+        .skip(from)
+        .take(limit)
+        .map(|(i, (role, text))| {
+            let text: String = text.chars().take(4000).collect();
+            json!({"index": i, "role": role, "text": text})
+        })
+        .collect();
+    ok(
+        request,
+        json!({"taskId": wanted, "title": context_title(record), "total": messages.len(), "messages": page}),
+    )
+}
+
+/// `context.readHandoff {token}`: the token's task checkpoint, as the brief.
+fn context_handoff(live: &Live, request: &Request) -> Frame {
+    let (_, task_id, _) = match context_scope(live, request) {
+        Ok(scope) => scope,
+        Err(frame) => return *frame,
+    };
+    let checkpoint = live
+        .executor
+        .checkpoints()
+        .get(&task_id)
+        .unwrap_or_else(|| cp_wire::Checkpoint::new(&task_id));
+    let brief = aeroric_core::sessions::live::checkpoint::brief::handoff_brief(
+        &checkpoint,
+        cp_wire::HandoffReason::Resume,
+    );
+    ok(request, json!({"brief": brief, "checkpoint": checkpoint}))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClarifyAcceptParams {
+    task_id: String,
+    #[serde(default)]
+    acceptance: Vec<cp_wire::Acceptance>,
+    #[serde(default)]
+    constraints: Vec<String>,
+}
+
+/// `clarify.accept {taskId, acceptance, constraints}`: the user ticked the
+/// criteria. They become the task's obligations, the permission chosen at
+/// submission comes back, and the work starts with them in the message.
+fn clarify_accept(live: &Live, request: &Request) -> Frame {
+    use aeroric_core::sessions::live::checkpoint::clarify;
+    let p: ClarifyAcceptParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let Some((project, record)) = live.record(&p.task_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no task with that id in any known project",
+        );
+    };
+    let project_id = project
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let restore = record
+        .get(clarify::RESTORE_FIELD)
+        .and_then(Value::as_str)
+        .unwrap_or("ask")
+        .to_string();
+    let checkpoints = live.executor.checkpoints();
+    checkpoints.add_obligations(
+        &p.task_id,
+        p.acceptance
+            .iter()
+            .enumerate()
+            .map(|(i, a)| cp_wire::Obligation {
+                id: format!("a{}", i + 1),
+                text: a.text.clone(),
+                check: a.check.clone(),
+                state: cp_wire::ObligationState::Open,
+                source: cp_wire::ObligationSource::Acceptance,
+            })
+            .collect(),
+    );
+    for constraint in &p.constraints {
+        checkpoints.add_constraint(&p.task_id, constraint);
+    }
+    let task_id = p.task_id.clone();
+    let restored = restore.clone();
+    let written = live.service.mutate(&project_id, |records, _now| {
+        let next = records
+            .iter()
+            .map(|record| {
+                let mut record = record.clone();
+                if record.get("id").and_then(Value::as_str) == Some(task_id.as_str()) {
+                    record.0.remove(clarify::RESTORE_FIELD);
+                    record
+                        .0
+                        .insert("permissionMode".into(), Value::String(restored.clone()));
+                }
+                record
+            })
+            .collect();
+        (next, true)
+    });
+    if let Err(error) = written {
+        return failure(request.id.clone(), ErrorCode::IoError, &error.to_string());
+    }
+    let driver = match live.driver(&p.task_id) {
+        Some(driver) => driver,
+        None => match live.reopen(request, &p.task_id) {
+            Ok(driver) => driver,
+            Err(frame) => return *frame,
+        },
+    };
+    if let Err(error) = driver.configure(ConfigChange {
+        permission: Some(restore),
+        ..ConfigChange::default()
+    }) {
+        return driver_failure(request, error);
+    }
+    match driver.prompt(clarify::start_message(&p.acceptance, &p.constraints)) {
+        Ok(()) => ok(request, json!({"accepted": true})),
+        Err(error) => driver_failure(request, error),
+    }
+}
+
+// MARK: B4′ checkpoints (2026-10-30)
+
+use aeroric_protocol::checkpoint as cp_wire;
+
+/// `checkpoint.get {taskId}` → `{checkpoint}` (an empty one when the task has
+/// none yet, so the progress page always has something to draw).
+fn checkpoint_get(live: &Live, request: &Request) -> Frame {
+    let p: TaskParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let Some((_, record)) = live.record(&p.task_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no task with that id in any known project",
+        );
+    };
+    let checkpoint = live
+        .executor
+        .checkpoints()
+        .get(&p.task_id)
+        .unwrap_or_else(|| cp_wire::Checkpoint::new(&p.task_id));
+    ok(
+        request,
+        json!({ "checkpoint": checkpoint, "branchOf": record.get(BRANCH_OF_FIELD) }),
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConstraintParams {
+    task_id: String,
+    text: String,
+}
+
+/// `checkpoint.addConstraint {taskId, text}`: a constraint the user states;
+/// it travels with every later handoff.
+fn checkpoint_add_constraint(live: &Live, request: &Request) -> Frame {
+    let p: ConstraintParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    if p.text.trim().is_empty() {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "约束不能为空",
+        );
+    }
+    if let Err(frame) = project_of(live, request, &p.task_id) {
+        return *frame;
+    }
+    live.executor
+        .checkpoints()
+        .add_constraint(&p.task_id, &p.text);
+    ok(request, json!({}))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ObligationParams {
+    task_id: String,
+    id: String,
+    state: cp_wire::ObligationState,
+}
+
+/// `checkpoint.setObligation {taskId, id, state}`: settle a criterion by hand.
+fn checkpoint_set_obligation(live: &Live, request: &Request) -> Frame {
+    let p: ObligationParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    if let Err(frame) = project_of(live, request, &p.task_id) {
+        return *frame;
+    }
+    if live
+        .executor
+        .checkpoints()
+        .set_obligation(&p.task_id, &p.id, p.state)
+    {
+        ok(request, json!({}))
+    } else {
+        failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "这个任务没有这条义务",
+        )
+    }
 }
 
 /// A05: which checks the task's project runs after a turn; keyed by task so
@@ -368,7 +956,14 @@ fn prompt(live: &Live, request: &Request) -> Frame {
             Err(frame) => return *frame,
         },
     };
-    match driver.prompt(p.text) {
+    let checkpoints = live.executor.checkpoints();
+    checkpoints.note_prompt(&p.task_id, &p.text);
+    // B4′: same session, new model or compacted — remind it of what is open.
+    let text = match checkpoints.take_reminder(&p.task_id) {
+        Some(reminder) => format!("{reminder}{}", p.text),
+        None => p.text,
+    };
+    match driver.prompt(text) {
         Ok(()) => ok(request, json!({"accepted": true})),
         Err(error) => driver_failure(request, error),
     }
@@ -460,6 +1055,12 @@ fn configure(live: &Live, request: &Request) -> Frame {
             "session.configure changes nothing",
         );
     }
+    if change.model.is_some() {
+        live.executor.checkpoints().arm_reminder(
+            &p.task_id,
+            aeroric_core::sessions::live::checkpoint::HandoffReason::ModelSwitch,
+        );
+    }
     // N3 D4: the record follows, so the board and a later resume agree.
     let Some((project, _)) = live.record(&p.task_id) else {
         return failure(
@@ -526,6 +1127,12 @@ fn command(live: &Live, request: &Request) -> Frame {
         LiveCommand::Compact => SlashCommand::Compact,
         LiveCommand::Review => SlashCommand::Review,
     };
+    if command == SlashCommand::Compact {
+        live.executor.checkpoints().arm_reminder(
+            &p.task_id,
+            aeroric_core::sessions::live::checkpoint::HandoffReason::AfterCompact,
+        );
+    }
     with_driver(live, request, &p.task_id, |d| d.command(command))
 }
 
@@ -845,6 +1452,12 @@ fn move_source(live: &Live, request: &Request) -> Frame {
         None => "handoff",
     };
     if moved.is_none() {
+        // B4′: the fresh session starts from the structured brief; the
+        // transcript file stays as its appendix.
+        live.executor.checkpoints().arm(
+            &p.task_id,
+            aeroric_core::sessions::live::checkpoint::HandoffReason::SourceMove,
+        );
         let messages = crate::services::parse_messages(&lines, family);
         let file = match write_handoff_file(&data, &p.task_id, &messages) {
             Ok(file) => file,
@@ -898,9 +1511,10 @@ fn move_source(live: &Live, request: &Request) -> Frame {
             )),
             Some(&copied.to_string_lossy()),
         ),
-        None => live
-            .service
-            .attach_session(&project_id, &p.task_id, family, &agent, None, None),
+        // HANDOFF-001: attach with no id and no path is a no-op by contract,
+        // so the old session has to be cleared on purpose — otherwise the
+        // next message resumes it instead of starting from the handoff.
+        None => live.service.detach_session(&project_id, &p.task_id),
     };
     if let Err(error) = session_result {
         return failure(request.id.clone(), ErrorCode::IoError, &error.to_string());

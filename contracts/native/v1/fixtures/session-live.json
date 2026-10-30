@@ -88,7 +88,7 @@
     "turnActive": true
   },
   "updates": {
-    "latestSeq": 22,
+    "latestSeq": 25,
     "updates": [
       {
         "atMs": 1761350400000,
@@ -306,26 +306,112 @@
       },
       {
         "atMs": 1761350400019,
+        "checkpoint": {
+          "effects": [
+            {
+              "evidence": [
+                {
+                  "kind": "turnChanges",
+                  "seq": 9,
+                  "turn": 2
+                }
+              ],
+              "kind": "changes",
+              "status": "verified",
+              "summary": "src/search.rs +18 −4",
+              "turn": 2
+            }
+          ],
+          "goal": {
+            "evidence": [
+              {
+                "kind": "userMessage",
+                "seq": 1,
+                "turn": 1
+              }
+            ],
+            "status": "verified",
+            "text": "修复搜索客户端超时"
+          },
+          "obligations": [
+            {
+              "id": "a1",
+              "source": "acceptance",
+              "state": "open",
+              "text": "回归测试覆盖 30s 边界"
+            }
+          ],
+          "revision": 3,
+          "taskId": "task-1",
+          "turn": 2,
+          "unknown": [
+            {
+              "kind": "command",
+              "status": "unknown",
+              "summary": "cargo test search_timeout",
+              "turn": 2
+            }
+          ],
+          "updatedMs": 1761350400000
+        },
+        "reason": "sourceMove",
+        "seq": 20,
+        "taskId": "task-1",
+        "type": "handoff"
+      },
+      {
+        "acceptance": [
+          {
+            "check": "cargo test search_timeout",
+            "text": "cargo test search_timeout 通过"
+          }
+        ],
+        "atMs": 1761350400020,
+        "requirements": [
+          "超时可以配置"
+        ],
+        "seq": 21,
+        "taskId": "task-1",
+        "turnId": "u0",
+        "type": "clarification"
+      },
+      {
+        "atMs": 1761350400021,
+        "result": {
+          "additions": 0,
+          "deletions": 0,
+          "files": 0,
+          "returnedMs": 1761350400500,
+          "summary": "reqwest 的 timeout 覆盖整个请求，连接超时另设",
+          "taskId": "task-2",
+          "title": "查 reqwest 超时语义"
+        },
+        "seq": 22,
+        "taskId": "task-1",
+        "type": "branchReturned"
+      },
+      {
+        "atMs": 1761350400022,
         "kind": "item/futureThing",
         "payload": {
           "x": 1
         },
-        "seq": 20,
+        "seq": 23,
         "taskId": "task-1",
         "type": "unknown"
       },
       {
-        "atMs": 1761350400020,
+        "atMs": 1761350400023,
         "messageId": "m1",
-        "seq": 21,
+        "seq": 24,
         "taskId": "task-1",
         "text": "我来看看",
         "type": "messageCompleted"
       },
       {
-        "atMs": 1761350400021,
+        "atMs": 1761350400024,
         "reason": "completed",
-        "seq": 22,
+        "seq": 25,
         "taskId": "task-1",
         "turnId": "u1",
         "type": "turnEnded"

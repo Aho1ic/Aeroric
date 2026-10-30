@@ -32,6 +32,10 @@ public protocol LiveSessionActions {
     /// A05: the task's project's auto-check choice; nil when the host has none.
     func autoCheck(taskID: String) async throws -> LiveAutoCheckSelection?
     func setAutoCheck(taskID: String, _ selection: LiveAutoCheckSelection) async throws
+    /// B4′: the task's checkpoint; nil when the host keeps none.
+    func checkpoint(taskID: String) async throws -> LiveCheckpoint?
+    /// B4′: accept the clarification card's ticked criteria and start the task.
+    func acceptClarification(taskID: String, acceptance: [LiveAcceptance], constraints: [String]) async throws
 }
 
 extension LiveSessionActions {
@@ -55,6 +59,10 @@ extension LiveSessionActions {
     public func autoCheck(taskID: String) async throws -> LiveAutoCheckSelection? { nil }
     public func setAutoCheck(taskID: String, _ selection: LiveAutoCheckSelection) async throws {
         throw LiveSessionError.unsupported("这个宿主不支持自动检查")
+    }
+    public func checkpoint(taskID: String) async throws -> LiveCheckpoint? { nil }
+    public func acceptClarification(taskID: String, acceptance: [LiveAcceptance], constraints: [String]) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持开工前澄清")
     }
 }
 
@@ -256,6 +264,15 @@ public final class LiveSessionStore {
         model?.echo(text)
         try await actions.prompt(taskID: taskID, text: text)
         return .sent
+    }
+
+    /// B4′: start the task with the clarification card's ticked criteria.
+    public func acceptClarification(_ acceptance: [LiveAcceptance], constraints: [String]) async {
+        do {
+            try await actions.acceptClarification(taskID: taskID, acceptance: acceptance, constraints: constraints)
+        } catch {
+            errorText = "开工失败：\(error)"
+        }
     }
 
     public func interrupt() async {

@@ -205,6 +205,7 @@ pub(crate) fn submit(
                 ("team", false),
                 ("review", false),
                 ("evolution", false),
+                ("clarify", request.clarify),
             ]
             .into_iter()
             .map(|(option, applied)| OptionConsumption {

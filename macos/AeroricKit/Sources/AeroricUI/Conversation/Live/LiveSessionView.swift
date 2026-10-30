@@ -315,6 +315,14 @@ public struct LiveSessionView: View {
             LiveAutoApprovedRow(kind: kind, summary: summary, revoked: store.revokedGrants.contains(subject)) {
                 Task { await store.revokeGrant(subject) }
             }
+        case let .handoff(_, reason, checkpoint):
+            HandoffCard(reason: reason, checkpoint: checkpoint)
+        case let .clarification(_, clarification):
+            ClarificationCard(clarification: clarification, onAccept: { accepted, constraints in
+                Task { await store.acceptClarification(accepted, constraints: constraints) }
+            })
+        case let .branchReturned(_, result):
+            BranchResultCard(result: result, onSend: { text in Task { _ = try? await store.send(text) } })
         case let .unknown(_, kind):
             LiveNoticeRow(message: "未识别的内容：\(kind)", recoverable: true)
         }

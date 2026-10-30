@@ -396,7 +396,13 @@ pub struct AutoChecker {
     next: AtomicU64,
     /// task → its latest run, when that run failed.
     failures: Mutex<HashMap<String, CheckFailure>>,
+    /// B4′: checks a task asks for itself (accepted criteria with a command).
+    extra: Mutex<Option<ExtraChecks>>,
 }
+
+/// B4′: a task's own checks, run after the project's (or alone when the
+/// project runs none).
+pub type ExtraChecks = Arc<dyn Fn(&str) -> Vec<CheckSpec> + Send + Sync>;
 
 impl AutoChecker {
     pub fn new(
@@ -414,7 +420,12 @@ impl AutoChecker {
             running: Mutex::default(),
             next: AtomicU64::new(1),
             failures: Mutex::default(),
+            extra: Mutex::new(None),
         })
+    }
+
+    pub fn set_extra(&self, extra: ExtraChecks) {
+        *self.extra.lock() = Some(extra);
     }
 
     pub fn set_policy(&self, policy: Arc<dyn AutoCheckPolicy>) {
@@ -456,7 +467,9 @@ impl AutoChecker {
         cwd: &Path,
     ) -> bool {
         let selection = self.policy.lock().selection(project_id);
-        if !selection.any() {
+        let extra_checks = self.extra.lock().clone();
+        let extra = extra_checks.map(|f| f(task_id)).unwrap_or_default();
+        if !selection.any() && extra.is_empty() {
             return false;
         }
         self.cancel(task_id);
@@ -484,7 +497,12 @@ impl AutoChecker {
                     },
                 );
             };
-            let specs = discover(&cwd, selection);
+            let mut specs = if selection.any() {
+                discover(&cwd, selection)
+            } else {
+                Vec::new()
+            };
+            specs.extend(extra);
             if specs.is_empty() {
                 report("skipped", Vec::new());
             } else {

@@ -183,6 +183,9 @@ public struct NewSessionHome: View {
             if skillBook != nil {
                 Button("工作配方…", systemImage: "sparkles") { showingRecipes = true }
             }
+            Toggle("开工前澄清", isOn: Binding(get: { draft.capabilities.clarify },
+                                           set: { draft.capabilities.clarify = $0 }))
+                .help("第一轮只列出推断的需求和验收条款，你确认后才开工")
             Section("组合能力 · 即将支持") {
                 capabilityToggle("团队协作", \.team)
                 capabilityToggle("独立审查", \.review)

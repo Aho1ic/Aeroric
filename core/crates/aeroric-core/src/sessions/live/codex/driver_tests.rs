@@ -423,3 +423,15 @@ async fn a_resumed_session_opens_its_thread_and_settles_done() {
     peer.expect("thread/unsubscribe").await;
     assert!(h.session.prompt("x".into()).is_err(), "closed");
 }
+
+/// B4′: the handoff brief goes out as `developerInstructions` on thread/start.
+#[tokio::test]
+async fn the_brief_is_sent_as_developer_instructions() {
+    let mut h = start(spec());
+    assert!(h.session.set_instructions("# 交接清单".into()));
+    h.session.prompt("hi".into()).unwrap();
+    let mut peer = launched(&mut h.peers).await;
+    peer.handshake().await;
+    let start = peer.expect("thread/start").await;
+    assert_eq!(start["params"]["developerInstructions"], "# 交接清单");
+}

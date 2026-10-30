@@ -420,6 +420,37 @@ pub fn attach_session(
     (if changed { next } else { records.to_vec() }, changed)
 }
 
+/// 换来源走交接（handoff）时的"不再续接"：四族的会话 id/路径和最老的无前缀
+/// `sessionId`/`sessionPath` 一并清掉，下一条消息起新会话（2026-10-30，HANDOFF-001）。
+/// 与 [`attach_session`] 分开：attach 的"两个都空就不动"是旧客户端的兼容契约，
+/// 不能借它来清场。本来就没有会话时不动盘。
+pub fn detach_session(records: &[Record], task_id: &str) -> (Vec<Record>, bool) {
+    let mut keys: Vec<String> = ProtocolFamily::ALL
+        .iter()
+        .flat_map(|family| {
+            let prefix = session_owner::family_prefix(*family);
+            [format!("{prefix}SessionId"), format!("{prefix}SessionPath")]
+        })
+        .collect();
+    keys.extend(["sessionId".to_string(), "sessionPath".to_string()]);
+    let mut changed = false;
+    let next: Vec<Record> = records
+        .iter()
+        .map(|record| {
+            if record.id() != Some(task_id) || !keys.iter().any(|key| record.0.contains_key(key)) {
+                return record.clone();
+            }
+            changed = true;
+            let mut next = record.clone();
+            for key in &keys {
+                next.0.remove(key);
+            }
+            next
+        })
+        .collect();
+    (if changed { next } else { records.to_vec() }, changed)
+}
+
 /// #5（`taskLifecycle.ts:425`）：worktree 三个字段一次挂上。值来自宿主的
 /// `create_task_worktree` 命令，宿主只是搬运，规则是"要么三个一起有，要么不动"。
 pub fn set_worktree(
@@ -783,6 +814,25 @@ mod tests {
         assert_eq!(row["sessionFamily"], json!("codex"));
         assert_eq!(row["sessionAgent"], json!("codex"));
         assert_eq!(row["sessionCodexLike"], json!(true));
+    }
+
+    /// HANDOFF-001：交接后旧会话不能再被续接，但会话归属（哪个 agent）留着。
+    #[test]
+    fn detaching_clears_every_family_and_keeps_the_owner() {
+        let records = vec![task(json!({
+            "codexSessionId": "old", "claudeSessionPath": "/p/a.jsonl",
+            "sessionId": "ancient", "sessionAgent": "codex", "sessionFamily": "codex",
+        }))];
+        let (next, changed) = detach_session(&records, "t1");
+        assert!(changed);
+        let row = &next[0].0;
+        for key in ["codexSessionId", "claudeSessionPath", "sessionId"] {
+            assert!(!row.contains_key(key), "{key} 必须清掉");
+        }
+        assert_eq!(row["sessionAgent"], json!("codex"));
+        let (again, changed_again) = detach_session(&next, "t1");
+        assert!(!changed_again, "没有会话时不动盘");
+        assert_eq!(again, next);
     }
 
     #[test]

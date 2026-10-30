@@ -929,6 +929,18 @@ pub fn claude_args(start: &ClaudeStart, passes_model: bool) -> Vec<String> {
     for dir in &start.extra_dirs {
         args.extend(["--add-dir".to_string(), dir.clone()]);
     }
+    // B4′: the Aeroric context server, for this process only.
+    if let Some(config) = start.mcp_config.as_deref() {
+        args.extend(["--mcp-config".to_string(), config.to_string()]);
+    }
+    // B4′: the handoff brief, in the system layer.
+    if let Some(text) = start
+        .append_system
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())
+    {
+        args.extend(["--append-system-prompt".to_string(), text.to_string()]);
+    }
     args
 }
 
@@ -1058,5 +1070,24 @@ mod linked_folder_args {
             joined.ends_with("--add-dir /shared --add-dir /docs"),
             "{joined}"
         );
+    }
+
+    /// B4′: the handoff brief reaches Claude's system layer as one argument.
+    #[test]
+    fn claude_gets_the_brief_as_append_system_prompt() {
+        let start = ClaudeStart {
+            cwd: "/w".into(),
+            permission: "ask".into(),
+            append_system: Some("# 交接清单\n- 目标".into()),
+            ..ClaudeStart::default()
+        };
+        let args = claude_args(&start, false);
+        let at = args
+            .iter()
+            .position(|a| a == "--append-system-prompt")
+            .unwrap();
+        assert_eq!(args[at + 1], "# 交接清单\n- 目标");
+        let none = claude_args(&ClaudeStart::default(), false);
+        assert!(!none.iter().any(|a| a == "--append-system-prompt"));
     }
 }

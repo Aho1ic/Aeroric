@@ -115,12 +115,21 @@ pub trait Routing: Send + Sync {
     }
 }
 
+/// B4′: a resumed session gets a brief only after this long without a turn.
+const RESUME_BRIEF_AFTER_MS: u64 = 60 * 60 * 1000;
+
 pub struct StructuredExecutor {
     inner: Arc<dyn TaskExecutor>,
     routing: Arc<dyn Routing>,
     sink: Arc<dyn LiveStatusSink>,
     /// A05: snapshots each session's repository at turn boundaries.
     turn_changes: Arc<super::turn_changes::TurnChangeTracker>,
+    /// B4′: every task's checkpoint, derived from its updates.
+    checkpoints: Arc<super::checkpoint::CheckpointSink>,
+    /// B4′: how to start the context server (`program`, `data_dir`); unset
+    /// gives sessions none (tests, and hosts that opt out).
+    context_program: Mutex<Option<(String, String)>>,
+    context_tokens: Arc<super::context_server::ContextTokens>,
     runtime: tokio::runtime::Handle,
     registry: Arc<DriverRegistry>,
     servers: Mutex<HashMap<ServerKey, Arc<CodexServer>>>,
@@ -136,7 +145,18 @@ impl StructuredExecutor {
         runtime: tokio::runtime::Handle,
     ) -> Arc<Self> {
         let registry: Arc<DriverRegistry> = Arc::default();
+        // Beneath the turn-change tracker, so it also sees the updates that
+        // tracker appends after a turn (turnChanges, autoCheck).
+        let checkpoints = super::checkpoint::CheckpointSink::new(sink);
+        let sink: Arc<dyn LiveStatusSink> = Arc::clone(&checkpoints) as Arc<dyn LiveStatusSink>;
         let turn_changes = super::turn_changes::TurnChangeTracker::new(sink, Arc::clone(&registry));
+        checkpoints.set_registry(Arc::clone(&registry));
+        let weak = Arc::downgrade(&checkpoints);
+        turn_changes.checks.set_extra(Arc::new(move |task: &str| {
+            weak.upgrade()
+                .map(|cp| cp.acceptance_checks(task))
+                .unwrap_or_default()
+        }));
         let sink: Arc<dyn LiveStatusSink> =
             Arc::new(super::turn_changes::TrackingSink(Arc::clone(&turn_changes)));
         let executor = Arc::new(Self {
@@ -144,6 +164,9 @@ impl StructuredExecutor {
             routing,
             sink,
             turn_changes,
+            checkpoints,
+            context_program: Mutex::new(None),
+            context_tokens: Arc::default(),
             runtime: runtime.clone(),
             registry,
             servers: Mutex::default(),
@@ -167,6 +190,80 @@ impl StructuredExecutor {
     /// A05: which projects run their tests / diagnostics after a turn.
     pub fn set_auto_check_policy(&self, policy: Arc<dyn super::auto_check::AutoCheckPolicy>) {
         self.turn_changes.checks.set_policy(policy);
+    }
+
+    /// B4′: give a session that is about to start the brief armed for its
+    /// task (a source move), or — resuming after a long pause with something
+    /// left open — a resume brief. Harnesses with a system layer take it
+    /// there; otherwise it goes in front of `prompt` (a resume without a
+    /// prompt then carries none). Returns the prompt to send.
+    fn hand_brief(
+        &self,
+        task_id: &str,
+        session: &Arc<dyn SessionDriver>,
+        prompt: Option<String>,
+        resuming: bool,
+    ) -> Option<String> {
+        use aeroric_protocol::checkpoint::HandoffReason;
+        let reason = self.checkpoints.take_armed(task_id).or_else(|| {
+            (resuming
+                && self
+                    .checkpoints
+                    .stale_with_open_work(task_id, RESUME_BRIEF_AFTER_MS))
+            .then_some(HandoffReason::Resume)
+        });
+        let Some(reason) = reason else {
+            return prompt;
+        };
+        let Some(checkpoint) = self.checkpoints.get(task_id).filter(|cp| !cp.is_empty()) else {
+            return prompt;
+        };
+        let brief = super::checkpoint::brief::handoff_brief(&checkpoint, reason);
+        if let Some(log) = self.registry.log(task_id) {
+            let update = log.push(
+                aeroric_protocol::session_live::SessionUpdateKind::Handoff {
+                    reason,
+                    checkpoint: Box::new(checkpoint),
+                },
+                now_ms(),
+            );
+            self.sink.update(&update);
+        }
+        if session.set_instructions(brief.clone()) {
+            return prompt;
+        }
+        prompt.map(|p| format!("{brief}\n---\n\n{p}"))
+    }
+
+    /// B4′: give every session the context server, started as
+    /// `program --data-dir data_dir mcp-context`.
+    pub fn set_context_program(&self, program: String, data_dir: String) {
+        *self.context_program.lock() = Some((program, data_dir));
+    }
+
+    pub fn context_tokens(&self) -> &Arc<super::context_server::ContextTokens> {
+        &self.context_tokens
+    }
+
+    /// Hand a starting session its context server and a fresh token.
+    fn give_context(&self, task_id: &str, project_id: &str, session: &Arc<dyn SessionDriver>) {
+        let Some((program, data_dir)) = self.context_program.lock().clone() else {
+            return;
+        };
+        let token = self.context_tokens.issue(task_id, project_id);
+        let server = super::context_server::ContextServer {
+            command: program,
+            args: vec!["--data-dir".into(), data_dir, "mcp-context".into()],
+            env: vec![(super::context_server::TOKEN_ENV.into(), token)],
+        };
+        if !session.set_context_server(server) {
+            self.context_tokens.revoke(task_id);
+        }
+    }
+
+    /// B4′: the tasks' checkpoints (the host sets where they are kept).
+    pub fn checkpoints(&self) -> &Arc<super::checkpoint::CheckpointSink> {
+        &self.checkpoints
     }
 
     /// Tasks whose latest check run failed (the attention queue).
@@ -353,6 +450,10 @@ impl StructuredExecutor {
                 &self.runtime,
             ),
         };
+        // A remote machine has no local `aeroric-cli` to start.
+        if matches!(route, Route::Codex(_) | Route::Claude(_)) {
+            self.give_context(&spec.task_id, &spec.project_id, &session);
+        }
         self.registry
             .insert(&spec.task_id, Arc::clone(&session), log);
         session
@@ -360,6 +461,7 @@ impl StructuredExecutor {
 
     /// Close and drop a task's driver; false when it has none.
     pub fn close_session(&self, task_id: &str) -> bool {
+        self.context_tokens.revoke(task_id);
         match self.registry.remove(task_id) {
             Some(driver) => {
                 let _ = driver.close();
@@ -427,10 +529,15 @@ impl TaskExecutor for StructuredExecutor {
             },
             &route,
         );
+        self.checkpoints
+            .note_prompt(&request.task_id, &request.prompt);
         let prompt = request
             .prompt_override
             .clone()
             .unwrap_or_else(|| request.prompt.clone());
+        let prompt = self
+            .hand_brief(&request.task_id, &session, Some(prompt), false)
+            .unwrap_or_default();
         let started = if prompt.trim().is_empty() {
             session.attach()
         } else {
@@ -479,6 +586,7 @@ impl TaskExecutor for StructuredExecutor {
             },
             &route,
         );
+        self.hand_brief(&request.task_id, &session, None, true);
         session.attach().map_err(|error| ExecutorFailure::Spawn {
             reason: error.to_string(),
         })

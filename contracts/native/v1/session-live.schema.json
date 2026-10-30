@@ -811,6 +811,105 @@
             },
             {
               "properties": {
+                "checkpoint": {
+                  "required": [
+                    "taskId",
+                    "revision",
+                    "turn",
+                    "updatedMs"
+                  ],
+                  "type": "object"
+                },
+                "reason": {
+                  "enum": [
+                    "modelSwitch",
+                    "sourceMove",
+                    "afterCompact",
+                    "delegate",
+                    "resume"
+                  ]
+                },
+                "type": {
+                  "const": "handoff"
+                }
+              },
+              "required": [
+                "type",
+                "reason",
+                "checkpoint"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "acceptance": {
+                  "items": {
+                    "properties": {
+                      "check": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "questions": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "raw": {
+                  "type": "string"
+                },
+                "requirements": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "turnId": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "clarification"
+                }
+              },
+              "required": [
+                "type",
+                "turnId"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "result": {
+                  "required": [
+                    "taskId",
+                    "title",
+                    "summary",
+                    "returnedMs"
+                  ],
+                  "type": "object"
+                },
+                "type": {
+                  "const": "branchReturned"
+                }
+              },
+              "required": [
+                "type",
+                "result"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "message": {
                   "type": "string"
                 },

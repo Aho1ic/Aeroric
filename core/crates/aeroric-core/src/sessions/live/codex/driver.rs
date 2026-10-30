@@ -62,6 +62,10 @@ struct Pending {
 }
 
 struct State {
+    /// B4′: the handoff brief, sent as `developerInstructions`.
+    instructions: Option<String>,
+    /// B4′: config overrides for the thread (the Aeroric context server).
+    config: Option<Value>,
     project_id: String,
     generation: u64,
     agent: String,
@@ -103,6 +107,8 @@ impl CodexSession {
         runtime: &tokio::runtime::Handle,
     ) -> Arc<Self> {
         let state = Arc::new(Mutex::new(State {
+            instructions: None,
+            config: None,
             project_id: spec.project_id,
             generation: spec.generation,
             agent: spec.agent,
@@ -156,6 +162,20 @@ impl CodexSession {
 }
 
 impl SessionDriver for CodexSession {
+    fn set_instructions(&self, text: String) -> bool {
+        self.state.lock().instructions = Some(text);
+        true
+    }
+
+    fn set_context_server(
+        &self,
+        server: crate::sessions::live::context_server::ContextServer,
+    ) -> bool {
+        use crate::sessions::live::context_server::SERVER_NAME;
+        self.state.lock().config = Some(json!({"mcp_servers": {SERVER_NAME: server.entry()}}));
+        true
+    }
+
     fn family(&self) -> ProtocolFamily {
         ProtocolFamily::Codex
     }
@@ -400,7 +420,7 @@ impl Actor {
             self.state.lock().subscribed = false;
         }
         self.connection = Some(connection.clone());
-        let (thread_id, subscribed, cwd, model, permission) = {
+        let (thread_id, subscribed, cwd, model, permission, instructions, config) = {
             let state = self.state.lock();
             (
                 state.thread_id.clone(),
@@ -408,6 +428,8 @@ impl Actor {
                 state.cwd.clone(),
                 state.model.clone(),
                 state.permission.clone(),
+                state.instructions.clone(),
+                state.config.clone(),
             )
         };
         let client = connection.client;
@@ -421,7 +443,16 @@ impl Actor {
                     .await
                     .map_err(|e| format!("无法分叉 Codex 会话：{e}"))?,
                 None => client
-                    .request("thread/resume", json!({"threadId": thread}))
+                    .request("thread/resume", {
+                        let mut params = json!({"threadId": thread});
+                        if let Some(text) = &instructions {
+                            params["developerInstructions"] = json!(text);
+                        }
+                        if let Some(config) = &config {
+                            params["config"] = config.clone();
+                        }
+                        params
+                    })
                     .await
                     .map_err(|e| format!("无法恢复 Codex 会话：{e}"))?,
             },
@@ -433,6 +464,12 @@ impl Actor {
                 params.insert("sandbox".into(), json!(policy.sandbox_mode));
                 if let Some(model) = model {
                     params.insert("model".into(), json!(model));
+                }
+                if let Some(text) = &instructions {
+                    params.insert("developerInstructions".into(), json!(text));
+                }
+                if let Some(config) = &config {
+                    params.insert("config".into(), config.clone());
                 }
                 client
                     .request("thread/start", Value::Object(params))

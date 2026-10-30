@@ -68,6 +68,10 @@ pub struct SubmissionRequest {
     pub team: bool,
     pub review: bool,
     pub evolution: bool,
+    /// B4′ 开工前澄清: the first turn only proposes acceptance criteria.
+    /// Optional on the wire; old requests keep their fingerprints.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clarify: bool,
 }
 
 impl SubmissionRequest {
@@ -112,6 +116,10 @@ impl SubmissionRequest {
             u8::from(self.review),
             u8::from(self.evolution),
         ]);
+        // Only when set, so a request without it hashes as it always did.
+        if self.clarify {
+            out.push(1);
+        }
         out
     }
 }
@@ -184,6 +192,7 @@ pub fn fixture_request() -> SubmissionRequest {
         team: false,
         review: false,
         evolution: false,
+        clarify: false,
     }
 }
 
@@ -238,6 +247,8 @@ pub fn schema() -> serde_json::Value {
         "required":["option","applied"],"properties":{"option":{"type":"string"},"applied":{"type":"boolean"}}}
     }));
     let required_request: Vec<_> = request.keys().cloned().collect();
+    // Optional (B4′): added after the required list.
+    request.insert("clarify".into(), json!({"type":"boolean"}));
     let required_receipt: Vec<_> = receipt.keys().cloned().collect();
     json!({
         "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -278,4 +289,23 @@ pub fn schema() -> serde_json::Value {
                             "permissionModes":strings,"blockedReasons":strings}}}}}
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clarify_changes_the_fingerprint_only_when_set() {
+        let mut request = fixture_request();
+        let plain = request.fingerprint_material();
+        assert_eq!(serde_json::to_value(&request).unwrap().get("clarify"), None);
+        request.clarify = true;
+        let clarified = request.fingerprint_material();
+        assert_eq!(&clarified[..plain.len()], &plain[..]);
+        assert_eq!(clarified.len(), plain.len() + 1);
+        let back: SubmissionRequest =
+            serde_json::from_value(serde_json::to_value(&request).unwrap()).unwrap();
+        assert!(back.clarify);
+    }
 }

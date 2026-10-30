@@ -167,7 +167,11 @@ struct TaskWorkspaceView: View {
     @State private var auxiliaryTab: AuxiliaryTab = .details
     @AppStorage(NewSessionLayout.defaultHarnessKey) private var defaultHarness = "codex"
     /// 2026-10-30: 改动 and Git 日志 became one Git tab (the Git page moved here).
-    enum AuxiliaryTab: Hashable { case details, files, git }
+    enum AuxiliaryTab: Hashable { case details, progress, files, git }
+    /// B4′: the selected task's checkpoint (进度), re-read while that tab shows.
+    @State private var checkpoint: LiveCheckpoint?
+    @State private var checkpointBranchOf: String?
+    @State private var checkpointError: String?
 
     /// Which surface the selected navigation row names. A project row or an
     /// empty selection is the task surface — the app's default view.
@@ -433,6 +437,7 @@ struct TaskWorkspaceView: View {
                 CapsuleSlider(selection: $auxiliaryTab, groupTitle: "辅助面板",
                               identifier: "auxiliary.tab-slider", segments: [
                     .init(value: .details, title: "详情", systemImage: "info.circle"),
+                    .init(value: .progress, title: "进度", systemImage: "checklist"),
                     .init(value: .files, title: "文件", systemImage: "folder"),
                     .init(value: .git, title: GitPageText.tabTitle("Git", count: services.gitStore.changes.count),
                           systemImage: "arrow.triangle.branch"),
@@ -456,6 +461,10 @@ struct TaskWorkspaceView: View {
                     .opacity(auxiliaryTab == .files ? 1 : 0)
                     .allowsHitTesting(auxiliaryTab == .files)
                     .accessibilityHidden(auxiliaryTab != .files)
+                auxiliaryProgress
+                    .opacity(auxiliaryTab == .progress ? 1 : 0)
+                    .allowsHitTesting(auxiliaryTab == .progress)
+                    .accessibilityHidden(auxiliaryTab != .progress)
                 auxiliaryGit
                     .opacity(auxiliaryTab == .git ? 1 : 0)
                     .allowsHitTesting(auxiliaryTab == .git)
@@ -537,6 +546,78 @@ struct TaskWorkspaceView: View {
             PaneEmptyState(systemImage: "folder.badge.questionmark",
                            title: resourceProjectID == nil ? "未选择项目" : "原项目不可用",
                            hint: "Git 显示当前会话所在项目的仓库。")
+        }
+    }
+
+    /// B4′: the selected task's checkpoint, with a constraint, a settled
+    /// obligation or a side branch added from here.
+    @ViewBuilder private var auxiliaryProgress: some View {
+        if let taskID = selectedTaskID {
+            CheckpointPanel(
+                checkpoint: checkpoint?.taskId == taskID ? checkpoint : nil,
+                errorText: checkpointError,
+                isBranch: checkpointBranchOf != nil,
+                onAddConstraint: { text in
+                    Task { await checkpointAction { try await $0.addConstraint(taskId: taskID, text: text) } }
+                },
+                onSetObligation: { id, state in
+                    Task { await checkpointAction { try await $0.setObligation(taskId: taskID, id: id, state: state) } }
+                },
+                onStartBranch: {
+                    Task {
+                        await checkpointAction { client in
+                            let branch = try await client.startBranch(taskId: taskID)
+                            await services.refreshWorkspace()
+                            services.requestedSelection = SessionNavigation.task(branch)
+                        }
+                    }
+                },
+                onReturnBranch: {
+                    Task {
+                        await checkpointAction { client in
+                            let parent = try await client.returnBranch(taskId: taskID)
+                            if !parent.isEmpty { services.requestedSelection = SessionNavigation.task(parent) }
+                        }
+                    }
+                },
+                onOpenTask: { id in services.requestedSelection = SessionNavigation.task(id) }
+            )
+            .task(id: progressRefreshKey) {
+                guard auxiliaryTab == .progress, showsAuxiliary || showsAuxiliaryOverlay else { return }
+                while !Task.isCancelled {
+                    await loadCheckpoint(taskID)
+                    try? await Task.sleep(for: .seconds(3))
+                }
+            }
+        } else {
+            PaneEmptyState(systemImage: "checklist", title: "未选择会话",
+                           hint: "进度显示当前会话的检查点：目标、改动、结果未知的操作和未完成的事。")
+        }
+    }
+
+    private var progressRefreshKey: String {
+        "\(selectedTaskID ?? "")|\(auxiliaryTab == .progress)|\(showsAuxiliary || showsAuxiliaryOverlay)"
+    }
+
+    private func loadCheckpoint(_ taskID: String) async {
+        guard let client = services.sessionsClient else { return }
+        do {
+            let read = try await client.checkpoint(taskId: taskID)
+            checkpoint = read.checkpoint
+            checkpointBranchOf = read.branchOf
+            checkpointError = nil
+        } catch {
+            checkpointError = "读取检查点失败：\(error)"
+        }
+    }
+
+    private func checkpointAction(_ run: (SessionsClient) async throws -> Void) async {
+        guard let client = services.sessionsClient else { return }
+        do {
+            try await run(client)
+            if let taskID = selectedTaskID { await loadCheckpoint(taskID) }
+        } catch {
+            checkpointError = "操作失败：\(error)"
         }
     }
 

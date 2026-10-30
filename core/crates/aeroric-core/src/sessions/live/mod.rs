@@ -4,8 +4,10 @@
 //! `TaskExecutor` port so the task service and its reducer stay unchanged.
 
 pub mod auto_check;
+pub mod checkpoint;
 pub mod claude;
 pub mod codex;
+pub mod context_server;
 pub mod executor;
 pub mod omp;
 pub mod remote;
@@ -86,6 +88,17 @@ pub trait SessionDriver: Send + Sync {
     /// Answer a question card (only agents that ask questions support it).
     fn answer(&self, question_id: &str, _answer: Answer) -> Result<(), DriverError> {
         Err(DriverError::UnknownRequest(question_id.to_string()))
+    }
+    /// B4′: system-layer instructions (the handoff brief) for the session's
+    /// next start. False when this harness has no such layer; the caller then
+    /// puts the brief in front of the first message instead.
+    fn set_instructions(&self, _text: String) -> bool {
+        false
+    }
+    /// B4′: the Aeroric context MCP server for the session's next start.
+    /// False when this harness has no per-start MCP injection.
+    fn set_context_server(&self, _server: context_server::ContextServer) -> bool {
+        false
     }
     /// Forget a remembered "always allow in this session" grant.
     fn revoke_grant(&self, _subject: &str) -> Result<(), DriverError> {

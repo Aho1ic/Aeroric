@@ -926,3 +926,298 @@ async fn auto_checks_are_toggled_per_project_through_a_task() {
         json!({"failures": []})
     );
 }
+
+/// B4′: the checkpoint follows the session — the goal from the first prompt,
+/// an approval recorded the moment it is asked — and is kept on disk.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_task_checkpoint_records_the_goal_and_a_pending_approval() {
+    let mut host = Host::start(true).await;
+    host.start_task("修复超时");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th-1", "path": "/tmp/th-1.jsonl"}}),
+    );
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-1", "turn": {"id": "u1"}}),
+    );
+    peer.send(
+        json!({"jsonrpc": "2.0", "id": 7, "method": "item/commandExecution/requestApproval",
+        "params": {"threadId": "th-1", "itemId": "c1", "command": "git push"}}),
+    );
+    host.until_state("a pending approval", |s| {
+        s["pending"].as_array().is_some_and(|p| p.len() == 1)
+    })
+    .await;
+
+    let got = host
+        .call("checkpoint.get", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    let cp = &got["checkpoint"];
+    assert_eq!(cp["goal"]["text"], "修复超时");
+    assert_eq!(cp["goal"]["status"], "verified");
+    assert_eq!(cp["intents"][0]["summary"], "git push");
+    assert_eq!(cp["intents"][0]["state"], "pending");
+    let file = host
+        .context
+        .paths
+        .data_dir()
+        .join("checkpoints")
+        .join("task-1.json");
+    assert!(file.is_file(), "saved when the approval was asked");
+
+    host.call(
+        "checkpoint.addConstraint",
+        json!({"taskId": "task-1", "text": "不要推送"}),
+    )
+    .await
+    .unwrap();
+    let got = host
+        .call("checkpoint.get", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(got["checkpoint"]["constraints"][0]["text"], "不要推送");
+    assert_eq!(
+        host.call(
+            "checkpoint.setObligation",
+            json!({"taskId": "task-1", "id": "nope", "state": "passed"})
+        )
+        .await
+        .unwrap_err()["code"],
+        "NOT_FOUND"
+    );
+    assert_eq!(
+        host.call("checkpoint.get", json!({"taskId": "nope"}))
+            .await
+            .unwrap_err()["code"],
+        "NOT_FOUND"
+    );
+}
+
+/// B4′: accepting the clarification card turns the ticked criteria into the
+/// task's obligations and starts the work with them in the message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepting_a_clarification_starts_the_work_with_its_criteria() {
+    let mut host = Host::start(true).await;
+    host.start_task("修复超时");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th-1", "path": "/tmp/th-1.jsonl"}}),
+    );
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-1", "turn": {"id": "u1"}}),
+    );
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": "u1", "status": "completed"}}),
+    );
+    host.until_state("the turn ended", |s| s["turnActive"] == false)
+        .await;
+
+    let accepted = host
+        .call(
+            "clarify.accept",
+            json!({"taskId": "task-1",
+                "acceptance": [{"text": "测试通过", "check": "cargo test"}, {"text": "文档更新"}],
+                "constraints": ["不要推送"]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted, json!({"accepted": true}));
+    let next = peer.expect("turn/start").await;
+    let text = next["params"]["input"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(text.contains("1. 测试通过（核对：`cargo test`）"), "{text}");
+    assert!(text.contains("- 不要推送"), "{text}");
+
+    let got = host
+        .call("checkpoint.get", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    let obligations = &got["checkpoint"]["obligations"];
+    assert_eq!(obligations[0]["id"], "a1");
+    assert_eq!(obligations[0]["check"], "cargo test");
+    assert_eq!(obligations[1]["source"], "acceptance");
+    assert_eq!(got["checkpoint"]["constraints"][0]["text"], "不要推送");
+}
+
+/// B4′: the context server's host methods answer only a live token, and only
+/// for the token's own project.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_methods_need_the_session_token_and_stay_in_the_project() {
+    let host = Host::start(true).await;
+    host.start_task("修复超时");
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+
+    let bad = host
+        .call("context.readHandoff", json!({"token": "made-up"}))
+        .await
+        .unwrap_err();
+    assert_eq!(bad["code"], "UNAUTHENTICATED");
+
+    let handoff = host
+        .call("context.readHandoff", json!({"token": token}))
+        .await
+        .unwrap();
+    assert!(handoff["brief"].as_str().unwrap().starts_with("# 交接清单"));
+    assert_eq!(handoff["checkpoint"]["goal"]["text"], "修复超时");
+
+    let cross = host
+        .call(
+            "context.searchSessions",
+            json!({"token": token, "query": "超时", "allProjects": true}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(cross["code"], "INVALID_ARGUMENT");
+    let search = host
+        .call(
+            "context.searchSessions",
+            json!({"token": token, "query": "超时"}),
+        )
+        .await
+        .unwrap();
+    assert!(search["hits"].is_array());
+
+    host.structured.context_tokens().revoke("task-1");
+    assert_eq!(
+        host.call("context.readHandoff", json!({"token": token}))
+            .await
+            .unwrap_err()["code"],
+        "UNAUTHENTICATED"
+    );
+}
+
+/// B4′: a side branch is a marked fork; only a branch can bring a result back,
+/// and only once it has an answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_side_branch_is_a_marked_fork_of_the_session() {
+    let mut host = Host::start(true).await;
+    host.start_task("修复超时");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th-1", "path": "/tmp/th-1.jsonl"}}),
+    );
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-1", "turn": {"id": "u1"}}),
+    );
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": "u1", "status": "completed"}}),
+    );
+    host.until("the turn settled", |h| h.record()["status"] == "done")
+        .await;
+    let started = host
+        .call("branch.start", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    let branch = started["taskId"].as_str().unwrap().to_string();
+    let record = host.record_of(&branch);
+    assert_eq!(record["branchOf"], "task-1");
+    assert!(record["name"].as_str().unwrap().ends_with("（侧支）"));
+
+    let not_branch = host
+        .call("branch.return", json!({"taskId": "task-1"}))
+        .await
+        .unwrap_err();
+    assert_eq!(not_branch["message"], "这个会话不是侧支");
+    let empty = host
+        .call("branch.return", json!({"taskId": branch}))
+        .await
+        .unwrap_err();
+    assert_eq!(empty["message"], "侧支还没有回答可以带回");
+}
+
+/// HANDOFF-001 (2026-10-30): a source move that falls back to a handoff (here:
+/// no transcript to carry over) clears the old session, so the next message
+/// starts a new thread with the brief instead of resuming the old one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_handoff_move_starts_a_new_session_instead_of_resuming() {
+    let mut host = Host::start(true).await;
+    host.start_task("修复超时");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(&start, json!({"thread": {"id": "th-old"}}));
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-old", "turn": {"id": "u1"}}),
+    );
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-old", "turn": {"id": "u1", "status": "completed"}}),
+    );
+    host.until("the turn settled", |h| h.record()["status"] == "done")
+        .await;
+    assert_eq!(host.record()["codexSessionId"], "th-old");
+
+    let moved = host
+        .call(
+            "session.moveSource",
+            json!({"taskId": "task-1", "model": "fixture-new-model"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(moved["mode"], "handoff");
+    let record = host.record();
+    assert!(record.get("codexSessionId").is_none(), "{record}");
+    assert!(record["pendingHandoff"].is_string());
+
+    let unsubscribe = peer.expect("thread/unsubscribe").await;
+    peer.reply(&unsubscribe, json!({"status": "unsubscribed"}));
+    host.call(
+        "session.prompt",
+        json!({"taskId": "task-1", "text": "继续"}),
+    )
+    .await
+    .unwrap();
+    let fresh = peer.next().await;
+    assert_eq!(fresh["method"], "thread/start", "{fresh}");
+    let brief = fresh["params"]["developerInstructions"].as_str().unwrap();
+    assert!(brief.starts_with("# 交接清单"), "{brief}");
+}

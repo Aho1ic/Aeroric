@@ -36,6 +36,10 @@ pub struct ClaudeStart {
     pub effort: Option<String>,
     /// `--resume <session id>` once the session exists.
     pub resume: Option<String>,
+    /// B4′: `--append-system-prompt` (the handoff brief).
+    pub append_system: Option<String>,
+    /// B4′: `--mcp-config` (the Aeroric context server, as JSON).
+    pub mcp_config: Option<String>,
 }
 
 /// Starts the process (the host builds argv and environment; tests use an
@@ -116,6 +120,9 @@ struct State {
     cached_input_tokens: Option<u64>,
     idle_since: u64,
     closed: bool,
+    /// B4′: the handoff brief, given at every start of the process.
+    instructions: Option<String>,
+    mcp_config: Option<String>,
 }
 
 pub struct ClaudeSession {
@@ -134,6 +141,8 @@ impl ClaudeSession {
         runtime: &tokio::runtime::Handle,
     ) -> Arc<Self> {
         let state = Arc::new(Mutex::new(State {
+            instructions: None,
+            mcp_config: None,
             project_id: spec.project_id,
             generation: spec.generation,
             agent: spec.agent,
@@ -193,6 +202,21 @@ impl ClaudeSession {
 }
 
 impl SessionDriver for ClaudeSession {
+    fn set_instructions(&self, text: String) -> bool {
+        self.state.lock().instructions = Some(text);
+        true
+    }
+
+    fn set_context_server(
+        &self,
+        server: crate::sessions::live::context_server::ContextServer,
+    ) -> bool {
+        use crate::sessions::live::context_server::SERVER_NAME;
+        let config = serde_json::json!({"mcpServers": {SERVER_NAME: server.entry()}});
+        self.state.lock().mcp_config = Some(config.to_string());
+        true
+    }
+
     fn family(&self) -> ProtocolFamily {
         ProtocolFamily::Claude
     }
@@ -409,6 +433,8 @@ impl Actor {
                 permission: state.permission.clone(),
                 effort: state.effort.clone(),
                 resume: state.session_id.clone(),
+                append_system: state.instructions.clone(),
+                mcp_config: state.mcp_config.clone(),
             }
         };
         let (transport, guard) = (self.launcher)(&start)?;

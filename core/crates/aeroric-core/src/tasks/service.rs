@@ -578,14 +578,25 @@ impl TaskService {
             let project = project
                 .as_ref()
                 .ok_or_else(|| TaskError::Unaddressable(request.project_id.clone()))?;
+            // B4′: a clarification turn reads under `plan` and asks for
+            // criteria; the chosen permission comes back when they are accepted.
+            use crate::sessions::live::checkpoint::clarify;
+            let (prompt, permission_mode) = if request.clarify {
+                (
+                    clarify::wrap(&request.prompt),
+                    clarify::PERMISSION.to_string(),
+                )
+            } else {
+                (request.prompt.clone(), request.permission_mode.clone())
+            };
             self.create(
                 project,
                 NewTask {
                     id: request.submission_id.clone(),
                     project_id: request.project_id.clone(),
-                    prompt: request.prompt.clone(),
+                    prompt,
                     agent: request.agent.clone(),
-                    permission_mode: request.permission_mode.clone(),
+                    permission_mode,
                     immediate: true,
                     selected_model: request.selected_model.clone(),
                     reasoning_effort: request.reasoning_effort.clone(),
@@ -602,6 +613,26 @@ impl TaskService {
                     texts: vec![],
                 },
             )?;
+            if request.clarify {
+                let id = request.submission_id.clone();
+                let restore = request.permission_mode.clone();
+                self.mutate(&request.project_id, |records, _now| {
+                    let next = records
+                        .iter()
+                        .map(|record| {
+                            let mut record = record.clone();
+                            if record.get("id").and_then(Value::as_str) == Some(id.as_str()) {
+                                record.0.insert(
+                                    clarify::RESTORE_FIELD.to_string(),
+                                    Value::String(restore.clone()),
+                                );
+                            }
+                            record
+                        })
+                        .collect();
+                    (next, true)
+                })?;
+            }
             self.start(
                 project,
                 &request.submission_id,
@@ -2093,6 +2124,13 @@ impl TaskService {
                 session_id,
                 session_path,
             )
+        })
+    }
+
+    /// 交接换来源：清掉任务记下的会话，下一条消息起新会话（[`reducer::detach_session`]）。
+    pub fn detach_session(&self, project_id: &str, task_id: &str) -> Result<Applied, TaskError> {
+        self.metadata_one(project_id, task_id, Persist::Commit, |records| {
+            reducer::detach_session(records, task_id)
         })
     }
 

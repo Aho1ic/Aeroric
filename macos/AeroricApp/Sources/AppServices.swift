@@ -510,7 +510,8 @@ final class AppServices {
             selectedModel: draft.task.model, reasoningEffort: draft.task.effort,
             attachments: draft.task.attachmentPaths, worktree: draft.task.worktree,
             recipeId: draft.recipeID, team: draft.capabilities.team,
-            review: draft.capabilities.review, evolution: draft.capabilities.evolution
+            review: draft.capabilities.review, evolution: draft.capabilities.evolution,
+            clarify: draft.capabilities.clarify
         )
     }
 

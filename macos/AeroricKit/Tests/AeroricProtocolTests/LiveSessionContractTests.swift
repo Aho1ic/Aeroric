@@ -18,10 +18,23 @@ final class LiveSessionContractTests: XCTestCase {
 
     func testEveryUpdateKindInTheFixtureDecodesAsKnown() throws {
         let batch = try LiveUpdatesBatch.decode(try fixture()["updates"] ?? .null)
-        XCTAssertEqual(batch.updates.count, 22)
-        XCTAssertEqual(batch.latestSeq, 22)
+        XCTAssertEqual(batch.updates.count, 25)
+        XCTAssertEqual(batch.latestSeq, 25)
         XCTAssertNil(batch.gapOldestAvailable)
-        XCTAssertEqual(batch.updates.map(\.seq), Array(1...22))
+        XCTAssertEqual(batch.updates.map(\.seq), Array(1...25))
+        let handoff = batch.updates.compactMap { update -> (String, LiveCheckpoint)? in
+            if case let .handoff(reason, checkpoint) = update.kind { return (reason, checkpoint) } else { return nil }
+        }.first
+        XCTAssertEqual(handoff?.0, "sourceMove")
+        XCTAssertEqual(handoff?.1.goal?.text, "修复搜索客户端超时")
+        XCTAssertEqual(handoff?.1.unknown.map(\.summary), ["cargo test search_timeout"])
+        XCTAssertEqual(handoff?.1.needsAttention, true)
+        XCTAssertTrue(batch.updates.map(\.kind).contains(.clarification(LiveClarification(
+            turnId: "u0", requirements: ["超时可以配置"],
+            acceptance: [LiveAcceptance(text: "cargo test search_timeout 通过", check: "cargo test search_timeout")]))))
+        XCTAssertTrue(batch.updates.map(\.kind).contains(.branchReturned(LiveBranchResult(
+            taskId: "task-2", title: "查 reqwest 超时语义", summary: "reqwest 的 timeout 覆盖整个请求，连接超时另设",
+            returnedMs: 1_761_350_400_500))))
         XCTAssertEqual(batch.updates[0], LiveSessionUpdate(taskId: "task-1", seq: 1, atMs: 1_761_350_400_000,
                                                            kind: .turnStarted(turnId: "u1")))
         let kinds = batch.updates.map(\.kind)

@@ -472,21 +472,40 @@ fn task_fork(request: &Request, context: &Arc<CoreContext>, tasks: &TaskService)
     let Some(task_id) = text(request, "taskId") else {
         return invalid(request, "task.fork requires params.taskId");
     };
+    match fork_task(context, tasks, &task_id, "分叉") {
+        Ok(new_id) => ok(request, json!({ "taskId": new_id })),
+        Err(ForkError::NotFound(message)) => {
+            failure(request.id.clone(), ErrorCode::NotFound, message)
+        }
+        Err(ForkError::Invalid(message)) => {
+            failure(request.id.clone(), ErrorCode::InvalidArgument, &message)
+        }
+    }
+}
+
+pub(crate) enum ForkError {
+    NotFound(&'static str),
+    Invalid(String),
+}
+
+/// A new task continuing `task_id`'s conversation, titled "<title>（<suffix>）";
+/// its id. Claude and Codex only.
+pub(crate) fn fork_task(
+    context: &Arc<CoreContext>,
+    tasks: &TaskService,
+    task_id: &str,
+    suffix: &str,
+) -> Result<String, ForkError> {
+    let task_id = task_id.to_string();
     let Some(project) = crate::services::find_project_of_task(context, &task_id) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::NotFound,
+        return Err(ForkError::NotFound(
             "no task with that id in any known project",
-        );
+        ));
     };
     let Some(project_id) = mutations::id_of(&project).map(str::to_string) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::NotFound,
-            "the task's project has no id",
-        );
+        return Err(ForkError::NotFound("the task's project has no id"));
     };
-    let result = (|| -> Result<String, String> {
+    (|| -> Result<String, String> {
         let records = aeroric_core::storage::tasks::load_tasks(context, &project_id)
             .map_err(|e| e.to_string())?;
         let source = records
@@ -556,14 +575,11 @@ fn task_fork(request: &Request, context: &Arc<CoreContext>, tasks: &TaskService)
             .unwrap_or_else(|| "会话".into());
         let title: String = title.chars().take(60).collect();
         tasks
-            .rename(&project_id, &new_id, &format!("{title}（分叉）"))
+            .rename(&project_id, &new_id, &format!("{title}（{suffix}）"))
             .map_err(|e| e.to_string())?;
         Ok(new_id)
-    })();
-    match result {
-        Ok(new_id) => ok(request, json!({ "taskId": new_id })),
-        Err(message) => failure(request.id.clone(), ErrorCode::InvalidArgument, &message),
-    }
+    })()
+    .map_err(ForkError::Invalid)
 }
 
 /// 接着聊（2026-10-28）：an imported Claude / Codex / DeepSeek Harness / OMP

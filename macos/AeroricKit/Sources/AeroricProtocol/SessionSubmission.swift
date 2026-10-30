@@ -50,13 +50,15 @@ public struct NativeTaskSubmission: Equatable, Sendable {
     public let team: Bool
     public let review: Bool
     public let evolution: Bool
+    /// B4′ 开工前澄清: the first turn only proposes acceptance criteria.
+    public let clarify: Bool
 
     public init(submissionId: String, projectId: String, configurationId: String,
                 configurationVersion: String, agent: String, prompt: String,
                 permissionMode: String, permissionAgent: String,
                 selectedModel: String?, reasoningEffort: String? = nil,
                 attachments: [String] = [], worktree: String? = nil, recipeId: String? = nil,
-                team: Bool = false, review: Bool = false, evolution: Bool = false) {
+                team: Bool = false, review: Bool = false, evolution: Bool = false, clarify: Bool = false) {
         self.submissionId = submissionId
         self.projectId = projectId
         self.configurationId = configurationId
@@ -73,6 +75,7 @@ public struct NativeTaskSubmission: Equatable, Sendable {
         self.team = team
         self.review = review
         self.evolution = evolution
+        self.clarify = clarify
     }
 
     public var fingerprintMaterial: Data {
@@ -99,6 +102,8 @@ public struct NativeTaskSubmission: Equatable, Sendable {
         optional(worktree)
         optional(recipeId)
         bytes.append(contentsOf: [team, review, evolution].map { $0 ? 1 : 0 })
+        // Only when set, so a request without it hashes as it always did.
+        if clarify { bytes.append(1) }
         return bytes
     }
 
@@ -119,7 +124,7 @@ public struct NativeTaskSubmission: Equatable, Sendable {
             "worktree": worktree.map(JSONValue.string) ?? .null,
             "recipeId": recipeId.map(JSONValue.string) ?? .null,
             "team": .bool(team), "review": .bool(review), "evolution": .bool(evolution),
-        ])
+        ].merging(clarify ? ["clarify": .bool(true)] : [:]) { a, _ in a })
     }
 }
 

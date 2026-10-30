@@ -12,7 +12,7 @@
 /// Aeroric 权限模式 → omp `--approval-mode` 参数值。
 pub fn omp_permission_flag(permission_mode: &str) -> Option<&'static str> {
     match permission_mode {
-        "ask" => Some("always-ask"),
+        "ask" | "plan" => Some("always-ask"),
         "auto_edit" => Some("write"),
         "full_access" => Some("yolo"),
         _ => None,

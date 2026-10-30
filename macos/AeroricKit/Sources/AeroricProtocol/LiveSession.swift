@@ -71,6 +71,13 @@ public enum LiveUpdateKind: Equatable, Sendable {
     /// A05: the project's tests / diagnostics after that turn; a later one for
     /// the same turn replaces the earlier (`running` first).
     case autoCheck(turnId: String, state: String, items: [LiveAutoCheckItem])
+    /// B4′: a handoff brief given to this session, with the checkpoint it came from.
+    /// `reason`: `modelSwitch` | `sourceMove` | `afterCompact` | `delegate` | `resume`.
+    case handoff(reason: String, checkpoint: LiveCheckpoint)
+    /// B4′: what the clarification turn proposed.
+    case clarification(LiveClarification)
+    /// B4′: a side branch brought its result back.
+    case branchReturned(LiveBranchResult)
     /// Kept with its source `type` (or the agent's own kind for host-side unknowns).
     case unknown(kind: String, payload: JSONValue)
 }
@@ -368,6 +375,14 @@ extension LiveUpdateKind {
             }
             guard decoded.count == items.count else { return nil }
             return .autoCheck(turnId: id, state: state, items: decoded)
+        case "handoff":
+            guard let reason = string(f, "reason"), let checkpoint = f["checkpoint"].flatMap(LiveCheckpoint.decode)
+            else { return nil }
+            return .handoff(reason: reason, checkpoint: checkpoint)
+        case "clarification":
+            return LiveClarification.decode(f).map { .clarification($0) }
+        case "branchReturned":
+            return f["result"].flatMap(LiveBranchResult.decode).map { .branchReturned($0) }
         case "unknown":
             guard let kind = string(f, "kind") else { return nil }
             return .unknown(kind: kind, payload: f["payload"] ?? .null)

@@ -89,6 +89,14 @@ struct HostLiveSessionActions: LiveSessionActions {
     func setAutoCheck(taskID: String, _ selection: LiveAutoCheckSelection) async throws {
         try await client().setAutoCheck(taskId: taskID, tests: selection.tests, diagnostics: selection.diagnostics)
     }
+
+    func checkpoint(taskID: String) async throws -> LiveCheckpoint? {
+        try await client().checkpoint(taskId: taskID).checkpoint
+    }
+
+    func acceptClarification(taskID: String, acceptance: [LiveAcceptance], constraints: [String]) async throws {
+        try await client().acceptClarification(taskId: taskID, acceptance: acceptance, constraints: constraints)
+    }
 }
 
 extension AppServices {

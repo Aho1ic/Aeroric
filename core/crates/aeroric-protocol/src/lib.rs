@@ -8,6 +8,7 @@
 //! Swift and TypeScript decoders read the same fixtures.
 
 pub mod capability;
+pub mod checkpoint;
 pub mod envelope;
 pub mod error;
 pub mod event;

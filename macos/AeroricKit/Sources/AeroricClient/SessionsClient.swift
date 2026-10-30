@@ -237,6 +237,59 @@ extension SessionsClient {
         ]))
     }
 
+    /// B4′: the task's checkpoint (`checkpoint.get`), and the parent task when
+    /// it is a side branch.
+    public func checkpoint(taskId: String) async throws -> (checkpoint: LiveCheckpoint, branchOf: String?) {
+        let frame = try await connection.request("checkpoint.get", params: .object(["taskId": .string(taskId)]))
+        guard let checkpoint = frame.result["checkpoint"].flatMap(LiveCheckpoint.decode) else {
+            throw MalformedReply.malformedReply("checkpoint.get needs a checkpoint")
+        }
+        return (checkpoint, frame.result["branchOf"]?.stringValue)
+    }
+
+    /// B4′: a side branch of `taskId` (a marked fork); the branch's task id.
+    public func startBranch(taskId: String) async throws -> String {
+        let frame = try await connection.request("branch.start", params: .object(["taskId": .string(taskId)]))
+        guard let id = frame.result["taskId"]?.stringValue else {
+            throw MalformedReply.malformedReply("branch.start needs a taskId")
+        }
+        return id
+    }
+
+    /// B4′: bring a branch's last answer back to its parent; the parent's id.
+    @discardableResult
+    public func returnBranch(taskId: String) async throws -> String {
+        let frame = try await connection.request("branch.return", params: .object(["taskId": .string(taskId)]))
+        return frame.result["parentTaskId"]?.stringValue ?? ""
+    }
+
+    /// B4′: a constraint the user states; every later handoff carries it.
+    public func addConstraint(taskId: String, text: String) async throws {
+        _ = try await connection.request("checkpoint.addConstraint", params: .object([
+            "taskId": .string(taskId), "text": .string(text),
+        ]))
+    }
+
+    /// B4′: settle an obligation by hand (`passed` | `failed` | `open` | `unknown`).
+    public func setObligation(taskId: String, id: String, state: String) async throws {
+        _ = try await connection.request("checkpoint.setObligation", params: .object([
+            "taskId": .string(taskId), "id": .string(id), "state": .string(state),
+        ]))
+    }
+
+    /// B4′: accept the clarification card and start the work.
+    public func acceptClarification(taskId: String, acceptance: [LiveAcceptance], constraints: [String]) async throws {
+        let items: [JSONValue] = acceptance.map { item in
+            var object: [String: JSONValue] = ["text": .string(item.text)]
+            if let check = item.check { object["check"] = .string(check) }
+            return .object(object)
+        }
+        _ = try await connection.request("clarify.accept", params: .object([
+            "taskId": .string(taskId), "acceptance": .array(items),
+            "constraints": .array(constraints.map(JSONValue.string)),
+        ]))
+    }
+
     /// Tasks whose latest auto-check run failed (`session.autoCheck.failures`):
     /// task id → (summary, finished at ms).
     public func autoCheckFailures() async throws -> [String: (summary: String, atMs: UInt64)] {

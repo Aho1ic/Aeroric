@@ -262,6 +262,30 @@ pub enum SessionUpdateKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         items: Vec<AutoCheckItem>,
     },
+    /// B4′: a handoff brief given to this session, with the checkpoint it was
+    /// built from (the handoff card shows that snapshot, not a later one).
+    Handoff {
+        reason: crate::checkpoint::HandoffReason,
+        checkpoint: Box<crate::checkpoint::Checkpoint>,
+    },
+    /// B4′: what the clarification turn proposed; nothing runs until the user
+    /// accepts it with `clarify.accept`.
+    Clarification {
+        turn_id: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        requirements: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        acceptance: Vec<crate::checkpoint::Acceptance>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        questions: Vec<String>,
+        /// The turn's text when it held no criteria that could be read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw: Option<String>,
+    },
+    /// B4′: a side branch brought its result back to this session.
+    BranchReturned {
+        result: crate::checkpoint::BranchResult,
+    },
     Error {
         message: String,
         recoverable: bool,
@@ -614,6 +638,31 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
                 output_tail: "1 failed, 1 passed".into(),
             }],
         },
+        K::Handoff {
+            reason: crate::checkpoint::HandoffReason::SourceMove,
+            checkpoint: Box::new(fixture_checkpoint()),
+        },
+        K::Clarification {
+            turn_id: "u0".into(),
+            requirements: vec!["超时可以配置".into()],
+            acceptance: vec![crate::checkpoint::Acceptance {
+                text: "cargo test search_timeout 通过".into(),
+                check: Some("cargo test search_timeout".into()),
+            }],
+            questions: vec![],
+            raw: None,
+        },
+        K::BranchReturned {
+            result: crate::checkpoint::BranchResult {
+                task_id: "task-2".into(),
+                title: "查 reqwest 超时语义".into(),
+                summary: "reqwest 的 timeout 覆盖整个请求，连接超时另设".into(),
+                files: 0,
+                additions: 0,
+                deletions: 0,
+                returned_ms: 1_761_350_400_500,
+            },
+        },
         K::Unknown {
             kind: "item/futureThing".into(),
             payload: json!({"x": 1}),
@@ -638,6 +687,54 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
             kind,
         })
         .collect()
+}
+
+/// The checkpoint the fixture's `handoff` update carries.
+pub fn fixture_checkpoint() -> crate::checkpoint::Checkpoint {
+    use crate::checkpoint::*;
+    Checkpoint {
+        task_id: "task-1".into(),
+        revision: 3,
+        turn: 2,
+        updated_ms: 1_761_350_400_000,
+        goal: Some(Entry {
+            text: "修复搜索客户端超时".into(),
+            status: Epistemic::Verified,
+            evidence: vec![EvidenceRef {
+                kind: EvidenceKind::UserMessage,
+                seq: Some(1),
+                turn: Some(1),
+                detail: String::new(),
+            }],
+        }),
+        effects: vec![Effect {
+            summary: "src/search.rs +18 −4".into(),
+            kind: "changes".into(),
+            turn: 2,
+            status: Epistemic::Verified,
+            evidence: vec![EvidenceRef {
+                kind: EvidenceKind::TurnChanges,
+                seq: Some(9),
+                turn: Some(2),
+                detail: String::new(),
+            }],
+        }],
+        unknown: vec![Effect {
+            summary: "cargo test search_timeout".into(),
+            kind: "command".into(),
+            turn: 2,
+            status: Epistemic::Unknown,
+            evidence: vec![],
+        }],
+        obligations: vec![Obligation {
+            id: "a1".into(),
+            text: "回归测试覆盖 30s 边界".into(),
+            check: None,
+            state: ObligationState::Open,
+            source: ObligationSource::Acceptance,
+        }],
+        ..Checkpoint::default()
+    }
 }
 
 pub fn fixture_state() -> SessionState {
@@ -864,6 +961,25 @@ pub fn schema() -> Value {
             "items": {"type": "array", "items": auto_check_item}}),
         ),
         update_variant(
+            "handoff",
+            json!(["reason", "checkpoint"]),
+            json!({"reason": {"enum": ["modelSwitch", "sourceMove", "afterCompact", "delegate", "resume"]},
+            "checkpoint": {"type": "object", "required": ["taskId", "revision", "turn", "updatedMs"]}}),
+        ),
+        update_variant(
+            "clarification",
+            json!(["turnId"]),
+            json!({"turnId": s, "requirements": {"type": "array", "items": s},
+            "acceptance": {"type": "array", "items": {"type": "object", "required": ["text"],
+                "properties": {"text": s, "check": s}}},
+            "questions": {"type": "array", "items": s}, "raw": s}),
+        ),
+        update_variant(
+            "branchReturned",
+            json!(["result"]),
+            json!({"result": {"type": "object", "required": ["taskId", "title", "summary", "returnedMs"]}}),
+        ),
+        update_variant(
             "error",
             json!(["message", "recoverable"]),
             json!({"message": s, "recoverable": {"type": "boolean"}}),
@@ -971,6 +1087,9 @@ mod tests {
             "configChanged",
             "turnChanges",
             "autoCheck",
+            "handoff",
+            "clarification",
+            "branchReturned",
             "error",
             "unknown",
         ] {

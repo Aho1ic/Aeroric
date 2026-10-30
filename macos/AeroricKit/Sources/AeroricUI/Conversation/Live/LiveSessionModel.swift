@@ -14,6 +14,12 @@ public enum LiveItem: Identifiable, Equatable, Sendable {
     case info(id: String, level: String, message: String)
     /// An approval answered from an "always allow in this session" grant.
     case autoApproved(id: String, kind: String, summary: String, subject: String)
+    /// B4′: the handoff card (a brief this session was given).
+    case handoff(id: String, reason: String, checkpoint: LiveCheckpoint)
+    /// B4′: the clarification card, waiting for the user to accept criteria.
+    case clarification(id: String, LiveClarification)
+    /// B4′: a side branch's result card.
+    case branchReturned(id: String, LiveBranchResult)
     /// Protocol content this build does not render (INV-12: shown, not dropped).
     case unknown(id: String, kind: String)
 
@@ -26,6 +32,9 @@ public enum LiveItem: Identifiable, Equatable, Sendable {
         case let .notice(id, _, _): "notice:\(id)"
         case let .info(id, _, _): "info:\(id)"
         case let .autoApproved(id, _, _, _): "auto:\(id)"
+        case let .handoff(id, _, _): "handoff:\(id)"
+        case let .clarification(id, _): "clarify:\(id)"
+        case let .branchReturned(id, _): "branch:\(id)"
         case let .unknown(id, _): "unknown:\(id)"
         }
     }
@@ -404,6 +413,12 @@ public struct LiveSessionModel: Equatable, Sendable {
                                               deletions: deletions, truncated: truncated)
         case let .autoCheck(turnId, state, items):
             lastAutoCheck = LiveAutoCheck(turnId: turnId, state: state, items: items)
+        case let .handoff(reason, checkpoint):
+            items.append(.handoff(id: "seq\(update.seq)", reason: reason, checkpoint: checkpoint))
+        case let .clarification(clarification):
+            items.append(.clarification(id: "seq\(update.seq)", clarification))
+        case let .branchReturned(result):
+            items.append(.branchReturned(id: "seq\(update.seq)", result))
         case let .unknown(kind, _):
             items.append(.unknown(id: "seq\(update.seq)", kind: kind))
         }

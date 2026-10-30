@@ -4,6 +4,7 @@
 mod args;
 mod attach;
 mod client;
+mod mcp_context;
 
 use args::{exit, ApprovalCmd, BackupCmd, Cli, Command, ProjectCmd, TaskCmd};
 use clap::Parser;
@@ -82,6 +83,7 @@ async fn dispatch(cli: Cli) -> i32 {
             ..
         } => rpc(&cli.data_dir, &method, params_file.as_deref()).await,
         Command::Attach { task_id } => attach::attach(&cli.data_dir, &task_id).await,
+        Command::McpContext => mcp_context::serve(&cli.data_dir).await,
         Command::Approval(cmd) => approval(&cli.data_dir, cmd).await,
     }
 }
