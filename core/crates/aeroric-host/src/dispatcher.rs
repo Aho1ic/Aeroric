@@ -441,6 +441,11 @@ impl HostServices {
             &mut set,
             Arc::clone(&context),
         );
+        // B2: built-in skills (工作配方库).
+        crate::builtin_skills_services::register_builtin_skill_services(
+            &mut set,
+            Arc::clone(&context),
+        );
         // Registered unconditionally above, so advertised unconditionally: the
         // native client gates its cleanup screen on this, never on a method probe.
         capabilities.push(aeroric_protocol::capability::Capability {

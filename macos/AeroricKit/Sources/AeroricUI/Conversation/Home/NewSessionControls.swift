@@ -96,6 +96,8 @@ struct FlowLayout: Layout {
 /// D: a recipe as one capsule; its description is the tooltip.
 struct RecipeChip: View {
     let recipe: ScenarioRecipe
+    /// Backed by a built-in skill that is on (B2): marked with ✦.
+    var skilled = false
     let action: () -> Void
     @State private var hovered = false
     @Environment(\.isEnabled) private var isEnabled
@@ -110,6 +112,12 @@ struct RecipeChip: View {
                     .font(.system(size: AeroricType.secondary, weight: .medium))
                     .foregroundStyle(AeroricColor.text)
                     .lineLimit(1)
+                if skilled {
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(AeroricColor.accent)
+                        .accessibilityLabel("内置技能")
+                }
             }
             .padding(.horizontal, AeroricSpace.l)
             .frame(height: 30)
@@ -119,7 +127,7 @@ struct RecipeChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
-        .help(recipe.detail)
+        .help(skilled ? "\(recipe.detail) · 使用内置技能" : recipe.detail)
         .accessibilityLabel(recipe.title)
         .accessibilityHint(recipe.detail)
         .accessibilityIdentifier("new-session.recipe.\(recipe.id)")

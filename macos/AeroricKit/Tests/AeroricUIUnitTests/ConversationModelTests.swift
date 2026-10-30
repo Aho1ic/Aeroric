@@ -156,7 +156,11 @@ final class ConversationModelTests: XCTestCase {
     // MARK: - Scenarios
 
     func testEveryScenarioHasSixRecipesWithUniqueIDs() {
-        for scenario in Scenario.allCases { XCTAssertEqual(scenario.recipes.count, 6, scenario.title) }
+        // 2026-10-30 (B2): 科研 carries one card per research skill.
+        for scenario in Scenario.allCases where scenario != .science {
+            XCTAssertEqual(scenario.recipes.count, 6, scenario.title)
+        }
+        XCTAssertEqual(Scenario.science.recipes.count, 13)
         XCTAssertEqual(Set(ScenarioCatalog.recipes.map(\.id)).count, ScenarioCatalog.recipes.count)
         XCTAssertTrue(ScenarioCatalog.recipes.allSatisfy { !$0.template.isEmpty && $0.placeholderRange != nil })
     }

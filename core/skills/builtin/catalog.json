@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "skills": [
+    {"id": "brainstorming", "group": "develop", "title": "头脑风暴与设计", "detail": "先澄清需求，再给出可选方案", "symbol": "lightbulb", "needs": []},
+    {"id": "writing-plans", "group": "develop", "title": "编写计划", "detail": "把需求拆成可验证的步骤", "symbol": "list.number", "needs": []},
+    {"id": "executing-plans", "group": "develop", "title": "按计划执行", "detail": "逐步实现，每步有检查点", "symbol": "play.circle", "needs": []},
+    {"id": "subagent-driven-development", "group": "develop", "title": "子代理驱动开发", "detail": "每个任务交给新代理并两轮复核", "symbol": "person.2.circle", "needs": []},
+    {"id": "dispatching-parallel-agents", "group": "develop", "title": "并行派发", "detail": "拆成互不依赖的子任务同时做", "symbol": "arrow.triangle.branch", "needs": []},
+    {"id": "test-driven-development", "group": "develop", "title": "测试驱动开发", "detail": "先写失败的测试，再实现", "symbol": "checkmark.seal", "needs": []},
+    {"id": "systematic-debugging", "group": "develop", "title": "系统化调试", "detail": "复现、定位根因、再修复", "symbol": "ladybug", "needs": []},
+    {"id": "verification-before-completion", "group": "develop", "title": "完成前验证", "detail": "说完成之前先跑检查拿证据", "symbol": "checklist", "needs": []},
+    {"id": "requesting-code-review", "group": "develop", "title": "请求代码审查", "detail": "整理改动，请独立审查", "symbol": "eye", "needs": []},
+    {"id": "receiving-code-review", "group": "develop", "title": "处理审查意见", "detail": "逐条核实后再改，不盲从", "symbol": "text.bubble", "needs": []},
+    {"id": "finishing-a-development-branch", "group": "develop", "title": "收尾分支", "detail": "测试通过后决定合并、PR 或清理", "symbol": "flag.checkered", "needs": []},
+    {"id": "using-git-worktrees", "group": "develop", "title": "使用 Git 工作树", "detail": "在隔离的工作树里开发新功能", "symbol": "square.split.2x1", "needs": []},
+    {"id": "using-superpowers", "group": "develop", "title": "技能使用指南", "detail": "让 Agent 知道何时该用哪个技能", "symbol": "sparkles", "needs": []},
+    {"id": "writing-skills", "group": "develop", "title": "编写技能", "detail": "新建或改进技能并验证效果", "symbol": "pencil.and.list.clipboard", "needs": []},
+    {"id": "scientific-brainstorming", "group": "science", "title": "科研头脑风暴", "detail": "开放式发散研究思路", "symbol": "brain", "needs": []},
+    {"id": "hypothesis-generation", "group": "science", "title": "假设生成", "detail": "从观察出发提出可检验的假设", "symbol": "questionmark.circle", "needs": ["python"]},
+    {"id": "experimental-design", "group": "science", "title": "实验设计", "detail": "收数据前定设计、变量与对照", "symbol": "flask", "needs": ["python"]},
+    {"id": "statistical-power", "group": "science", "title": "统计功效", "detail": "估算需要多大的样本量", "symbol": "chart.bar.xaxis", "needs": ["python"]},
+    {"id": "statistical-analysis", "group": "science", "title": "统计分析", "detail": "选检验、查假设、解读结果", "symbol": "function", "needs": ["python"]},
+    {"id": "exploratory-data-analysis", "group": "science", "title": "探索性数据分析", "detail": "先摸清数据的分布与问题", "symbol": "magnifyingglass", "needs": ["python"]},
+    {"id": "scientific-visualization", "group": "science", "title": "科学可视化", "detail": "做出能投稿的图", "symbol": "chart.xyaxis.line", "needs": ["python"]},
+    {"id": "scientific-critical-thinking", "group": "science", "title": "批判性思维", "detail": "评估论断与证据质量", "symbol": "scalemass", "needs": []},
+    {"id": "paper-lookup", "group": "science", "title": "论文检索", "detail": "在学术数据库里查论文与引用", "symbol": "books.vertical", "needs": []},
+    {"id": "peer-review", "group": "science", "title": "同行评审", "detail": "按清单评审稿件或基金申请", "symbol": "doc.text.magnifyingglass", "needs": ["python"]},
+    {"id": "citation-management", "group": "science", "title": "引用管理", "detail": "检索、整理与核对参考文献", "symbol": "quote.opening", "needs": ["python"]},
+    {"id": "scholar-evaluation", "group": "science", "title": "学术评估", "detail": "按 ScholarEval 框架评估成果", "symbol": "graduationcap", "needs": ["python"]},
+    {"id": "scientific-schematics", "group": "science", "title": "科学示意图", "detail": "生成论文用示意图（需要图像模型的 key）", "symbol": "square.on.circle", "needs": ["python"]}
+  ]
+}

@@ -5,6 +5,7 @@ import SwiftUI
 /// in the centre (sidebar → Agent 配置). Each tab is a list on the left and
 /// an editor on the right; nothing is saved until the user clicks 保存 (G3).
 public struct AgentConfigPage: View {
+    @Environment(BuiltinSkillBook.self) private var skillBook: BuiltinSkillBook?
     @Bindable var store: AgentConfigStore
     @Environment(AgentUpgradeBook.self) private var upgrades: AgentUpgradeBook?
 
@@ -18,6 +19,7 @@ public struct AgentConfigPage: View {
                     .init(value: .pools, title: "号池", systemImage: "square.stack.3d.up"),
                     .init(value: .routes, title: "模型路由", systemImage: "arrow.triangle.branch"),
                     .init(value: .configs, title: "Agent 预设", systemImage: "slider.horizontal.3"),
+                    .init(value: .skills, title: "技能", systemImage: "sparkles"),
                     .init(value: .upgrades, title: "Agent 升级", systemImage: "arrow.up.circle"),
                 ])
                 .fixedSize()
@@ -36,6 +38,8 @@ public struct AgentConfigPage: View {
                 case .pools: PoolsPane(store: store)
                 case .routes: RoutesPane(store: store)
                 case .configs: ConfigsPane(store: store)
+                case .skills:
+                    if let skillBook { BuiltinSkillsPane(book: skillBook) }
                 case .upgrades: AgentUpgradePane(book: upgrades)
                 }
             }

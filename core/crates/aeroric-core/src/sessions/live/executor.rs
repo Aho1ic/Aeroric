@@ -83,6 +83,8 @@ pub trait Routing: Send + Sync {
     ) -> Option<Route>;
     fn codex_launcher(&self, key: &ServerKey) -> Launcher;
     fn claude_launcher(&self, key: &ClaudeKey) -> ClaudeLauncher;
+    /// Runs before a Codex session opens its thread in `cwd` (B2 built-in skills).
+    fn before_codex_session(&self, _key: &ServerKey, _cwd: &str) {}
     /// The `CLAUDE_CONFIG_DIR` this key's process writes transcripts under
     /// (`<dir>/projects/<encoded cwd>/<session id>.jsonl`); `None` records no path.
     fn claude_config_dir(&self, _key: &ClaudeKey) -> Option<std::path::PathBuf> {
@@ -264,13 +266,17 @@ impl StructuredExecutor {
                 .watch(&spec.task_id, &spec.project_id, &spec.cwd);
         }
         let session: Arc<dyn SessionDriver> = match route {
-            Route::Codex(key) => CodexSession::start(
-                spec.clone(),
-                self.server(key),
-                Arc::clone(&self.sink),
-                log.clone(),
-                &self.runtime,
-            ),
+            Route::Codex(key) => {
+                // B2: a direct Codex session gets the built-in skills in its project.
+                self.routing.before_codex_session(key, &spec.cwd);
+                CodexSession::start(
+                    spec.clone(),
+                    self.server(key),
+                    Arc::clone(&self.sink),
+                    log.clone(),
+                    &self.runtime,
+                )
+            }
             Route::Claude(key) => ClaudeSession::start(
                 ClaudeSessionSpec {
                     task_id: spec.task_id.clone(),

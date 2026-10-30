@@ -1093,6 +1093,18 @@ impl TaskExecutor for CliPtyExecutor {
             }
             ProtocolFamily::Dsh => {
                 let dsh_home = self.managed_agent_home("dsh")?;
+                if let WorkingDirectory::Local { path } = &request.working_directory {
+                    // B2: built-in skills linked into the managed DSH_HOME.
+                    let _ = aeroric_core::extensions::builtin_skills::mount(
+                        self.context.paths.data_dir(),
+                        "dsh",
+                        Some(std::path::Path::new(path)),
+                        aeroric_core::extensions::builtin_skills::Mount::Home(&dsh_home),
+                    )
+                    .map_err(|reason| {
+                        eprintln!("[aeroric] built-in skills not offered to dsh: {reason}")
+                    });
+                }
                 let mut p = dsh_plan(
                     &input,
                     &request.permission_mode_wire,

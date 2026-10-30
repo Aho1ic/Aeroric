@@ -9,6 +9,8 @@ public enum Scenario: String, CaseIterable, Identifiable, Sendable {
     case build
     case collaborate
     case explore
+    /// B2 (2026-10-30): the K-Dense research skills.
+    case science
 
     public var id: String { rawValue }
 
@@ -17,6 +19,7 @@ public enum Scenario: String, CaseIterable, Identifiable, Sendable {
         case .build: "构建"
         case .collaborate: "协作"
         case .explore: "探索"
+        case .science: "科研"
         }
     }
 
@@ -25,6 +28,7 @@ public enum Scenario: String, CaseIterable, Identifiable, Sendable {
         case .build: "hammer"
         case .collaborate: "person.2"
         case .explore: "safari"
+        case .science: "flask"
         }
     }
 
@@ -39,6 +43,8 @@ public struct ScenarioRecipe: Identifiable, Equatable, Sendable {
     public let symbol: String
     /// Filled into the composer. `{…}` marks the part the user should replace.
     public let template: String
+    /// The built-in skill behind the card (B2), called before the template.
+    public var skill: String? = nil
 
     /// Range of the first `{…}` placeholder, so the caret can land on it.
     public var placeholderRange: Range<String.Index>? {
@@ -49,7 +55,74 @@ public struct ScenarioRecipe: Identifiable, Equatable, Sendable {
 }
 
 public enum ScenarioCatalog {
-    public static let recipes: [ScenarioRecipe] = [
+    /// Cards that call a built-in skill (B2, 2026-10-30).
+    static let skills: [String: String] = [
+        "brainstorm": "brainstorming", "write-plan": "writing-plans", "execute-plan": "executing-plans",
+        "tdd": "test-driven-development", "debug": "systematic-debugging",
+        "verify": "verification-before-completion", "request-review": "requesting-code-review",
+        "address-review": "receiving-code-review", "parallel": "dispatching-parallel-agents",
+        "subagents": "subagent-driven-development",
+    ]
+
+    public static let recipes: [ScenarioRecipe] = (cards + science).map { recipe in
+        var recipe = recipe
+        if recipe.skill == nil { recipe.skill = skills[recipe.id] }
+        return recipe
+    }
+
+    /// The 科研 group: one card per research skill.
+    static let science: [ScenarioRecipe] = [
+        .init(id: "sci-brainstorm", scenario: .science, title: "科研头脑风暴", detail: "开放式发散研究思路",
+              symbol: "brain", template: "我的研究方向是：{方向}。\n帮我发散出几个值得做的问题，并说明各自的价值和可行性。",
+              skill: "scientific-brainstorming"),
+        .init(id: "hypothesis", scenario: .science, title: "假设生成", detail: "从观察出发提出可检验的假设",
+              symbol: "questionmark.circle", template: "我观察到：{现象或数据}。\n提出几个可检验的假设，并说明怎么检验。",
+              skill: "hypothesis-generation"),
+        .init(id: "experiment", scenario: .science, title: "实验设计", detail: "收数据前定设计、变量与对照",
+              symbol: "flask", template: "我想研究：{研究问题}。\n帮我设计实验：自变量、因变量、对照、样本量和分析方法。",
+              skill: "experimental-design"),
+        .init(id: "power", scenario: .science, title: "统计功效", detail: "估算需要多大的样本量",
+              symbol: "chart.bar.xaxis", template: "我的设计是：{设计与预期效应}。\n算一下需要多少样本才有足够的统计功效。",
+              skill: "statistical-power"),
+        .init(id: "stats", scenario: .science, title: "统计分析", detail: "选检验、查假设、解读结果",
+              symbol: "function", template: "数据在：{文件或描述}。\n帮我选合适的检验，检查前提假设，并解读结果。",
+              skill: "statistical-analysis"),
+        .init(id: "eda", scenario: .science, title: "探索性数据分析", detail: "先摸清数据的分布与问题",
+              symbol: "magnifyingglass", template: "对 {数据文件} 做一次探索性分析：分布、缺失、异常和变量关系。",
+              skill: "exploratory-data-analysis"),
+        .init(id: "sci-viz", scenario: .science, title: "科学可视化", detail: "做出能投稿的图",
+              symbol: "chart.xyaxis.line", template: "把 {数据或结果} 画成能投稿的图，说明为什么这样画。",
+              skill: "scientific-visualization"),
+        .init(id: "critical", scenario: .science, title: "批判性思维", detail: "评估论断与证据质量",
+              symbol: "scalemass", template: "评估这个论断和它的证据：{论断或论文}。指出漏洞和替代解释。",
+              skill: "scientific-critical-thinking"),
+        .init(id: "papers", scenario: .science, title: "论文检索", detail: "在学术数据库里查论文与引用",
+              symbol: "books.vertical", template: "帮我找关于 {主题} 的重要论文，按相关性列出并概括要点。",
+              skill: "paper-lookup"),
+        .init(id: "peer-review", scenario: .science, title: "同行评审", detail: "按清单评审稿件或基金申请",
+              symbol: "doc.text.magnifyingglass", template: "按同行评审的标准审阅 {稿件或申请书}，给出分项意见。",
+              skill: "peer-review"),
+        .init(id: "citations", scenario: .science, title: "引用管理", detail: "检索、整理与核对参考文献",
+              symbol: "quote.opening", template: "整理并核对 {文档} 里的参考文献，补全缺失信息。",
+              skill: "citation-management"),
+        .init(id: "scholar-eval", scenario: .science, title: "学术评估", detail: "按 ScholarEval 框架评估成果",
+              symbol: "graduationcap", template: "用 ScholarEval 框架评估 {论文或成果}。",
+              skill: "scholar-evaluation"),
+        .init(id: "schematics", scenario: .science, title: "科学示意图", detail: "生成论文用示意图（需要图像模型的 key）",
+              symbol: "square.on.circle", template: "为 {要表达的机制或流程} 画一张论文示意图。",
+              skill: "scientific-schematics"),
+    ]
+
+    /// A card for a skill picked in the 工作配方 panel: the matching card when
+    /// there is one, else a plain one asking what to do.
+    public static func recipe(forSkill item: BuiltinSkillBook.Item) -> ScenarioRecipe {
+        if let card = recipes.first(where: { $0.skill == item.id }) { return card }
+        return ScenarioRecipe(id: "skill.\(item.id)", scenario: item.group == "science" ? .science : .build,
+                              title: item.title, detail: item.detail, symbol: item.symbol,
+                              template: "{描述你要做的事}", skill: item.id)
+    }
+
+    static let cards: [ScenarioRecipe] = [
         // 构建
         .init(id: "brainstorm", scenario: .build, title: "头脑风暴与设计", detail: "先澄清需求，再给出可选方案",
               symbol: "lightbulb",
@@ -112,13 +185,15 @@ public enum ScenarioCatalog {
     /// Merges a template into what the user already typed.
     public enum Insertion: Sendable { case replace, append }
 
-    public static func merged(_ current: String, with recipe: ScenarioRecipe, as insertion: Insertion) -> String {
+    public static func merged(_ current: String, with recipe: ScenarioRecipe, as insertion: Insertion,
+                              invocation: String? = nil) -> String {
+        let template = invocation.map { "\($0) \(recipe.template)" } ?? recipe.template
         switch insertion {
         case .replace:
-            return recipe.template
+            return template
         case .append:
             let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? recipe.template : trimmed + "\n\n" + recipe.template
+            return trimmed.isEmpty ? template : trimmed + "\n\n" + template
         }
     }
 }

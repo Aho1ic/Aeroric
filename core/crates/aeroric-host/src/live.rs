@@ -141,6 +141,17 @@ impl HostRouting {
 }
 
 impl Routing for HostRouting {
+    fn before_codex_session(&self, key: &ServerKey, cwd: &str) {
+        if matches!(key, ServerKey::Agent(agent) if agent == "codex") {
+            crate::builtin_skills_services::prepare(
+                &self.context,
+                "codex",
+                Some(std::path::Path::new(cwd)),
+                crate::builtin_skills_services::Mount::CodexProject,
+            );
+        }
+    }
+
     fn route(
         &self,
         family: ProtocolFamily,
@@ -609,6 +620,18 @@ fn omp_launcher(context: Arc<CoreContext>, key: OmpKey) -> OmpLauncher {
             spec.env.retain(|(existing, _)| existing != name);
             spec.unset_env.push((*name).to_string());
         }
+        if let Some((_, home)) = spec
+            .env
+            .iter()
+            .find(|(name, _)| name == "PI_CODING_AGENT_DIR")
+        {
+            crate::builtin_skills_services::prepare(
+                &context,
+                "omp",
+                Some(std::path::Path::new(&start.cwd)),
+                crate::builtin_skills_services::Mount::Home(std::path::Path::new(home)),
+            );
+        }
         let mut args = aeroric_core::agents::launch::omp_rpc_args(
             &start.permission,
             &start.cwd,
@@ -651,6 +674,12 @@ fn omp_config_launcher(context: Arc<CoreContext>, config_id: String) -> OmpLaunc
             api,
             &config.models,
         )?;
+        crate::builtin_skills_services::prepare(
+            &context,
+            "omp",
+            Some(std::path::Path::new(&start.cwd)),
+            crate::builtin_skills_services::Mount::Home(&home),
+        );
         let input = harness_path(&context, "omp")
             .map(LaunchInput::new)
             .unwrap_or_else(|| LaunchInput::new("omp"));
@@ -789,11 +818,37 @@ fn claude_launcher(context: Arc<CoreContext>, key: ClaudeKey) -> ClaudeLauncher 
         };
         let mut spec = spec_with_login_env(input);
         spec.cwd = Some(start.cwd.clone());
-        let args = claude_args(start, passes_model);
+        let mut args = claude_args(start, passes_model);
+        let cwd = std::path::Path::new(&start.cwd);
+        if key.config.is_none() && key.agent == "claude" {
+            // B2: the built-in skills as a session-only plugin; ~/.claude is untouched.
+            if let Some(plugin) = crate::builtin_skills_services::prepare(
+                &context,
+                "claude",
+                Some(cwd),
+                crate::builtin_skills_services::Mount::ClaudePlugin,
+            ) {
+                args.extend([
+                    "--plugin-dir".to_string(),
+                    plugin.to_string_lossy().into_owned(),
+                ]);
+            }
+        }
         let mut revoke: Option<Box<dyn FnOnce() + Send>> = None;
         if let Some(config_id) = &key.config {
             let config = resolve_config(context.paths.data_dir(), config_id)?;
             push_ops(&mut spec, config_home_env(&context, &config)?);
+            let home = context
+                .paths
+                .data_dir()
+                .join("agent-homes")
+                .join(&config.home_dir_name);
+            crate::builtin_skills_services::prepare(
+                &context,
+                "claude",
+                Some(cwd),
+                crate::builtin_skills_services::Mount::Home(&home),
+            );
             let token = aeroric_core::local_router::task_tokens::issue(
                 &start.task_id,
                 Some(config_id.clone()),
@@ -934,6 +989,13 @@ fn config_launcher(context: Arc<CoreContext>, config_id: String) -> Launcher {
             )?));
         let mut spec = spec_with_login_env(input);
         push_ops(&mut spec, config_home_env(&context, &config)?);
+        let home = data_dir.join("agent-homes").join(&config.home_dir_name);
+        crate::builtin_skills_services::prepare(
+            &context,
+            "codex",
+            None,
+            crate::builtin_skills_services::Mount::Home(&home),
+        );
         let token_id = server_token_id(&config_id);
         let token =
             aeroric_core::local_router::task_tokens::issue(&token_id, Some(config_id.clone()));

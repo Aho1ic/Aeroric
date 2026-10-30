@@ -6,6 +6,7 @@ pub mod adapter_services;
 pub mod agent_connections_services;
 pub mod agent_upgrade_services;
 pub mod auth;
+pub mod builtin_skills_services;
 pub mod canvas_services;
 pub mod codec;
 pub mod connection_services;

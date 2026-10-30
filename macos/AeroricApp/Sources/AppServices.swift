@@ -39,6 +39,8 @@ final class AppServices {
     /// AP4: 全业务域 Store 挂载（统一由 AppServices 持有，消除仅存于库目录的断链）。
     let fileTreeStore = FileTreeStore()
     let documentStore = DocumentStore()
+    /// B2 (2026-10-30): built-in skills; actions attach once the host is up.
+    let builtinSkillBook = BuiltinSkillBook()
     let gitStore = GitStore()
     let diagnosticsStore = DiagnosticsStore()
     let debugSessionStore = DebugSessionStore()
@@ -255,6 +257,8 @@ final class AppServices {
                     self.notifier.install()
                     self.notifier.onOpen = { [weak self] taskID in self?.openFromNotification(taskID: taskID) }
                     self.startStatusPump()
+                // B2: built-in skills for the recipe cards and Agent 配置 → 技能.
+                await MainActor.run { self.attachBuiltinSkills() }
                 }
                 // AP7:能力探测走宿主真值。没有适配器面时 `capabilities()` 抛错,
                 // store 保持「未探测」——UI 因此什么都不显示,而不是显示一堆注定
@@ -1097,6 +1101,16 @@ extension AppServices: WorkspaceStateProviding {
 
     private static func gitWorking(_ action: GitAction) -> String {
         switch action {
+    /// Hands the skill book its host calls (re-run on every attach).
+    func attachBuiltinSkills() {
+        guard let connection = attachedConnection else { return }
+        builtinSkillBook.actions = HostBuiltinSkillActions(client: BuiltinSkillsClient(connection: connection))
+        builtinSkillBook.loginOnGateway = { [weak self] harness in
+            self?.agentConfigStore.loginGateway[harness]?.active ?? false
+        }
+        Task { @MainActor in await builtinSkillBook.refresh() }
+    }
+
         case .stage, .stageAll: "正在暂存…"
         case .unstage, .unstageAll: "正在取消暂存…"
         case .commit: "正在提交…"
@@ -1319,6 +1333,32 @@ extension AppServices: WorkspaceStateProviding {
         guard taskSnapshotReadState == .loaded else { return nil }
         return ActivityCounts(
             running: taskStore.tasks.filter { ["pending", "running", "detached"].contains($0.status) }.count,
+
+
+/// `builtinSkills.*` for the skill book (B2).
+@MainActor
+struct HostBuiltinSkillActions: BuiltinSkillActions {
+    let client: BuiltinSkillsClient
+
+    func list() async throws -> [BuiltinSkillBook.Item] {
+        try await client.list().map {
+            BuiltinSkillBook.Item(id: $0.id, group: $0.group, title: $0.title, detail: $0.detail, symbol: $0.symbol,
+                                  needs: $0.needs, enabled: $0.enabled, shadowedBy: $0.shadowedBy, missing: $0.missing)
+        }
+    }
+
+    func setEnabled(id: String, enabled: Bool) async throws {
+        try await client.setEnabled(id: id, enabled: enabled)
+    }
+
+    func projectsWithCopies() async throws -> [BuiltinSkillBook.ProjectCopies] {
+        try await client.projectsWithCopies().map { .init(path: $0.path, name: $0.name, count: $0.count) }
+    }
+
+    func removeFromProject(path: String) async throws -> Int {
+        try await client.removeFromProject(projectPath: path)
+    }
+}
             waiting: taskStore.tasks.filter { $0.status == "input_required" }.count
         )
     }

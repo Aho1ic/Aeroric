@@ -27,6 +27,8 @@ public struct NewSessionHome: View {
     }
 
     @State private var scenario: Scenario = .build
+    @State private var showingRecipes = false
+    @Environment(BuiltinSkillBook.self) private var skillBook: BuiltinSkillBook?
     @State private var pendingRecipe: ScenarioRecipe?
     @State private var focusRequest = 0
     @State private var selectingAttachment = false
@@ -107,7 +109,7 @@ public struct NewSessionHome: View {
 
                     FlowLayout(spacing: AeroricSpace.s, centered: true) {
                         ForEach(scenario.recipes) { recipe in
-                            RecipeChip(recipe: recipe) { choose(recipe) }
+                            RecipeChip(recipe: recipe, skilled: invocation(for: recipe) != nil) { choose(recipe) }
                                 .disabled(!draft.isEditable)
                         }
                     }
@@ -178,6 +180,9 @@ public struct NewSessionHome: View {
     private var addMenu: some View {
         Menu {
             Button("添加资料引用…", systemImage: "paperclip") { selectingAttachment = true }
+            if skillBook != nil {
+                Button("工作配方…", systemImage: "sparkles") { showingRecipes = true }
+            }
             Section("组合能力 · 即将支持") {
                 capabilityToggle("团队协作", \.team)
                 capabilityToggle("独立审查", \.review)
@@ -193,6 +198,15 @@ public struct NewSessionHome: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .popover(isPresented: $showingRecipes, arrowEdge: .bottom) {
+            if let skillBook {
+                BuiltinRecipePanel(book: skillBook) { recipe in
+                    showingRecipes = false
+                    choose(recipe)
+                }
+                .task { if !skillBook.loaded { await skillBook.refresh() } }
+            }
+        }
         .help("添加")
         .accessibilityLabel("添加")
         .accessibilityIdentifier("new-session.add")
@@ -290,8 +304,15 @@ public struct NewSessionHome: View {
         }
     }
 
+    /// How this draft's harness calls the card's skill; nil keeps the plain template.
+    private func invocation(for recipe: ScenarioRecipe) -> String? {
+        guard let skill = recipe.skill, let skillBook else { return nil }
+        return skillBook.invocation(skill: skill, harness: harness, configurationID: draft.configurationID)
+    }
+
     private func insert(_ recipe: ScenarioRecipe, _ insertion: ScenarioCatalog.Insertion) {
-        draft.task.prompt = ScenarioCatalog.merged(draft.task.prompt, with: recipe, as: insertion)
+        draft.task.prompt = ScenarioCatalog.merged(draft.task.prompt, with: recipe, as: insertion,
+                                                   invocation: invocation(for: recipe))
         pendingRecipe = nil
         focusRequest += 1
     }
