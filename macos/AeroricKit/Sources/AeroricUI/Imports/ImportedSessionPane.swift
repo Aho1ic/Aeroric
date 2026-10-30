@@ -21,6 +21,11 @@ public struct ImportedSessionPane: View {
 
     public static let notice = "已导入的会话只可查看。"
 
+    /// `从 Codex 导入 · 10/28 16:25` (2026-10-30), at the page's top left.
+    public static func badge(agent: String, lastAtMs: UInt64, now: Date = Date()) -> String {
+        "从 \(AgentGlyph.displayName(for: agent)) 导入 · \(TranscriptTurns.clock(lastAtMs, now: now))"
+    }
+
     public init(book: ImportBook, id: String, availability: [String: Bool] = [:], preferredHarness: String = "codex",
                 onContinue: @escaping (_ id: String, _ addingProject: String?) async throws -> Void = { _, _ in },
                 onFork: @escaping (_ projectID: String?, _ harness: String, _ prompt: String) -> Void = { _, _, _ in }) {
@@ -34,13 +39,11 @@ public struct ImportedSessionPane: View {
 
     public var body: some View {
         if let session = book.session(id: id) {
-            SessionRouteView(
-                task: TaskStore.TaskEntry(id: session.id, projectID: session.projectId ?? "", title: session.title,
-                                          status: "done", agent: session.agent, updatedAtMs: session.lastAtMs),
-                actions: ImportedSessionActions(book: book), canSend: false,
-                readOnlyNotice: Self.notice,
-                readOnlyFooter: AnyView(footer(session))
-            )
+            ImportedTranscript(book: book, sessionID: session.id,
+                               badge: Self.badge(agent: session.agent, lastAtMs: session.lastAtMs),
+                               agentSessionID: session.sessionId) {
+                footer(session)
+            }
             .id(session.id)
         } else {
             AeroricEmptyState(systemImage: "tray", title: "导入的会话不可用",
@@ -97,17 +100,4 @@ public struct ImportedSessionPane: View {
                    ImportForkPrompt.make(agent: session.agent, title: session.title, messages: messages))
         }
     }
-}
-
-@MainActor
-struct ImportedSessionActions: SessionRouteActions {
-    let book: ImportBook
-
-    func loadHistory(taskID: String) async throws -> [SessionMessage] {
-        try await book.messages(id: taskID)
-    }
-    func send(taskID: String, text: String) async throws {}
-    func stop(taskID: String) async {}
-    func respond(eventID: String, outcome: PendingRequestStore.Outcome) async throws {}
-    func export(taskID: String) async throws {}
 }

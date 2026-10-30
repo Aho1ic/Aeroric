@@ -100,7 +100,7 @@ struct ImportedSessionBar: View {
     @ViewBuilder private var message: some View {
         switch continuation {
         case .resume:
-            Text("**从 \(agentName) 导入** · 接着聊会恢复原会话并在 Aeroric 里接管，记录仍留在原处")
+            Text("接着聊会恢复原会话并在 Aeroric 里接管，记录仍留在原处")
                 .foregroundStyle(AeroricColor.textSecondary)
         case let .addProject(path):
             Text("**\(ImportPresentation.abbreviated(path))** 还不是项目，接着聊需要先添加")

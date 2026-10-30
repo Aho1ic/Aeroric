@@ -660,7 +660,7 @@ struct PendingMove: Equatable {
 /// The page colour behind the composer and 统计栏, fading in just above
 /// them (2026-10-29): text scrolling down slips out of sight instead of
 /// showing through the glass composer.
-private struct FooterFade: View {
+struct FooterFade: View {
     static let height: CGFloat = 36
 
     var body: some View {
