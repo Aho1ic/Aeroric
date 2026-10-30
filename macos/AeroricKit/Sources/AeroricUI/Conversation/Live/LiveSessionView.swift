@@ -60,13 +60,7 @@ public struct LiveSessionView: View {
     /// The whole session's turns (the person's own messages) and tool steps:
     /// history plus the live rows history has not taken over yet.
     private var turnAndStepCounts: (turns: Int, steps: Int) {
-        var turns = 0
-        var steps = 0
-        for message in store.history {
-            let hasText = message.content.contains { if case .text = $0 { return true }; return false }
-            if message.role == "user" && hasText { turns += 1 }
-            steps += message.content.filter { if case .toolUse = $0 { return true }; return false }.count
-        }
+        var (turns, steps) = SessionStatsBar.counts(store.history)
         for item in liveItems {
             switch item {
             case .userEcho: turns += 1

@@ -3,7 +3,8 @@
 //! The live counters only cover what the page saw since it opened, so a
 //! finished session, an App restart or a host restart left the bar empty.
 //! Codex rollouts and Claude jsonl both carry token usage and timestamps;
-//! reading them gives the same figures for any session on disk.
+//! reading them gives the same figures for any session on disk. 2026-10-30:
+//! OMP and DeepSeek Harness sessions too.
 
 use std::collections::HashMap;
 
@@ -275,6 +276,163 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
     (!stats.is_empty()).then_some(stats)
 }
 
+/// Disjoint usage counts (Claude, OMP and DeepSeek Harness): the prompt is
+/// uncached input plus cache reads and writes.
+#[derive(Default)]
+struct Disjoint {
+    input: u64,
+    cached: u64,
+    output: u64,
+    last_prompt: Option<u64>,
+    last_output: u64,
+}
+
+impl Disjoint {
+    /// Adds one model call; all-zero usage (a failed call) counts nothing.
+    fn add(
+        &mut self,
+        stats: &mut TranscriptStats,
+        uncached: u64,
+        read: u64,
+        write: u64,
+        output: u64,
+    ) {
+        let prompt = uncached + read + write;
+        if prompt == 0 && output == 0 {
+            return;
+        }
+        self.input += prompt;
+        self.cached += read;
+        self.output += output;
+        self.last_prompt = Some(prompt);
+        self.last_output = output;
+        if let Some(turn) = stats.turns.last_mut() {
+            turn.tokens += prompt + output;
+        }
+    }
+
+    fn finish(self, stats: &mut TranscriptStats) {
+        if let Some(prompt) = self.last_prompt {
+            stats.input_tokens = Some(self.input);
+            stats.cached_input_tokens = Some(self.cached);
+            stats.output_tokens = Some(self.output);
+            stats.context_used = Some(prompt + self.last_output);
+        }
+    }
+}
+
+/// An OMP session: a user message starts a turn; each assistant entry is
+/// one model call (written when it completes, with its start time and time to
+/// first token on the message); `toolCall` blocks pair with `toolResult`
+/// messages by id. OMP closes no turn explicitly: a turn ends at its last
+/// activity.
+pub fn omp(lines: &[String]) -> Option<TranscriptStats> {
+    let mut stats = TranscriptStats::default();
+    let mut clock = Clock::default();
+    let mut usage = Disjoint::default();
+    for line in lines {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value["type"] != "message" {
+            continue;
+        }
+        let Some(at) = at_ms(&value) else { continue };
+        let message = &value["message"];
+        match message["role"].as_str().unwrap_or_default() {
+            "user" => clock.start_turn(&mut stats, at),
+            "assistant" => {
+                let first = match (message["timestamp"].as_u64(), message["ttft"].as_f64()) {
+                    (Some(start), Some(ttft)) if ttft >= 0.0 => (start + ttft as u64).min(at),
+                    _ => at,
+                };
+                clock.output(&mut stats, first);
+                clock.last_at = Some(at);
+                for block in message["content"].as_array().into_iter().flatten() {
+                    if block["type"] == "toolCall" {
+                        if let Some(id) = block["id"].as_str() {
+                            clock.tool_start(id, at);
+                        }
+                    }
+                }
+                let u = &message["usage"];
+                let count = |key: &str| u[key].as_u64().unwrap_or(0);
+                usage.add(
+                    &mut stats,
+                    count("input"),
+                    count("cacheRead"),
+                    count("cacheWrite"),
+                    count("output"),
+                );
+            }
+            "toolResult" => {
+                if let Some(id) = message["toolCallId"].as_str() {
+                    clock.tool_end(&mut stats, id, at);
+                }
+            }
+            _ => {}
+        }
+    }
+    clock.close(&mut stats);
+    usage.finish(&mut stats);
+    (!stats.is_empty()).then_some(stats)
+}
+
+/// A DeepSeek Harness `session.jsonl`: `turn/start` / `turn/end` bound
+/// turns, the first `assistant/chunk` is the first output, each
+/// `assistant/message` carries its call's usage, `tool/call` pairs with
+/// `tool/result` by call id, `request/context` names the window.
+pub fn dsh(lines: &[String]) -> Option<TranscriptStats> {
+    let mut stats = TranscriptStats::default();
+    let mut clock = Clock::default();
+    let mut usage = Disjoint::default();
+    for line in lines {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(at) = value["time"].as_u64() else {
+            continue;
+        };
+        let data = &value["data"];
+        match value["type"].as_str().unwrap_or_default() {
+            "turn/start" => clock.start_turn(&mut stats, at),
+            "turn/end" => clock.end_turn(&mut stats, at),
+            "assistant/chunk" => clock.output(&mut stats, at),
+            "assistant/message" => {
+                clock.output(&mut stats, at);
+                let u = &data["usage"];
+                let count = |key: &str| u[key].as_u64().unwrap_or(0);
+                usage.add(
+                    &mut stats,
+                    count("inputTokens"),
+                    count("cacheReadTokens"),
+                    count("cacheWriteTokens"),
+                    count("outputTokens"),
+                );
+            }
+            "tool/call" => {
+                if let Some(id) = data["callId"].as_str() {
+                    clock.tool_start(id, at);
+                }
+            }
+            "tool/result" => {
+                if let Some(id) = data["message"]["source"]["callId"].as_str() {
+                    clock.tool_end(&mut stats, id, at);
+                }
+            }
+            "request/context" => {
+                if let Some(window) = data["contextWindow"].as_u64() {
+                    stats.context_limit = Some(window);
+                }
+            }
+            _ => {}
+        }
+    }
+    clock.close(&mut stats);
+    usage.finish(&mut stats);
+    (!stats.is_empty()).then_some(stats)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,8 +504,80 @@ mod tests {
     }
 
     #[test]
+    fn an_omp_session_gives_disjoint_usage_and_turn_timing() {
+        let t = |s: &str| format!("2026-10-30T01:00:{s}Z");
+        let start = chrono::DateTime::parse_from_rfc3339(&t("00.000"))
+            .unwrap()
+            .timestamp_millis() as u64;
+        let usage = |input: u64, read: u64, out: u64| serde_json::json!({"input": input, "output": out, "cacheRead": read, "cacheWrite": 0});
+        let jsonl = lines(&[
+            serde_json::json!({"type": "session", "timestamp": t("00.000")}),
+            serde_json::json!({"type": "message", "timestamp": t("00.000"), "message": {"role": "user", "content": []}}),
+            // A failed call: all-zero usage counts nothing.
+            serde_json::json!({"type": "message", "timestamp": t("01.000"), "message": {"role": "assistant", "content": [],
+                "usage": usage(0, 0, 0), "stopReason": "error"}}),
+            serde_json::json!({"type": "message", "timestamp": t("03.000"), "message": {"role": "assistant",
+                "timestamp": start + 1000, "ttft": 500.0,
+                "content": [{"type": "toolCall", "id": "c1"}], "usage": usage(100, 900, 20)}}),
+            serde_json::json!({"type": "message", "timestamp": t("07.000"), "message": {"role": "toolResult", "toolCallId": "c1"}}),
+            serde_json::json!({"type": "message", "timestamp": t("09.000"), "message": {"role": "assistant",
+                "content": [{"type": "text"}], "usage": usage(50, 1000, 30)}}),
+        ]);
+        let stats = omp(&jsonl).unwrap();
+        assert_eq!(stats.input_tokens, Some(2050));
+        assert_eq!(stats.cached_input_tokens, Some(1900));
+        assert_eq!(stats.output_tokens, Some(50));
+        assert_eq!(stats.context_used, Some(1080));
+        assert_eq!(stats.context_limit, None);
+        assert_eq!(stats.tool_ms, 4000);
+        assert_eq!(stats.model_ms, 5000);
+        assert_eq!(
+            (stats.first_token_ms_total, stats.first_token_samples),
+            (1000, 1)
+        );
+        assert_eq!(stats.turns.len(), 1);
+        assert_eq!(stats.turns[0].tokens, 2100);
+        assert_eq!(stats.turns[0].ended_at, Some(start + 9000));
+    }
+
+    #[test]
+    fn a_dsh_session_gives_usage_timing_and_its_window() {
+        let at = |s: u64| 1_787_218_854_000 + s;
+        let jsonl = lines(&[
+            serde_json::json!({"type": "session", "createdAt": at(0)}),
+            serde_json::json!({"type": "turn/start", "time": at(0), "data": {"turn": 1}}),
+            serde_json::json!({"type": "request/context", "time": at(10), "data": {"contextWindow": 262_144}}),
+            serde_json::json!({"type": "assistant/chunk", "time": at(1500), "data": {}}),
+            serde_json::json!({"type": "assistant/message", "time": at(2000), "data": {
+                "usage": {"inputTokens": 900, "outputTokens": 100, "cacheReadTokens": 300}}}),
+            serde_json::json!({"type": "tool/call", "time": at(2000), "data": {"callId": "k1"}}),
+            serde_json::json!({"type": "tool/result", "time": at(5000), "data": {"message": {"source": {"callId": "k1"}}}}),
+            serde_json::json!({"type": "assistant/message", "time": at(6000), "data": {
+                "usage": {"inputTokens": 50, "outputTokens": 40, "cacheReadTokens": 1200}}}),
+            serde_json::json!({"type": "turn/end", "time": at(6500), "data": {"turn": 1}}),
+        ]);
+        let stats = dsh(&jsonl).unwrap();
+        assert_eq!(stats.input_tokens, Some(2450));
+        assert_eq!(stats.cached_input_tokens, Some(1500));
+        assert_eq!(stats.output_tokens, Some(140));
+        assert_eq!(stats.context_used, Some(1290));
+        assert_eq!(stats.context_limit, Some(262_144));
+        assert_eq!(stats.tool_ms, 3000);
+        assert_eq!(stats.model_ms, 3500);
+        assert_eq!(
+            (stats.first_token_ms_total, stats.first_token_samples),
+            (1500, 1)
+        );
+        assert_eq!(stats.turns.len(), 1);
+        assert_eq!(stats.turns[0].tokens, 2590);
+        assert_eq!(stats.turns[0].ended_at, Some(at(6500)));
+    }
+
+    #[test]
     fn an_empty_or_foreign_transcript_has_no_stats() {
         assert_eq!(codex(&[]), None);
         assert_eq!(claude(&["not json".to_string()]), None);
+        assert_eq!(omp(&[]), None);
+        assert_eq!(dsh(&["{}".to_string()]), None);
     }
 }

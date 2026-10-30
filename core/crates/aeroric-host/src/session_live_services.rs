@@ -986,7 +986,8 @@ fn context_used(lines: &[String], family: ProtocolFamily, path: Option<&str>) ->
     let stats = match family {
         ProtocolFamily::Codex => transcript_stats::codex(lines),
         ProtocolFamily::Claude => transcript_stats::claude(lines),
-        _ => None,
+        ProtocolFamily::Omp => transcript_stats::omp(lines),
+        ProtocolFamily::Dsh => transcript_stats::dsh(lines),
     };
     stats.and_then(|s| s.context_used).or_else(|| {
         let bytes = std::fs::metadata(path?).ok()?.len();

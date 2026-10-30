@@ -1,3 +1,4 @@
+import AeroricProtocol
 import SwiftUI
 
 /// What the session page may ask of the host. The App implements it on top
@@ -5,11 +6,20 @@ import SwiftUI
 @MainActor
 public protocol SessionRouteActions {
     func loadHistory(taskID: String) async throws -> [SessionMessage]
+    /// History with the 统计栏 figures read from the transcript (2026-10-30,
+    /// DeepSeek Harness); nil figures hide the bar.
+    func loadPage(taskID: String) async throws -> (messages: [SessionMessage], stats: SessionTranscriptStats?)
     func send(taskID: String, text: String) async throws
     /// Ends the task (`task.cancel`); there is no per-turn interrupt yet (D3).
     func stop(taskID: String) async
     func respond(eventID: String, outcome: PendingRequestStore.Outcome) async throws
     func export(taskID: String) async throws
+}
+
+public extension SessionRouteActions {
+    func loadPage(taskID: String) async throws -> (messages: [SessionMessage], stats: SessionTranscriptStats?) {
+        (try await loadHistory(taskID: taskID), nil)
+    }
 }
 
 /// Session page: transcript + inline approvals + the shared composer.
@@ -24,6 +34,7 @@ public struct SessionRouteView: View {
     /// imported session's 接着聊 capsule); wins over `readOnlyNotice`.
     let readOnlyFooter: AnyView?
     @State private var messages: [SessionMessage] = []
+    @State private var transcriptStats: SessionTranscriptStats?
     @State private var loading = false
     @State private var draft = ""
     @State private var store: PendingRequestStore
@@ -80,6 +91,12 @@ public struct SessionRouteView: View {
                     .padding(.horizontal, AeroricSpace.s)
                     .help("会话中不可更改 Agent、模型或权限")
                 }
+                if let transcriptStats {
+                    let counts = SessionStatsBar.counts(messages)
+                    SessionStatsBar(usage: UsageSummary(transcript: transcriptStats),
+                                    stats: SessionStats(transcript: transcriptStats),
+                                    turns: counts.turns, steps: counts.steps)
+                }
             }
             }
         }
@@ -115,7 +132,11 @@ public struct SessionRouteView: View {
         loading = true
         Task { @MainActor in
             defer { loading = false }
-            do { messages = try await actions.loadHistory(taskID: task.id) } catch { errorText = "读取历史失败：\(error)" }
+            do {
+                let page = try await actions.loadPage(taskID: task.id)
+                messages = page.messages
+                transcriptStats = page.stats
+            } catch { errorText = "读取历史失败：\(error)" }
         }
     }
 

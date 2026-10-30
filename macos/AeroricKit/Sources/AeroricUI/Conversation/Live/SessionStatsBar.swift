@@ -10,6 +10,18 @@ struct SessionStatsBar: View {
     let turns: Int
     let steps: Int
 
+    /// Turns (the person's own messages) and tool steps in a history.
+    static func counts(_ history: [SessionMessage]) -> (turns: Int, steps: Int) {
+        var turns = 0
+        var steps = 0
+        for message in history {
+            let hasText = message.content.contains { if case .text = $0 { return true }; return false }
+            if message.role == "user" && hasText { turns += 1 }
+            steps += message.content.filter { if case .toolUse = $0 { return true }; return false }.count
+        }
+        return (turns, steps)
+    }
+
     enum Panel: Hashable { case stats, tokens, context }
     @State private var open: Panel?
 

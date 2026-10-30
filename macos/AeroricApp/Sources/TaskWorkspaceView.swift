@@ -1319,9 +1319,13 @@ struct HostSessionRouteActions: SessionRouteActions {
     let services: AppServices
 
     func loadHistory(taskID: String) async throws -> [AeroricUI.SessionMessage] {
+        try await loadPage(taskID: taskID).messages
+    }
+
+    func loadPage(taskID: String) async throws -> (messages: [AeroricUI.SessionMessage], stats: SessionTranscriptStats?) {
         guard let sessions = services.sessionsClient else { throw AppServices.ProjectError.notConnected }
         let page = try await sessions.fullHistory(taskId: taskID)
-        return page.messages.map(SessionBlockMapping.message)
+        return (page.messages.map(SessionBlockMapping.message), page.stats)
     }
 
     func send(taskID: String, text: String) async throws {

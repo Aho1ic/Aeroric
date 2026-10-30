@@ -4424,7 +4424,8 @@ fn session_history(
         let stats = match family {
             ProtocolFamily::Codex => transcript_stats::codex(&lines),
             ProtocolFamily::Claude => transcript_stats::claude(&lines),
-            _ => None,
+            ProtocolFamily::Omp => transcript_stats::omp(&lines),
+            ProtocolFamily::Dsh => transcript_stats::dsh(&lines),
         };
         if let Some(stats) = stats {
             reply["stats"] = serde_json::to_value(stats).unwrap_or_default();
