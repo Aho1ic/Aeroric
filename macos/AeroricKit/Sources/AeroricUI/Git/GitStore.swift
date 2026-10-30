@@ -68,6 +68,15 @@ public final class GitStore {
     public private(set) var conflictPaths: Set<String> = []
     /// diff 内容（原始 diff 不截断；可下载到用户指定位置）。
     public private(set) var diffText: String = ""
+    /// Commits ahead of / behind the upstream; nil without one (2026-10-30).
+    public private(set) var ahead: Int?
+    public private(set) var behind: Int?
+    /// The write in flight, e.g. 正在提交…; the page holds other writes meanwhile.
+    public var working: String?
+    /// Why the last write failed, until dismissed or the next write.
+    public var actionError: String?
+
+    public var currentBranch: String? { branches.first(where: \.current)?.name }
     public private(set) var changesReadState: WorkspaceReadState = .notLoaded
     public private(set) var historyReadState: WorkspaceReadState = .notLoaded
     public private(set) var stashReadState: WorkspaceReadState = .notLoaded
@@ -100,6 +109,11 @@ public final class GitStore {
     public func ingest(stash: [StashEntry]) {
         self.stashEntries = stash
         stashReadState = .loaded
+    }
+
+    public func ingest(ahead: Int?, behind: Int?) {
+        self.ahead = ahead
+        self.behind = behind
     }
 
     public func setDiff(_ text: String) {

@@ -985,12 +985,16 @@ extension AppServices: WorkspaceStateProviding {
                             systemImage: "plus", group: .work)] + sections + projects + unassigned + archived
     }
 
-    /// B1 Git page (read-only): status, branches and history of `projectPath`.
-    func refreshGit(projectPath: String) async {
+    /// B1 Git page: status, branches, history, stash and upstream counts of
+    /// `projectPath`. After a write the diff stays (the page reloads it).
+    func refreshGit(projectPath: String, keepDiff: Bool = false) async {
         guard let connection = attachedConnection else { return }
         let client = GitClient(connection: connection)
         gitStore.beginRead()
-        gitStore.ingest(stash: [])
+        let stash = (try? await client.stashList(projectPath: projectPath)) ?? []
+        gitStore.ingest(stash: stash.map { GitStore.StashEntry(index: $0.index, message: $0.message) })
+        let counts = try? await client.remoteCounts(projectPath: projectPath)
+        gitStore.ingest(ahead: counts?.ahead, behind: counts?.behind)
         do {
             let status = try await client.status(projectPath: projectPath)
             gitStore.ingest(changes: status.map { GitStore.Change(path: $0.path, status: $0.status, staged: $0.staged) },
@@ -998,7 +1002,7 @@ extension AppServices: WorkspaceStateProviding {
         } catch {
             gitStore.failChanges("读取更改失败：\(Self.gitReason(error))")
         }
-        gitStore.setDiff("")
+        if !keepDiff { gitStore.setDiff("") }
         if let branches = try? await client.branches(projectPath: projectPath) {
             gitStore.ingest(branches: branches.map { GitStore.Branch(name: $0.name, current: $0.current, remote: $0.remote) })
         }
@@ -1034,6 +1038,87 @@ extension AppServices: WorkspaceStateProviding {
             }
         }
         fileTreeStore.ingestChildren(of: path, entries: nodes)
+    }
+
+    /// The Git page's writes (2026-10-30, first batch). One at a time; the page
+    /// reloads after each, and a failure shows on the page.
+    func performGit(projectPath: String, action: GitAction) async {
+        guard let connection = attachedConnection, gitStore.working == nil else { return }
+        let client = GitClient(connection: connection)
+        gitStore.actionError = nil
+        gitStore.working = Self.gitWorking(action)
+        defer { gitStore.working = nil }
+        do {
+            switch action {
+            case let .stage(path): try await client.stage(projectPath: projectPath, filePath: path)
+            case let .unstage(path): try await client.unstage(projectPath: projectPath, filePath: path)
+            case .stageAll: try await client.stageAll(projectPath: projectPath)
+            case .unstageAll: try await client.unstageAll(projectPath: projectPath)
+            case let .commit(message): try await client.commit(projectPath: projectPath, message: message)
+            case let .checkout(branch):
+                let changed = try await client.status(projectPath: projectPath).count
+                if case let .blocked(reason) = BranchSwitch.decision(changedFiles: changed) {
+                    gitStore.actionError = reason
+                    return
+                }
+                try await client.checkoutBranch(projectPath: projectPath, branch: branch)
+            case let .createBranch(name):
+                try await client.createBranch(projectPath: projectPath, name: name,
+                                              from: gitStore.currentBranch ?? "HEAD")
+            case let .discardFile(path, untracked):
+                try await client.discard(projectPath: projectPath, filePath: path, untracked: untracked)
+            case let .stashPush(message):
+                try await client.stashPush(projectPath: projectPath, message: message)
+            case let .stashApply(index): try await client.stashApply(projectPath: projectPath, name: "stash@{\(index)}")
+            case let .stashDrop(index): try await client.stashDrop(projectPath: projectPath, name: "stash@{\(index)}")
+            case .push, .pull, .fetch, .discard, .resolveConflict:
+                return  // Next batch.
+            }
+        } catch {
+            gitStore.actionError = "\(Self.gitFailure(action))：\(Self.gitReason(error))"
+        }
+        await refreshGit(projectPath: projectPath, keepDiff: true)
+    }
+
+    /// Codex writes a commit message from the staged diff; nil on failure.
+    func generateCommitMessage(projectPath: String) async -> String? {
+        guard let connection = attachedConnection else { return nil }
+        do {
+            return try await GitClient(connection: connection).generateCommitMessage(projectPath: projectPath)
+        } catch {
+            gitStore.actionError = "生成提交信息失败：\(Self.gitReason(error))"
+            return nil
+        }
+    }
+
+    private static func gitWorking(_ action: GitAction) -> String {
+        switch action {
+        case .stage, .stageAll: "正在暂存…"
+        case .unstage, .unstageAll: "正在取消暂存…"
+        case .commit: "正在提交…"
+        case .checkout: "正在切换分支…"
+        case .createBranch: "正在新建分支…"
+        case .discardFile, .discard: "正在放弃改动…"
+        case .stashPush: "正在贮藏…"
+        case .stashApply: "正在恢复贮藏…"
+        case .stashDrop: "正在删除贮藏…"
+        default: "正在处理…"
+        }
+    }
+
+    private static func gitFailure(_ action: GitAction) -> String {
+        switch action {
+        case .stage, .stageAll: "暂存失败"
+        case .unstage, .unstageAll: "取消暂存失败"
+        case .commit: "提交失败"
+        case .checkout: "切换分支失败"
+        case .createBranch: "新建分支失败"
+        case .discardFile, .discard: "放弃改动失败"
+        case .stashPush: "贮藏失败"
+        case .stashApply: "恢复贮藏失败"
+        case .stashDrop: "删除贮藏失败"
+        default: "操作失败"
+        }
     }
 
     func loadGitDiff(projectPath: String, change: GitStore.Change) async {

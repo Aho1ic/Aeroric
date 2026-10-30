@@ -75,11 +75,14 @@ public enum GitAction: Equatable {
     case stage(path: String)
     case unstage(path: String)
     case stageAll
+    case unstageAll
     case commit(message: String)
     case push(branch: String)
     case pull
     case fetch(prune: Bool)
     case discard(paths: [String])
+    /// One unstaged file; an untracked one is deleted (2026-10-30).
+    case discardFile(path: String, untracked: Bool)
     case stashPush(message: String)
     case stashApply(index: Int)
     case stashDrop(index: Int)

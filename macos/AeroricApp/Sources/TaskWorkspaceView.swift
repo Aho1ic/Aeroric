@@ -1108,9 +1108,10 @@ struct TaskWorkspaceView: View {
             }
         case .git:
             if let path = gitProjectPath {
-                GitPanel(store: services.gitStore, onSelect: { change in
-                    Task { await services.loadGitDiff(projectPath: path, change: change) }
-                })
+                GitPage(store: services.gitStore,
+                        onAction: { action in Task { await services.performGit(projectPath: path, action: action) } },
+                        onSelect: { change in Task { await services.loadGitDiff(projectPath: path, change: change) } },
+                        onGenerate: { await services.generateCommitMessage(projectPath: path) })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .task(id: path) { await services.refreshGit(projectPath: path) }
             } else {

@@ -1,8 +1,9 @@
 import AeroricProtocol
 import Foundation
 
-/// Read-only Git queries for the Git page (B1 tool-page wiring). Writes
-/// (stage, commit, push, …) are deliberately not here yet.
+/// Git queries and the Git page's first batch of writes (2026-10-30: stage,
+/// commit, branches, stash, discarding one file). Push and pull are not here
+/// yet.
 public struct GitClient: Sendable {
     public struct FileStatus: Sendable, Equatable {
         public var path: String
@@ -22,6 +23,17 @@ public struct GitClient: Sendable {
         public var author: String
         public var date: String
         public var message: String
+    }
+
+    public struct StashEntry: Sendable, Equatable {
+        public var index: Int
+        public var name: String
+        public var message: String
+    }
+
+    public struct RemoteCounts: Sendable, Equatable {
+        public var ahead: Int
+        public var behind: Int
     }
 
     public enum MalformedReply: Error { case malformed(String) }
@@ -44,10 +56,87 @@ public struct GitClient: Sendable {
 
     /// D: switch the project's working copy to `branch` (`git checkout`).
     /// Callers check the working tree is clean and confirm with the user first.
+    /// `isRemote` is required by the host; a local branch until remote
+    /// branches are offered.
     public func checkoutBranch(projectPath: String, branch: String) async throws {
-        _ = try await connection.request("git.git_checkout_branch", params: .object([
-            "projectPath": .string(projectPath), "branchName": .string(branch),
-        ]))
+        try await call("git.git_checkout_branch", projectPath, [
+            "branchName": .string(branch), "isRemote": .bool(false),
+        ])
+    }
+
+    public func stage(projectPath: String, filePath: String) async throws {
+        try await call("git.git_stage", projectPath, ["filePath": .string(filePath)])
+    }
+
+    public func unstage(projectPath: String, filePath: String) async throws {
+        try await call("git.git_unstage", projectPath, ["filePath": .string(filePath)])
+    }
+
+    public func stageAll(projectPath: String) async throws {
+        try await call("git.git_stage_all", projectPath)
+    }
+
+    public func unstageAll(projectPath: String) async throws {
+        try await call("git.git_unstage_all", projectPath)
+    }
+
+    public func commit(projectPath: String, message: String) async throws {
+        try await call("git.git_commit", projectPath, ["message": .string(message)])
+    }
+
+    /// Written by the user's Codex from the staged diff; fails when nothing is staged.
+    public func generateCommitMessage(projectPath: String) async throws -> String {
+        let frame = try await connection.request("git.generate_commit_message",
+                                                 params: .object(["projectPath": .string(projectPath)]))
+        guard let text = frame.result.stringValue else {
+            throw MalformedReply.malformed("git.generate_commit_message returns text")
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Creates `name` from `from` and switches to it.
+    public func createBranch(projectPath: String, name: String, from: String) async throws {
+        try await call("git.git_create_branch", projectPath, [
+            "branchName": .string(name), "fromBranch": .string(from), "checkout": .bool(true),
+        ])
+    }
+
+    /// One file back to its committed state; an untracked file is removed.
+    public func discard(projectPath: String, filePath: String, untracked: Bool) async throws {
+        try await call("git.git_discard_files", projectPath, [
+            "filePaths": .array([.string(filePath)]), "untracked": .bool(untracked),
+        ])
+    }
+
+    public func stashPush(projectPath: String, message: String?) async throws {
+        var params: [String: JSONValue] = ["includeUntracked": .bool(true)]
+        if let message, !message.isEmpty { params["message"] = .string(message) }
+        try await call("git.git_stash_push", projectPath, params)
+    }
+
+    public func stashList(projectPath: String) async throws -> [StashEntry] {
+        let frame = try await connection.request("git.git_stash_list", params: .object(["projectPath": .string(projectPath)]))
+        return try Self.decodeStash(frame.result)
+    }
+
+    public func stashApply(projectPath: String, name: String) async throws {
+        try await call("git.git_stash_apply", projectPath, ["stashRef": .string(name)])
+    }
+
+    public func stashDrop(projectPath: String, name: String) async throws {
+        try await call("git.git_stash_drop", projectPath, ["stashRef": .string(name)])
+    }
+
+    /// Commits ahead of and behind the upstream; nil without an upstream.
+    public func remoteCounts(projectPath: String) async throws -> RemoteCounts? {
+        let frame = try await connection.request("git.git_remote_counts", params: .object(["projectPath": .string(projectPath)]))
+        return Self.decodeCounts(frame.result)
+    }
+
+    private func call(_ method: String, _ projectPath: String, _ extra: [String: JSONValue] = [:]) async throws {
+        var params = extra
+        params["projectPath"] = .string(projectPath)
+        _ = try await connection.request(method, params: .object(params))
     }
 
     public func log(projectPath: String, limit: Int = 100) async throws -> [Commit] {
@@ -84,6 +173,21 @@ public struct GitClient: Sendable {
             }
             return Branch(name: name, current: current, remote: item["remote"]?.stringValue)
         }
+    }
+
+    public static func decodeStash(_ value: JSONValue) throws -> [StashEntry] {
+        guard let items = value.arrayValue else { throw MalformedReply.malformed("git.git_stash_list returns a list") }
+        return try items.map { item in
+            guard let index = Int(item["index"]?.numberText ?? ""), let name = item["name"]?.stringValue else {
+                throw MalformedReply.malformed("a stash entry needs index and name")
+            }
+            return StashEntry(index: index, name: name, message: item["message"]?.stringValue ?? "")
+        }
+    }
+
+    public static func decodeCounts(_ value: JSONValue) -> RemoteCounts? {
+        guard let ahead = Int(value["ahead"]?.numberText ?? ""), let behind = Int(value["behind"]?.numberText ?? "") else { return nil }
+        return RemoteCounts(ahead: ahead, behind: behind)
     }
 
     public static func decodeLog(_ value: JSONValue) throws -> [Commit] {
