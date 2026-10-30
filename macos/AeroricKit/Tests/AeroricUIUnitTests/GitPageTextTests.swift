@@ -26,6 +26,14 @@ final class GitPageTextTests: XCTestCase {
         XCTAssertTrue(GitPageText.discardMessage(path: "a.txt", untracked: false).contains("上次提交"))
     }
 
+    /// 2026-10-30 验收：单文件放弃的确认框要写出是哪个文件（含子目录）。
+    func testDiscardConfirmationNamesTheWholePath() {
+        for untracked in [true, false] {
+            XCTAssertTrue(GitPageText.discardMessage(path: "src/app/settings.txt", untracked: untracked)
+                .hasPrefix("「src/app/settings.txt」"))
+        }
+    }
+
     func testPathsSplitIntoFolderAndName() {
         XCTAssertEqual(GitPageText.split("Sources/App/Main.swift").directory, "Sources/App/")
         XCTAssertEqual(GitPageText.split("Sources/App/Main.swift").name, "Main.swift")

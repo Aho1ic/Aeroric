@@ -869,57 +869,38 @@ pub fn generate_commit_message(project_path: &Path) -> Result<String, String> {
         cmd.args(["-p", &full_prompt, "--output-format", "text"]);
     }
     cmd.current_dir(project_path);
+    // GUI 启动的宿主 PATH 里没有 node，`#!/usr/bin/env node` 的 codex 会直接
+    // 以 "env: node: No such file or directory" 退出；与 detect_version 一样
+    // 先给登录 shell 的 PATH，再让 launch spec 的 extra_env 覆盖。
+    cmd.env("PATH", crate::settings::get_login_shell_path());
     cmd.stdin(std::process::Stdio::null());
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|error| format!("Failed to run {agent}: {error}"))?;
-    // `commit_message_timeout_secs` is already u64 (settings::project_config), so no
-    // cast: clippy's `unnecessary_cast` fires on the same-type cast, and it is a lint
-    // the local toolchain only raises in some installs — CI caught it.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    let output = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let stdout = child
-                    .stdout
-                    .take()
-                    .map(|mut s| {
-                        use std::io::Read;
-                        let mut buf = String::new();
-                        let _ = s.read_to_string(&mut buf);
-                        buf
-                    })
-                    .unwrap_or_default();
-                let stderr = child
-                    .stderr
-                    .take()
-                    .map(|mut s| {
-                        use std::io::Read;
-                        let mut buf = String::new();
-                        let _ = s.read_to_string(&mut buf);
-                        buf
-                    })
-                    .unwrap_or_default();
-                break (status, stdout, stderr);
-            }
-            Ok(None) => {
-                if std::time::Instant::now() > deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!("生成提交信息超时（{}秒）", timeout_secs));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Err(error) => return Err(format!("生成提交信息线程错误: {error}")),
-        }
-    };
-    let (status, stdout, stderr) = output;
+    let (status, stdout, stderr) =
+        run_agent_with_deadline(cmd, std::time::Duration::from_secs(timeout_secs)).map_err(
+            |error| match error {
+                AgentRunError::Spawn(error) => format!("Failed to run {agent}: {error}"),
+                AgentRunError::Timeout => format!("生成提交信息超时（{}秒）", timeout_secs),
+                AgentRunError::Wait(error) => format!("生成提交信息线程错误: {error}"),
+            },
+        )?;
     if !status.success() {
-        return Err(format!("Agent failed: {stderr}{stdout}"));
+        // codex exec 会把整段提示词回显到 stderr；页面只放得下结尾几行。
+        let lines = stderr
+            .lines()
+            .chain(stdout.lines())
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        let detail = lines[lines.len().saturating_sub(3)..].join(" / ");
+        if detail.is_empty() {
+            return Err(format!(
+                "Agent failed: {agent} 以 {status} 退出，没有输出。"
+            ));
+        }
+        return Err(format!("Agent failed: {detail}"));
     }
 
     let result = stdout.trim().to_string();
@@ -927,6 +908,55 @@ pub fn generate_commit_message(project_path: &Path) -> Result<String, String> {
         return Err("Agent returned empty response.".to_string());
     }
     Ok(result)
+}
+
+#[derive(Debug)]
+pub enum AgentRunError {
+    Spawn(std::io::Error),
+    Timeout,
+    Wait(std::io::Error),
+}
+
+/// 运行生成提交信息的 agent：stdout/stderr 接管道，并各用一个线程边跑边读
+/// ——codex exec 会把提示词和 diff 回显到 stderr，超过管道缓冲时只靠
+/// try_wait 轮询会让子进程卡在写上、最后被当作超时。到点 kill。
+pub fn run_agent_with_deadline(
+    mut cmd: std::process::Command,
+    timeout: std::time::Duration,
+) -> Result<(std::process::ExitStatus, String, String), AgentRunError> {
+    fn drain<R: std::io::Read + Send + 'static>(
+        pipe: Option<R>,
+    ) -> std::thread::JoinHandle<String> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut buf);
+            }
+            String::from_utf8_lossy(&buf).into_owned()
+        })
+    }
+
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().map_err(AgentRunError::Spawn)?;
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AgentRunError::Timeout);
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(error) => return Err(AgentRunError::Wait(error)),
+        }
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+    Ok((status, stdout, stderr))
 }
 
 // ===== clone（切片 88）=====

@@ -400,3 +400,48 @@ fn file_diff_rejects_directory_paths_instead_of_scanning_them() -> Result<(), St
     }
     Ok(())
 }
+
+#[cfg(unix)]
+fn sh(script: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("/bin/sh");
+    cmd.args(["-c", script]);
+    cmd
+}
+
+#[cfg(unix)]
+#[test]
+fn commit_message_agent_failure_keeps_its_output() {
+    // 2026-10-30 验收：子进程没接管道，页面只剩 "Agent failed: "。
+    let (status, stdout, stderr) = service::run_agent_with_deadline(
+        sh("echo partial; echo 'env: node: No such file or directory' >&2; exit 127"),
+        std::time::Duration::from_secs(10),
+    )
+    .expect("agent runs");
+    assert!(!status.success());
+    assert_eq!(stdout.trim(), "partial");
+    assert!(stderr.contains("env: node"), "stderr lost: {stderr:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn commit_message_agent_with_a_loud_stderr_does_not_stall() {
+    // codex exec 把提示词回显到 stderr；超过管道缓冲也要按时结束。
+    let (status, stdout, stderr) = service::run_agent_with_deadline(
+        sh("head -c 300000 /dev/zero | tr '\\0' x >&2; echo 'feat: done'"),
+        std::time::Duration::from_secs(10),
+    )
+    .expect("agent finishes before the deadline");
+    assert!(status.success());
+    assert_eq!(stdout.trim(), "feat: done");
+    assert_eq!(stderr.len(), 300_000);
+}
+
+#[cfg(unix)]
+#[test]
+fn commit_message_agent_past_its_deadline_is_killed() {
+    let started = std::time::Instant::now();
+    let result =
+        service::run_agent_with_deadline(sh("sleep 30"), std::time::Duration::from_millis(300));
+    assert!(matches!(result, Err(service::AgentRunError::Timeout)));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
