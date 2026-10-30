@@ -78,6 +78,9 @@ pub struct UpstreamTarget {
     /// R8: set when this target serves a fallback model instead of the
     /// requested one (config routing only).
     fallback: Option<config_routes::Fallback>,
+    /// 2026-10-30: authenticate with this harness's own local login instead
+    /// of `api_key` (task `10-29-local-login-gateway`).
+    login: Option<crate::agent_connections::model::Harness>,
 }
 
 impl UpstreamTarget {
@@ -142,6 +145,7 @@ impl UpstreamTarget {
             enable_chat_completions_proxy,
             upstream_protocol: None,
             fallback: None,
+            login: None,
         })
     }
 
@@ -194,6 +198,15 @@ impl UpstreamTarget {
     }
 
     /// Mark this target as serving a fallback model (R8).
+    pub fn with_login(mut self, harness: crate::agent_connections::model::Harness) -> Self {
+        self.login = Some(harness);
+        self
+    }
+
+    pub fn login(&self) -> Option<crate::agent_connections::model::Harness> {
+        self.login
+    }
+
     pub fn with_fallback(mut self, fallback: config_routes::Fallback) -> Self {
         self.fallback = Some(fallback);
         self

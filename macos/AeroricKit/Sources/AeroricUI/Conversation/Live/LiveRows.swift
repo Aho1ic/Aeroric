@@ -234,6 +234,18 @@ struct LiveNoticeRow: View {
         return String(message[message.index(message.startIndex, offsetBy: prefix.count)..<end])
     }
 
+    /// D3 (2026-10-30): an error that means the local login cannot serve
+    /// right now — spent quota or rate limit, or a login that needs signing
+    /// in again; the page then offers 「换到第三方模型」.
+    static func loginTrouble(in message: String) -> String? {
+        let text = message.lowercased()
+        let spent = ["usage limit", "rate limit", "quota", "429", "额度", "限流"]
+        let auth = ["401", "unauthorized", "本机登录已失效", "sign in again", "log in again"]
+        if spent.contains(where: text.contains) { return "本机登录额度已用完或被限流" }
+        if auth.contains(where: text.contains) { return "本机登录需要重新登录" }
+        return nil
+    }
+
     var body: some View {
         if Self.fallbackModel(in: message) != nil {
             // 2026-10-29: not shown. It fires for every third-party model and

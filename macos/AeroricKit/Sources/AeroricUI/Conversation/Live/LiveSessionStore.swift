@@ -23,6 +23,8 @@ public protocol LiveSessionActions {
     /// Continue under another model source (`configID` nil = the harness's own
     /// login). Returns `native` or `handoff` (2026-10-29).
     func moveSource(taskID: String, configID: String?, model: String) async throws -> String
+    /// How a change to `model` (offered under `configID`) will happen.
+    func planSwitch(taskID: String, model: String, configID: String?) async throws -> LiveSwitchPlan
     func close(taskID: String) async throws
     func export(taskID: String) async throws
     /// `/clear` (N4 D6): open the new-session page prefilled like this task.
@@ -35,6 +37,10 @@ public protocol LiveSessionActions {
 extension LiveSessionActions {
     public func moveSource(taskID: String, configID: String?, model: String) async throws -> String {
         throw LiveSessionError.unsupported("这个宿主不支持换模型来源")
+    }
+    /// Hosts without the planner keep the 2026-10-29 behaviour: always move, and ask.
+    public func planSwitch(taskID: String, model: String, configID: String?) async throws -> LiveSwitchPlan {
+        LiveSwitchPlan(inPlace: false, configID: configID, handoff: false, confirm: true)
     }
     public func historyWithStats(taskID: String) async throws
         -> (messages: [SessionMessage], stats: SessionTranscriptStats?) {
@@ -258,6 +264,10 @@ public final class LiveSessionStore {
 
     public func endSession() async {
         do { try await actions.close(taskID: taskID) } catch { errorText = "结束会话失败：\(error)" }
+    }
+
+    public func planSwitch(model: String, configID: String?) async throws -> LiveSwitchPlan {
+        try await actions.planSwitch(taskID: taskID, model: model, configID: configID)
     }
 
     /// Moves the session to another source and model; the next message runs there.

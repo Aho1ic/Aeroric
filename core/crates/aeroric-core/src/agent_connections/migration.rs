@@ -891,6 +891,7 @@ mod tests {
             }],
             pools: Vec::new(),
             configs: Vec::new(),
+            login_gateway: Default::default(),
         };
         store::save(&store::document_path(data_dir), &original).unwrap();
         let document_before = std::fs::read(store::document_path(data_dir)).unwrap();

@@ -774,7 +774,25 @@ impl TaskService {
     }
 
     /// The `todo`/`pending` choice plus the record shape `handleSubmitTask` built.
-    pub fn create(&self, project: &Record, spec: NewTask) -> Result<(Record, Applied), TaskError> {
+    pub fn create(
+        &self,
+        project: &Record,
+        mut spec: NewTask,
+    ) -> Result<(Record, Applied), TaskError> {
+        // 2026-10-30: a new 本机登录 session goes through the gateway while its
+        // login is on there, so it can switch models in place. A remote project
+        // keeps the remote machine's own login.
+        let remote = project
+            .get("location")
+            .and_then(|l| l.get("kind"))
+            .and_then(Value::as_str)
+            == Some("ssh");
+        if spec.agent_config_id.is_none() && !remote {
+            spec.agent_config_id = crate::agent_connections::launch::login_config_for(
+                self.context.paths.data_dir(),
+                &spec.agent,
+            );
+        }
         let project_id = project
             .id()
             .ok_or(StorageError::InvalidId(crate::paths::PathError::EmptyId {

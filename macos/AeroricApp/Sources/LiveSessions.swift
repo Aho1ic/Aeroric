@@ -56,6 +56,11 @@ struct HostLiveSessionActions: LiveSessionActions {
         try await client().configure(taskId: taskID, model: model, permission: permission, effort: effort)
     }
 
+    func planSwitch(taskID: String, model: String, configID: String?) async throws -> LiveSwitchPlan {
+        let plan = try await client().planSwitch(taskId: taskID, model: model, configId: configID)
+        return LiveSwitchPlan(inPlace: plan.inPlace, configID: plan.configId, handoff: plan.handoff, confirm: plan.confirm)
+    }
+
     func moveSource(taskID: String, configID: String?, model: String) async throws -> String {
         let mode = try await client().moveSource(taskId: taskID, configId: configID, model: model)
         await services.refreshWorkspace()
@@ -160,6 +165,7 @@ extension AppServices {
         let login = configurations.first { !AgentConfigCatalog.isCatalogID($0.id) }
         let allThirdParty = configurations.first { $0.id == AgentConfigCatalog.catalogID("via-\(task.agent ?? "")-all") }
         facts.onLogin = pinned == nil
+        facts.loginOnGateway = task.agentConfigID == "via-\(task.agent ?? "")-login"
         if let allThirdParty, pinned?.id != allThirdParty.id {
             facts.modelSources.append(LiveModelSource(
                 configID: String(allThirdParty.id.dropFirst(AgentConfigCatalog.prefix.count)),

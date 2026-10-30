@@ -93,6 +93,7 @@ pub fn register_session_live_services(
         set.register(name, blocking(&live, run));
     }
     set.register(MOVE_SOURCE_METHOD, blocking(&live, move_source));
+    set.register(PLAN_SWITCH_METHOD, blocking(&live, plan_switch));
     set.register(AUTO_CHECK_GET_METHOD, blocking(&live, auto_check_get));
     set.register(AUTO_CHECK_SET_METHOD, blocking(&live, auto_check_set));
     set.register(
@@ -654,6 +655,98 @@ fn now_ms() -> u64 {
 /// a fresh session that is pointed at it (`handoff`). The old model is never
 /// called, so this works when its upstream is down or out of quota.
 pub const MOVE_SOURCE_METHOD: &str = "session.moveSource";
+pub const PLAN_SWITCH_METHOD: &str = "session.planSwitch";
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanParams {
+    task_id: String,
+    model: String,
+    /// The source the picker offered the model under (legacy moves only).
+    #[serde(default)]
+    config_id: Option<String>,
+}
+
+/// How a model change happens (2026-10-30, D7/D9/D10). Under 「本机登录」 on
+/// the gateway every model it routes switches in place, unless the context
+/// would not fit the new window (then a handoff move). A session still on
+/// the direct login, or on this harness's third-party sources, moves onto
+/// it once. With the login off the 2026-10-29 moves between sources stay.
+/// Answers `{mode: inPlace|move, configId, handoff, confirm}`; the App then
+/// configures the model or calls `session.moveSource`.
+fn plan_switch(live: &Live, request: &Request) -> Frame {
+    use aeroric_core::agent_connections::{
+        model::{ConnectionsDocument, Harness},
+        routing, store,
+    };
+    let p: PlanParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let Some((_, record)) = live.record(&p.task_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no task with that id in any known project",
+        );
+    };
+    let model = p.model.trim().to_string();
+    if model.is_empty() {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "缺少要换到的模型",
+        );
+    }
+    let family = launch_family_of(&record, live.families.as_ref());
+    let data = live.context.paths.data_dir().to_path_buf();
+    let current = record
+        .get("agentConfigId")
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    let harness = match family {
+        ProtocolFamily::Codex => Some(Harness::Codex),
+        ProtocolFamily::Claude => Some(Harness::Claude),
+        _ => None,
+    };
+    let doc = store::load_effective(&store::document_path(&data)).ok();
+    let login = harness.and_then(|h| {
+        let id = ConnectionsDocument::via_login_id(h);
+        let doc = doc.as_ref()?;
+        let config = doc.config(&id)?;
+        (!routing::candidates(doc, &config, &model).0.is_empty()).then_some((h, id))
+    });
+    let (in_place, config_id) = switch_route(
+        login.as_ref().map(|(h, id)| (h.slug(), id.as_str())),
+        current.as_deref(),
+        p.config_id.as_deref(),
+    );
+    let fits = {
+        let (_, path) = aeroric_core::tasks::session_owner::current_session(&record);
+        let lines: Vec<String> = path
+            .as_deref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|raw| raw.lines().map(str::to_string).collect())
+            .unwrap_or_default();
+        let used = context_used(&lines, family, path.as_deref());
+        match (used, target_window(&data, config_id.as_deref(), &model)) {
+            (Some(used), Some(window)) => used * 100 <= window * FIT_PERCENT,
+            _ => true,
+        }
+    };
+    let in_place = in_place && fits;
+    let crossing = login.is_none() && current.is_none() != config_id.is_none();
+    ok(
+        request,
+        json!({
+            "mode": if in_place { "inPlace" } else { "move" },
+            "configId": config_id,
+            "handoff": !fits,
+            "confirm": !fits || crossing,
+        }),
+    )
+}
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -818,6 +911,74 @@ fn move_source(live: &Live, request: &Request) -> Frame {
     )
 }
 
+/// Which configuration a model change lands on, and whether in place
+/// (`plan_switch`). `login` is the harness slug and its 「本机登录」 gateway
+/// configuration when it is on and routes the model; `picked` is the source
+/// the picker offered the model under.
+fn switch_route(
+    login: Option<(&str, &str)>,
+    current: Option<&str>,
+    picked: Option<&str>,
+) -> (bool, Option<String>) {
+    match login {
+        Some((_, id)) if current == Some(id) => (true, Some(id.to_string())),
+        Some((slug, id))
+            if current.is_none()
+                || current.is_some_and(|c| c.starts_with(&format!("via-{slug}-"))) =>
+        {
+            (false, Some(id.to_string()))
+        }
+        _ => (
+            false,
+            picked.filter(|c| !c.trim().is_empty()).map(str::to_string),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod switch_route_tests {
+    use super::switch_route;
+
+    const LOGIN: Option<(&str, &str)> = Some(("codex", "via-codex-login"));
+
+    #[test]
+    fn on_the_login_configuration_every_routed_model_switches_in_place() {
+        assert_eq!(
+            switch_route(LOGIN, Some("via-codex-login"), Some("via-codex-all")),
+            (true, Some("via-codex-login".into()))
+        );
+    }
+
+    #[test]
+    fn a_direct_or_third_party_session_moves_onto_the_login_once() {
+        assert_eq!(
+            switch_route(LOGIN, None, None),
+            (false, Some("via-codex-login".into()))
+        );
+        assert_eq!(
+            switch_route(LOGIN, Some("via-codex-all"), None),
+            (false, Some("via-codex-login".into()))
+        );
+    }
+
+    #[test]
+    fn with_the_login_off_the_picked_source_is_kept() {
+        assert_eq!(
+            switch_route(None, None, Some("via-codex-all")),
+            (false, Some("via-codex-all".into()))
+        );
+        assert_eq!(
+            switch_route(None, Some("via-codex-all"), Some("")),
+            (false, None)
+        );
+        // A user's own configuration is never pulled onto the login.
+        assert_eq!(
+            switch_route(LOGIN, Some("my-pool"), Some("my-pool")),
+            (false, Some("my-pool".into()))
+        );
+    }
+}
+
 /// The tokens the session's last turn sent (what the new model must hold).
 /// Falls back to the transcript size when the transcript says nothing.
 fn context_used(lines: &[String], family: ProtocolFamily, path: Option<&str>) -> Option<u64> {
@@ -837,7 +998,7 @@ fn context_used(lines: &[String], family: ProtocolFamily, path: Option<&str>) ->
 /// built-in login (its own models are large and the CLI compacts itself).
 fn target_window(data: &std::path::Path, config_id: Option<&str>, model: &str) -> Option<u64> {
     let config_id = config_id?;
-    let doc = aeroric_core::agent_connections::store::load(
+    let doc = aeroric_core::agent_connections::store::load_effective(
         &aeroric_core::agent_connections::store::document_path(data),
     )
     .ok()?;

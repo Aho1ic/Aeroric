@@ -33,6 +33,12 @@ struct HostAgentConfigBackend: AgentConfigBackend {
     }
     func status() async throws -> [ACC.Cooldown] { try await client().status() }
     func clearCooldown(connectionId: String) async throws { try await client().clearCooldown(connectionId: connectionId) }
+    func loginGatewayStatus(harness: String) async throws -> ACC.LoginGatewayStatus {
+        try await client().loginGatewayStatus(harness: harness)
+    }
+    func setLoginGateway(harness: String, enabled: Bool, accept: Bool) async throws -> Bool {
+        try await client().setLoginGateway(harness: harness, enabled: enabled, accept: accept)
+    }
     func reasoningStripped() async throws -> [String] { try await client().reasoningStripped() }
     func officialStatus() async throws -> ACC.OfficialStatus { try await client().officialStatus() }
     func testConnection(connectionId: String, model: String) async throws -> ACC.Probe {

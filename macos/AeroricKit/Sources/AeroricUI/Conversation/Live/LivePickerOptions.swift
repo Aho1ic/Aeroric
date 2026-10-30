@@ -27,6 +27,9 @@ public struct LiveSessionFacts: Equatable, Sendable {
     public var modelSources: [LiveModelSource] = []
     /// Whether the session runs on the harness's own login.
     public var onLogin = true
+    /// 2026-10-30: on the login through the gateway (`via-<agent>-login`):
+    /// every model it routes switches in place.
+    public var loginOnGateway = false
 
     public init(agent: String?, configurationTitle: String? = nil, presetTitle: String? = nil,
                 workingDirectory: String? = nil,
@@ -79,7 +82,7 @@ public enum LivePickerOptions {
             guard !configuration.options.models.isEmpty else { continue }
             var sections = ComposerPickerOptions.groupedModels(configuration, idPrefix: source.key + moveSeparator) { _ in false }
             if source.isLogin, !sections.isEmpty {
-                sections[0].title = "本机登录 · 换过去时原样搬会话"
+                sections[0].title = facts.loginOnGateway ? "本机登录" : "本机登录 · 换过去时原样搬会话"
             } else if sections.count == 1, sections[0].title == nil {
                 sections[0].title = source.title
             }
@@ -124,6 +127,18 @@ public enum LivePickerOptions {
         }
         return PickerMenu(sections: [PickerSection(id: "efforts", title: nil, options: options)],
                           note: editable ? "下一轮生效" : reason)
+    }
+}
+
+/// How the host will carry out a model change (2026-10-30, `session.planSwitch`).
+public struct LiveSwitchPlan: Equatable, Sendable {
+    public var inPlace: Bool
+    /// The source to move to when not in place (nil: the direct login).
+    public var configID: String?
+    public var handoff: Bool
+    public var confirm: Bool
+    public init(inPlace: Bool, configID: String?, handoff: Bool, confirm: Bool) {
+        self.inPlace = inPlace; self.configID = configID; self.handoff = handoff; self.confirm = confirm
     }
 }
 

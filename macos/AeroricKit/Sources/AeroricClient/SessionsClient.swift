@@ -183,6 +183,31 @@ extension SessionsClient {
 
     /// `session.moveSource` (2026-10-29): continue under another source.
     /// Returns `native` (the session was carried over) or `handoff`.
+    /// How the host will carry out a model change (2026-10-30).
+    public struct SwitchPlan: Equatable, Sendable {
+        /// Same source: just configure the next turn's model.
+        public var inPlace: Bool
+        /// Otherwise the source to move to (nil: the CLI's own direct login).
+        public var configId: String?
+        /// The context will not fit the new window; the move hands off.
+        public var handoff: Bool
+        /// Ask before doing it.
+        public var confirm: Bool
+        public init(inPlace: Bool, configId: String?, handoff: Bool, confirm: Bool) {
+            self.inPlace = inPlace; self.configId = configId; self.handoff = handoff; self.confirm = confirm
+        }
+    }
+
+    public func planSwitch(taskId: String, model: String, configId: String?) async throws -> SwitchPlan {
+        var params: [String: JSONValue] = ["taskId": .string(taskId), "model": .string(model)]
+        if let configId { params["configId"] = .string(configId) }
+        let reply = try await connection.request("session.planSwitch", params: .object(params)).result
+        return SwitchPlan(inPlace: reply["mode"]?.stringValue == "inPlace",
+                          configId: reply["configId"]?.stringValue,
+                          handoff: reply["handoff"]?.boolValue ?? false,
+                          confirm: reply["confirm"]?.boolValue ?? true)
+    }
+
     public func moveSource(taskId: String, configId: String?, model: String) async throws -> String {
         var params: [String: JSONValue] = ["taskId": .string(taskId), "model": .string(model)]
         if let configId { params["configId"] = .string(configId) }

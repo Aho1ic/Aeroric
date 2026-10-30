@@ -14,6 +14,12 @@ pub fn document_path(data_dir: &Path) -> PathBuf {
 
 /// Absent file is an empty document; an unreadable one is an error, never
 /// silently replaced (same rule as settings.json).
+/// The document as routing and launching see it: plus the virtual login
+/// connections that are on (`ConnectionsDocument::with_logins`). Never save it.
+pub fn load_effective(path: &Path) -> Result<ConnectionsDocument, String> {
+    load(path).map(ConnectionsDocument::with_logins)
+}
+
 pub fn load(path: &Path) -> Result<ConnectionsDocument, String> {
     match std::fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str(&raw).map_err(|e| format!("{}: {e}", path.display())),

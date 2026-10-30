@@ -11,6 +11,8 @@ struct ConnectionsPane: View {
     @State private var confirmDelete = false
     /// `codex` / `claude` while one of the built-in local logins is shown.
     @State private var builtin: String?
+    /// The harness whose login waits for the terms-and-risk consent (D4).
+    @State private var consentHarness: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private typealias ACC = AgentConnectionsClient
@@ -472,6 +474,7 @@ struct ConnectionsPane: View {
     private func builtinDetail(_ id: String) -> some View {
         let title = id == "codex" ? "Codex" : "Claude Code"
         let login = id == "codex" ? store.official?.codex : store.official?.claude
+        let gateway = store.loginGateway[id] ?? .init()
         return VStack(alignment: .leading, spacing: AeroricSpace.xxxl) {
             HStack(alignment: .top, spacing: AeroricSpace.l) {
                 VStack(alignment: .leading, spacing: AeroricSpace.s) {
@@ -484,6 +487,10 @@ struct ConnectionsPane: View {
                         } else {
                             StatusChip(text: "还没检测", tint: AeroricColor.textTertiary)
                         }
+                        if gateway.active {
+                            StatusChip(text: "经网关", systemImage: "point.topleft.down.to.point.bottomright.curvepath",
+                                       tint: AeroricColor.accent)
+                        }
                     }
                 }
                 Spacer(minLength: 0)
@@ -495,8 +502,11 @@ struct ConnectionsPane: View {
             }
             .padding(AeroricSpace.xl)
             .configSurface(AeroricRadius.xl)
+            loginGatewayCard(id, title: title, gateway: gateway)
             ConfigCard("说明") {
-                ConfigRow("怎么用", detail: "新建会话时不选 Agent 配置，就用这个本机登录。Aeroric 只读取登录方式和账号，不复制 token。", first: true) {
+                ConfigRow("怎么用", detail: gateway.active
+                    ? "新建会话时不选 Agent 配置，就用这个本机登录，并经本机网关转发；同一个会话里可以直接换到第三方模型。网关会读取登录令牌，只留在本机，不写日志。"
+                    : "新建会话时不选 Agent 配置，就用这个本机登录。Aeroric 只读取登录方式和账号，不复制 token。", first: true) {
                     EmptyView()
                 }
                 ConfigRow("读取了哪里", detail: login.map { $0.sources.isEmpty ? "—" : $0.sources.joined(separator: "、") }
@@ -505,6 +515,46 @@ struct ConnectionsPane: View {
                     EmptyView()
                 }
             }
+        }
+    }
+
+    /// 2026-10-30 (D4/D5, approved mockup): the login through the gateway.
+    private func loginGatewayCard(_ id: String, title: String, gateway: ACC.LoginGatewayStatus) -> some View {
+        ConfigCard("经网关使用") {
+            ConfigRow("经网关使用", detail: "同一个会话里直接切到第三方模型，不用搬会话", first: true) {
+                Toggle("", isOn: Binding(
+                    get: { gateway.active },
+                    set: { on in
+                        Task {
+                            if await store.setLoginGateway(id, enabled: on), on { consentHarness = id }
+                        }
+                    }))
+                    .labelsHidden().toggleStyle(.switch)
+                    .accessibilityIdentifier("agent-config.login-gateway.\(id)")
+            }
+            if gateway.active {
+                ConfigRow("登录状态", detail: AgentConfigText.loginTokenLine(gateway)) {
+                    if gateway.problem == nil {
+                        StatusChip(text: "正常", systemImage: "checkmark", tint: AeroricColor.success)
+                    } else {
+                        StatusChip(text: "需要处理", tint: AeroricColor.warning)
+                    }
+                }
+                ConfigRow("会话存放", detail: "Aeroric 独立目录，不出现在 \(id == "codex" ? "ChatGPT 应用的 Codex" : "Claude Code 自己的") 历史里") {
+                    EmptyView()
+                }
+            }
+        }
+        .task(id: id) { await store.refreshLoginGateway(id) }
+        .alert("让本机登录经网关使用？", isPresented: Binding(
+            get: { consentHarness == id }, set: { if !$0 { consentHarness = nil } })) {
+            Button("取消", role: .cancel) { consentHarness = nil }
+            Button("我了解风险，开启") {
+                consentHarness = nil
+                Task { _ = await store.setLoginGateway(id, enabled: true, accept: true) }
+            }
+        } message: {
+            Text(AgentConfigText.loginGatewayConsent(title))
         }
     }
 

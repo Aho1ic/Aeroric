@@ -71,6 +71,7 @@ fn deepseek_doc() -> ConnectionsDocument {
         ],
         pools: vec![],
         configs: vec![],
+        login_gateway: Default::default(),
     }
 }
 

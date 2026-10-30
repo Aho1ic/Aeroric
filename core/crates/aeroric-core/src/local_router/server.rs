@@ -28,6 +28,8 @@ mod guard;
 mod routing;
 mod semantic;
 
+use crate::agent_connections::login_credentials::{self, LoginToken};
+use crate::agent_connections::model::Harness;
 use crate::agent_connections::routing::FailureClass;
 use axum::extract::{Request, State};
 use axum::http::header::{
@@ -668,6 +670,17 @@ async fn attempt_target(
     }
 
     let mut rectifier_retried = false;
+    // A local-login target: the token used for this attempt, and whether a
+    // refused one was already renewed once.
+    let mut login_token: Option<LoginToken> = None;
+    let mut login_retried = false;
+    if target.login() == Some(Harness::Codex) {
+        // The ChatGPT backend only takes unstored requests, as Codex sends
+        // them when signed in.
+        if let Some(forced) = force_unstored(&current_body) {
+            current_body = forced;
+        }
+    }
     let mut reasoning_retried = false;
 
     loop {
@@ -704,6 +717,29 @@ async fn attempt_target(
             }
         };
 
+        let headers = match target.login() {
+            None => headers,
+            Some(harness) => {
+                if login_token.is_none() {
+                    match login_credentials::shared().current(harness).await {
+                        Ok(token) => login_token = Some(token),
+                        Err(error) => {
+                            return AttemptResult::Retry(AttemptFailure::transport(
+                                target,
+                                StatusCode::UNAUTHORIZED,
+                                error.to_string(),
+                                endpoint,
+                                outbound_model,
+                            ));
+                        }
+                    }
+                }
+                match login_token.as_ref() {
+                    Some(token) => with_login_headers(headers, harness, token),
+                    None => headers,
+                }
+            }
+        };
         let request = runtime_config
             .client()
             .request(method.clone(), upstream_url.clone())
@@ -737,6 +773,20 @@ async fn attempt_target(
 
         if raw.status.as_u16() >= 400 {
             let status = raw.status;
+            // A refused login token: take the one the CLI renewed meanwhile, or
+            // renew it, then try once more (D8).
+            if status == StatusCode::UNAUTHORIZED && !login_retried {
+                if let (Some(harness), Some(stale)) = (target.login(), login_token.as_ref()) {
+                    if let Ok(token) = login_credentials::shared()
+                        .rejected(harness, &stale.access_token)
+                        .await
+                    {
+                        login_token = Some(token);
+                        login_retried = true;
+                        continue;
+                    }
+                }
+            }
             let (mut headers, body) = raw.into_buffered();
             let summary = upstream_error_summary(status, &headers, &body);
             // R7: a refusal of replayed thinking is a request error, which never
@@ -1416,6 +1466,66 @@ fn transport_from_reqwest(error: reqwest::Error) -> TransportFailure {
             class: None,
         }
     }
+}
+
+const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
+
+/// Authenticate a local-login request the way the CLI does when signed in
+/// (2026-10-30, design §5): bearer token, never an API key; Codex also names
+/// its ChatGPT workspace, Claude adds the OAuth beta. Everything else the
+/// client sent stays.
+fn with_login_headers(mut headers: HeaderMap, harness: Harness, token: &LoginToken) -> HeaderMap {
+    headers.remove("x-api-key");
+    if let Ok(bearer) = HeaderValue::from_str(&format!("Bearer {}", token.access_token)) {
+        headers.insert(AUTHORIZATION, bearer);
+    }
+    match harness {
+        Harness::Codex => {
+            if let Some(account) = token
+                .account_id
+                .as_deref()
+                .and_then(|a| HeaderValue::from_str(a).ok())
+            {
+                headers.insert("chatgpt-account-id", account);
+            }
+            headers
+                .entry("originator")
+                .or_insert(HeaderValue::from_static("codex_cli_rs"));
+        }
+        _ => {
+            let mut betas: Vec<String> = headers
+                .get("anthropic-beta")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| {
+                    v.split(',')
+                        .map(|b| b.trim().to_string())
+                        .filter(|b| !b.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !betas.iter().any(|b| b == CLAUDE_OAUTH_BETA) {
+                betas.push(CLAUDE_OAUTH_BETA.to_string());
+            }
+            if let Ok(value) = HeaderValue::from_str(&betas.join(",")) {
+                headers.insert("anthropic-beta", value);
+            }
+            headers
+                .entry("anthropic-version")
+                .or_insert(HeaderValue::from_static("2023-06-01"));
+        }
+    }
+    headers
+}
+
+/// `store: false` on a Responses body, when it is not already.
+fn force_unstored(body: &[u8]) -> Option<Vec<u8>> {
+    let mut json: Value = serde_json::from_slice(body).ok()?;
+    let object = json.as_object_mut()?;
+    if object.get("store") == Some(&Value::Bool(false)) {
+        return None;
+    }
+    object.insert("store".into(), Value::Bool(false));
+    serde_json::to_vec(&json).ok()
 }
 
 fn should_retry_status(agent: RouterAgent, target: &UpstreamTarget, status: StatusCode) -> bool {
@@ -4543,5 +4653,166 @@ mod tests {
             let _ = upstream_task.await;
             remove_database(&database_path);
         }
+    }
+
+    /// 2026-10-30 (local login through the gateway): the bearer is the
+    /// login's token, never the client's; a 401 renews it once and retries;
+    /// the token stays out of the usage record.
+    #[tokio::test]
+    async fn a_local_login_target_signs_with_the_login_and_renews_once_on_401() {
+        use crate::agent_connections::login_credentials::{
+            self, LoginCredentials, LoginPaths, SecurityCli,
+        };
+        let seen: Arc<Mutex<Vec<(Option<String>, Option<String>, Option<String>, Value)>>> =
+            Arc::default();
+        let log = seen.clone();
+        let upstream = Router::new()
+            .route(
+                "/token",
+                axum::routing::post(|| async {
+                    Json(json!({"access_token": "tok-2", "refresh_token": "rt-2"}))
+                }),
+            )
+            .fallback(any(move |request: Request| {
+                let log = log.clone();
+                async move {
+                    let (parts, body) = request.into_parts();
+                    let header = |name: &str| {
+                        parts
+                            .headers
+                            .get(name)
+                            .and_then(|v| v.to_str().ok())
+                            .map(str::to_string)
+                    };
+                    let auth = header("authorization");
+                    let account = header("chatgpt-account-id");
+                    let originator = header("originator");
+                    let body = to_bytes(body, usize::MAX).await.unwrap();
+                    let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                    let refused = auth.as_deref() == Some("Bearer tok-1");
+                    log.lock().await.push((auth, account, originator, body));
+                    if refused {
+                        (
+                            StatusCode::UNAUTHORIZED,
+                            Json(json!({"error": {"message": "expired"}})),
+                        )
+                    } else {
+                        (
+                            StatusCode::OK,
+                            Json(
+                                json!({"id": "resp_login", "model": "gpt-5.5-codex", "output": []}),
+                            ),
+                        )
+                    }
+                }
+            }));
+        let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
+
+        let home = std::env::temp_dir()
+            .join("aeroric-login-gateway-test")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(home.join("codex")).unwrap();
+        fs::write(
+            home.join("codex/auth.json"),
+            json!({"tokens": {"access_token": "tok-1", "refresh_token": "rt-1", "account_id": "acct-9"}})
+                .to_string(),
+        )
+        .unwrap();
+        login_credentials::install(Arc::new(LoginCredentials::new(
+            LoginPaths {
+                codex_home: home.join("codex"),
+                claude_dir: home.join("claude"),
+                user: "tester".into(),
+                codex_token_url: format!("http://{upstream_address}/token"),
+                claude_token_url: format!("http://{upstream_address}/token"),
+            },
+            Arc::new(SecurityCli),
+        )));
+
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone());
+        let target = UpstreamTarget::with_details(
+            "login",
+            "本机登录 · Codex",
+            format!("http://{upstream_address}/backend-api/codex"),
+            "",
+            Vec::new(),
+            false,
+            false,
+        )
+        .unwrap()
+        .with_login(Harness::Codex);
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                runtime_with_target(
+                    RouterAgent::Codex,
+                    target,
+                    RouterAgentPolicy {
+                        active_target: "login".to_string(),
+                        ..RouterAgentPolicy::default()
+                    },
+                ),
+            ))
+            .await
+            .unwrap();
+
+        let response = test_client()
+            .post(format!("{}/codex/v1/responses", info.base_url))
+            .header("authorization", "Bearer gateway-task-token")
+            .header(ROUTE_AGENT_HEADER, "codex")
+            .json(&json!({"model": "gpt-5.5-codex", "input": "hi", "store": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let seen = seen.lock().await.clone();
+        assert_eq!(seen.len(), 2, "one refusal, one retry");
+        assert_eq!(seen[0].0.as_deref(), Some("Bearer tok-1"));
+        assert_eq!(seen[1].0.as_deref(), Some("Bearer tok-2"));
+        assert_eq!(seen[1].1.as_deref(), Some("acct-9"));
+        assert_eq!(seen[1].2.as_deref(), Some("codex_cli_rs"));
+        assert_eq!(seen[1].3["store"], false);
+        let saved: Value =
+            serde_json::from_str(&fs::read_to_string(home.join("codex/auth.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved["tokens"]["access_token"], "tok-2");
+
+        let recent = router.recent_requests(10).await.unwrap();
+        let record = format!("{recent:?}");
+        assert!(
+            !record.contains("tok-1") && !record.contains("tok-2"),
+            "{record}"
+        );
+        router.stop().await.unwrap();
+        upstream_task.abort();
+        let _ = upstream_task.await;
+        remove_database(&database_path);
+    }
+
+    #[test]
+    fn login_headers_replace_the_key_and_merge_the_claude_beta() {
+        let token = LoginToken {
+            access_token: "tok".into(),
+            account_id: None,
+            expires_at_ms: None,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", HeaderValue::from_static("gateway"));
+        headers.insert(
+            "anthropic-beta",
+            HeaderValue::from_static("context-1m-2025-08-07"),
+        );
+        let headers = with_login_headers(headers, Harness::Claude, &token);
+        assert!(headers.get("x-api-key").is_none());
+        assert_eq!(headers["authorization"], "Bearer tok");
+        assert_eq!(
+            headers["anthropic-beta"],
+            "context-1m-2025-08-07,oauth-2025-04-20"
+        );
+        assert_eq!(headers["anthropic-version"], "2023-06-01");
     }
 }

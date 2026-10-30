@@ -7,7 +7,10 @@
 
 use std::sync::Arc;
 
-use aeroric_core::agent_connections::model::{AgentConfig, Connection, ConnectionsDocument, Pool};
+use aeroric_core::agent_connections::login_credentials;
+use aeroric_core::agent_connections::model::{
+    AgentConfig, Connection, ConnectionsDocument, Harness, ModelEntry, Pool,
+};
 use aeroric_core::agent_connections::{fetch, legacy_cleanup, routing, service, store};
 use aeroric_core::context::CoreContext;
 use aeroric_protocol::envelope::{Frame, Request};
@@ -378,6 +381,142 @@ async fn fetch_models_for_draft(context: &Arc<CoreContext>, request: &Request) -
 /// tasks whose last answer came from a fallback model, for the session page;
 /// R7: connections that refused replayed thinking, for the connection page.
 /// `{connectionId}` → `{cleared}` (2026-10-29, 立即恢复).
+fn login_harness(request: &Request) -> Option<Harness> {
+    match request.params.get("harness").and_then(Value::as_str)? {
+        "codex" => Some(Harness::Codex),
+        "claude" => Some(Harness::Claude),
+        _ => None,
+    }
+}
+
+/// The login's model list for the session pickers: Codex asks its own
+/// app-server (on the real login); Claude Code takes its stable aliases.
+fn login_models(harness: Harness) -> Vec<ModelEntry> {
+    let names: Vec<String> = match harness {
+        Harness::Codex => aeroric_core::sessions::live::codex::models::builtin_models("codex")
+            .and_then(Result::ok)
+            .map(|models| {
+                let mut models = models;
+                models.sort_by_key(|m| !m.is_default);
+                models.into_iter().map(|m| m.model).collect()
+            })
+            .unwrap_or_default(),
+        _ => vec!["opus".into(), "sonnet".into(), "haiku".into()],
+    };
+    names
+        .into_iter()
+        .filter_map(|name| {
+            serde_json::from_value(json!({"upstream_id": name, "enabled": true})).ok()
+        })
+        .collect()
+}
+
+/// 2026-10-30 (D4/D5): turn a harness's local login through the gateway on
+/// or off. Turning it on the first time needs `accept: true` (the owner saw
+/// the terms-and-risk notice); without it nothing changes and the answer
+/// says `needsConsent`.
+fn set_login_gateway(request: Request, context: Arc<CoreContext>) -> Frame {
+    let Some(harness) = login_harness(&request) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "agentConnections.setLoginGateway requires params.harness: codex | claude",
+        );
+    };
+    let enabled = request
+        .params
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let accept = request
+        .params
+        .get("accept")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let path = doc_path(&context);
+    let mut doc = match store::load(&path) {
+        Ok(doc) => doc,
+        Err(e) => return failure(request.id.clone(), ErrorCode::IoError, &e),
+    };
+    let Some(state) = doc.login_gateway.state_mut(harness) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "此 Harness 没有本机登录",
+        );
+    };
+    if enabled && state.accepted_at.is_none() && !accept {
+        return ok(&request, json!({ "needsConsent": true, "enabled": false }));
+    }
+    if enabled {
+        if accept && state.accepted_at.is_none() {
+            state.accepted_at = Some(chrono::Utc::now().to_rfc3339());
+        }
+        let models = login_models(harness);
+        if !models.is_empty() {
+            state.models = models;
+        }
+        if state.models.is_empty() {
+            return failure(
+                request.id.clone(),
+                ErrorCode::Busy,
+                "读不到本机登录的模型列表；请先确认 CLI 已登录，再重试",
+            );
+        }
+    }
+    state.enabled = enabled;
+    if let Err(e) = store::save(&path, &doc) {
+        return failure(request.id.clone(), ErrorCode::IoError, &e);
+    }
+    ok(
+        &request,
+        json!({ "needsConsent": false, "enabled": enabled }),
+    )
+}
+
+/// What the details page shows for a login on the gateway: on or off, and
+/// when its token expires. The login is only read while it is on (reading
+/// Claude's keychain item asks macOS for access).
+fn login_gateway_status(request: Request, context: Arc<CoreContext>) -> Frame {
+    let Some(harness) = login_harness(&request) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "agentConnections.loginGatewayStatus requires params.harness: codex | claude",
+        );
+    };
+    let doc = store::load(&doc_path(&context)).unwrap_or_default();
+    let state = doc
+        .login_gateway
+        .state(harness)
+        .cloned()
+        .unwrap_or_default();
+    let active = doc.login_gateway.active(harness);
+    let (expires_at, problem) = if active {
+        let credentials = login_credentials::shared();
+        let peeked = tokio::runtime::Handle::try_current()
+            .map(|h| h.block_on(login_credentials::peek(&credentials, harness)));
+        match peeked {
+            Ok(Ok(token)) => (token.expires_at_ms, None),
+            Ok(Err(e)) => (None, Some(e.to_string())),
+            Err(_) => (None, None),
+        }
+    } else {
+        (None, None)
+    };
+    ok(
+        &request,
+        json!({
+            "enabled": state.enabled,
+            "accepted": state.accepted_at.is_some(),
+            "active": active,
+            "expiresAt": expires_at,
+            "problem": problem,
+            "models": state.models.iter().map(|m| m.upstream_id.clone()).collect::<Vec<_>>(),
+        }),
+    )
+}
+
 fn clear_cooldown(request: Request, _context: Arc<CoreContext>) -> Frame {
     let Some(id) = request
         .params
@@ -588,6 +727,14 @@ pub fn register_agent_connection_services(set: &mut ServiceSet, context: Arc<Cor
     set.register(
         "agentConnections.clearCooldown",
         blocking(&context, clear_cooldown),
+    );
+    set.register(
+        "agentConnections.setLoginGateway",
+        blocking(&context, set_login_gateway),
+    );
+    set.register(
+        "agentConnections.loginGatewayStatus",
+        blocking(&context, login_gateway_status),
     );
     set.register(
         "agentConnections.officialStatus",

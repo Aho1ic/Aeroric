@@ -61,9 +61,22 @@ pub fn config_id_from_catalog(catalog_id: &str) -> Option<&str> {
 /// The configuration a task is pinned to. Missing or non-gateway harness is an
 /// error, never a fallback.
 pub fn resolve_config(data_dir: &Path, config_id: &str) -> Result<ConfigLaunch, String> {
-    let document = store::load(&store::document_path(data_dir))?;
+    let document = store::load_effective(&store::document_path(data_dir))?;
     let report = load_report(data_dir);
     resolve_in(&document, report.as_ref(), config_id)
+}
+
+/// The 「本机登录」 gateway configuration a new built-in `agent` session uses,
+/// while that harness's login is on there (2026-10-30); `None` keeps it direct.
+pub fn login_config_for(data_dir: &Path, agent: &str) -> Option<String> {
+    let harness = match agent {
+        "codex" => super::model::Harness::Codex,
+        "claude" => super::model::Harness::Claude,
+        _ => return None,
+    };
+    let document = store::load_effective(&store::document_path(data_dir)).ok()?;
+    let id = ConnectionsDocument::via_login_id(harness);
+    document.config(&id).map(|_| id)
 }
 
 /// The configuration a legacy custom Agent id was migrated to, if it still exists.

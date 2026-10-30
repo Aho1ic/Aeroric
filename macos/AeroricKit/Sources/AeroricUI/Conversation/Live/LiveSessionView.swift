@@ -303,6 +303,18 @@ public struct LiveSessionView: View {
             LiveToolLine(tool: tool)
         case let .notice(_, message, recoverable):
             LiveNoticeRow(message: message, recoverable: recoverable)
+            if facts.loginOnGateway, let trouble = LiveNoticeRow.loginTrouble(in: message) {
+                HStack(spacing: AeroricSpace.m) {
+                    Text(trouble)
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.textSecondary)
+                        .lineLimit(1)
+                    Button("换到第三方模型") { modelPickerRequest += 1 }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
+                        .fixedSize()
+                        .accessibilityIdentifier("session.live.login-trouble.switch")
+                }
+            }
         case let .info(_, level, message):
             LiveInfoRow(level: level, message: message)
         case let .autoApproved(_, kind, summary, subject):
@@ -470,9 +482,25 @@ public struct LiveSessionView: View {
                   let source = facts.modelSources.first(where: { $0.key == target.source }) else {
                 return configure(model: id)
             }
-            let move = PendingMove(source: source, model: target.model)
-            // Crossing login types is asked first; between third-party sources it just moves.
-            if source.isLogin || facts.onLogin { pendingMove = move } else { perform(move) }
+            // 2026-10-30: the host decides — in place on the login's gateway
+            // configuration, one move onto it, or the old move; it asks only
+            // when the context needs a handoff or the move crosses logins.
+            Task { @MainActor in
+                do {
+                    let plan = try await store.planSwitch(model: target.model, configID: source.configID)
+                    if plan.inPlace {
+                        configure(model: target.model)
+                        moveNotice = "已换到 \(target.model)，下一条消息开始生效"
+                        return
+                    }
+                    var destination = source
+                    destination.configID = plan.configID
+                    let move = PendingMove(source: destination, model: target.model, handoff: plan.handoff)
+                    if plan.confirm { pendingMove = move } else { perform(move) }
+                } catch {
+                    store.errorText = "换模型失败：\(error)"
+                }
+            }
         }
             .id("model-\(modelPickerRequest)")
             .confirmationDialog(pendingMove.map { "换到\($0.source.isLogin ? "本机登录" : "第三方")的 \($0.model)？" } ?? "",
@@ -480,8 +508,10 @@ public struct LiveSessionView: View {
                                 presenting: pendingMove) { move in
                 Button("换过去") { perform(move) }
                 Button("取消", role: .cancel) {}
-            } message: { _ in
-                Text("当前会话会原样搬过去继续，原模型不再调用；新模型第一轮会读完整上下文。")
+            } message: { move in
+                Text(move.handoff
+                     ? "当前上下文超出 \(move.model) 的窗口：完整记录会存为交接文件，下一条消息带上摘要和文件位置。"
+                     : "当前会话会原样搬过去继续，原模型不再调用；新模型第一轮会读完整上下文。")
             }
     }
 
@@ -491,7 +521,7 @@ public struct LiveSessionView: View {
                 let mode = try await store.moveSource(configID: move.source.configID, model: move.model)
                 moveNotice = mode == "handoff"
                     ? "已换到 \(move.model)：上下文超出新模型的窗口，完整记录已存为交接文件，下一条消息会带上"
-                    : "已换到 \(move.model)，下一条消息开始在新来源继续"
+                    : "已换到 \(move.model)，下一条消息开始生效"
             } catch {
                 store.errorText = "换模型失败：\(error)"
             }
@@ -623,6 +653,8 @@ private struct SessionDialogs: ViewModifier {
 struct PendingMove: Equatable {
     let source: LiveModelSource
     let model: String
+    /// The context will not fit the new window (D9).
+    var handoff = false
 }
 
 /// The page colour behind the composer and 统计栏, fading in just above

@@ -19,6 +19,8 @@ public protocol AgentConfigBackend {
     func candidates(configId: String, model: String?) async throws -> ACC.Candidates
     func status() async throws -> [ACC.Cooldown]
     func clearCooldown(connectionId: String) async throws
+    func loginGatewayStatus(harness: String) async throws -> ACC.LoginGatewayStatus
+    func setLoginGateway(harness: String, enabled: Bool, accept: Bool) async throws -> Bool
     func officialStatus() async throws -> ACC.OfficialStatus
     func testConnection(connectionId: String, model: String) async throws -> ACC.Probe
     /// R7: connections the gateway strips replayed thinking for.
@@ -65,6 +67,22 @@ public enum AgentConfigText {
 
     /// The gateway's failure classes, as the pool page shows them.
     /// `冷却到 17:45 · 网络错误` (2026-10-29).
+    /// 2026-10-30: the line under 「登录状态」.
+    public static func loginTokenLine(_ status: AgentConnectionsClient.LoginGatewayStatus) -> String {
+        if let problem = status.problem { return problem }
+        guard let at = status.expiresAt else { return "过期前自动续期" }
+        return "令牌有效到 \(at.formatted(date: .omitted, time: .shortened)) · 过期前自动续期"
+    }
+
+    /// D4: what the owner accepts before the login goes through the gateway.
+    public static func loginGatewayConsent(_ harness: String) -> String {
+        let vendor = harness == "Codex" ? "ChatGPT" : "Claude"
+        let terms = harness == "Codex" ? "OpenAI" : "Anthropic"
+        return "网关会读取你的 \(vendor) 登录令牌，代 \(harness) 把请求原样发给官方。\n"
+            + "这可能不符合 \(terms) 的使用条款，账号有被限制的风险。\n"
+            + "令牌只留在本机，随时可以关掉，回到直连。"
+    }
+
     public static func coolingTag(until: String, reason: String) -> String {
         "冷却到 \(until) · \(reasonTitle(reason))"
     }
@@ -203,6 +221,8 @@ public final class AgentConfigStore {
     /// R7: connections that refused replayed thinking (in the gateway's memory).
     public private(set) var reasoningStripped: Set<String> = []
     public private(set) var official: ACC.OfficialStatus?
+    /// 2026-10-30: per harness (`codex` / `claude`), the login through the gateway.
+    public private(set) var loginGateway: [String: ACC.LoginGatewayStatus] = [:]
     public private(set) var busy = false
     public var errorText: String?
     public var notice: String?
@@ -260,6 +280,20 @@ public final class AgentConfigStore {
     public func refreshStatus() async {
         if let latest = try? await backend.status() { cooldowns = latest }
         if let latest = try? await backend.reasoningStripped() { reasoningStripped = Set(latest) }
+    }
+
+    public func refreshLoginGateway(_ harness: String) async {
+        if let latest = try? await backend.loginGatewayStatus(harness: harness) { loginGateway[harness] = latest }
+    }
+
+    /// Returns true when the owner must see the terms-and-risk notice first.
+    public func setLoginGateway(_ harness: String, enabled: Bool, accept: Bool = false) async -> Bool {
+        var needsConsent = false
+        await run(enabled ? "开启经网关使用失败" : "关闭经网关使用失败") { [self] in
+            needsConsent = try await backend.setLoginGateway(harness: harness, enabled: enabled, accept: accept)
+        }
+        await refreshLoginGateway(harness)
+        return needsConsent
     }
 
     public func detectOfficial() async {
@@ -581,4 +615,6 @@ extension AgentConnectionsClient: AgentConfigBackend {}
 extension AgentConfigBackend {
     /// Backends without the gateway (previews, tests) have nothing to clear.
     public func clearCooldown(connectionId: String) async throws {}
+    public func loginGatewayStatus(harness: String) async throws -> ACC.LoginGatewayStatus { .init() }
+    public func setLoginGateway(harness: String, enabled: Bool, accept: Bool) async throws -> Bool { false }
 }

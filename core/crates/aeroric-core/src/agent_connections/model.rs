@@ -296,6 +296,75 @@ pub struct ConnectionsDocument {
     pub pools: Vec<Pool>,
     #[serde(default)]
     pub configs: Vec<AgentConfig>,
+    /// D4/D5 (2026-10-30): whether each harness's own login also serves
+    /// through the gateway. Off unless the owner turned it on and accepted.
+    #[serde(default, skip_serializing_if = "LoginGateway::is_off")]
+    pub login_gateway: LoginGateway,
+}
+
+/// The harness's own local login as a gateway source (task
+/// `10-29-local-login-gateway`). Only Codex and Claude Code have one.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct LoginGateway {
+    #[serde(default)]
+    pub codex: LoginGatewayState,
+    #[serde(default)]
+    pub claude: LoginGatewayState,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct LoginGatewayState {
+    #[serde(default)]
+    pub enabled: bool,
+    /// When the owner accepted the terms-and-risk notice (D4); required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_at: Option<String>,
+    /// The login's model list as last fetched from the provider.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelEntry>,
+}
+
+impl LoginGateway {
+    fn is_off(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn state(&self, harness: Harness) -> Option<&LoginGatewayState> {
+        match harness {
+            Harness::Codex => Some(&self.codex),
+            Harness::Claude => Some(&self.claude),
+            Harness::Omp | Harness::Dsh => None,
+        }
+    }
+
+    pub fn state_mut(&mut self, harness: Harness) -> Option<&mut LoginGatewayState> {
+        match harness {
+            Harness::Codex => Some(&mut self.codex),
+            Harness::Claude => Some(&mut self.claude),
+            Harness::Omp | Harness::Dsh => None,
+        }
+    }
+
+    /// On and accepted: the only state in which the login is routable.
+    pub fn active(&self, harness: Harness) -> bool {
+        self.state(harness)
+            .is_some_and(|s| s.enabled && s.accepted_at.is_some())
+    }
+}
+
+/// Virtual connection ids, never stored: `login-codex`, `login-claude`.
+pub const LOGIN_PREFIX: &str = "login-";
+
+impl Connection {
+    /// The harness whose own login this virtual connection is (D1: it serves
+    /// that harness only).
+    pub fn login_harness(&self) -> Option<Harness> {
+        if self.kind != ConnectionKind::LinkedLocalLogin {
+            return None;
+        }
+        let harness = Harness::from_slug(self.id.strip_prefix(LOGIN_PREFIX)?)?;
+        matches!(harness, Harness::Codex | Harness::Claude).then_some(harness)
+    }
 }
 
 pub const DOCUMENT_VERSION: u32 = 1;
@@ -308,7 +377,7 @@ pub const DOCUMENT_VERSION: u32 = 1;
 pub const VIA_PREFIX: &str = "via-";
 
 impl Harness {
-    fn slug(self) -> &'static str {
+    pub fn slug(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
@@ -336,6 +405,63 @@ impl ConnectionsDocument {
         )
     }
 
+    /// 「本机登录」through the gateway for `harness` (2026-10-30): the login
+    /// first, then every enabled third-party connection, by model name.
+    pub fn via_login_id(harness: Harness) -> String {
+        format!("{VIA_PREFIX}{}-login", harness.slug())
+    }
+
+    pub fn login_connection_id(harness: Harness) -> String {
+        format!("{LOGIN_PREFIX}{}", harness.slug())
+    }
+
+    /// This document plus the virtual login connections that are on. Routing,
+    /// launching and the session pickers read this; edits and saves use the
+    /// stored document, so the virtual connections are never written.
+    pub fn with_logins(mut self) -> Self {
+        for harness in [Harness::Codex, Harness::Claude] {
+            if !self.login_gateway.active(harness) {
+                continue;
+            }
+            let models = self
+                .login_gateway
+                .state(harness)
+                .map(|s| s.models.clone())
+                .unwrap_or_default();
+            let (vendor, protocol, base_url, label) = match harness {
+                Harness::Codex => (
+                    Vendor::OpenAi,
+                    WireProtocol::Responses,
+                    "https://chatgpt.com/backend-api/codex",
+                    "本机登录 · Codex",
+                ),
+                _ => (
+                    Vendor::Anthropic,
+                    WireProtocol::Messages,
+                    "https://api.anthropic.com",
+                    "本机登录 · Claude Code",
+                ),
+            };
+            self.connections.insert(
+                0,
+                Connection {
+                    id: Self::login_connection_id(harness),
+                    label: label.into(),
+                    kind: ConnectionKind::LinkedLocalLogin,
+                    vendor,
+                    base_url: base_url.into(),
+                    protocols: vec![protocol],
+                    use_global_proxy: false,
+                    models,
+                    catalog_revision: 0,
+                    enabled: true,
+                    rest_on_limit: true,
+                },
+            );
+        }
+        self
+    }
+
     /// 「全部第三方模型」for `harness` (2026-10-29): every enabled connection,
     /// routed by model name.
     pub fn via_all_id(harness: Harness) -> String {
@@ -351,6 +477,9 @@ impl ConnectionsDocument {
         let harness = Harness::from_slug(slug)?;
         if rest == "all" {
             return self.derived_all(harness);
+        }
+        if rest == "login" {
+            return self.derived_login(harness);
         }
         let connection = self
             .connections
@@ -372,7 +501,12 @@ impl ConnectionsDocument {
                 out.push(config);
             }
         }
-        for connection in self.connections.iter().filter(|c| c.enabled) {
+        // Logins are offered as 「本机登录」, never as a connection entry.
+        for connection in self
+            .connections
+            .iter()
+            .filter(|c| c.enabled && c.login_harness().is_none())
+        {
             for harness in HARNESSES {
                 if let Some(config) = self.derived_config(harness, connection) {
                     out.push(config);
@@ -399,11 +533,28 @@ impl ConnectionsDocument {
         config.default_model = self
             .connections
             .iter()
-            .filter(|c| c.enabled)
+            .filter(|c| c.enabled && c.login_harness().is_none())
             .flat_map(|c| c.routable_models())
             .map(|m| m.routing_name().to_string())
             .find(|name| offered.contains(name))?;
         Some(config)
+    }
+
+    /// Present only while the login is on (`with_logins` added it) and has a
+    /// model; its default is the login's own first model.
+    fn derived_login(&self, harness: Harness) -> Option<AgentConfig> {
+        let login_id = Self::login_connection_id(harness);
+        let login = self.connections.iter().find(|c| c.id == login_id)?;
+        let default_model = login.routable_models().next()?.routing_name().to_string();
+        Some(AgentConfig {
+            id: Self::via_login_id(harness),
+            label: "本机登录".into(),
+            harness,
+            target: ConfigTarget::Route { pool_id: None },
+            default_model,
+            default_reasoning: String::new(),
+            fallback_models: Vec::new(),
+        })
     }
 
     fn derived_config(&self, harness: Harness, connection: &Connection) -> Option<AgentConfig> {

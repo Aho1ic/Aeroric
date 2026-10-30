@@ -7,6 +7,7 @@
 pub mod fetch;
 pub mod launch;
 pub mod legacy_cleanup;
+pub mod login_credentials;
 pub mod migration;
 pub mod model;
 pub mod official;
@@ -14,5 +15,7 @@ pub mod routing;
 pub mod service;
 pub mod store;
 
+#[cfg(test)]
+mod login_gateway_tests;
 #[cfg(test)]
 mod tests;

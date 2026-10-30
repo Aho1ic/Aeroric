@@ -323,13 +323,19 @@ pub fn resolve(
         else {
             continue;
         };
-        let key = match store::get_credential(secrets, &connection.id) {
-            Ok(Some(key)) => key,
-            Ok(None) => String::new(),
-            Err(e) => {
-                reasons.push(format!("{}: keychain {e}", connection.id));
-                continue;
-            }
+        // A local login carries no stored key; the gateway reads the login
+        // per request (`login_credentials`).
+        let login = connection.login_harness();
+        let key = match login {
+            Some(_) => String::new(),
+            None => match store::get_credential(secrets, &connection.id) {
+                Ok(Some(key)) => key,
+                Ok(None) => String::new(),
+                Err(e) => {
+                    reasons.push(format!("{}: keychain {e}", connection.id));
+                    continue;
+                }
+            },
         };
         let bridge = matches!(candidate.reach, Reach::ViaGateway { .. });
         let speaks = match candidate.reach {
@@ -347,6 +353,10 @@ pub fn resolve(
         ) {
             Ok(target) => {
                 let target = target.with_upstream_protocol(speaks);
+                let target = match login {
+                    Some(harness) => target.with_login(harness),
+                    None => target,
+                };
                 targets.push(if index == 0 {
                     target
                 } else {
@@ -406,7 +416,7 @@ pub fn resolve_from_disk(
     model: &str,
     secrets: &Arc<dyn SecretStore>,
 ) -> Resolution {
-    match store::load(&store::document_path(data_dir)) {
+    match store::load_effective(&store::document_path(data_dir)) {
         Ok(doc) => resolve(&doc, grant, model, secrets.as_ref()),
         Err(e) => Resolution::Unavailable(format!("cannot read agent connections: {e}")),
     }
@@ -754,6 +764,7 @@ mod tests {
                 default_reasoning: String::new(),
                 fallback_models: Vec::new(),
             }],
+            login_gateway: Default::default(),
         }
     }
 

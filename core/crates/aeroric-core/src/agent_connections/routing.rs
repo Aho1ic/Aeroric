@@ -219,6 +219,13 @@ pub fn candidates(
         out: &mut Vec<Candidate>,
         excluded: &mut Vec<(String, Unavailable)>,
     ) {
+        // D1: a login serves only its own harness's 「本机登录」 configuration;
+        // everywhere else it is simply not a channel.
+        if let Some(owner) = connection.login_harness() {
+            if owner != config.harness || config.id != ConnectionsDocument::via_login_id(owner) {
+                return;
+            }
+        }
         if !connection.enabled {
             excluded.push((connection.id.clone(), Unavailable::ConnectionDisabled));
             return;
@@ -298,6 +305,28 @@ pub fn candidates(
                     &mut out,
                     &mut excluded,
                 );
+            }
+            // 2026-10-30: under 「本机登录」 the login takes any model no
+            // third-party channel serves — Claude Code resolves `opus` to a
+            // full id the login's list never names.
+            if out.is_empty() && config.id == ConnectionsDocument::via_login_id(config.harness) {
+                let login_id = ConnectionsDocument::login_connection_id(config.harness);
+                if let Some(login) = doc
+                    .connections
+                    .iter()
+                    .find(|c| c.id == login_id && c.enabled)
+                {
+                    if let Ok(reach) = reach_in(native, config.harness, &login.protocols) {
+                        out.push(Candidate {
+                            connection_id: login.id.clone(),
+                            upstream_model: model.to_string(),
+                            reach,
+                            priority: 0,
+                            weight: 1,
+                            free: false,
+                        });
+                    }
+                }
             }
         }
     }

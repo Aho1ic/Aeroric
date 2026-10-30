@@ -342,6 +342,42 @@ public struct AgentConnectionsClient: Sendable {
     }
 
     /// 立即恢复 (2026-10-29): ends every cooldown on the connection and its models.
+    /// 2026-10-30: the harness's own login as a gateway source.
+    public struct LoginGatewayStatus: Equatable, Sendable {
+        public var enabled: Bool
+        public var accepted: Bool
+        /// On and accepted: sessions route through the gateway.
+        public var active: Bool
+        public var expiresAt: Date?
+        public var problem: String?
+        public var models: [String]
+        public init(enabled: Bool = false, accepted: Bool = false, active: Bool = false,
+                    expiresAt: Date? = nil, problem: String? = nil, models: [String] = []) {
+            self.enabled = enabled; self.accepted = accepted; self.active = active
+            self.expiresAt = expiresAt; self.problem = problem; self.models = models
+        }
+    }
+
+    public func loginGatewayStatus(harness: String) async throws -> LoginGatewayStatus {
+        let reply = try await connection.request("agentConnections.loginGatewayStatus",
+                                                 params: .object(["harness": .string(harness)])).result
+        return LoginGatewayStatus(
+            enabled: reply["enabled"]?.boolValue ?? false,
+            accepted: reply["accepted"]?.boolValue ?? false,
+            active: reply["active"]?.boolValue ?? false,
+            expiresAt: reply["expiresAt"]?.numberText.flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1000) },
+            problem: reply["problem"]?.stringValue,
+            models: (reply["models"]?.arrayValue ?? []).compactMap(\.stringValue))
+    }
+
+    /// Returns true when the host wants the terms-and-risk consent first.
+    public func setLoginGateway(harness: String, enabled: Bool, accept: Bool) async throws -> Bool {
+        let reply = try await connection.request("agentConnections.setLoginGateway", params: .object([
+            "harness": .string(harness), "enabled": .bool(enabled), "accept": .bool(accept),
+        ])).result
+        return reply["needsConsent"]?.boolValue ?? false
+    }
+
     public func clearCooldown(connectionId: String) async throws {
         _ = try await connection.request("agentConnections.clearCooldown",
                                          params: .object(["connectionId": .string(connectionId)]))
