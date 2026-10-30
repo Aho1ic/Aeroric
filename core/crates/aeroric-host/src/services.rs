@@ -2261,6 +2261,25 @@ async fn git_push(request: Request) -> Frame {
             )
         }
     };
+    // 2026-10-30: `setUpstream` publishes a branch that has no remote yet.
+    let set_upstream = match params.get("setUpstream") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => {
+            return failure(
+                id,
+                ErrorCode::InvalidArgument,
+                "git.git_push requires params.setUpstream (boolean)",
+            )
+        }
+    };
+    if set_upstream && branch.as_deref().unwrap_or_default().is_empty() {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_push with setUpstream requires params.branch",
+        );
+    }
     if let Some(error) =
         crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
     {
@@ -2268,7 +2287,11 @@ async fn git_push(request: Request) -> Frame {
     }
     let p_path = project_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        aeroric_core::git::service::push_result(std::path::Path::new(&p_path), branch.as_deref())
+        let root = std::path::Path::new(&p_path);
+        match (set_upstream, branch.as_deref()) {
+            (true, Some(branch)) => aeroric_core::git::service::publish_result(root, branch),
+            _ => aeroric_core::git::service::push_result(root, branch.as_deref()),
+        }
     })
     .await;
     match result {

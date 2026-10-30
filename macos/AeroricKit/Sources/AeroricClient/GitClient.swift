@@ -1,9 +1,9 @@
 import AeroricProtocol
 import Foundation
 
-/// Git queries and the Git page's first batch of writes (2026-10-30: stage,
-/// commit, branches, stash, discarding one file). Push and pull are not here
-/// yet.
+/// Git queries and the Git page's writes (2026-10-30: stage, commit,
+/// branches, stash, discarding one file; then fetch, pull, push and
+/// publishing a branch).
 public struct GitClient: Sendable {
     public struct FileStatus: Sendable, Equatable {
         public var path: String
@@ -131,6 +131,26 @@ public struct GitClient: Sendable {
     public func remoteCounts(projectPath: String) async throws -> RemoteCounts? {
         let frame = try await connection.request("git.git_remote_counts", params: .object(["projectPath": .string(projectPath)]))
         return Self.decodeCounts(frame.result)
+    }
+
+    /// Network calls never prompt for a password; they fail with git's reason.
+    public func fetch(projectPath: String) async throws {
+        try await call("git.git_fetch", projectPath, ["prune": .bool(false)])
+    }
+
+    public func pull(projectPath: String) async throws {
+        try await call("git.git_pull", projectPath)
+    }
+
+    /// Pushes the current branch to its upstream.
+    public func push(projectPath: String) async throws {
+        try await call("git.git_push", projectPath)
+    }
+
+    /// First push of a branch with no remote yet: creates `origin/<branch>`
+    /// and makes it the upstream.
+    public func publish(projectPath: String, branch: String) async throws {
+        try await call("git.git_push", projectPath, ["branch": .string(branch), "setUpstream": .bool(true)])
     }
 
     private func call(_ method: String, _ projectPath: String, _ extra: [String: JSONValue] = [:]) async throws {

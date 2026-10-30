@@ -1072,6 +1072,23 @@ pub fn push_result(repo_root: &Path, branch: Option<&str>) -> Result<String, Str
     Ok(combined.trim().to_string())
 }
 
+/// 发布分支（2026-10-30，Git 页「发布分支」）：`push --set-upstream origin <branch>`，
+/// 让还没有远端的分支第一次推送后就有上游——之后领先/落后计数与裸 `push` 才可用。
+/// `push_result` 保持 legacy 逐字，只有显式发布才走这里。失败不 trim，与 push 一致。
+pub fn publish_result(repo_root: &Path, branch: &str) -> Result<String, String> {
+    validate_branch_name(branch)?;
+    let output = transport::run_git_network(
+        repo_root,
+        &["push", "--set-upstream", "origin", branch],
+        transport::NETWORK_TIMEOUT,
+    )?;
+    let combined = format!("{}{}", output.stdout, output.stderr);
+    if !output.success {
+        return Err(combined);
+    }
+    Ok(combined.trim().to_string())
+}
+
 // ===== 冲突预览/解决家族（切片 86）=====
 
 /// 冲突解决选项（legacy `GitConflictResolution` verbatim：wire 小写）。

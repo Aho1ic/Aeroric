@@ -78,6 +78,8 @@ public enum GitAction: Equatable {
     case unstageAll
     case commit(message: String)
     case push(branch: String)
+    /// First push of a branch with no remote (2026-10-30).
+    case publish(branch: String)
     case pull
     case fetch(prune: Bool)
     case discard(paths: [String])

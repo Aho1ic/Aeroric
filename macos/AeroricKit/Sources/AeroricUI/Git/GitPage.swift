@@ -32,6 +32,27 @@ public enum GitPageText {
             : "「\(path)」会回到上次提交时的样子，未暂存的改动会丢失，无法撤销。"
     }
 
+    public static func pushQuestion(count: Int, upstream: String) -> String {
+        "推送 \(count) 个提交到 \(upstream)？"
+    }
+
+    public static func pullQuestion(count: Int, upstream: String) -> String {
+        "从 \(upstream) 拉取 \(count) 个提交？"
+    }
+
+    public static func publishQuestion(branch: String) -> String {
+        "发布分支 \(branch)？"
+    }
+
+    public static func publishDetail(branch: String) -> String {
+        "会在 origin 上新建同名分支 \(branch)，并把它设为这个分支的上游。之后就能直接推送和拉取。"
+    }
+
+    /// The commits a push sends: the newest `ahead` of the history.
+    public static func outgoing(_ commits: [GitStore.Commit], ahead: Int) -> [GitStore.Commit] {
+        Array(commits.prefix(max(0, ahead)))
+    }
+
     /// The path inside a `GitStore.Change` id (`<path>:<staged>`).
     public static func path(ofChangeID id: String) -> String {
         guard let colon = id.lastIndex(of: ":") else { return id }
@@ -64,6 +85,9 @@ public struct GitPage: View {
     @State private var stashNote = ""
     @State private var discarding: GitStore.Change?
     @State private var dropping: GitStore.StashEntry?
+    @State private var confirmPush = false
+    @State private var confirmPull = false
+    @State private var confirmPublish = false
 
     public init(store: GitStore, onAction: @escaping (GitAction) -> Void,
                 onSelect: @escaping (GitStore.Change) -> Void, onGenerate: @escaping () async -> String?) {
@@ -145,27 +169,61 @@ public struct GitPage: View {
                 .lineLimit(1)
                 .fixedSize()
             }
-            if let ahead = store.ahead, let behind = store.behind,
-               store.branches.contains(where: { $0.current && $0.remote != nil }) {
-                HStack(spacing: AeroricSpace.s) {
-                    Label("\(ahead)", systemImage: "arrow.up")
-                    Label("\(behind)", systemImage: "arrow.down")
-                }
-                .labelStyle(.titleAndIcon)
-                .font(.system(size: AeroricType.caption).monospacedDigit())
-                .foregroundStyle(AeroricColor.textTertiary)
-                .fixedSize()
-                .help("比远端领先 \(ahead) 个提交、落后 \(behind) 个")
-            }
-            Text("拉取 · 推送（下一批）")
-                .font(.system(size: AeroricType.caption))
-                .foregroundStyle(AeroricColor.textTertiary)
-                .padding(.horizontal, AeroricSpace.m)
-                .frame(height: 26)
-                .overlay(Capsule(style: .continuous).stroke(AeroricColor.separator2))
-                .fixedSize()
-                .help("推送和拉取在下一批接入，每次都会二次确认")
+            remoteButtons
         }
+    }
+
+    /// 获取 · 拉取 N · 推送 N, or 发布分支 before the branch has a remote.
+    @ViewBuilder private var remoteButtons: some View {
+        let ahead = store.ahead ?? 0
+        let behind = store.behind ?? 0
+        HStack(spacing: AeroricSpace.s) {
+            remoteButton("获取", systemImage: "arrow.clockwise", help: "从远端取回最新状态，不改动你的文件") {
+                onAction(.fetch(prune: false))
+            }
+            .disabled(busy || store.upstream == nil)
+            if let upstream = store.upstream {
+                remoteButton(behind > 0 ? "拉取 \(behind)" : "拉取", systemImage: "arrow.down",
+                             help: behind > 0 ? "从 \(upstream) 拉取 \(behind) 个提交" : "已是最新") { confirmPull = true }
+                    .disabled(busy || behind == 0)
+                remoteButton(ahead > 0 ? "推送 \(ahead)" : "推送", systemImage: "arrow.up",
+                             help: ahead > 0 ? "推送 \(ahead) 个提交到 \(upstream)" : "没有要推送的提交") { confirmPush = true }
+                    .disabled(busy || ahead == 0)
+            } else if store.currentBranch != nil {
+                remoteButton("发布分支", systemImage: "arrow.up", help: "在 origin 上新建同名分支") { confirmPublish = true }
+                    .disabled(busy || store.commits.isEmpty)
+            }
+        }
+        .alert(GitPageText.pushQuestion(count: ahead, upstream: store.upstream ?? ""), isPresented: $confirmPush) {
+            Button("推送") { onAction(.push(branch: store.currentBranch ?? "")) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text((["别人拉取后就能看到这些提交："]
+                  + GitPageText.outgoing(store.commits, ahead: ahead).map { "\($0.shortHash)  \($0.message)" })
+                .joined(separator: "\n"))
+        }
+        .alert(GitPageText.pullQuestion(count: behind, upstream: store.upstream ?? ""), isPresented: $confirmPull) {
+            Button("拉取") { onAction(.pull) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("会合并到当前分支 \(store.currentBranch ?? "")。如果和本地改动冲突，Git 会停下并说明原因，不会覆盖你的改动。")
+        }
+        .alert(GitPageText.publishQuestion(branch: store.currentBranch ?? ""), isPresented: $confirmPublish) {
+            Button("发布") { onAction(.publish(branch: store.currentBranch ?? "")) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(GitPageText.publishDetail(branch: store.currentBranch ?? ""))
+        }
+    }
+
+    private func remoteButton(_ title: String, systemImage: String, help: String,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage).monospacedDigit()
+        }
+        .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+        .fixedSize()
+        .help(help)
     }
 
     private var branchMenu: some View {

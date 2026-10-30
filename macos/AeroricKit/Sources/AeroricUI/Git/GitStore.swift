@@ -77,6 +77,8 @@ public final class GitStore {
     public var actionError: String?
 
     public var currentBranch: String? { branches.first(where: \.current)?.name }
+    /// The current branch's upstream, e.g. `origin/main`; nil before it is published.
+    public var upstream: String? { branches.first(where: \.current)?.remote }
     public private(set) var changesReadState: WorkspaceReadState = .notLoaded
     public private(set) var historyReadState: WorkspaceReadState = .notLoaded
     public private(set) var stashReadState: WorkspaceReadState = .notLoaded

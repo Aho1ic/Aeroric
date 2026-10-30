@@ -1071,8 +1071,12 @@ extension AppServices: WorkspaceStateProviding {
                 try await client.stashPush(projectPath: projectPath, message: message)
             case let .stashApply(index): try await client.stashApply(projectPath: projectPath, name: "stash@{\(index)}")
             case let .stashDrop(index): try await client.stashDrop(projectPath: projectPath, name: "stash@{\(index)}")
-            case .push, .pull, .fetch, .discard, .resolveConflict:
-                return  // Next batch.
+            case .fetch: try await client.fetch(projectPath: projectPath)
+            case .pull: try await client.pull(projectPath: projectPath)
+            case .push: try await client.push(projectPath: projectPath)
+            case let .publish(branch): try await client.publish(projectPath: projectPath, branch: branch)
+            case .discard, .resolveConflict:
+                return  // Not offered on the page.
             }
         } catch {
             gitStore.actionError = "\(Self.gitFailure(action))：\(Self.gitReason(error))"
@@ -1102,6 +1106,10 @@ extension AppServices: WorkspaceStateProviding {
         case .stashPush: "正在贮藏…"
         case .stashApply: "正在恢复贮藏…"
         case .stashDrop: "正在删除贮藏…"
+        case .fetch: "正在获取…"
+        case .pull: "正在拉取…"
+        case .push: "正在推送…"
+        case .publish: "正在发布分支…"
         default: "正在处理…"
         }
     }
@@ -1117,6 +1125,10 @@ extension AppServices: WorkspaceStateProviding {
         case .stashPush: "贮藏失败"
         case .stashApply: "恢复贮藏失败"
         case .stashDrop: "删除贮藏失败"
+        case .fetch: "获取失败"
+        case .pull: "拉取失败"
+        case .push: "推送失败"
+        case .publish: "发布分支失败"
         default: "操作失败"
         }
     }

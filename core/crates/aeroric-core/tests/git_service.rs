@@ -161,6 +161,54 @@ fn full_remote_roundtrip_with_bare_remote() {
 }
 
 #[test]
+fn publishing_a_branch_sets_its_upstream_so_counts_work() {
+    let repo = new_repo("aeroric-git-publish");
+    let bare = std::env::temp_dir().join(format!(
+        "aeroric-git-publish-bare-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    let _ = std::process::Command::new("git")
+        .args(["init", "--bare", bare.to_str().unwrap()])
+        .output();
+    commit_file(&repo, "a.txt", "x", "init");
+    let _ = std::process::Command::new("git")
+        .args([
+            "-C",
+            repo.root.to_str().unwrap(),
+            "remote",
+            "add",
+            "origin",
+            bare.to_str().unwrap(),
+        ])
+        .output();
+    let published = service::publish_result(&repo.root, "main");
+    assert!(published.is_ok(), "发布到本地 bare remote：{published:?}");
+    let upstream = std::process::Command::new("git")
+        .args([
+            "-C",
+            repo.root.to_str().unwrap(),
+            "rev-parse",
+            "--abbrev-ref",
+            "@{u}",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&upstream.stdout).trim(),
+        "origin/main"
+    );
+    commit_file(&repo, "b.txt", "y", "second");
+    let counts = service::remote_counts(&repo.root, None).unwrap();
+    assert_eq!((counts.ahead, counts.behind), (1, 0));
+    assert!(
+        service::publish_result(&repo.root, "-x").is_err(),
+        "选项样的分支名被拒"
+    );
+    let _ = std::fs::remove_dir_all(&bare);
+}
+
+#[test]
 fn conflict_files_detected_after_diverging_merge() {
     let repo = new_repo("aeroric-git-conflict");
     commit_file(&repo, "a.txt", "base", "base");
