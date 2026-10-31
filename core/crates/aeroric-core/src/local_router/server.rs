@@ -1,5 +1,8 @@
 use super::cache_injector;
-use super::chat_bridge::{chat_response_to_responses, responses_to_chat, ChatSseTransformer};
+use super::chat_bridge::{
+    chat_response_to_responses, responses_to_chat, restore_tool_namespaces, tool_namespaces,
+    ChatSseTransformer,
+};
 use super::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerRegistry, CircuitPermit};
 use super::inline_tool_calls;
 use super::messages_bridge::{
@@ -591,6 +594,14 @@ async fn attempt_target(
     // Two bridges share the Chat Completions upstream: Codex Responses (existing)
     // and Claude Messages (4c). `chat_bridge` is "the upstream speaks Chat".
     let bridge = route.bridges_responses_to_chat(target);
+    // CU F1: a Codex request's namespaced (MCP) tools, to split their calls back.
+    let namespaces = if bridge || route.pivot(target) == Some(Pivot::CodexToMessages) {
+        serde_json::from_slice::<Value>(original_body)
+            .map(|body| tool_namespaces(&body))
+            .unwrap_or_default()
+    } else {
+        Default::default()
+    };
     let messages_bridge = route.bridges_messages_to_chat(target);
     let chat_bridge = bridge || messages_bridge;
     // 4d: Messages ↔ Responses, pivoting through Chat inside the router.
@@ -940,7 +951,10 @@ async fn attempt_target(
                             let converted = if reply_as_messages {
                                 chat_response_to_messages(&payload, reply_model)
                             } else {
-                                chat_response_to_responses(&payload, reply_model)
+                                let mut converted =
+                                    chat_response_to_responses(&payload, reply_model);
+                                restore_tool_namespaces(&mut converted, &namespaces);
+                                converted
                             };
                             serde_json::to_vec(&converted)
                                 .map(Bytes::from)
@@ -1004,7 +1018,10 @@ async fn attempt_target(
                             let client = if reply_as_messages {
                                 StreamBridge::Messages(ChatToMessagesSse::new(model.clone()))
                             } else {
-                                StreamBridge::Responses(ChatSseTransformer::new(model.clone()))
+                                StreamBridge::Responses(
+                                    ChatSseTransformer::new(model.clone())
+                                        .with_namespaces(namespaces.clone()),
+                                )
                             };
                             // 4d: the upstream stream is first normalized to Chat SSE.
                             match pivot {

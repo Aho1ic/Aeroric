@@ -406,3 +406,147 @@ pub async fn probe_connection(
         excerpt: text.unwrap_or(body).chars().take(200).collect(),
     })
 }
+
+/// B5-2 (2026-10-31): one Chat Completions call for Aeroric's own work (the
+/// memory extraction's analysis model). Same client and proxy rules as
+/// [`probe_connection`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatOnce {
+    pub text: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+pub async fn chat_once(
+    base_url: &str,
+    api_key: &str,
+    use_global_proxy: bool,
+    model: &str,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<ChatOnce, String> {
+    let policy = ModelDetectionPolicy::LocalUser;
+    let base_url = validate_model_base_url(base_url, policy)?;
+    let proxy_settings = if use_global_proxy {
+        let proxy = tokio::task::spawn_blocking(|| load_settings_internal().proxy_settings)
+            .await
+            .map_err(|error| error.to_string())?;
+        if normalize_proxy_url(&proxy.url).is_empty() {
+            return Err("Global proxy is not configured; no request was sent".to_string());
+        }
+        proxy
+    } else {
+        ProxySettings::default()
+    };
+    let client = build_detect_client(&base_url, &proxy_settings, policy, &[])?;
+    let root = base_url.as_str().trim_end_matches('/');
+    let response = client
+        .post(format!("{root}/chat/completions"))
+        .bearer_auth(api_key.trim())
+        .json(&serde_json::json!({
+            "model": model, "max_tokens": max_tokens, "temperature": 0, "stream": false,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        }))
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    let value: serde_json::Value = serde_json::from_str(&body).map_err(|_| {
+        format!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            body.chars().take(200).collect::<String>()
+        )
+    })?;
+    // cline wraps the OpenAI shape in `data`.
+    let value = if value.get("choices").is_none() && value.get("data").is_some() {
+        value["data"].clone()
+    } else {
+        value
+    };
+    if !status.is_success() {
+        let message = value
+            .pointer("/error/message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("request failed");
+        return Err(format!("HTTP {}: {message}", status.as_u16()));
+    }
+    let text = value
+        .pointer("/choices/0/message/content")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let number = |pointer: &str| {
+        value
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    Ok(ChatOnce {
+        text,
+        input_tokens: number("/usage/prompt_tokens"),
+        output_tokens: number("/usage/completion_tokens"),
+    })
+}
+
+#[cfg(test)]
+mod chat_once_tests {
+    use std::io::{Read, Write};
+
+    /// One HTTP exchange on a loopback port; returns the request it read.
+    fn serve_once(reply: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut seen = Vec::new();
+            let mut buf = [0u8; 8192];
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                seen.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&seen).to_string();
+                if let Some(head) = text.find("\r\n\r\n") {
+                    let length = text[..head]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if seen.len() >= head + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&seen).to_string()
+        });
+        (url, handle)
+    }
+
+    #[tokio::test]
+    async fn chat_once_reads_a_cline_wrapped_reply_and_its_usage() {
+        let (url, server) = serve_once(
+            r#"{"data":{"choices":[{"message":{"content":"{\"candidates\":[]}"}}],"usage":{"prompt_tokens":12,"completion_tokens":3}}}"#,
+        );
+        let reply = super::chat_once(&url, "k", false, "flash", "系统", "用户", 100)
+            .await
+            .unwrap();
+        assert_eq!(reply.text, "{\"candidates\":[]}");
+        assert_eq!((reply.input_tokens, reply.output_tokens), (12, 3));
+        let request = server.join().unwrap();
+        assert!(
+            request.starts_with("POST /v1/chat/completions"),
+            "{request}"
+        );
+        assert!(request.contains("\"temperature\":0"));
+    }
+}

@@ -451,6 +451,8 @@ public struct ProjectSidebar: View {
             Button("分叉会话", systemImage: "arrow.triangle.branch") { onSessionAction(item.id, .fork) }
                 .disabled(SidebarItem.forkUnavailableReason(item) != nil)
                 .help(SidebarItem.forkUnavailableReason(item) ?? "从这里复制出一个新会话，原会话不受影响")
+            Button("整理这次会话", systemImage: "brain") { onSessionAction(item.id, .extractMemory) }
+                .help("用整理设置里的分析模型，把这次对话整理成历史线索和待确认的记忆；整理过的会重新整理")
         }
         Button("复制 Session ID", systemImage: "doc.on.doc") { onSessionAction(item.id, .copySessionID) }
             .disabled(item.sessionID == nil)
@@ -513,6 +515,7 @@ public struct ProjectSidebar: View {
                 .disabled(project.defaultAgent == nil)
         }
         Button("会话管理…", systemImage: "list.bullet.rectangle") { managingProject = project }
+        Button("项目记忆…", systemImage: "brain") { onProjectAction(project.id, .memory) }
         Menu("移动到分组") {
             ForEach(projectGroupNames, id: \.self) { name in
                 Button(project.projectGroup == name ? "✓ \(name)" : name) { onProjectAction(project.id, .group(name)) }
@@ -824,11 +827,11 @@ private struct SessionRow: View {
     var body: some View {
         HStack(spacing: AeroricSpace.s) {
             if let kind = item.childKind {
-                Image(systemName: kind == "review" ? "eye" : "arrow.triangle.branch")
+                Image(systemName: kind == "review" ? "eye" : (kind == "delegate" ? "person.2" : "arrow.triangle.branch"))
                     .font(.system(size: 9))
                     .foregroundStyle(AeroricColor.textTertiary)
                     .padding(.leading, AeroricSpace.l)
-                    .accessibilityLabel(kind == "review" ? "审查会话" : "侧支")
+                    .accessibilityLabel(kind == "review" ? "审查会话" : (kind == "delegate" ? "委派子会话" : "侧支"))
             }
             HarnessLogo(harness: item.harness, agent: item.agent, size: 14)
             Text(item.title)

@@ -1368,3 +1368,456 @@ async fn a_changed_turn_is_reviewed_by_another_family_and_answered() {
         .unwrap();
     assert!(types(&updates).iter().any(|t| t == "review"));
 }
+
+/// B4-2 (2026-10-31): the user delegates from a Codex session to a read-only
+/// reviewer of the other family. The Claude child gets the contract, not the
+/// conversation; its answer becomes a result card; a child cannot delegate;
+/// sending the result gives the Codex parent a turn; every step is audited.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_delegation_runs_in_a_child_and_its_result_comes_back() {
+    let mut host = Host::start(true).await;
+    host.start_task("修复超时");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(&start, json!({"thread": {"id": "th-1"}}));
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-1", "turn": {"id": "u1"}}),
+    );
+    peer.notify(
+        "item/agentMessage/delta",
+        json!({"threadId": "th-1", "itemId": "m1", "delta": "我的私下推理"}),
+    );
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": "u1", "status": "completed"}}),
+    );
+
+    let above = host
+        .call(
+            "delegation.start",
+            json!({"taskId": "task-1", "contract": {"instruction": "改", "permission": "full_access", "workspace": "shared"}}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        above["message"].as_str().unwrap().contains("不能高于"),
+        "{above}"
+    );
+    let started = host
+        .call(
+            "delegation.start",
+            json!({"taskId": "task-1", "contract": {"instruction": "查 reqwest 的连接超时", "role": "reviewer",
+                "acceptance": [{"text": "给出示例"}]}}),
+        )
+        .await
+        .unwrap();
+    let id = started["delegation"]["delegationId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(started["delegation"]["contract"]["permission"], "plan");
+
+    let (claude, mut child) = tokio::time::timeout(WAIT, host.claude_peers.recv())
+        .await
+        .expect("a child started")
+        .expect("launcher");
+    assert_eq!(claude.permission, "plan");
+    let init = child.expect_control("initialize").await;
+    child.control_ok(&init, json!({"commands": []}));
+    let asked = child.next().await;
+    let prompt = asked["message"]["content"].as_str().unwrap().to_string();
+    assert!(prompt.starts_with("[Aeroric 委派]"), "{prompt}");
+    assert!(prompt.contains("查 reqwest 的连接超时") && prompt.contains("审查员"));
+    assert!(prompt.contains("给出示例"));
+    assert!(!prompt.contains("私下推理"));
+    child.send(
+        json!({"type": "system", "subtype": "init", "session_id": "dg-s", "model": "sonnet"}),
+    );
+    child.send(
+        json!({"type": "assistant", "session_id": "dg-s", "message": {"id": "a1", "content": [
+        {"type": "text", "text": "用 ClientBuilder::connect_timeout"}]}}),
+    );
+    child.send(
+        json!({"type": "result", "subtype": "success", "is_error": false,
+        "session_id": "dg-s", "usage": {"input_tokens": 1, "output_tokens": 1}}),
+    );
+
+    let deadline = std::time::Instant::now() + WAIT;
+    let card = loop {
+        let got = host
+            .call("delegation.list", json!({"taskId": "task-1"}))
+            .await
+            .unwrap();
+        if got["delegations"][0]["state"] == "reported" {
+            break got["delegations"][0].clone();
+        }
+        assert!(std::time::Instant::now() < deadline, "{got}");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(card["result"], "用 ClientBuilder::connect_timeout");
+    assert_eq!(card["agent"], "claude");
+    assert_eq!(card["origin"], "user");
+    assert_eq!(card["sent"], false);
+    let child_id = card["childTaskId"].as_str().unwrap().to_string();
+    let record = host.record_of(&child_id);
+    assert_eq!(record["delegateOf"], "task-1");
+    assert_eq!(record["permissionMode"], "plan");
+    assert!(
+        record["name"]
+            .as_str()
+            .unwrap()
+            .ends_with("（委派·审查员）"),
+        "{record}"
+    );
+    let listed = host
+        .call("delegation.list", json!({"taskId": child_id}))
+        .await
+        .unwrap();
+    assert_eq!(listed["delegateOf"], "task-1");
+    let nested = host
+        .call(
+            "delegation.start",
+            json!({"taskId": child_id, "contract": {"instruction": "再拆"}}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        nested["message"].as_str().unwrap().contains("深度"),
+        "{nested}"
+    );
+
+    host.call(
+        "delegation.send",
+        json!({"taskId": "task-1", "delegationId": id}),
+    )
+    .await
+    .unwrap();
+    let back = peer.expect("turn/start").await;
+    let text = back["params"]["input"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(text.starts_with("[Aeroric 委派结果]"), "{text}");
+    assert!(text.contains("connect_timeout"));
+
+    let audit = host
+        .call("delegation.audit", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    let actions: Vec<&str> = audit["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["refuse", "start", "report", "send"], "{audit}");
+    let roles = host.call("delegation.roles", json!({})).await.unwrap();
+    assert_eq!(roles["roles"].as_array().unwrap().len(), 4);
+    let stats = host.call("delegation.stats", json!({})).await.unwrap();
+    assert_eq!(stats["rows"][0]["reported"], 1);
+    let updates = host
+        .call("session.updates", json!({"taskId": "task-1", "after": 0}))
+        .await
+        .unwrap();
+    assert!(types(&updates).iter().any(|t| t == "delegation"));
+}
+
+/// B4-3 (2026-10-31): the user writes the task's board; a decision waits in
+/// the attention list until it is accepted; a hypothesis takes only its own
+/// states.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_board_decision_waits_for_the_user() {
+    let host = Host::start(true).await;
+    host.start_task("修复超时");
+    let empty = host
+        .call("board.get", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(empty["board"]["revision"], 0);
+    assert_eq!(empty["shared"], false);
+    host.call(
+        "board.write",
+        json!({"taskId": "task-1", "entry": {"kind": "goal", "text": "修复超时"}}),
+    )
+    .await
+    .unwrap();
+    let decision = host
+        .call(
+            "board.write",
+            json!({"taskId": "task-1", "entry": {"kind": "decision", "text": "用 connect_timeout"}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(decision["entry"]["state"], "proposed");
+    let id = decision["entry"]["id"].as_str().unwrap().to_string();
+    let attention = host.call("board.attention", json!({})).await.unwrap();
+    assert_eq!(attention["items"][0]["reason"], "decision");
+    assert_eq!(attention["items"][0]["ownerTaskId"], "task-1");
+    let bad = host
+        .call(
+            "board.write",
+            json!({"taskId": "task-1", "entry": {"kind": "hypothesis", "text": "x", "state": "accepted"}}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(bad["code"], "INVALID_ARGUMENT", "{bad}");
+    host.call(
+        "board.decide",
+        json!({"taskId": "task-1", "entryId": id, "accept": true}),
+    )
+    .await
+    .unwrap();
+    let board = host
+        .call("board.get", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(board["board"]["entries"][1]["state"], "accepted");
+    assert_eq!(board["board"]["revision"], 3);
+    let attention = host.call("board.attention", json!({})).await.unwrap();
+    assert!(attention["items"].as_array().unwrap().is_empty());
+    let invalid = host
+        .call("context.boardRead", json!({"token": "nope"}))
+        .await
+        .unwrap_err();
+    assert_eq!(invalid["code"], "UNAUTHENTICATED", "{invalid}");
+}
+
+/// B5-1 (2026-10-31): what the user said to keep goes to a starting
+/// session's system layer; an agent's proposal waits for the user, recall
+/// finds it once confirmed, and a forgotten item cannot be proposed again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remembered_words_reach_a_new_session_and_proposals_wait() {
+    let mut host = Host::start(true).await;
+    let kept = host
+        .call(
+            "memory.remember",
+            json!({"draft": {"projectId": "project-1", "kind": "profile", "category": "language",
+                             "text": "回复一律用简体中文"}, "source": "/记住 回复一律用简体中文"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(kept["item"]["assertion"], "userExplicit");
+    let secret = host
+        .call(
+            "memory.remember",
+            json!({"draft": {"kind": "fact", "text": "key sk-ant-abcdefgh123456"}}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(secret["code"], "INVALID_ARGUMENT", "{secret}");
+
+    host.start_task("修复超时");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    let instructions = start["params"]["developerInstructions"].as_str().unwrap();
+    assert!(instructions.starts_with("# Aeroric 记忆"), "{instructions}");
+    assert!(instructions.contains("[语言] 回复一律用简体中文"));
+
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+    let enabled = host
+        .call("context.memoryEnabled", json!({"token": token}))
+        .await
+        .unwrap();
+    assert_eq!(enabled["enabled"], true);
+    let proposed = host
+        .call(
+            "context.memoryPropose",
+            json!({"token": token, "text": "发布前先跑 native:check sessions"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(proposed["item"]["state"], "pending");
+    let id = proposed["item"]["id"].as_str().unwrap().to_string();
+    let attention = host.call("memory.attention", json!({})).await.unwrap();
+    assert_eq!(attention["items"][0]["id"], id.as_str());
+    let nothing = host
+        .call(
+            "context.memoryRecall",
+            json!({"token": token, "query": "发布"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(nothing["text"], "没有找到相关记忆。");
+    host.call("memory.confirm", json!({"id": id, "accept": true}))
+        .await
+        .unwrap();
+    let found = host
+        .call(
+            "context.memoryRecall",
+            json!({"token": token, "query": "发布"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(found["items"][0]["assertion"], "agentConfirmed", "{found}");
+
+    host.call("memory.forget", json!({"id": id})).await.unwrap();
+    let again = host
+        .call(
+            "context.memoryPropose",
+            json!({"token": token, "text": "发布前先跑 native:check sessions"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(again["code"], "INVALID_ARGUMENT", "{again}");
+    let list = host
+        .call("memory.list", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert_eq!(list["items"].as_array().unwrap().len(), 1);
+    assert_eq!(list["enabled"], true);
+    host.call(
+        "memory.project",
+        json!({"projectId": "project-1", "enabled": false}),
+    )
+    .await
+    .unwrap();
+    let off = host
+        .call(
+            "context.memoryRecall",
+            json!({"token": token, "query": "中文"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(off["code"], "INVALID_ARGUMENT");
+}
+
+/// B5-2 (2026-10-31): the 整理设置 and its guards; a session that cannot be
+/// read, or whose project does not use memory, is skipped and says why —
+/// nothing reaches a model.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extraction_is_off_until_a_model_is_chosen_and_says_why_it_skips() {
+    let host = Host::start(true).await;
+    host.start_task("修复超时");
+    let models = host.call("memory.models", json!({})).await.unwrap();
+    assert!(models["models"].as_array().unwrap().is_empty());
+    let refused = host
+        .call("memory.settings", json!({"settings": {"auto": true}}))
+        .await
+        .unwrap_err();
+    assert_eq!(refused["code"], "INVALID_ARGUMENT", "{refused}");
+    let none = host
+        .call("memory.extract", json!({"taskId": "task-1"}))
+        .await
+        .unwrap_err();
+    assert!(
+        none["message"]
+            .as_str()
+            .unwrap()
+            .contains("还没有选分析模型"),
+        "{none}"
+    );
+    let saved = host
+        .call(
+            "memory.settings",
+            json!({"settings": {"auto": true, "connectionId": "c1", "model": "flash", "dailyLimit": 0}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved["settings"]["dailyLimit"], 1);
+    assert!(saved["settings"]["enabledMs"].as_u64().unwrap() > 0);
+    let off = host
+        .call("memory.extract", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(off["run"]["state"], "skipped");
+    assert_eq!(off["run"]["reason"], "项目没有开启记忆");
+    host.call(
+        "memory.project",
+        json!({"projectId": "project-1", "enabled": true}),
+    )
+    .await
+    .unwrap();
+    let unread = host
+        .call("memory.extract", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(unread["run"]["reason"], "读不到这个会话的对话");
+    let runs = host.call("memory.runs", json!({})).await.unwrap();
+    assert_eq!(runs["runs"].as_array().unwrap().len(), 2);
+    assert_eq!(runs["usedToday"], 0, "skips are free");
+    let swept = host.call("memory.sweep", json!({})).await.unwrap();
+    assert_eq!(swept["extracted"], 0, "task-1 is already handled");
+    let outside = host
+        .call("memory.importNative", json!({"path": "/etc/hosts"}))
+        .await
+        .unwrap_err();
+    assert_eq!(outside["code"], "INVALID_ARGUMENT");
+}
+
+/// B5-3a (2026-10-31): recall counts and shows how an item fared; the app
+/// and an agent vote; an agent cannot vote on another project's item.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn feedback_counts_and_stays_in_the_project() {
+    let host = Host::start(true).await;
+    host.start_task("修复超时");
+    let kept = host
+        .call(
+            "memory.remember",
+            json!({"draft": {"projectId": "project-1", "kind": "fact", "text": "发布前先跑 native:check"}}),
+        )
+        .await
+        .unwrap();
+    let id = kept["item"]["id"].as_str().unwrap().to_string();
+    let elsewhere = host
+        .call(
+            "memory.remember",
+            json!({"draft": {"projectId": "project-2", "kind": "fact", "text": "别的项目的约定"}}),
+        )
+        .await
+        .unwrap();
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+    let found = host
+        .call(
+            "context.memoryRecall",
+            json!({"token": token, "query": "发布"}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        found["text"].as_str().unwrap().contains("memory_feedback"),
+        "{found}"
+    );
+    let voted = host
+        .call(
+            "context.memoryFeedback",
+            json!({"token": token, "id": id, "helpful": true}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(voted["item"]["stats"]["helpful"], 1);
+    assert_eq!(voted["item"]["stats"]["retrieved"], 1);
+    let other = host
+        .call(
+            "context.memoryFeedback",
+            json!({"token": token, "id": elsewhere["item"]["id"], "helpful": false}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(other["code"], "NOT_FOUND", "{other}");
+    let user = host
+        .call("memory.feedback", json!({"id": id, "helpful": false}))
+        .await
+        .unwrap();
+    assert_eq!(user["item"]["stats"]["wrong"], 1);
+}

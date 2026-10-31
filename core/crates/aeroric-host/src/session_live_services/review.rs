@@ -26,7 +26,7 @@ pub(super) const REVIEW_OF_FIELD: &str = "reviewOf";
 /// The record field holding a task's [`ReviewSettings`].
 const SETTINGS_FIELD: &str = "reviewLoop";
 /// Harnesses that can review: their read-only mode is enforced by the agent.
-const REVIEWERS: [(&str, ProtocolFamily, &str); 2] = [
+pub(super) const REVIEWERS: [(&str, ProtocolFamily, &str); 2] = [
     ("claude", ProtocolFamily::Claude, "Claude Code"),
     ("codex", ProtocolFamily::Codex, "Codex"),
 ];

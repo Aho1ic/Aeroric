@@ -88,7 +88,7 @@
     "turnActive": true
   },
   "updates": {
-    "latestSeq": 26,
+    "latestSeq": 27,
     "updates": [
       {
         "atMs": 1761350400000,
@@ -417,26 +417,78 @@
       },
       {
         "atMs": 1761350400023,
+        "delegation": {
+          "acceptance": [
+            {
+              "id": "a1",
+              "state": "open",
+              "text": "给出可运行的示例"
+            }
+          ],
+          "additions": 0,
+          "agent": "codex",
+          "childTaskId": "task-4",
+          "contract": {
+            "acceptance": [
+              {
+                "text": "给出可运行的示例"
+              }
+            ],
+            "agent": "other",
+            "budget": {
+              "minutes": 30
+            },
+            "contextMode": "isolated",
+            "contextRefs": [
+              "src/client.rs"
+            ],
+            "instruction": "查清 reqwest 的连接超时怎么设",
+            "permission": "plan",
+            "role": "researcher",
+            "workspace": "readOnly"
+          },
+          "createdMs": 1761350400000,
+          "delegationId": "dg-1",
+          "deletions": 0,
+          "evidence": false,
+          "files": 0,
+          "finishedMs": 1761350460000,
+          "harnessLabel": "Codex",
+          "origin": "session",
+          "parentTaskId": "task-1",
+          "result": "用 ClientBuilder::connect_timeout",
+          "reworks": 0,
+          "roleName": "调研员",
+          "sent": true,
+          "state": "reported",
+          "tokens": 1200
+        },
+        "seq": 24,
+        "taskId": "task-1",
+        "type": "delegation"
+      },
+      {
+        "atMs": 1761350400024,
         "kind": "item/futureThing",
         "payload": {
           "x": 1
         },
-        "seq": 24,
+        "seq": 25,
         "taskId": "task-1",
         "type": "unknown"
       },
       {
-        "atMs": 1761350400024,
+        "atMs": 1761350400025,
         "messageId": "m1",
-        "seq": 25,
+        "seq": 26,
         "taskId": "task-1",
         "text": "我来看看",
         "type": "messageCompleted"
       },
       {
-        "atMs": 1761350400025,
+        "atMs": 1761350400026,
         "reason": "completed",
-        "seq": 26,
+        "seq": 27,
         "taskId": "task-1",
         "turnId": "u1",
         "type": "turnEnded"

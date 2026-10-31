@@ -291,6 +291,8 @@ public enum SessionRowAction: Sendable, Equatable {
     case rename(String)
     case fork
     case copySessionID
+    /// B5-2: 整理这次会话 into memory now.
+    case extractMemory
 }
 
 /// What a project row's 更多 menu can do (S1–S5).
@@ -300,6 +302,8 @@ public enum ProjectRowAction: Sendable, Equatable {
     case color(String?)
     case defaultAgent(String?)
     case group(String?)
+    /// B5-1: 项目记忆… opens the memory page on this project.
+    case memory
     case remove
 }
 

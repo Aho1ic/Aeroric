@@ -325,6 +325,180 @@ extension SessionsClient {
         _ = try await connection.request(method, params: .object(["taskId": .string(taskId)]))
     }
 
+    /// B4-2: a task's delegations, and its parent when it is a child.
+    public func delegations(taskId: String) async throws -> (cards: [LiveDelegationCard], delegateOf: String?) {
+        let frame = try await connection.request("delegation.list", params: .object(["taskId": .string(taskId)]))
+        return ((frame.result["delegations"]?.arrayValue ?? []).compactMap(LiveDelegationCard.decode),
+                frame.result["delegateOf"]?.stringValue)
+    }
+
+    /// B4-2: the user delegates from `taskId`.
+    @discardableResult
+    public func startDelegation(taskId: String, contract: LiveDelegationContract) async throws -> LiveDelegationCard? {
+        let frame = try await connection.request(
+            "delegation.start", params: .object(["taskId": .string(taskId), "contract": contract.json]))
+        return frame.result["delegation"].flatMap(LiveDelegationCard.decode)
+    }
+
+    /// B4-2: `delegation.stop` / `delegation.send` / `delegation.redo`.
+    public func delegationAction(_ method: String, taskId: String, delegationId: String,
+                                 note: String? = nil) async throws {
+        var params: [String: JSONValue] = ["taskId": .string(taskId), "delegationId": .string(delegationId)]
+        if let note { params["note"] = .string(note) }
+        _ = try await connection.request(method, params: .object(params))
+    }
+
+    public func delegationRoles() async throws -> [LiveDelegationRole] {
+        let frame = try await connection.request("delegation.roles", params: .object([:]))
+        return (frame.result["roles"]?.arrayValue ?? []).compactMap(LiveDelegationRole.decode)
+    }
+
+    public func saveDelegationRole(_ role: LiveDelegationRole) async throws {
+        _ = try await connection.request("delegation.saveRole", params: .object(["role": role.json]))
+    }
+
+    public func deleteDelegationRole(id: String) async throws {
+        _ = try await connection.request("delegation.deleteRole", params: .object(["id": .string(id)]))
+    }
+
+    public func delegationAudit(taskId: String) async throws -> [LiveDelegationAudit] {
+        let frame = try await connection.request("delegation.audit", params: .object(["taskId": .string(taskId)]))
+        return (frame.result["entries"]?.arrayValue ?? []).compactMap(LiveDelegationAudit.decode)
+    }
+
+    public func delegationStats() async throws -> [LiveReputationRow] {
+        let frame = try await connection.request("delegation.stats", params: .object([:]))
+        return (frame.result["rows"]?.arrayValue ?? []).compactMap(LiveReputationRow.decode)
+    }
+
+    /// B4-2: delegations that need the user (`delegation.attention`).
+    public func delegationAttention() async throws -> [LiveDelegationCard] {
+        let frame = try await connection.request("delegation.attention", params: .object([:]))
+        return (frame.result["items"]?.arrayValue ?? []).compactMap(LiveDelegationCard.decode)
+    }
+
+    /// B4-3: the board a task works on (its parent's when it is a child).
+    public func board(taskId: String) async throws -> (board: LiveBoard, shared: Bool) {
+        let frame = try await connection.request("board.get", params: .object(["taskId": .string(taskId)]))
+        return (LiveBoard.decode(frame.result["board"]) ?? LiveBoard(ownerTaskId: taskId),
+                frame.result["shared"]?.boolValue ?? false)
+    }
+
+    /// B4-3: add an entry (`kind` + `text`) or change one (`id` + `state`).
+    public func writeBoard(taskId: String, id: String? = nil, kind: String? = nil, text: String? = nil,
+                           state: String? = nil) async throws {
+        var entry: [String: JSONValue] = [:]
+        if let id { entry["id"] = .string(id) }
+        if let kind { entry["kind"] = .string(kind) }
+        if let text { entry["text"] = .string(text) }
+        if let state { entry["state"] = .string(state) }
+        _ = try await connection.request(
+            "board.write", params: .object(["taskId": .string(taskId), "entry": .object(entry)]))
+    }
+
+    public func decideBoard(taskId: String, entryId: String, accept: Bool) async throws {
+        _ = try await connection.request("board.decide", params: .object([
+            "taskId": .string(taskId), "entryId": .string(entryId), "accept": .bool(accept),
+        ]))
+    }
+
+    /// B4-3: proposed decisions and stale claims on every board.
+    public func boardAttention() async throws -> [LiveBoardAttention] {
+        let frame = try await connection.request("board.attention", params: .object([:]))
+        return (frame.result["items"]?.arrayValue ?? []).compactMap(LiveBoardAttention.decode)
+    }
+
+    // MARK: B5-1 memory
+
+    /// A scope's items (`projectId` nil = global) and whether the project uses memory.
+    public func memoryList(projectId: String?, query: String?) async throws
+        -> (items: [LiveMemoryItem], enabled: Bool?) {
+        var params: [String: JSONValue] = [:]
+        if let projectId { params["projectId"] = .string(projectId) }
+        if let query { params["query"] = .string(query) }
+        let frame = try await connection.request("memory.list", params: .object(params))
+        return ((frame.result["items"]?.arrayValue ?? []).compactMap { LiveMemoryItem.decode($0) },
+                frame.result["enabled"]?.boolValue)
+    }
+
+    /// The user keeps something (`/记住`, the memory page; `supersedes` = an edit).
+    public func remember(projectId: String?, kind: String, category: String? = nil, text: String,
+                         supersedes: String? = nil, taskId: String? = nil, source: String? = nil)
+        async throws -> LiveMemoryItem {
+        var draft: [String: JSONValue] = ["kind": .string(kind), "text": .string(text)]
+        if let projectId { draft["projectId"] = .string(projectId) }
+        if let category { draft["category"] = .string(category) }
+        if let supersedes { draft["supersedes"] = .string(supersedes) }
+        var params: [String: JSONValue] = ["draft": .object(draft)]
+        if let taskId { params["taskId"] = .string(taskId) }
+        if let source { params["source"] = .string(source) }
+        let frame = try await connection.request("memory.remember", params: .object(params))
+        guard let item = LiveMemoryItem.decode(frame.result["item"]) else {
+            throw MalformedReply.malformedReply("memory.remember needs an item")
+        }
+        return item
+    }
+
+    /// `memory.confirm/archive/pin/move/undo/forget {id, …}`.
+    public func memoryAction(_ method: String, id: String, _ extra: [String: JSONValue] = [:]) async throws {
+        var params = extra
+        params["id"] = .string(id)
+        _ = try await connection.request(method, params: .object(params))
+    }
+
+    /// Read or set "这个项目用记忆".
+    public func memoryProject(projectId: String, enabled: Bool? = nil) async throws -> Bool {
+        var params: [String: JSONValue] = ["projectId": .string(projectId)]
+        if let enabled { params["enabled"] = .bool(enabled) }
+        let frame = try await connection.request("memory.project", params: .object(params))
+        return frame.result["enabled"]?.boolValue ?? false
+    }
+
+    public func memoryNative(projectId: String?) async throws -> [LiveNativeMemory] {
+        let frame = try await connection.request(
+            "memory.native", params: .object(projectId.map { ["projectId": .string($0)] } ?? [:]))
+        return (frame.result["files"]?.arrayValue ?? []).compactMap(LiveNativeMemory.decode)
+    }
+
+    /// Proposals waiting for the user, in every scope.
+    public func memoryAttention() async throws -> [LiveMemoryItem] {
+        let frame = try await connection.request("memory.attention", params: .object([:]))
+        return (frame.result["items"]?.arrayValue ?? []).compactMap { LiveMemoryItem.decode($0) }
+    }
+
+    // MARK: B5-2 extraction
+
+    /// Read, or save, the 整理设置.
+    public func memorySettings(_ settings: LiveMemorySettings? = nil) async throws -> LiveMemorySettings {
+        let frame = try await connection.request(
+            "memory.settings", params: .object(settings.map { ["settings": $0.json] } ?? [:]))
+        return LiveMemorySettings.decode(frame.result["settings"])
+    }
+
+    public func memoryRuns() async throws -> LiveMemoryRunsPage {
+        let frame = try await connection.request("memory.runs", params: .object([:]))
+        return LiveMemoryRunsPage.decode(frame.result)
+    }
+
+    public func memoryModels() async throws -> [LiveMemoryModelChoice] {
+        let frame = try await connection.request("memory.models", params: .object([:]))
+        return (frame.result["models"]?.arrayValue ?? []).compactMap(LiveMemoryModelChoice.decode)
+    }
+
+    /// 整理这次会话 / 重试: the row it recorded.
+    public func memoryExtract(taskId: String) async throws -> LiveMemoryRun? {
+        let frame = try await connection.request("memory.extract", params: .object(["taskId": .string(taskId)]))
+        return LiveMemoryRun.decode(frame.result["run"])
+    }
+
+    public func memoryImportNative(path: String, projectId: String?) async throws -> (imported: Int, skipped: Int) {
+        var params: [String: JSONValue] = ["path": .string(path)]
+        if let projectId { params["projectId"] = .string(projectId) }
+        let frame = try await connection.request("memory.importNative", params: .object(params))
+        return (frame.result["imported"]?.numberText.flatMap { Int($0) } ?? 0,
+                frame.result["skipped"]?.numberText.flatMap { Int($0) } ?? 0)
+    }
+
     /// B4-1: loops that need the user (`review.attention`): task id → card.
     public func reviewAttention() async throws -> [String: LiveReviewCard] {
         let frame = try await connection.request("review.attention", params: .object([:]))

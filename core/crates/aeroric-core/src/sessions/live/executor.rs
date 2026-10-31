@@ -126,8 +126,14 @@ pub struct StructuredExecutor {
     turn_changes: Arc<super::turn_changes::TurnChangeTracker>,
     /// B4′: every task's checkpoint, derived from its updates.
     checkpoints: Arc<super::checkpoint::CheckpointSink>,
-    /// B4-1: the review loops, between the host's sink and the checkpoints.
+    /// B4-1: the review loops, between the delegations and the checkpoints.
     reviews: Arc<super::review::ReviewLoop>,
+    /// B4-2: delegations, between the host's sink and the review loops.
+    delegations: Arc<super::delegation::Delegations>,
+    /// B4-3: the shared boards.
+    boards: Arc<super::board::Boards>,
+    /// B5-1: long-term memory (the profile a starting session is handed).
+    memory: Arc<crate::memory::Memory>,
     /// B4′: how to start the context server (`program`, `data_dir`); unset
     /// gives sessions none (tests, and hosts that opt out).
     context_program: Mutex<Option<(String, String)>>,
@@ -149,11 +155,15 @@ impl StructuredExecutor {
         let registry: Arc<DriverRegistry> = Arc::default();
         // Beneath the turn-change tracker, so it also sees the updates that
         // tracker appends after a turn (turnChanges, autoCheck).
+        let delegations = super::delegation::Delegations::new(sink);
+        delegations.set_registry(Arc::clone(&registry));
+        let sink: Arc<dyn LiveStatusSink> = Arc::clone(&delegations) as Arc<dyn LiveStatusSink>;
         let reviews = super::review::ReviewLoop::new(sink);
         reviews.set_registry(Arc::clone(&registry));
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&reviews) as Arc<dyn LiveStatusSink>;
         let checkpoints = super::checkpoint::CheckpointSink::new(sink);
         reviews.set_checkpoints(Arc::downgrade(&checkpoints));
+        delegations.set_checkpoints(Arc::downgrade(&checkpoints));
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&checkpoints) as Arc<dyn LiveStatusSink>;
         let turn_changes = super::turn_changes::TurnChangeTracker::new(sink, Arc::clone(&registry));
         checkpoints.set_registry(Arc::clone(&registry));
@@ -164,7 +174,11 @@ impl StructuredExecutor {
                 .unwrap_or_default()
         }));
         let weak = Arc::downgrade(&reviews);
+        let weak_delegations = Arc::downgrade(&delegations);
         turn_changes.set_hook(Arc::new(move |settled| {
+            if let Some(delegations) = weak_delegations.upgrade() {
+                delegations.turn_settled(settled.clone());
+            }
             if let Some(reviews) = weak.upgrade() {
                 reviews.turn_settled(settled);
             }
@@ -178,6 +192,9 @@ impl StructuredExecutor {
             turn_changes,
             checkpoints,
             reviews,
+            delegations,
+            boards: Arc::default(),
+            memory: Arc::default(),
             context_program: Mutex::new(None),
             context_tokens: Arc::default(),
             runtime: runtime.clone(),
@@ -210,12 +227,28 @@ impl StructuredExecutor {
     /// left open — a resume brief. Harnesses with a system layer take it
     /// there; otherwise it goes in front of `prompt` (a resume without a
     /// prompt then carries none). Returns the prompt to send.
+    ///
+    /// B5-1: the user's memory profile goes in front of the brief, but only
+    /// into a system layer — never into the user's message.
     fn hand_brief(
+        &self,
+        task_id: &str,
+        project_id: &str,
+        session: &Arc<dyn SessionDriver>,
+        prompt: Option<String>,
+        resuming: bool,
+    ) -> Option<String> {
+        let profile = self.memory.profile_for_session(Some(project_id));
+        self.hand_handoff(task_id, session, prompt, resuming, profile.as_deref())
+    }
+
+    fn hand_handoff(
         &self,
         task_id: &str,
         session: &Arc<dyn SessionDriver>,
         prompt: Option<String>,
         resuming: bool,
+        profile: Option<&str>,
     ) -> Option<String> {
         use aeroric_protocol::checkpoint::HandoffReason;
         let reason = self.checkpoints.take_armed(task_id).or_else(|| {
@@ -225,10 +258,12 @@ impl StructuredExecutor {
                     .stale_with_open_work(task_id, RESUME_BRIEF_AFTER_MS))
             .then_some(HandoffReason::Resume)
         });
-        let Some(reason) = reason else {
-            return prompt;
-        };
-        let Some(checkpoint) = self.checkpoints.get(task_id).filter(|cp| !cp.is_empty()) else {
+        let checkpoint =
+            reason.and_then(|_| self.checkpoints.get(task_id).filter(|cp| !cp.is_empty()));
+        let (Some(reason), Some(checkpoint)) = (reason, checkpoint) else {
+            if let Some(profile) = profile {
+                session.set_instructions(profile.to_string());
+            }
             return prompt;
         };
         let brief = super::checkpoint::brief::handoff_brief(&checkpoint, reason);
@@ -242,7 +277,11 @@ impl StructuredExecutor {
             );
             self.sink.update(&update);
         }
-        if session.set_instructions(brief.clone()) {
+        let instructions = match profile {
+            Some(profile) => format!("{profile}\n\n---\n\n{brief}"),
+            None => brief.clone(),
+        };
+        if session.set_instructions(instructions) {
             return prompt;
         }
         prompt.map(|p| format!("{brief}\n---\n\n{p}"))
@@ -282,6 +321,18 @@ impl StructuredExecutor {
     /// B4-1: the review loops (the host sets their host and directory).
     pub fn reviews(&self) -> &Arc<super::review::ReviewLoop> {
         &self.reviews
+    }
+
+    pub fn delegations(&self) -> &Arc<super::delegation::Delegations> {
+        &self.delegations
+    }
+
+    pub fn boards(&self) -> &Arc<super::board::Boards> {
+        &self.boards
+    }
+
+    pub fn memory(&self) -> &Arc<crate::memory::Memory> {
+        &self.memory
     }
 
     /// Tasks whose latest check run failed (the attention queue).
@@ -554,7 +605,13 @@ impl TaskExecutor for StructuredExecutor {
             .clone()
             .unwrap_or_else(|| request.prompt.clone());
         let prompt = self
-            .hand_brief(&request.task_id, &session, Some(prompt), false)
+            .hand_brief(
+                &request.task_id,
+                &request.project_id,
+                &session,
+                Some(prompt),
+                false,
+            )
             .unwrap_or_default();
         let started = if prompt.trim().is_empty() {
             session.attach()
@@ -604,7 +661,7 @@ impl TaskExecutor for StructuredExecutor {
             },
             &route,
         );
-        self.hand_brief(&request.task_id, &session, None, true);
+        self.hand_brief(&request.task_id, &request.project_id, &session, None, true);
         session.attach().map_err(|error| ExecutorFailure::Spawn {
             reason: error.to_string(),
         })

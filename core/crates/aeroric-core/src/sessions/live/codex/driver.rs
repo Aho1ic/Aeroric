@@ -172,7 +172,19 @@ impl SessionDriver for CodexSession {
         server: crate::sessions::live::context_server::ContextServer,
     ) -> bool {
         use crate::sessions::live::context_server::SERVER_NAME;
-        self.state.lock().config = Some(json!({"mcp_servers": {SERVER_NAME: server.entry()}}));
+        // CU F1 (2026-10-31): Codex leaves an optional server that is still
+        // starting out of the turn ("omitting pending optional MCP server"),
+        // so a new session's first turn had no Aeroric tools. Required, it waits.
+        let mut entry = server.entry();
+        entry["required"] = json!(true);
+        entry["startup_timeout_sec"] = json!(20);
+        // CU 2026-10-31: under 每次询问 Codex asks before each MCP tool call
+        // (an `mcpServer/elicitation/request` Aeroric declined), so
+        // memory_recall came back "user rejected". These tools only touch
+        // Aeroric's own memory, board and delegations; the user approves
+        // what a delegated child does in that child.
+        entry["default_tools_approval_mode"] = json!("approve");
+        self.state.lock().config = Some(json!({"mcp_servers": {SERVER_NAME: entry}}));
         true
     }
 

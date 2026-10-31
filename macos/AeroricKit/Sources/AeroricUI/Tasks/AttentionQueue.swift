@@ -14,6 +14,12 @@ public enum AttentionQueue {
         case checksFailed
         /// B4-1: a review loop stopped for the user's decision.
         case reviewNeedsYou
+        /// B4-2: a delegation failed, ran over budget, or was interrupted.
+        case delegationNeedsYou
+        /// B4-3: a decision on the board waits, or a claim went stale.
+        case boardNeedsYou
+        /// B5-1: an agent proposed a memory.
+        case memoryNeedsYou
 
         public var text: String {
             switch self {
@@ -22,6 +28,9 @@ public enum AttentionQueue {
             case .interrupted: "被中断"
             case .checksFailed: "检查没通过"
             case .reviewNeedsYou: "审查要你定"
+            case .delegationNeedsYou: "委派要你定"
+            case .boardNeedsYou: "黑板要你定"
+            case .memoryNeedsYou: "记忆待确认"
             }
         }
     }
@@ -52,7 +61,9 @@ public enum AttentionQueue {
     /// Waiting first (they block an agent), then the newest. A task is listed
     /// once: its own status wins over a failed check, which then shows as detail.
     public static func items(_ tasks: [TaskStore.TaskEntry], checkFailures: [String: CheckFailure] = [:],
-                             reviews: [String: CheckFailure] = [:], nowMs: UInt64) -> [Item] {
+                             reviews: [String: CheckFailure] = [:], delegations: [String: CheckFailure] = [:],
+                             boards: [String: CheckFailure] = [:], memories: [String: CheckFailure] = [:],
+                             nowMs: UInt64) -> [Item] {
         tasks.compactMap { task -> Item? in
             guard !task.archived else { return nil }
             let updated = task.updatedAtMs ?? task.createdAtMs ?? 0
@@ -69,8 +80,18 @@ public enum AttentionQueue {
                 if let check {
                     return Item(task: task, reason: .checksFailed, detail: check.summary, atMs: check.atMs)
                 }
-                guard let review = reviews[task.id] else { return nil }
-                return Item(task: task, reason: .reviewNeedsYou, detail: review.summary, atMs: review.atMs)
+                if let review = reviews[task.id] {
+                    return Item(task: task, reason: .reviewNeedsYou, detail: review.summary, atMs: review.atMs)
+                }
+                if let delegation = delegations[task.id] {
+                    return Item(task: task, reason: .delegationNeedsYou, detail: delegation.summary,
+                                atMs: delegation.atMs)
+                }
+                if let board = boards[task.id] {
+                    return Item(task: task, reason: .boardNeedsYou, detail: board.summary, atMs: board.atMs)
+                }
+                guard let memory = memories[task.id] else { return nil }
+                return Item(task: task, reason: .memoryNeedsYou, detail: memory.summary, atMs: memory.atMs)
             }
         }
         .sorted { lhs, rhs in
@@ -87,12 +108,15 @@ public struct AttentionListView: View {
     let items: [AttentionQueue.Item]
     let projectName: (String) -> String?
     let onOpen: (String) -> Void
+    /// B5-1: a memory proposal opens the memory page, not the task.
+    let onOpenItem: ((AttentionQueue.Item) -> Bool)?
 
     public init(items: [AttentionQueue.Item], projectName: @escaping (String) -> String?,
-                onOpen: @escaping (String) -> Void) {
+                onOpen: @escaping (String) -> Void, onOpenItem: ((AttentionQueue.Item) -> Bool)? = nil) {
         self.items = items
         self.projectName = projectName
         self.onOpen = onOpen
+        self.onOpenItem = onOpenItem
     }
 
     public var body: some View {
@@ -106,7 +130,9 @@ public struct AttentionListView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(items) { item in
-                    Button { onOpen(item.task.id) } label: { row(item) }
+                    Button {
+                        if onOpenItem?(item) != true { onOpen(item.task.id) }
+                    } label: { row(item) }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("attention.row.\(item.task.id)")
                 }

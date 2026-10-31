@@ -22,6 +22,8 @@ public enum LiveItem: Identifiable, Equatable, Sendable {
     case branchReturned(id: String, LiveBranchResult)
     /// B4-1: a review loop's card (one per `reviewId`, updated in place).
     case review(id: String, LiveReviewCard)
+    /// B4-2: a delegation's card (one per `delegationId`, updated in place).
+    case delegation(id: String, LiveDelegationCard)
     /// Protocol content this build does not render (INV-12: shown, not dropped).
     case unknown(id: String, kind: String)
 
@@ -38,6 +40,7 @@ public enum LiveItem: Identifiable, Equatable, Sendable {
         case let .clarification(id, _): "clarify:\(id)"
         case let .branchReturned(id, _): "branch:\(id)"
         case let .review(id, _): "review:\(id)"
+        case let .delegation(id, _): "delegation:\(id)"
         case let .unknown(id, _): "unknown:\(id)"
         }
     }
@@ -283,8 +286,23 @@ public struct LiveSessionModel: Equatable, Sendable {
     }
 
     /// History now holds this turn: drop the live rows (D3), keep the rest.
+    /// CU F2 (2026-10-31): a delegation card the user can still act on is not
+    /// in the transcript, so it stays.
     public mutating func clearItems() {
-        items.removeAll()
+        items.removeAll { item in
+            if case let .delegation(_, card) = item { return !card.wantsUser }
+            return true
+        }
+    }
+
+    /// CU F2: put back a delegation card the live rows no longer hold (the
+    /// page reopened, or a gap reset the model).
+    public mutating func restoreDelegation(_ card: LiveDelegationCard) {
+        let held = items.contains {
+            if case let .delegation(id, _) = $0 { return id == card.delegationId }
+            return false
+        }
+        if !held { items.append(.delegation(id: card.delegationId, card)) }
     }
 
     /// The message the user just sent, until history has it.
@@ -435,6 +453,16 @@ public struct LiveSessionModel: Equatable, Sendable {
                 items[same] = .review(id: card.reviewId, card)
             } else {
                 items.append(.review(id: card.reviewId, card))
+            }
+        case let .delegation(card):
+            let same = items.firstIndex {
+                if case let .delegation(id, _) = $0 { return id == card.delegationId }
+                return false
+            }
+            if let same {
+                items[same] = .delegation(id: card.delegationId, card)
+            } else {
+                items.append(.delegation(id: card.delegationId, card))
             }
         case let .unknown(kind, _):
             items.append(.unknown(id: "seq\(update.seq)", kind: kind))

@@ -932,6 +932,11 @@ pub fn claude_args(start: &ClaudeStart, passes_model: bool) -> Vec<String> {
     // B4′: the Aeroric context server, for this process only.
     if let Some(config) = start.mcp_config.as_deref() {
         args.extend(["--mcp-config".to_string(), config.to_string()]);
+        // CU 2026-10-31: its tools run without a permission card, as on Codex.
+        args.extend([
+            "--allowedTools".to_string(),
+            "mcp__aeroric_context".to_string(),
+        ]);
     }
     // B4′: the handoff brief, in the system layer.
     if let Some(text) = start
@@ -1089,5 +1094,18 @@ mod linked_folder_args {
         assert_eq!(args[at + 1], "# 交接清单\n- 目标");
         let none = claude_args(&ClaudeStart::default(), false);
         assert!(!none.iter().any(|a| a == "--append-system-prompt"));
+        assert!(!none.iter().any(|a| a == "--allowedTools"));
+        let with_context = claude_args(
+            &ClaudeStart {
+                mcp_config: Some("{}".into()),
+                ..ClaudeStart::default()
+            },
+            false,
+        );
+        let at = with_context
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .unwrap();
+        assert_eq!(with_context[at + 1], "mcp__aeroric_context");
     }
 }

@@ -7,12 +7,15 @@
 //! here is generated into `contracts/native/v1/` by `bin/export-schema.rs`; the
 //! Swift and TypeScript decoders read the same fixtures.
 
+pub mod board;
 pub mod capability;
 pub mod checkpoint;
+pub mod delegation;
 pub mod envelope;
 pub mod error;
 pub mod event;
 pub mod legacy_cleanup;
+pub mod memory;
 pub mod project;
 pub mod review;
 pub mod session;

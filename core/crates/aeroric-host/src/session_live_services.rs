@@ -33,6 +33,9 @@ use crate::services::{find_project_of_task, ok};
 
 pub use wire::CAPABILITY;
 
+mod board;
+mod delegation;
+mod memory;
 mod review;
 
 struct Live {
@@ -146,6 +149,11 @@ pub fn register_session_live_services(
     }
     // B4-1: the review loop (only the product asks whether a harness is installed).
     review::install(set, &live, live.product);
+    // B4-2: delegation.
+    delegation::install(set, &live, live.product);
+    // B4-3: the shared boards.
+    board::install(set, &live);
+    memory::install(set, &live);
 }
 
 // MARK: B4′ side branches (2026-10-30)

@@ -118,6 +118,51 @@ struct HostLiveSessionActions: LiveSessionActions {
         try await client().reviewAction("review.retry", taskId: taskID)
     }
 
+    func delegate(taskID: String, contract: LiveDelegationContract) async throws {
+        try await client().startDelegation(taskId: taskID, contract: contract)
+        await services.refreshWorkspace()
+    }
+
+    func stopDelegation(taskID: String, delegationID: String) async throws {
+        try await client().delegationAction("delegation.stop", taskId: taskID, delegationId: delegationID)
+    }
+
+    func sendDelegation(taskID: String, delegationID: String) async throws {
+        try await client().delegationAction("delegation.send", taskId: taskID, delegationId: delegationID)
+    }
+
+    func redoDelegation(taskID: String, delegationID: String, note: String) async throws {
+        try await client().delegationAction("delegation.redo", taskId: taskID, delegationId: delegationID, note: note)
+    }
+
+    func delegationRoles() async throws -> [LiveDelegationRole] {
+        try await client().delegationRoles()
+    }
+
+    func ackDelegationProbes(taskID: String, delegationID: String) async throws {
+        try await client().delegationAction("delegation.ackProbes", taskId: taskID, delegationId: delegationID)
+    }
+
+    func delegationCards(taskID: String) async throws -> [LiveDelegationCard] {
+        try await client().delegations(taskId: taskID).cards
+    }
+
+    func remember(taskID: String, text: String, kind: String) async throws -> LiveMemoryItem {
+        let project = services.taskStore.tasks.first { $0.id == taskID }?.projectID
+        let item = try await client().remember(projectId: project, kind: kind, text: text,
+                                               taskId: taskID, source: "/记住 \(text)")
+        await services.memoryStore.reload()
+        return item
+    }
+
+    func makeMemoryGlobal(id: String) async throws {
+        try await client().memoryAction("memory.move", id: id)
+    }
+
+    func undoMemory(id: String) async throws {
+        try await client().memoryAction("memory.undo", id: id)
+    }
+
     func openTask(_ taskID: String) {
         services.requestedSelection = SessionNavigation.task(taskID)
     }
@@ -236,6 +281,39 @@ extension AppServices {
         guard let client = sessionsClient, let list = try? await client.autoCheckFailures() else { return }
         let next = list.mapValues { AttentionQueue.CheckFailure(summary: $0.summary, atMs: $0.atMs) }
         if next != checkFailures { checkFailures = next }
+        // B4-2: delegations that need the user, under their parent.
+        if let stuck = try? await client.delegationAttention() {
+            let now = UInt64(Date().timeIntervalSince1970 * 1000)
+            var next: [String: AttentionQueue.CheckFailure] = [:]
+            for card in stuck where next[card.parentTaskId] == nil {
+                next[card.parentTaskId] = AttentionQueue.CheckFailure(
+                    summary: DelegationText.summary(card), atMs: delegationNeeds[card.parentTaskId]?.atMs ?? now)
+            }
+            if next != delegationNeeds { delegationNeeds = next }
+        }
+        // B4-3: board decisions waiting for the user and stale claims, under the board's owner.
+        if let items = try? await client.boardAttention() {
+            let now = UInt64(Date().timeIntervalSince1970 * 1000)
+            var next: [String: AttentionQueue.CheckFailure] = [:]
+            for item in items where next[item.ownerTaskId] == nil {
+                next[item.ownerTaskId] = AttentionQueue.CheckFailure(
+                    summary: BoardText.attention(item), atMs: boardNeeds[item.ownerTaskId]?.atMs ?? now)
+            }
+            if next != boardNeeds { boardNeeds = next }
+        }
+        // B5-1: memory proposals, under the session that proposed them.
+        if let items = try? await client.memoryAttention() {
+            let now = UInt64(Date().timeIntervalSince1970 * 1000)
+            var next: [String: AttentionQueue.CheckFailure] = [:]
+            for item in items {
+                guard let task = item.evidence.first?.taskId, next[task] == nil else { continue }
+                next[task] = AttentionQueue.CheckFailure(summary: MemoryText.attention(item),
+                                                         atMs: memoryNeeds[task]?.atMs ?? now)
+            }
+            if next != memoryNeeds { memoryNeeds = next }
+            if items.count != memoryPendingCount { memoryPendingCount = items.count }
+            await memoryStore.refreshPending()
+        }
         // B4-1: review loops that need the user join the same queue; a loop
         // keeps the time it was first seen so the queue order holds still.
         guard let reviews = try? await client.reviewAttention() else { return }
@@ -364,3 +442,84 @@ enum AgentConfigCatalog {
     static func isCatalogID(_ id: String) -> Bool { id.hasPrefix(prefix) }
 }
 
+
+/// B5-1 (2026-10-31): the memory page's host calls, over `SessionsClient`.
+@MainActor
+struct HostMemoryService: MemoryService {
+    weak var services: AppServices?
+
+    private func client() throws -> SessionsClient {
+        guard let client = services?.sessionsClient else { throw AppServices.ProjectError.notConnected }
+        return client
+    }
+
+    func list(projectID: String?, query: String?) async throws -> (items: [LiveMemoryItem], enabled: Bool?) {
+        try await client().memoryList(projectId: projectID, query: query)
+    }
+
+    func remember(projectID: String?, kind: String, category: String?, text: String,
+                  supersedes: String?) async throws -> LiveMemoryItem {
+        try await client().remember(projectId: projectID, kind: kind, category: category, text: text,
+                                    supersedes: supersedes)
+    }
+
+    func confirm(id: String, accept: Bool) async throws {
+        try await client().memoryAction("memory.confirm", id: id, ["accept": .bool(accept)])
+    }
+
+    func archive(id: String, archived: Bool) async throws {
+        try await client().memoryAction("memory.archive", id: id, ["archived": .bool(archived)])
+    }
+
+    func pin(id: String, pinned: Bool) async throws {
+        try await client().memoryAction("memory.pin", id: id, ["pinned": .bool(pinned)])
+    }
+
+    func move(id: String, projectID: String?) async throws {
+        try await client().memoryAction("memory.move", id: id, projectID.map { ["projectId": .string($0)] } ?? [:])
+    }
+
+    func forget(id: String) async throws {
+        try await client().memoryAction("memory.forget", id: id)
+    }
+
+    func setEnabled(projectID: String, enabled: Bool) async throws {
+        _ = try await client().memoryProject(projectId: projectID, enabled: enabled)
+    }
+
+    func native(projectID: String?) async throws -> [LiveNativeMemory] {
+        try await client().memoryNative(projectId: projectID)
+    }
+
+    func attention() async throws -> [LiveMemoryItem] {
+        try await client().memoryAttention()
+    }
+
+    func settings() async throws -> LiveMemorySettings {
+        try await client().memorySettings()
+    }
+
+    func saveSettings(_ settings: LiveMemorySettings) async throws -> LiveMemorySettings {
+        try await client().memorySettings(settings)
+    }
+
+    func runs() async throws -> LiveMemoryRunsPage {
+        try await client().memoryRuns()
+    }
+
+    func models() async throws -> [LiveMemoryModelChoice] {
+        try await client().memoryModels()
+    }
+
+    func extract(taskID: String) async throws -> LiveMemoryRun? {
+        try await client().memoryExtract(taskId: taskID)
+    }
+
+    func importNative(path: String, projectID: String?) async throws -> (imported: Int, skipped: Int) {
+        try await client().memoryImportNative(path: path, projectId: projectID)
+    }
+
+    func feedback(id: String, helpful: Bool) async throws {
+        try await client().memoryAction("memory.feedback", id: id, ["helpful": .bool(helpful)])
+    }
+}

@@ -435,3 +435,25 @@ async fn the_brief_is_sent_as_developer_instructions() {
     let start = peer.expect("thread/start").await;
     assert_eq!(start["params"]["developerInstructions"], "# 交接清单");
 }
+
+/// CU F1 (2026-10-31): the context server is required, so Codex waits for it
+/// instead of leaving the Aeroric tools out of a new session's first turn.
+#[tokio::test]
+async fn the_context_server_is_required() {
+    let mut h = start(spec());
+    assert!(h
+        .session
+        .set_context_server(crate::sessions::live::context_server::ContextServer {
+            command: "aeroric-cli".into(),
+            args: vec!["mcp-context".into()],
+            env: vec![("AERORIC_CONTEXT_TOKEN".into(), "t".into())],
+        }));
+    h.session.prompt("hi".into()).unwrap();
+    let mut peer = launched(&mut h.peers).await;
+    peer.handshake().await;
+    let start = peer.expect("thread/start").await;
+    let server = &start["params"]["config"]["mcp_servers"]["aeroric_context"];
+    assert_eq!(server["required"], true, "{start}");
+    assert_eq!(server["default_tools_approval_mode"], "approve");
+    assert_eq!(server["command"], "aeroric-cli");
+}

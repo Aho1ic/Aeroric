@@ -45,6 +45,22 @@ public protocol LiveSessionActions {
     func sendReview(taskID: String) async throws
     /// B4-1: run a failed or interrupted round again.
     func retryReview(taskID: String) async throws
+    /// B4-2: delegate from this task (the `#` prefix, the progress page).
+    func delegate(taskID: String, contract: LiveDelegationContract) async throws
+    func stopDelegation(taskID: String, delegationID: String) async throws
+    func sendDelegation(taskID: String, delegationID: String) async throws
+    func redoDelegation(taskID: String, delegationID: String, note: String) async throws
+    /// B4-2: the role library (for the `#` suggestions).
+    func delegationRoles() async throws -> [LiveDelegationRole]
+    /// B4-3: the user saw a delegation's probes.
+    func ackDelegationProbes(taskID: String, delegationID: String) async throws
+    /// CU F2: this task's delegations, to put back cards still waiting on the user.
+    func delegationCards(taskID: String) async throws -> [LiveDelegationCard]
+    /// B5-1: `/记住 …` in this task's project; the item as kept.
+    func remember(taskID: String, text: String, kind: String) async throws -> LiveMemoryItem
+    /// B5-1: the "已记住" card's 改为全局 and 撤销.
+    func makeMemoryGlobal(id: String) async throws
+    func undoMemory(id: String) async throws
     /// Show another task (a reviewer, a parent).
     func openTask(_ taskID: String)
 }
@@ -87,6 +103,32 @@ extension LiveSessionActions {
     }
     public func retryReview(taskID: String) async throws {
         throw LiveSessionError.unsupported("这个宿主不支持审查回环")
+    }
+    public func delegate(taskID: String, contract: LiveDelegationContract) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持委派")
+    }
+    public func stopDelegation(taskID: String, delegationID: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持委派")
+    }
+    public func sendDelegation(taskID: String, delegationID: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持委派")
+    }
+    public func redoDelegation(taskID: String, delegationID: String, note: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持委派")
+    }
+    public func delegationRoles() async throws -> [LiveDelegationRole] { [] }
+    public func delegationCards(taskID: String) async throws -> [LiveDelegationCard] { [] }
+    public func ackDelegationProbes(taskID: String, delegationID: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持委派")
+    }
+    public func remember(taskID: String, text: String, kind: String) async throws -> LiveMemoryItem {
+        throw LiveSessionError.unsupported("这个宿主不支持记忆")
+    }
+    public func makeMemoryGlobal(id: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持记忆")
+    }
+    public func undoMemory(id: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持记忆")
     }
     public func openTask(_ taskID: String) {}
 }
@@ -134,6 +176,10 @@ public final class LiveSessionStore {
     public private(set) var autoCheck: LiveAutoCheckSelection?
     /// B4-1: findings wait for the user before going to the writer.
     public private(set) var reviewPaused = false
+    /// B4-2: the role library, for the composer's `#` suggestions.
+    public private(set) var delegationRoles: [LiveDelegationRole] = []
+    /// B5-1: what the last `/记住` kept (the "已记住" card), until dismissed.
+    public private(set) var remembered: LiveMemoryItem?
 
     @ObservationIgnored private let actions: any LiveSessionActions
     @ObservationIgnored private var baseline = 0
@@ -178,11 +224,13 @@ public final class LiveSessionStore {
             approvals.retain(pending: state.pending)
             await reloadHistory()
             baseline = LiveHistoryMerge.assistantCount(history)
+            await restoreDelegations()
         } catch {
             errorText = "读取会话失败：\(error)"
         }
         autoCheck = try? await actions.autoCheck(taskID: taskID)
         reviewPaused = (try? await actions.reviewPaused(taskID: taskID)) ?? false
+        delegationRoles = (try? await actions.delegationRoles()) ?? []
     }
 
     public func setAutoCheck(_ selection: LiveAutoCheckSelection) async {
@@ -241,8 +289,17 @@ public final class LiveSessionStore {
             approvals.retain(pending: state.pending)
             await reloadHistory()
             baseline = LiveHistoryMerge.assistantCount(history)
+            await restoreDelegations()
         } catch {
             noteConnectionFailure(error)
+        }
+    }
+
+    /// CU F2: cards of this task's delegations that still want the user.
+    private func restoreDelegations() async {
+        guard let cards = try? await actions.delegationCards(taskID: taskID) else { return }
+        for card in cards where card.parentTaskId == taskID && card.wantsUser {
+            model?.restoreDelegation(card)
         }
     }
 
@@ -288,10 +345,79 @@ public final class LiveSessionStore {
                 return .clearedToNewSession
             }
         }
+        if let body = MemoryText.rememberCommand(text) {
+            remembered = try await actions.remember(taskID: taskID, text: body, kind: MemoryText.guessKind(body))
+            return .ranCommand
+        }
+        if let (target, instruction) = DelegationText.hashCommand(text),
+           let contract = delegationContract(target: target, instruction: instruction) {
+            try await actions.delegate(taskID: taskID, contract: contract)
+            return .ranCommand
+        }
         if !turnActive { baseline = LiveHistoryMerge.assistantCount(history) }
         model?.echo(text)
         try await actions.prompt(taskID: taskID, text: text)
         return .sent
+    }
+
+    /// B4-2: "#调研员 …" or "#codex …" as a contract; nil when `target`
+    /// names no role or harness (the text then goes to the agent as typed).
+    func delegationContract(target: String, instruction: String) -> LiveDelegationContract? {
+        if let agent = DelegationText.agent(for: target) {
+            return LiveDelegationContract(instruction: instruction, agent: agent)
+        }
+        let key = target.lowercased()
+        guard let role = delegationRoles.first(where: { $0.id.lowercased() == key || $0.name.lowercased() == key })
+        else { return nil }
+        return LiveDelegationContract(instruction: instruction, role: role.id)
+    }
+
+    /// B5-1: the "已记住" card.
+    public func makeRememberedGlobal() async {
+        guard let item = remembered else { return }
+        do {
+            try await actions.makeMemoryGlobal(id: item.id)
+            remembered?.projectId = nil
+        } catch {
+            errorText = "改为全局失败：\(error)"
+        }
+    }
+
+    public func undoRemembered() async {
+        guard let item = remembered else { return }
+        do {
+            try await actions.undoMemory(id: item.id)
+            remembered = nil
+        } catch {
+            errorText = "撤销失败：\(error)"
+        }
+    }
+
+    public func dismissRemembered() { remembered = nil }
+
+    /// B4-2: the delegation card's actions.
+    public func stopDelegation(_ id: String) async {
+        do { try await actions.stopDelegation(taskID: taskID, delegationID: id) } catch { errorText = "停止委派失败：\(error)" }
+    }
+
+    public func sendDelegation(_ id: String) async {
+        do { try await actions.sendDelegation(taskID: taskID, delegationID: id) } catch { errorText = "发出委派结果失败：\(error)" }
+    }
+
+    public func ackDelegationProbes(_ id: String) async {
+        do {
+            try await actions.ackDelegationProbes(taskID: taskID, delegationID: id)
+        } catch {
+            errorText = "确认探针失败：\(error)"
+        }
+    }
+
+    public func redoDelegation(_ id: String, note: String) async {
+        do {
+            try await actions.redoDelegation(taskID: taskID, delegationID: id, note: note)
+        } catch {
+            errorText = "退回重做失败：\(error)"
+        }
     }
 
     /// B4-1: the review card's and the turn-change row's actions.

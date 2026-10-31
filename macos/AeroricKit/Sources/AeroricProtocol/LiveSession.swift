@@ -80,6 +80,8 @@ public enum LiveUpdateKind: Equatable, Sendable {
     case branchReturned(LiveBranchResult)
     /// B4-1: a step of a review loop; the latest of a `reviewId` replaces the card.
     case review(LiveReviewCard)
+    /// B4-2: a step of a delegation; the latest of a `delegationId` replaces the card.
+    case delegation(LiveDelegationCard)
     /// Kept with its source `type` (or the agent's own kind for host-side unknowns).
     case unknown(kind: String, payload: JSONValue)
 }
@@ -387,6 +389,8 @@ extension LiveUpdateKind {
             return f["result"].flatMap(LiveBranchResult.decode).map { .branchReturned($0) }
         case "review":
             return f["review"].flatMap(LiveReviewCard.decode).map { .review($0) }
+        case "delegation":
+            return f["delegation"].flatMap(LiveDelegationCard.decode).map { .delegation($0) }
         case "unknown":
             guard let kind = string(f, "kind") else { return nil }
             return .unknown(kind: kind, payload: f["payload"] ?? .null)

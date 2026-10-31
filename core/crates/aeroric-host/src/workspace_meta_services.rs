@@ -496,7 +496,21 @@ pub(crate) fn fork_task(
     task_id: &str,
     suffix: &str,
 ) -> Result<String, ForkError> {
+    let new_id = format!("task-{}", uuid::Uuid::new_v4().simple());
+    fork_task_as(context, tasks, task_id, suffix, &new_id)
+}
+
+/// [`fork_task`] with the new task's id chosen by the caller (B4-2: a
+/// delegation knows its child's id before the child exists).
+pub(crate) fn fork_task_as(
+    context: &Arc<CoreContext>,
+    tasks: &TaskService,
+    task_id: &str,
+    suffix: &str,
+    new_id: &str,
+) -> Result<String, ForkError> {
     let task_id = task_id.to_string();
+    let new_id = new_id.to_string();
     let Some(project) = crate::services::find_project_of_task(context, &task_id) else {
         return Err(ForkError::NotFound(
             "no task with that id in any known project",
@@ -534,7 +548,6 @@ pub(crate) fn fork_task(
             .filter(|s| aeroric_core::sessions::live::fork_source(s).is_none())
             .ok_or("这个会话还没有可分叉的对话")?;
         let agent = field("agent").ok_or("会话没有记录 Agent")?;
-        let new_id = format!("task-{}", uuid::Uuid::new_v4().simple());
         tasks
             .create(
                 &project,

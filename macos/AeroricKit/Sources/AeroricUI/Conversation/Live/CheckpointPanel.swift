@@ -17,6 +17,12 @@ public struct CheckpointPanel: View {
     /// B4-1: the task's review loop; nil while it is read (or on a host without one).
     let review: ReviewPanelModel?
     let onReview: (ReviewPanelAction) -> Void
+    /// B4-2: the task's delegations; nil while they are read.
+    let delegation: DelegationPanelModel?
+    let onDelegation: (DelegationPanelAction) -> Void
+    /// B4-3: the board the task works on; nil while it is read.
+    let board: BoardPanelModel?
+    let onBoard: (BoardPanelAction) -> Void
     @State private var constraint = ""
 
     public init(checkpoint: LiveCheckpoint?, errorText: String?, isBranch: Bool,
@@ -24,9 +30,16 @@ public struct CheckpointPanel: View {
                 onSetObligation: @escaping (_ id: String, _ state: String) -> Void,
                 onStartBranch: @escaping () -> Void, onReturnBranch: @escaping () -> Void,
                 onOpenTask: @escaping (String) -> Void,
-                review: ReviewPanelModel? = nil, onReview: @escaping (ReviewPanelAction) -> Void = { _ in }) {
+                review: ReviewPanelModel? = nil, onReview: @escaping (ReviewPanelAction) -> Void = { _ in },
+                delegation: DelegationPanelModel? = nil,
+                onDelegation: @escaping (DelegationPanelAction) -> Void = { _ in },
+                board: BoardPanelModel? = nil, onBoard: @escaping (BoardPanelAction) -> Void = { _ in }) {
+        self.board = board
+        self.onBoard = onBoard
         self.review = review
         self.onReview = onReview
+        self.delegation = delegation
+        self.onDelegation = onDelegation
         self.checkpoint = checkpoint
         self.errorText = errorText
         self.isBranch = isBranch
@@ -74,6 +87,12 @@ public struct CheckpointPanel: View {
                 }
                 if let review {
                     ReviewPanelSection(model: review, onAction: onReview)
+                }
+                if let delegation {
+                    DelegationPanelSection(model: delegation, onAction: onDelegation)
+                }
+                if let board, !board.board.entries.isEmpty || delegation?.delegations.isEmpty == false || board.shared {
+                    BoardPanelSection(model: board, onAction: onBoard)
                 }
                 CheckpointSectionLabel(title: "加一条约束")
                 HStack(spacing: AeroricSpace.m) {

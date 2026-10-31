@@ -63,6 +63,12 @@ final class AppServices {
     let linkedFolderBook = LinkedFolderBook()
     /// SSH hosts (连接 page, open-remote-project sheet), 2026-10-27.
     let sshHostsStore = SshHostsStore()
+    /// B5-1: the memory page (proposals feed its badge and 需要我处理).
+    @ObservationIgnored lazy var memoryStore = MemoryStore(service: HostMemoryService(services: self))
+    /// B5-1 → A19: proposing task id → a memory proposal waiting for the user.
+    var memoryNeeds: [String: AttentionQueue.CheckFailure] = [:]
+    /// B5-1: proposals in every scope (the 记忆 row's badge).
+    var memoryPendingCount = 0
     /// The sidebar's "打开远程项目…" asks the workspace to show its sheet.
     var openRemoteRequested = false
     let keepAwakeStore = KeepAwakeStore()
@@ -100,6 +106,10 @@ final class AppServices {
     var checkFailures: [String: AttentionQueue.CheckFailure] = [:]
     /// B4-1 → A19: task id → its review loop, when that loop needs the user.
     var reviewNeeds: [String: AttentionQueue.CheckFailure] = [:]
+    /// B4-2 → A19: parent task id → a delegation of it that needs the user.
+    var delegationNeeds: [String: AttentionQueue.CheckFailure] = [:]
+    /// B4-3 → A19: board owner → a decision waiting or a stale claim.
+    var boardNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// Group names the 移动到分组 menu offers (host `project.group_names`).
     var projectGroupNames: [String] = []
     @ObservationIgnored private var projectListRetries = 0
@@ -563,6 +573,22 @@ final class AppServices {
 
     /// Sidebar context menu: 归档 / 取消归档 for tasks and imports, 移除 for imports.
     func sessionAction(_ id: String, _ action: SessionRowAction) {
+        if action == .extractMemory {
+            guard let taskID = SessionNavigation.taskID(id), let client = sessionsClient else { return }
+            let project = taskStore.tasks.first { $0.id == taskID }?.projectID
+            Task { @MainActor in
+                do {
+                    _ = try await client.memoryExtract(taskId: taskID)
+                    memoryStore.show(scope: project, tab: .log)
+                    requestedSelection = WorkspaceSection.memory.sidebarID
+                    await memoryStore.reload()
+                    await memoryStore.refreshPending()
+                } catch {
+                    showActionError("整理失败：\(error)")
+                }
+            }
+            return
+        }
         if case .copySessionID = action {
             let session = SessionNavigation.taskID(id).flatMap { taskID in
                 taskStore.tasks.first { $0.id == taskID }?.sessionID
@@ -944,7 +970,8 @@ extension AppServices: WorkspaceStateProviding {
                 id: section.sidebarID,
                 title: section.title,
                 systemImage: section.systemImage,
-                badge: section == .tasks ? openTaskCount : section == .attention ? attentionCount : nil,
+                badge: section == .tasks ? openTaskCount : section == .attention ? attentionCount
+                    : section == .memory ? (memoryPendingCount > 0 ? memoryPendingCount : nil) : nil,
                 group: section.group
             )
         }
@@ -1156,6 +1183,7 @@ extension AppServices: WorkspaceStateProviding {
     /// A19 badge: how many tasks need the user; nil renders no zero.
     var attentionCount: Int? {
         let count = AttentionQueue.items(taskStore.tasks, checkFailures: checkFailures, reviews: reviewNeeds,
+                                         delegations: delegationNeeds, boards: boardNeeds, memories: memoryNeeds,
                                          nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
         return count > 0 ? count : nil
     }
@@ -1179,7 +1207,7 @@ extension AppServices: WorkspaceStateProviding {
         return item
     }
 
-    /// B4-1: a reviewer or a side branch right under its parent (oldest
+    /// B4-1: a reviewer, a side branch or (B4-2) a delegated child right under its parent (oldest
     /// first); one whose parent is not in `tasks` stays where it sorted.
     static func nestedTasks(_ tasks: [TaskStore.TaskEntry]) -> [TaskStore.TaskEntry] {
         let ids = Set(tasks.map(\.id))
@@ -1225,7 +1253,17 @@ extension AppServices: WorkspaceStateProviding {
         NativeHarnessPicker.harnesses.map { AgentChoice(id: $0.id, title: $0.title, harness: $0.id) }
     }
 
+    /// B5-1: show the memory page on a project (项目记忆…, a 需要我处理 row).
+    func openMemory(projectID: String?) {
+        memoryStore.show(scope: projectID, tab: projectID == nil ? .about : .context)
+        requestedSelection = WorkspaceSection.memory.sidebarID
+    }
+
     func projectAction(_ id: String, _ action: ProjectRowAction) {
+        if action == .memory {
+            openMemory(projectID: id)
+            return
+        }
         guard let client = workspaceClient else { return }
         Task { @MainActor in
             do {
@@ -1241,6 +1279,8 @@ extension AppServices: WorkspaceStateProviding {
                     try await client.updateProjectMeta(projectId: id, ["group": group.map { .string($0) } ?? .null])
                 case .remove:
                     try await client.removeProject(projectId: id)
+                case .memory:
+                    break
                 }
             } catch {
                 showActionError("项目操作失败：\(error)")

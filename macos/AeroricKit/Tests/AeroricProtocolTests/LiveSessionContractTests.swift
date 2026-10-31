@@ -18,10 +18,10 @@ final class LiveSessionContractTests: XCTestCase {
 
     func testEveryUpdateKindInTheFixtureDecodesAsKnown() throws {
         let batch = try LiveUpdatesBatch.decode(try fixture()["updates"] ?? .null)
-        XCTAssertEqual(batch.updates.count, 26)
-        XCTAssertEqual(batch.latestSeq, 26)
+        XCTAssertEqual(batch.updates.count, 27)
+        XCTAssertEqual(batch.latestSeq, 27)
         XCTAssertNil(batch.gapOldestAvailable)
-        XCTAssertEqual(batch.updates.map(\.seq), Array(1...26))
+        XCTAssertEqual(batch.updates.map(\.seq), Array(1...27))
         let handoff = batch.updates.compactMap { update -> (String, LiveCheckpoint)? in
             if case let .handoff(reason, checkpoint) = update.kind { return (reason, checkpoint) } else { return nil }
         }.first
@@ -41,6 +41,19 @@ final class LiveSessionContractTests: XCTestCase {
             findings: [LiveReviewFinding(id: "r1", severity: "blocker", text: "重试没有上限，可能死循环",
                                          file: "src/client.rs", line: 88, decision: "adopt")],
             summary: "超时逻辑可行，重试上限缺测试"))))
+        let delegation = batch.updates.compactMap { update -> LiveDelegationCard? in
+            if case let .delegation(card) = update.kind { return card }
+            return nil
+        }.first
+        XCTAssertEqual(delegation?.delegationId, "dg-1")
+        XCTAssertEqual(delegation?.origin, "session")
+        XCTAssertEqual(delegation?.contract.agent, .other)
+        XCTAssertEqual(delegation?.contract.contextMode, "isolated")
+        XCTAssertEqual(delegation?.contract.contextRefs, ["src/client.rs"])
+        XCTAssertEqual(delegation?.contract.budgetMinutes, 30)
+        XCTAssertEqual(delegation?.acceptance, [LiveDelegationAcceptance(id: "a1", text: "给出可运行的示例", state: "open")])
+        XCTAssertEqual(delegation?.tokens, 1200)
+        XCTAssertEqual(delegation?.sent, true)
         XCTAssertEqual(batch.updates[0], LiveSessionUpdate(taskId: "task-1", seq: 1, atMs: 1_761_350_400_000,
                                                            kind: .turnStarted(turnId: "u1")))
         let kinds = batch.updates.map(\.kind)

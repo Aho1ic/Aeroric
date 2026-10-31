@@ -900,6 +900,21 @@ fn pricing_for_request(request: &UsageRequest) -> (ModelPricing, PricingSource) 
     (pricing, source)
 }
 
+/// B5-2: a one-off call's estimated cost in USD, and whether the model's
+/// price is listed (otherwise it is a guess from its name).
+pub fn estimate_cost_usd(model: &str, input_tokens: u64, output_tokens: u64) -> (f64, bool) {
+    let normalized = normalize_model(model);
+    let listed = MODEL_PRICES
+        .iter()
+        .find(|(family, _)| normalized.contains(family))
+        .map(|(_, pricing)| *pricing);
+    let pricing = listed.unwrap_or_else(|| estimated_pricing_for(&normalized));
+    (
+        (input_tokens as f64 * pricing.input + output_tokens as f64 * pricing.output) / 1_000_000.0,
+        listed.is_some(),
+    )
+}
+
 fn estimated_request_cost(request: &UsageRequest) -> (f64, PricingSource) {
     let (pricing, source) = pricing_for_request(request);
     let cost = (request.input_tokens as f64 * pricing.input

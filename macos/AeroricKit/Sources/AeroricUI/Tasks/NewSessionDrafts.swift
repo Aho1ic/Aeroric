@@ -87,6 +87,20 @@ public struct NewSessionDraft: Equatable, Sendable {
         self.submissionID = submissionID
     }
 
+    /// What the composer shows before its scope has a draft. Never a real
+    /// identity: CU 2026-10-31 found the whole-value binding writing it into
+    /// the book, so a second send reused "unopened" and the host answered
+    /// revisionConflict for good.
+    public static let placeholderID = "unopened"
+    public static var placeholder: NewSessionDraft { NewSessionDraft(submissionID: placeholderID) }
+
+    /// An edit that came from the placeholder keeps the book's identity.
+    fileprivate mutating func keepIdentity(of previous: NewSessionDraft) {
+        guard submissionID == Self.placeholderID else { return }
+        submissionID = previous.submissionID
+        submission = previous.submission
+    }
+
     public var isEditable: Bool {
         switch submission {
         case .editing, .failed: true
@@ -252,6 +266,7 @@ public struct NewSessionDraftBook: Equatable, Sendable {
         guard var value = drafts[scope], value.isEditable else { return }
         let previous = value
         update(&value)
+        value.keepIdentity(of: previous)
         if value != previous { value.renewAfterKnownFailure() }
         drafts[scope] = value
     }

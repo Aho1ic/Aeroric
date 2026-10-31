@@ -4,10 +4,12 @@
 //! `TaskExecutor` port so the task service and its reducer stay unchanged.
 
 pub mod auto_check;
+pub mod board;
 pub mod checkpoint;
 pub mod claude;
 pub mod codex;
 pub mod context_server;
+pub mod delegation;
 pub mod executor;
 pub mod omp;
 pub mod remote;

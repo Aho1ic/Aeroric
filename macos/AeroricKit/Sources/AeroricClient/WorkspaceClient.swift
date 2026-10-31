@@ -137,7 +137,7 @@ public struct WorkspaceClient: Sendable {
         public var model: String? = nil
         /// B4-1: the task this one reviews (`reviewOf`) or branched from (`branchOf`).
         public var parentTaskID: String? = nil
-        /// `review` | `branch` when `parentTaskID` is set.
+        /// `review` | `branch` | `delegate` when `parentTaskID` is set.
         public var childKind: String? = nil
     }
 
@@ -194,8 +194,10 @@ public struct WorkspaceClient: Sendable {
             agentConfigID: record["agentConfigId"]?.stringValue,
             harness: harness(record),
             model: record["selectedModel"]?.stringValue,
-            parentTaskID: record["reviewOf"]?.stringValue ?? record["branchOf"]?.stringValue,
-            childKind: record["reviewOf"] != nil ? "review" : (record["branchOf"] != nil ? "branch" : nil)
+            parentTaskID: record["reviewOf"]?.stringValue ?? record["branchOf"]?.stringValue
+                ?? record["delegateOf"]?.stringValue,
+            childKind: record["reviewOf"] != nil ? "review"
+                : (record["branchOf"] != nil ? "branch" : (record["delegateOf"] != nil ? "delegate" : nil))
         )
     }
 

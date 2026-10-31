@@ -31,6 +31,19 @@ private final class FakeLiveActions: LiveSessionActions {
     func close(taskID: String) async throws { calls.append("close") }
     func export(taskID: String) async throws { calls.append("export") }
     func startNewSession(like taskID: String) { calls.append("new-session") }
+    var roles: [LiveDelegationRole] = []
+    func delegate(taskID: String, contract: LiveDelegationContract) async throws {
+        calls.append("delegate \(contract.role ?? "-") \(contract.instruction)")
+    }
+    func delegationRoles() async throws -> [LiveDelegationRole] { roles }
+    var cards: [LiveDelegationCard] = []
+    func delegationCards(taskID: String) async throws -> [LiveDelegationCard] { cards }
+    func remember(taskID: String, text: String, kind: String) async throws -> LiveMemoryItem {
+        calls.append("remember \(kind) \(text)")
+        return LiveMemoryItem(id: "m1", projectId: "p", kind: kind, text: text)
+    }
+    func makeMemoryGlobal(id: String) async throws { calls.append("global \(id)") }
+    func undoMemory(id: String) async throws { calls.append("undo \(id)") }
 }
 
 @MainActor
@@ -74,6 +87,59 @@ final class LiveSessionStoreTests: XCTestCase {
         XCTAssertEqual(store.model?.items, [])
         XCTAssertEqual(store.history, [user, reply])
         XCTAssertTrue(actions.calls.contains("prompt hi"))
+    }
+
+    /// B4-2: "#角色 …" delegates instead of prompting; an unknown name is a message.
+    func testAHashPrefixDelegatesToARole() async {
+        let actions = FakeLiveActions(state: state(seq: 1))
+        actions.roles = [LiveDelegationRole(id: "researcher", name: "调研员")]
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        let delegated = try? await store.send("#调研员 查超时")
+        XCTAssertEqual(delegated, .ranCommand)
+        XCTAssertTrue(actions.calls.contains("delegate researcher 查超时"))
+        let sent = try? await store.send("#无此角色 照常发")
+        XCTAssertEqual(sent, .sent)
+        XCTAssertTrue(actions.calls.contains("prompt #无此角色 照常发"))
+    }
+
+    /// CU F2: an unsent delegation card outlives the turn and comes back on reopen;
+    /// a finished, sent one does not.
+    func testADelegationCardStillWantingTheUserSurvivesHistory() async {
+        func card(_ id: String, sent: Bool) -> LiveDelegationCard {
+            LiveDelegationCard(delegationId: id, parentTaskId: "t", origin: "user", harnessLabel: "Codex",
+                               agent: "codex", contract: LiveDelegationContract(instruction: "查"),
+                               state: "reported", createdMs: 0, sent: sent)
+        }
+        let actions = FakeLiveActions(state: state(seq: 1))
+        actions.cards = [card("dg-unsent", sent: false), card("dg-done", sent: true)]
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        let ids = { store.model?.items.compactMap { item -> String? in
+            if case let .delegation(id, _) = item { return id } else { return nil }
+        } ?? [] }
+        XCTAssertEqual(ids(), ["dg-unsent"])
+        var model = store.model!
+        model.echo("下一轮")
+        model.clearItems()
+        XCTAssertEqual(model.items.map(\.id), ["delegation:dg-unsent"])
+    }
+
+    /// B5-1: `/记住` is kept by Aeroric and never reaches the agent.
+    func testRememberIsKeptNotSent() async {
+        let actions = FakeLiveActions(state: state(seq: 1))
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        let kept = try? await store.send("/记住 回复一律用简体中文")
+        XCTAssertEqual(kept, .ranCommand)
+        XCTAssertTrue(actions.calls.contains("remember profile 回复一律用简体中文"))
+        XCTAssertFalse(actions.calls.contains { $0.hasPrefix("prompt") })
+        XCTAssertEqual(store.remembered?.projectId, "p")
+        await store.makeRememberedGlobal()
+        XCTAssertNil(store.remembered?.projectId)
+        await store.undoRemembered()
+        XCTAssertNil(store.remembered)
+        XCTAssertEqual(actions.calls.suffix(2), ["global m1", "undo m1"])
     }
 
     func testAGapRereadsStateAndHistory() async {

@@ -27,6 +27,8 @@ import SwiftUI
 /// `SidebarItem` in one of the four groups, and the grouping is what carries
 /// the hierarchy the flat strip had lost.
 enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
+    /// B5-1: long-term memory, at the top of the sidebar (Q-M7 b).
+    case memory
     case tasks
     /// A19: tasks waiting on the user, and recent failures.
     case attention
@@ -45,6 +47,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     /// the sidebar row model carries text, not view builders.
     var title: String {
         switch self {
+        case .memory: "记忆"
         case .tasks: "任务"
         case .attention: "需要我处理"
         case .canvas: "画布"
@@ -67,6 +70,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     /// Leading glyph for the navigation row.
     var systemImage: String {
         switch self {
+        case .memory: "brain"
         case .tasks: "checklist"
         case .attention: "bell.badge"
         case .canvas: "square.on.square.dashed"
@@ -89,7 +93,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     /// Agent tools gets real data today; the rest explain what they will do.
     var status: ToolSectionStatus {
         switch self {
-        case .tasks, .attention, .canvas, .agentConfigs: .wired
+        case .tasks, .attention, .canvas, .agentConfigs, .memory: .wired
         case .connections: .wired
         case .infrastructure: .comingSoon("Docker 容器与镜像、端口占用、Conda 环境。")
         case .database: .comingSoon("SQLite、Redis、MongoDB 的浏览与查询。")
@@ -102,7 +106,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
 
     var group: SidebarGroup {
         switch self {
-        case .tasks, .attention, .canvas, .agentConfigs: .work
+        case .tasks, .attention, .canvas, .agentConfigs, .memory: .work
         case .database, .notebook: .tools
         case .connections, .infrastructure, .extensions, .remote, .operations: .system
         }
@@ -175,6 +179,12 @@ struct TaskWorkspaceView: View {
     /// B4-1: the selected task's review loop, read with its checkpoint.
     @State private var reviewPanel: ReviewPanelModel?
     @State private var reviewPanelTask: String?
+    /// B4-2: the selected task's delegations, read with its checkpoint.
+    @State private var delegationPanel: DelegationPanelModel?
+    @State private var delegationPanelTask: String?
+    /// B4-3: the board the selected task works on.
+    @State private var boardPanel: BoardPanelModel?
+    @State private var boardPanelTask: String?
 
     /// Which surface the selected navigation row names. A project row or an
     /// empty selection is the task surface — the app's default view.
@@ -596,6 +606,47 @@ struct TaskWorkspaceView: View {
                     case .request:
                         Task { await checkpointAction { try await $0.reviewAction("review.request", taskId: taskID) } }
                     }
+                },
+                delegation: delegationPanelTask == taskID ? delegationPanel : nil,
+                onDelegation: { action in
+                    switch action {
+                    case let .open(id):
+                        services.requestedSelection = SessionNavigation.task(id)
+                    case let .start(contract):
+                        Task {
+                            await checkpointAction { client in
+                                try await client.startDelegation(taskId: taskID, contract: contract)
+                                await services.refreshWorkspace()
+                            }
+                            await loadDelegations(taskID)
+                        }
+                    case let .saveRole(role):
+                        Task {
+                            await checkpointAction { try await $0.saveDelegationRole(role) }
+                            await loadDelegations(taskID)
+                        }
+                    case let .deleteRole(id):
+                        Task {
+                            await checkpointAction { try await $0.deleteDelegationRole(id: id) }
+                            await loadDelegations(taskID)
+                        }
+                    }
+                },
+                board: boardPanelTask == taskID ? boardPanel : nil,
+                onBoard: { action in
+                    Task {
+                        await checkpointAction { client in
+                            switch action {
+                            case let .add(kind, text):
+                                try await client.writeBoard(taskId: taskID, kind: kind, text: text)
+                            case let .setState(id, state):
+                                try await client.writeBoard(taskId: taskID, id: id, state: state)
+                            case let .decide(id, accept):
+                                try await client.decideBoard(taskId: taskID, entryId: id, accept: accept)
+                            }
+                        }
+                        await loadBoard(taskID)
+                    }
                 }
             )
             .task(id: progressRefreshKey) {
@@ -625,6 +676,8 @@ struct TaskWorkspaceView: View {
         } catch {
             checkpointError = "读取检查点失败：\(error)"
         }
+        await loadDelegations(taskID)
+        await loadBoard(taskID)
         // B4-1: the review loop beside it; who can review is read once per task.
         guard let review = try? await client.review(taskId: taskID) else { return }
         var next = ReviewPanelModel(settings: review.settings, card: review.card, reviewOf: review.reviewOf)
@@ -637,6 +690,27 @@ struct TaskWorkspaceView: View {
         }
         reviewPanel = next
         reviewPanelTask = taskID
+    }
+
+    /// B4-3: the board the task works on.
+    private func loadBoard(_ taskID: String) async {
+        guard let client = services.sessionsClient, let read = try? await client.board(taskId: taskID) else { return }
+        boardPanel = BoardPanelModel(board: read.board, shared: read.shared)
+        boardPanelTask = taskID
+    }
+
+    /// B4-2: the task's delegations, the role library, track records and its audit.
+    private func loadDelegations(_ taskID: String) async {
+        guard let client = services.sessionsClient,
+              let read = try? await client.delegations(taskId: taskID) else { return }
+        var next = DelegationPanelModel(delegations: read.cards, delegateOf: read.delegateOf)
+        if read.delegateOf == nil {
+            next.roles = (try? await client.delegationRoles()) ?? []
+            next.stats = (try? await client.delegationStats()) ?? []
+            next.audit = (try? await client.delegationAudit(taskId: taskID)) ?? []
+        }
+        delegationPanel = next
+        delegationPanelTask = taskID
     }
 
     private func checkpointAction(_ run: (SessionsClient) async throws -> Void) async {
@@ -673,13 +747,28 @@ struct TaskWorkspaceView: View {
                 AttentionListView(
                     items: AttentionQueue.items(services.taskStore.tasks, checkFailures: services.checkFailures,
                                                 reviews: services.reviewNeeds,
+                                                delegations: services.delegationNeeds,
+                                                boards: services.boardNeeds,
+                                                memories: services.memoryNeeds,
                                                 nowMs: UInt64(Date().timeIntervalSince1970 * 1000)),
                     projectName: { id in services.taskStore.projects.first { $0.id == id }?.name },
-                    onOpen: { selection = SessionNavigation.task($0) }
+                    onOpen: { selection = SessionNavigation.task($0) },
+                    onOpenItem: { item in
+                        guard item.reason == .memoryNeedsYou else { return false }
+                        services.openMemory(projectID: item.task.projectID)
+                        return true
+                    }
                 )
                 .opacity(previewActive ? 0 : 1)
                 .allowsHitTesting(!previewActive)
                 .accessibilityHidden(previewActive)
+            } else if activeSection == .memory {
+                MemoryPage(store: services.memoryStore,
+                           projects: services.taskStore.projects.map { (id: $0.id, name: $0.name) },
+                           onOpenTask: { selection = SessionNavigation.task($0) })
+                    .opacity(previewActive ? 0 : 1)
+                    .allowsHitTesting(!previewActive)
+                    .accessibilityHidden(previewActive)
             } else if activeSection == .agentConfigs {
                 AgentConfigPage(store: services.agentConfigStore)
                     .opacity(previewActive ? 0 : 1)
@@ -1006,7 +1095,7 @@ struct TaskWorkspaceView: View {
 
     private func composer(_ scope: SessionDraftScope) -> some View {
         let project = services.taskStore.projects.first { $0.id == scope.projectID }
-        let value = draftBook[scope] ?? NewSessionDraft(submissionID: "unopened")
+        let value = draftBook[scope] ?? NewSessionDraft.placeholder
         // 2026-10-28: no project chosen yet still offers every harness — the
         // first local project's catalog stands in (the configurations are the
         // user's, not the project's); submitting still asks for a project.
@@ -1016,7 +1105,7 @@ struct TaskWorkspaceView: View {
         let reasons = sessionBlockingReasons(value, scope: scope)
         return NewSessionHome(
             draft: Binding(
-                get: { draftBook[scope] ?? NewSessionDraft(submissionID: "unopened") },
+                get: { draftBook[scope] ?? NewSessionDraft.placeholder },
                 set: { value in draftBook.edit(scope) { $0 = value } }
             ),
             projectID: project?.id,
@@ -1189,7 +1278,7 @@ struct TaskWorkspaceView: View {
     @ViewBuilder
     private var sectionContent: some View {
         switch activeSection {
-        case .tasks, .attention, .canvas, .agentConfigs, .connections:
+        case .tasks, .attention, .canvas, .agentConfigs, .connections, .memory:
             EmptyView() // Mounted directly by centralContent.
         case .infrastructure:
             HSplitView {

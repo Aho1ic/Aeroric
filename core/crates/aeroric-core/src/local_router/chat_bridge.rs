@@ -3,6 +3,86 @@ use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
+/// Codex 0.163 groups each MCP server's tools as
+/// `{"type":"namespace","name":ns,"tools":[{"type":"function","name":…}]}` and
+/// a call to one comes back as `function_call` with `namespace` + `name`.
+/// Chat has no namespaces (2026-10-31, CU F1: the bridge dropped them, so a
+/// gateway model never saw the Aeroric context tools): each tool becomes one
+/// function named [`flat_tool_name`], and a call is split back with this map
+/// (flat name → namespace, name).
+pub type ToolNamespaces = std::collections::HashMap<String, (String, String)>;
+
+pub fn flat_tool_name(namespace: &str, name: &str) -> String {
+    if namespace.ends_with("__") {
+        format!("{namespace}{name}")
+    } else {
+        format!("{namespace}__{name}")
+    }
+}
+
+/// The namespaced tools a Responses request offers.
+pub fn tool_namespaces(body: &Value) -> ToolNamespaces {
+    let mut map = ToolNamespaces::new();
+    for tool in body
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if tool.get("type").and_then(Value::as_str) != Some("namespace") {
+            continue;
+        }
+        let Some(namespace) = tool.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        for inner in tool
+            .get("tools")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(name) = inner.get("name").and_then(Value::as_str) {
+                map.insert(
+                    flat_tool_name(namespace, name),
+                    (namespace.to_string(), name.to_string()),
+                );
+            }
+        }
+    }
+    map
+}
+
+/// Put `namespace` back on the function calls of a converted response.
+pub fn restore_tool_namespaces(response: &mut Value, namespaces: &ToolNamespaces) {
+    if namespaces.is_empty() {
+        return;
+    }
+    for item in response
+        .get_mut("output")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        split_call_name(item, namespaces);
+    }
+}
+
+fn split_call_name(item: &mut Value, namespaces: &ToolNamespaces) {
+    if item.get("type").and_then(Value::as_str) != Some("function_call") {
+        return;
+    }
+    let Some((namespace, name)) = item
+        .get("name")
+        .and_then(Value::as_str)
+        .and_then(|flat| namespaces.get(flat))
+        .cloned()
+    else {
+        return;
+    };
+    item["name"] = Value::String(name);
+    item["namespace"] = Value::String(namespace);
+}
+
 pub fn responses_to_chat(body: &Value) -> Value {
     let mut messages = Vec::new();
     let instructions = text_from_content(body.get("instructions").unwrap_or(&Value::Null));
@@ -318,8 +398,12 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
             let Some(name) = item.get("name").and_then(Value::as_str) else {
                 continue;
             };
+            let flat;
             let name = if item_type == Some("tool_search_call") {
                 "tool_search"
+            } else if let Some(namespace) = item.get("namespace").and_then(Value::as_str) {
+                flat = flat_tool_name(namespace, name);
+                flat.as_str()
             } else {
                 name
             };
@@ -462,9 +546,29 @@ fn response_tools_to_chat(tools: &Value) -> Vec<Value> {
     let Some(tools) = tools.as_array() else {
         return Vec::new();
     };
+    let mut flat = Vec::new();
+    for tool in tools {
+        if tool.get("type").and_then(Value::as_str) == Some("namespace") {
+            let namespace = tool.get("name").and_then(Value::as_str).unwrap_or_default();
+            for inner in tool
+                .get("tools")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let mut inner = inner.clone();
+                if let Some(name) = inner.get("name").and_then(Value::as_str) {
+                    inner["name"] = Value::String(flat_tool_name(namespace, name));
+                }
+                flat.push(inner);
+            }
+        } else {
+            flat.push(tool.clone());
+        }
+    }
     let mut converted = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for tool in tools {
+    for tool in &flat {
         let tool = if let Some(name) = tool.as_str() {
             json!({"type":"custom","name":name})
         } else {
@@ -675,6 +779,7 @@ struct ToolState {
     id: String,
     call_id: String,
     name: String,
+    namespace: Option<String>,
     arguments: String,
     output_index: usize,
 }
@@ -687,6 +792,7 @@ pub struct ChatSseTransformer {
     text: String,
     reasoning: String,
     tools: BTreeMap<usize, ToolState>,
+    namespaces: ToolNamespaces,
     call_indexes: super::bridge_common::CallIndexer,
     usage: Option<Value>,
     started: bool,
@@ -705,6 +811,7 @@ impl ChatSseTransformer {
             text: String::new(),
             reasoning: String::new(),
             tools: BTreeMap::new(),
+            namespaces: ToolNamespaces::new(),
             call_indexes: Default::default(),
             usage: None,
             started: false,
@@ -712,6 +819,12 @@ impl ChatSseTransformer {
             reasoning_started: false,
             finished: false,
         }
+    }
+
+    /// The request's namespaced tools, so their calls go back split.
+    pub fn with_namespaces(mut self, namespaces: ToolNamespaces) -> Self {
+        self.namespaces = namespaces;
+        self
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> Vec<Bytes> {
@@ -796,6 +909,15 @@ impl ChatSseTransformer {
                 // 行为一致 —— 旧代码在 vacant 分支里无条件 insert,后面的
                 // get_mut().expect() 其实不可达,并没有修掉真实的 panic 路径。
                 let is_new = !self.tools.contains_key(&index);
+                let flat = function
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("tool")
+                    .to_string();
+                let (name, namespace) = match self.namespaces.get(&flat) {
+                    Some((namespace, name)) => (name.clone(), Some(namespace.clone())),
+                    None => (flat, None),
+                };
                 let state = self.tools.entry(index).or_insert_with(|| ToolState {
                     id: call
                         .get("id")
@@ -807,28 +929,29 @@ impl ChatSseTransformer {
                         .and_then(Value::as_str)
                         .map(str::to_string)
                         .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple())),
-                    name: function
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("tool")
-                        .to_string(),
+                    name,
+                    namespace,
                     arguments: String::new(),
                     output_index: index + usize::from(self.text_started),
                 });
                 if is_new {
+                    let mut item = json!({
+                        "id":state.id,
+                        "type":"function_call",
+                        "status":"in_progress",
+                        "call_id":state.call_id,
+                        "name":state.name,
+                        "arguments":""
+                    });
+                    if let Some(namespace) = &state.namespace {
+                        item["namespace"] = Value::String(namespace.clone());
+                    }
                     emit_event(
                         "response.output_item.added",
                         json!({
                             "type":"response.output_item.added",
                             "output_index":state.output_index,
-                            "item":{
-                                "id":state.id,
-                                "type":"function_call",
-                                "status":"in_progress",
-                                "call_id":state.call_id,
-                                "name":state.name,
-                                "arguments":""
-                            }
+                            "item":item
                         }),
                         output,
                     );
@@ -1002,7 +1125,7 @@ impl ChatSseTransformer {
             items.push(item);
         }
         for state in self.tools.values() {
-            let item = json!({
+            let mut item = json!({
                 "id":state.id,
                 "type":"function_call",
                 "status":"completed",
@@ -1010,6 +1133,9 @@ impl ChatSseTransformer {
                 "name":state.name,
                 "arguments":state.arguments
             });
+            if let Some(namespace) = &state.namespace {
+                item["namespace"] = Value::String(namespace.clone());
+            }
             emit_event(
                 "response.function_call_arguments.done",
                 json!({
@@ -1306,5 +1432,76 @@ mod tests {
         assert!(text.contains("\"delta\":\"lo\""));
         assert!(text.contains("response.completed"));
         assert!(text.contains("\"input_tokens\":3"));
+    }
+
+    /// CU F1 (2026-10-31): Codex 0.163 offers MCP tools inside a namespace;
+    /// a Chat upstream sees each as a function and its call goes back split.
+    #[test]
+    fn namespaced_mcp_tools_reach_chat_and_come_back_split() {
+        let body = json!({
+            "model":"m",
+            "input":[
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"委派"}]},
+                {"type":"function_call","call_id":"c0","namespace":"mcp__aeroric_context__",
+                 "name":"board_read","arguments":"{}"},
+                {"type":"function_call_output","call_id":"c0","output":"空"}
+            ],
+            "tools":[
+                {"type":"function","name":"shell","parameters":{"type":"object"}},
+                {"type":"namespace","name":"mcp__aeroric_context__","description":"Aeroric",
+                 "tools":[{"type":"function","name":"delegate","description":"委派",
+                           "parameters":{"type":"object","properties":{}},"defer_loading":true},
+                          {"type":"function","name":"board_read","parameters":{"type":"object"}}]}
+            ]
+        });
+        let chat = responses_to_chat(&body);
+        let names: Vec<&str> = chat["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "shell",
+                "mcp__aeroric_context__delegate",
+                "mcp__aeroric_context__board_read"
+            ]
+        );
+        let history = chat["messages"].to_string();
+        assert!(
+            history.contains("mcp__aeroric_context__board_read"),
+            "{history}"
+        );
+
+        let namespaces = tool_namespaces(&body);
+        let payload = json!({"choices":[{"message":{"role":"assistant","content":null,
+            "tool_calls":[{"id":"c1","type":"function","function":{
+                "name":"mcp__aeroric_context__delegate","arguments":"{}"}}]}}]});
+        let mut response = chat_response_to_responses(&payload, "m");
+        restore_tool_namespaces(&mut response, &namespaces);
+        let call = &response["output"][0];
+        assert_eq!(call["name"], "delegate");
+        assert_eq!(call["namespace"], "mcp__aeroric_context__");
+
+        let mut transformer = ChatSseTransformer::new("m").with_namespaces(namespaces);
+        let mut events = transformer.push(
+            b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c2\",\"function\":{\"name\":\"mcp__aeroric_context__board_read\",\"arguments\":\"{}\"}}]}}]}\n\n",
+        );
+        events.extend(transformer.push(b"data: [DONE]\n\n"));
+        let text: String = events
+            .iter()
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .collect();
+        assert!(
+            text.contains("\"namespace\":\"mcp__aeroric_context__\""),
+            "{text}"
+        );
+        assert!(text.contains("\"name\":\"board_read\""), "{text}");
+        assert!(
+            !text.contains("\"name\":\"mcp__aeroric_context__board_read\""),
+            "{text}"
+        );
     }
 }

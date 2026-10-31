@@ -329,6 +329,12 @@ public struct LiveSessionView: View {
                        onRetry: { Task { await store.retryReview() } },
                        onPause: { paused in Task { await store.setReviewPaused(paused) } },
                        onOpen: { store.openTask($0) })
+        case let .delegation(_, card):
+            DelegationCard(card: card, onOpen: { store.openTask($0) },
+                           onSend: { Task { await store.sendDelegation(card.delegationId) } },
+                           onStop: { Task { await store.stopDelegation(card.delegationId) } },
+                           onRedo: { note in Task { await store.redoDelegation(card.delegationId, note: note) } },
+                           onAck: { Task { await store.ackDelegationProbes(card.delegationId) } })
         case let .unknown(_, kind):
             LiveNoticeRow(message: "未识别的内容：\(kind)", recoverable: true)
         }
@@ -418,6 +424,7 @@ public struct LiveSessionView: View {
             // closed), and the 统计栏 always last, right under it — a session
             // that has ended keeps its figures.
             VStack(spacing: AeroricSpace.xs) {
+                if let item = store.remembered { RememberedCard(item: item, store: store) }
                 if let blocked = store.state?.resumeBlocked, store.state?.live == false {
                     Label(blocked, systemImage: "lock")
                         .font(.system(size: AeroricType.secondary))
@@ -446,8 +453,38 @@ public struct LiveSessionView: View {
         return SessionStatsBar(usage: usage, stats: stats, turns: counts.turns, steps: counts.steps)
     }
 
+    /// B4-2: "#…" offers the roles and harnesses a delegation can go to.
+    private var hashSuggestions: [String] { DelegationText.suggestions(draft, roles: store.delegationRoles) }
+
+    private var hashList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(hashSuggestions, id: \.self) { name in
+                Button {
+                    draft = "#\(name) "
+                } label: {
+                    HStack {
+                        Text("#\(name)").font(AeroricType.mono(AeroricType.code))
+                        Text(store.delegationRoles.first { $0.name == name }?.description ?? "交给这个 Harness 做")
+                            .foregroundStyle(AeroricColor.textTertiary)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .font(.system(size: AeroricType.secondary))
+                    .padding(.horizontal, AeroricSpace.m)
+                    .frame(height: 26)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(AeroricSpace.s)
+        .glassSurface(.popover, in: AeroricRadius.shape(AeroricRadius.m))
+        .accessibilityIdentifier("session.live.delegate")
+    }
+
     @ViewBuilder private var composer: some View {
         if !suggestions.isEmpty { suggestionList }
+        if !hashSuggestions.isEmpty { hashList }
         ComposerCard(
             text: $draft, placeholder: store.turnActive ? "补充说明会发给正在进行的这一轮…" : "继续对话，或输入 / 使用命令",
             isEditable: store.state != nil, sendState: sendState, identifierPrefix: "session.live",
@@ -690,5 +727,44 @@ struct FooterFade: View {
         }
         .padding(.top, -Self.height)
         .allowsHitTesting(false)
+    }
+}
+
+/// B5-1: what `/记住` kept — it did not go to the model, and sessions that
+/// start or resume from now on carry it.
+private struct RememberedCard: View {
+    let item: LiveMemoryItem
+    let store: LiveSessionStore
+
+    var body: some View {
+        HStack(spacing: AeroricSpace.m) {
+            Image(systemName: "brain")
+                .foregroundStyle(AeroricColor.accent)
+            Text("已记住 · \(item.projectId == nil ? "全局" : "本项目")：\(item.text)")
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help("没有发给模型；之后新开或恢复的会话会带上这条")
+            if item.projectId != nil {
+                Button("改为全局") { Task { await store.makeRememberedGlobal() } }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .fixedSize()
+            }
+            Button("撤销") { Task { await store.undoRemembered() } }
+                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                .fixedSize()
+            Button {
+                store.dismissRemembered()
+            } label: {
+                Image(systemName: "xmark").foregroundStyle(AeroricColor.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭")
+        }
+        .font(.system(size: AeroricType.secondary))
+        .padding(.horizontal, AeroricSpace.l)
+        .frame(height: 34)
+        .glassSurface(.floatingCard, in: Capsule(style: .continuous))
+        .accessibilityIdentifier("session.live.remembered")
     }
 }

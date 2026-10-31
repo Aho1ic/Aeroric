@@ -17,6 +17,21 @@ final class ApprovedSessionDraftTests: XCTestCase {
         XCTAssertEqual(book[.global]?.capabilities, SessionCapabilities())
     }
 
+    /// CU 2026-10-31: the composer edits a cleared scope through a binding
+    /// that hands back the whole placeholder; the book keeps a real identity.
+    func testAPlaceholderEditNeverBecomesTheSubmissionIdentity() {
+        var book = NewSessionDraftBook()
+        var shown = book[.project("a")] ?? NewSessionDraft.placeholder
+        shown.task.prompt = "第二个会话"
+        book.edit(.project("a")) { $0 = shown }
+        let kept = book[.project("a")]
+        XCTAssertEqual(kept?.task.prompt, "第二个会话")
+        XCTAssertNotEqual(kept?.submissionID, NewSessionDraft.placeholderID)
+        let first = kept?.submissionID
+        book.edit(.project("a")) { $0.task.prompt = "改一下" }
+        XCTAssertEqual(book[.project("a")]?.submissionID, first, "an ordinary edit keeps it")
+    }
+
     func testFirstCapabilitiesOffAndSuccessPreferencesStayWithinProject() throws {
         var book = NewSessionDraftBook()
         book.open(.project("a"))

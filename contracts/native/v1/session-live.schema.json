@@ -1012,6 +1012,224 @@
             },
             {
               "properties": {
+                "delegation": {
+                  "properties": {
+                    "acceptance": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "enum": [
+                              "open",
+                              "passed",
+                              "failed",
+                              "unknown"
+                            ]
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "text",
+                          "state"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "additions": {
+                      "type": "integer"
+                    },
+                    "agent": {
+                      "type": "string"
+                    },
+                    "childTaskId": {
+                      "type": "string"
+                    },
+                    "contract": {
+                      "properties": {
+                        "acceptance": {
+                          "items": {
+                            "properties": {
+                              "check": {
+                                "type": "string"
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "text"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "agent": {},
+                        "budget": {
+                          "properties": {
+                            "minutes": {
+                              "type": "integer"
+                            },
+                            "tokens": {
+                              "type": "integer"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "contextMode": {
+                          "enum": [
+                            "fork",
+                            "brief",
+                            "isolated"
+                          ]
+                        },
+                        "contextRefs": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "instruction": {
+                          "type": "string"
+                        },
+                        "permission": {
+                          "type": "string"
+                        },
+                        "role": {
+                          "type": "string"
+                        },
+                        "workspace": {
+                          "enum": [
+                            "readOnly",
+                            "shared"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "instruction",
+                        "agent",
+                        "contextMode",
+                        "permission",
+                        "workspace"
+                      ],
+                      "type": "object"
+                    },
+                    "createdMs": {
+                      "type": "integer"
+                    },
+                    "delegationId": {
+                      "type": "string"
+                    },
+                    "deletions": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "evidence": {
+                      "type": "boolean"
+                    },
+                    "files": {
+                      "type": "integer"
+                    },
+                    "finishedMs": {
+                      "type": "integer"
+                    },
+                    "harnessLabel": {
+                      "type": "string"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "origin": {
+                      "enum": [
+                        "user",
+                        "session"
+                      ]
+                    },
+                    "parentTaskId": {
+                      "type": "string"
+                    },
+                    "probes": {
+                      "items": {
+                        "properties": {
+                          "acknowledged": {
+                            "type": "boolean"
+                          },
+                          "atMs": {
+                            "type": "integer"
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "detail",
+                          "atMs"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "result": {
+                      "type": "string"
+                    },
+                    "reworks": {
+                      "type": "integer"
+                    },
+                    "roleName": {
+                      "type": "string"
+                    },
+                    "sent": {
+                      "type": "boolean"
+                    },
+                    "state": {
+                      "enum": [
+                        "starting",
+                        "running",
+                        "checking",
+                        "reported",
+                        "failed",
+                        "stopped",
+                        "overBudget",
+                        "interrupted"
+                      ]
+                    },
+                    "tokens": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "delegationId",
+                    "parentTaskId",
+                    "origin",
+                    "contract",
+                    "state",
+                    "createdMs"
+                  ],
+                  "type": "object"
+                },
+                "type": {
+                  "const": "delegation"
+                }
+              },
+              "required": [
+                "type",
+                "delegation"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "message": {
                   "type": "string"
                 },
