@@ -33,6 +33,10 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     set.register(wire::LIST_METHOD, blocking(live, memory_list));
     set.register(wire::REMEMBER_METHOD, blocking(live, memory_remember));
     set.register(wire::CONFIRM_METHOD, blocking(live, memory_confirm));
+    set.register(
+        wire::CONFIRM_MANY_METHOD,
+        blocking(live, memory_confirm_many),
+    );
     set.register(wire::ARCHIVE_METHOD, blocking(live, memory_archive));
     set.register(wire::PIN_METHOD, blocking(live, memory_pin));
     set.register(wire::MOVE_METHOD, blocking(live, memory_move));
@@ -54,6 +58,14 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     set.register(wire::SETTINGS_METHOD, blocking(live, memory_settings));
     set.register(wire::RUNS_METHOD, blocking(live, memory_runs));
     set.register(wire::MODELS_METHOD, blocking(live, memory_models));
+    set.register(
+        wire::HISTORY_PLAN_METHOD,
+        blocking(live, memory_history_plan),
+    );
+    set.register(
+        wire::EXTRACT_IMPORTED_METHOD,
+        blocking(live, memory_extract_imported),
+    );
     set.register(wire::EXTRACT_METHOD, blocking(live, memory_extract));
     set.register(
         wire::IMPORT_NATIVE_METHOD,
@@ -61,6 +73,11 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     );
     set.register("memory.sweep", blocking(live, memory_sweep));
     set.register(wire::FEEDBACK_METHOD, blocking(live, memory_feedback));
+    set.register(wire::PROPOSALS_METHOD, blocking(live, skill_proposals));
+    set.register(wire::PROPOSAL_EDIT_METHOD, blocking(live, skill_edit));
+    set.register(wire::PROPOSAL_DECIDE_METHOD, blocking(live, skill_decide));
+    set.register(wire::SKILL_VERSION_METHOD, blocking(live, skill_version));
+    set.register(wire::SKILL_DISABLE_METHOD, blocking(live, skill_disable));
     set.register("context.memoryFeedback", blocking(live, context_feedback));
     start_sweeper(live);
 }
@@ -196,6 +213,26 @@ fn memory_confirm(live: &Live, request: &Request) -> Frame {
     answer(request, result, "item")
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ManyParams {
+    ids: Vec<String>,
+    accept: bool,
+}
+
+/// `memory.confirmMany {ids, accept}`: 全部确认 / 全部拒绝.
+fn memory_confirm_many(live: &Live, request: &Request) -> Frame {
+    let p: ManyParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let result = live
+        .executor
+        .memory()
+        .confirm_many(&p.ids, p.accept, now_ms());
+    answer(request, result, "decided")
+}
+
 /// `memory.archive {id, archived}`.
 fn memory_archive(live: &Live, request: &Request) -> Frame {
     let p = match id_params(request) {
@@ -259,7 +296,23 @@ fn memory_forget(live: &Live, request: &Request) -> Frame {
 
 /// `memory.attention {}`: proposals waiting for the user.
 fn memory_attention(live: &Live, request: &Request) -> Frame {
-    answer(request, live.executor.memory().attention(), "items")
+    let memory = live.executor.memory();
+    match memory.attention() {
+        // B5-3b: skill proposals waiting for the user come along.
+        Ok(items) => ok(
+            request,
+            json!({
+                "items": items,
+                "proposals": memory
+                    .proposals()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|p| p.state == wire::SkillProposalState::Pending)
+                    .collect::<Vec<_>>(),
+            }),
+        ),
+        Err(error) => memory_failure(request, error),
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -664,7 +717,6 @@ fn memory_models(live: &Live, request: &Request) -> Frame {
 /// Extract one session: the conversation from its transcript, the call over
 /// the chosen connection with its stored key.
 fn extract_task(live: &Live, task_id: &str, forced: bool) -> Result<wire::MemoryRun, String> {
-    use aeroric_core::agent_connections::store;
     let (project, record) = live.record(task_id).ok_or("没有这个会话")?;
     let project_id = project
         .get("id")
@@ -681,11 +733,31 @@ fn extract_task(live: &Live, task_id: &str, forced: bool) -> Result<wire::Memory
                 .iter()
                 .all(|o| o.state == aeroric_protocol::checkpoint::ObligationState::Passed)
     });
-    let memory = live.executor.memory();
-    let settings = memory.settings();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    live.executor.memory().extract_session(
+        memory::run::Session {
+            task_id,
+            project_id: &project_id,
+            title: &title,
+            messages: &messages,
+            forced,
+            verified,
+        },
+        home.as_deref(),
+        analysis_call(live),
+        now_ms(),
+    )
+}
+
+/// The analysis model over the chosen connection with its stored key.
+fn analysis_call(
+    live: &Live,
+) -> impl FnOnce(&str, &str) -> Result<aeroric_core::settings::model_detect::ChatOnce, String> {
+    use aeroric_core::agent_connections::store;
+    let settings = live.executor.memory().settings();
     let data = live.context.paths.data_dir().to_path_buf();
     let secrets = Arc::clone(&live.context.secrets);
-    let call = move |system: &str, user: &str| {
+    move |system: &str, user: &str| {
         let id = settings.connection_id.clone().ok_or("没有选连接")?;
         let model = settings.model.clone().ok_or("没有选模型")?;
         let doc = store::load(&store::document_path(&data))?;
@@ -704,21 +776,106 @@ fn extract_task(live: &Live, task_id: &str, forced: bool) -> Result<wire::Memory
             user,
             1200,
         ))
+    }
+}
+
+fn imports(live: &Live) -> aeroric_core::sessions::import::ImportStore {
+    aeroric_core::sessions::import::ImportStore::new(live.context.paths.data_dir())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HistoryPlanParams {
+    project_id: String,
+    #[serde(default)]
+    since_ms: Option<u64>,
+}
+
+/// `memory.historyPlan {projectId, sinceMs?}` (Q4): the project's imported
+/// sessions since then and what extracting them would cost. Reads only the
+/// import index; no session text, no model call.
+fn memory_history_plan(live: &Live, request: &Request) -> Frame {
+    let p: HistoryPlanParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
     };
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    memory.extract_session(
-        memory::run::Session {
-            task_id,
-            project_id: &project_id,
-            title: &title,
-            messages: &messages,
-            forced,
-            verified,
-        },
-        home.as_deref(),
-        call,
-        now_ms(),
-    )
+    let sources: Vec<_> = imports(live)
+        .visible()
+        .into_iter()
+        .filter(|s| s.project_id.as_deref() == Some(p.project_id.as_str()))
+        .filter(|s| p.since_ms.is_none_or(|since| s.last_at_ms >= since))
+        .map(|s| memory::run::HistorySource {
+            agent: s.agent.as_str().to_string(),
+            bytes: s.marker.size,
+            id: s.id,
+            title: s.title,
+            last_at_ms: s.last_at_ms,
+        })
+        .collect();
+    let plan = live
+        .executor
+        .memory()
+        .history_plan(&p.project_id, &sources, now_ms());
+    ok(request, json!(plan))
+}
+
+/// One imported session's text blocks, `(role, text)`.
+fn text_pairs(messages: &[aeroric_core::sessions::SessionMessage]) -> Vec<(String, String)> {
+    messages
+        .iter()
+        .filter_map(|m| {
+            let text: Vec<String> = m
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    aeroric_core::sessions::SessionContent::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            (!text.is_empty()).then(|| (m.role.clone(), text.join("\n")))
+        })
+        .collect()
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExtractImportedParams {
+    id: String,
+}
+
+/// `memory.extractImported {id}` (Q4): extract one imported session. Not
+/// forced: one already extracted, or where the user said one thing, is
+/// skipped, and the day's limit holds.
+fn memory_extract_imported(live: &Live, request: &Request) -> Frame {
+    let p: ExtractImportedParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let result = imports(live)
+        .messages(&p.id)
+        .map_err(|error| error.to_string())
+        .and_then(|(session, messages)| {
+            let project_id = session.project_id.clone().ok_or("这个会话还没有归到项目")?;
+            let pairs = text_pairs(&messages);
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            live.executor.memory().extract_session(
+                memory::run::Session {
+                    task_id: &session.id,
+                    project_id: &project_id,
+                    title: &session.title,
+                    messages: &pairs,
+                    forced: false,
+                    verified: false,
+                },
+                home.as_deref(),
+                analysis_call(live),
+                now_ms(),
+            )
+        });
+    match result {
+        Ok(run) => ok(request, json!({ "run": run })),
+        Err(error) => failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -863,7 +1020,9 @@ fn memory_import_native(live: &Live, request: &Request) -> Frame {
             text: line.clone(),
             supersedes: None,
         };
-        let proof = memory::evidence(None, Some(&file.harness), None, &line, now);
+        // The file's name leads the excerpt so the page can group an import.
+        let excerpt = format!("{} · {line}", file.title);
+        let proof = memory::evidence(None, Some(&file.harness), None, &excerpt, now);
         match memory.propose(draft, proof, now) {
             Ok(item) if item.state == wire::MemoryState::Pending && item.created_ms == now => {
                 imported += 1
@@ -931,4 +1090,107 @@ fn context_feedback(live: &Live, request: &Request) -> Frame {
         ),
         Err(error) => memory_failure(request, error),
     }
+}
+
+// MARK: B5-3b skill proposals
+
+/// `memory.proposals {}`: every proposal, newest first.
+fn skill_proposals(live: &Live, request: &Request) -> Frame {
+    answer(request, live.executor.memory().proposals(), "proposals")
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SkillEditParams {
+    id: String,
+    edit: wire::SkillEdit,
+}
+
+/// `memory.proposalEdit {id, edit}`: a pending proposal changes; an accepted
+/// skill gets a new version.
+fn skill_edit(live: &Live, request: &Request) -> Frame {
+    let p: SkillEditParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    answer(
+        request,
+        live.executor
+            .memory()
+            .edit_proposal(&p.id, p.edit, now_ms()),
+        "proposal",
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SkillDecideParams {
+    id: String,
+    accept: bool,
+}
+
+/// `memory.proposalDecide {id, accept}`: accepting pins the project's folder,
+/// under which its sessions are offered the skill.
+fn skill_decide(live: &Live, request: &Request) -> Frame {
+    let p: SkillDecideParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let memory = live.executor.memory();
+    let path = match memory.proposal(&p.id) {
+        Ok(proposal) => proposal
+            .project_id
+            .as_deref()
+            .and_then(|id| project_dir(live, id)),
+        Err(error) => return memory_failure(request, error),
+    };
+    answer(
+        request,
+        memory.decide_proposal(&p.id, p.accept, path, now_ms()),
+        "proposal",
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SkillVersionParams {
+    id: String,
+    version: u32,
+}
+
+/// `memory.skillVersion {id, version}`: 回到第 N 版.
+fn skill_version(live: &Live, request: &Request) -> Frame {
+    let p: SkillVersionParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    answer(
+        request,
+        live.executor
+            .memory()
+            .use_version(&p.id, p.version, now_ms()),
+        "proposal",
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SkillDisableParams {
+    id: String,
+    disabled: bool,
+}
+
+/// `memory.skillDisable {id, disabled}`: 停用 / 启用.
+fn skill_disable(live: &Live, request: &Request) -> Frame {
+    let p: SkillDisableParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    answer(
+        request,
+        live.executor
+            .memory()
+            .disable_skill(&p.id, p.disabled, now_ms()),
+        "proposal",
+    )
 }

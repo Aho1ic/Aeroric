@@ -37,6 +37,7 @@ mod board;
 mod delegation;
 mod memory;
 mod review;
+mod wiki;
 
 struct Live {
     executor: Arc<StructuredExecutor>,
@@ -154,6 +155,7 @@ pub fn register_session_live_services(
     // B4-3: the shared boards.
     board::install(set, &live);
     memory::install(set, &live);
+    wiki::install(set, &live);
 }
 
 // MARK: B4′ side branches (2026-10-30)
@@ -996,8 +998,20 @@ fn prompt(live: &Live, request: &Request) -> Frame {
         Some(reminder) => format!("{reminder}{}", p.text),
         None => p.text,
     };
+    // R1-1: not refused — the user's own sessions are theirs to run — but said.
+    let own_turn_writes = driver.snapshot().permission.as_deref() != Some("plan");
     match driver.prompt(text) {
-        Ok(()) => ok(request, json!({"accepted": true})),
+        Ok(()) => {
+            let shared: Vec<Value> = if own_turn_writes {
+                delegation::writers_beside(live, &p.task_id)
+                    .into_iter()
+                    .map(|w| json!({"taskId": w.task_id, "title": w.title}))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            ok(request, json!({"accepted": true, "sharedWriters": shared}))
+        }
         Err(error) => driver_failure(request, error),
     }
 }

@@ -328,12 +328,18 @@ public final class AgentConfigStore {
         }
     }
 
+    /// A read that was superseded (the user moved on) is not a failure.
+    public static func isCancelled(_ error: Error) -> Bool {
+        error is CancellationError || (error as? ConnectionError) == .cancelled
+    }
+
     /// Plain words instead of "ConnectionError error 4".
-    static func describe(_ error: Error) -> String {
+    public static func describe(_ error: Error) -> String {
         switch error as? ConnectionError {
         case .refused(let frame)?: frame.error.message
         case .notConnected?, .disconnected?: "还没连上 Aeroric 宿主，稍后点右上角刷新"
         case .timedOut?: "宿主没有及时回应"
+        case .cancelled?: "操作已取消"
         case .io(let message)?: message
         default: error.localizedDescription
         }

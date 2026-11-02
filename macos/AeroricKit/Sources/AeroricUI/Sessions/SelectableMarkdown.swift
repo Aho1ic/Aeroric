@@ -11,12 +11,18 @@ import SwiftUI
 struct SelectableMarkdown: NSViewRepresentable {
     let text: String
     let size: CGFloat
+    /// 2026-11-02 Wiki (owner): the system font (苹方 for Chinese) whatever
+    /// the conversation font is, links in the text color with no underline,
+    /// and what follows a link on its line (` · implemented`) in the
+    /// tertiary color. Maple Mono and 宋体 were tried and dropped.
+    var reading = false
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(ConversationCJKFont.storageKey) private var cjkChoice = ConversationCJKFont.pingFang.rawValue
     @AppStorage(ConversationCJKFont.customKey) private var cjkCustom = ""
 
     private var cjkFamily: String? {
         _ = FontDownloads.shared.revision // a download just registered its fonts
+        if reading { return nil }
         return ConversationCJKFont.resolve(ConversationCJKFont(rawValue: cjkChoice) ?? .pingFang, custom: cjkCustom)
     }
 
@@ -36,7 +42,9 @@ struct SelectableMarkdown: NSViewRepresentable {
         view.textContainer?.widthTracksTextView = true
         view.isVerticallyResizable = false
         view.isHorizontallyResizable = false
-        view.linkTextAttributes = [.foregroundColor: NSColor(AeroricColor.accent), .cursor: NSCursor.pointingHand]
+        view.linkTextAttributes = reading
+            ? [.foregroundColor: NSColor(AeroricColor.text), .cursor: NSCursor.pointingHand]
+            : [.foregroundColor: NSColor(AeroricColor.accent), .cursor: NSCursor.pointingHand]
         view.delegate = context.coordinator
         view.setAccessibilityIdentifier("session.content.text")
         return view
@@ -44,10 +52,11 @@ struct SelectableMarkdown: NSViewRepresentable {
 
     func updateNSView(_ view: NSTextView, context: Context) {
         let family = cjkFamily
-        let key = "\(size)|\(colorScheme)|\(family ?? "")|\(FontDownloads.shared.revision)|\(text)"
+        let key = "\(size)|\(reading)|\(colorScheme)|\(family ?? "")|\(FontDownloads.shared.revision)|\(text)"
         guard context.coordinator.renderedKey != key else { return }
         context.coordinator.renderedKey = key
-        view.textStorage?.setAttributedString(MarkdownAttributed.build(text, size: size, cjkFamily: family))
+        let built = MarkdownAttributed.build(text, size: size, cjkFamily: family)
+        view.textStorage?.setAttributedString(reading ? MarkdownAttributed.quietAfterLinks(built) : built)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: NSTextView, context: Context) -> CGSize? {
@@ -56,7 +65,7 @@ struct SelectableMarkdown: NSViewRepresentable {
         let offered = proposal.width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 10_000
         guard let storage = view.textStorage else { return nil }
         let coordinator = context.coordinator
-        let key = "\(size)|\(offered)|\(cjkChoice)|\(cjkCustom)|\(text)"
+        let key = "\(size)|\(reading)|\(offered)|\(cjkChoice)|\(cjkCustom)|\(text)"
         if let cached = coordinator.measured, cached.key == key { return cached.size }
         let used = Self.measure(storage, width: offered)
         let size = CGSize(width: min(offered, max(ceil(used.width), 1)), height: max(ceil(used.height), 1))
@@ -96,6 +105,26 @@ struct SelectableMarkdown: NSViewRepresentable {
 
 /// Markdown → attributed text in the session's look (pure; tested).
 enum MarkdownAttributed {
+    /// What follows a link on its line — an index entry's ` · implemented` —
+    /// in the secondary color, so the titles lead.
+    static func quietAfterLinks(_ text: NSAttributedString) -> NSAttributedString {
+        let out = NSMutableAttributedString(attributedString: text)
+        let string = out.string as NSString
+        out.enumerateAttribute(.link, in: NSRange(location: 0, length: out.length)) { value, range, _ in
+            guard value != nil else { return }
+            let end = NSMaxRange(range)
+            let line = string.lineRange(for: NSRange(location: end, length: 0))
+            let rest = NSRange(location: end, length: max(0, NSMaxRange(line) - end))
+            guard rest.length > 0 else { return }
+            var linked = false
+            out.enumerateAttribute(.link, in: rest) { other, _, stop in
+                if other != nil { linked = true; stop.pointee = true }
+            }
+            if !linked { out.addAttribute(.foregroundColor, value: NSColor(AeroricColor.textTertiary), range: rest) }
+        }
+        return out
+    }
+
     static func build(_ markdown: String, size: CGFloat, cjkFamily: String? = nil) -> NSAttributedString {
         let fonts = Fonts(cjkFamily: cjkFamily)
         let options = AttributedString.MarkdownParsingOptions(

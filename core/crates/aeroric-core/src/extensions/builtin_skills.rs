@@ -84,6 +84,83 @@ pub fn skill_dir(root: &Path, skill: &SkillInfo) -> PathBuf {
     root.join(&skill.group).join(&skill.id)
 }
 
+/// One skill a session is offered, wherever it lives: a built-in one, or
+/// (B5-3b, 2026-10-31) one Aeroric learned and the user accepted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Offer {
+    pub id: String,
+    pub dir: PathBuf,
+    /// What a project copy's marker records; a change replaces the copy.
+    pub version: String,
+}
+
+fn builtin_offers(root: &Path, skills: &[SkillInfo]) -> Vec<Offer> {
+    let version = content_hash();
+    skills
+        .iter()
+        .map(|skill| Offer {
+            id: skill.id.clone(),
+            dir: skill_dir(root, skill),
+            version: version.clone(),
+        })
+        .collect()
+}
+
+/// B5-3b: where accepted learned skills live (inside the store, so links to
+/// them count as Aeroric's), and the index the memory store keeps.
+pub fn learned_dir(data_dir: &Path) -> PathBuf {
+    base_dir(data_dir).join("learned")
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LearnedEntry {
+    pub name: String,
+    /// The active version's folder (holds SKILL.md).
+    pub dir: PathBuf,
+    pub version: u32,
+    pub global: bool,
+    /// The project it came from; offered under this folder only unless global.
+    #[serde(default)]
+    pub project_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LearnedIndex {
+    #[serde(default)]
+    pub skills: Vec<LearnedEntry>,
+}
+
+pub fn write_learned_index(data_dir: &Path, index: &LearnedIndex) -> Result<(), String> {
+    let path = learned_dir(data_dir).join("index.json");
+    std::fs::create_dir_all(learned_dir(data_dir)).map_err(|e| e.to_string())?;
+    let raw = serde_json::to_vec_pretty(index).map_err(|e| e.to_string())?;
+    crate::storage::atomic::write_atomic(&path, &raw, crate::storage::atomic::FileMode::Private)
+        .map_err(|e| e.to_string())
+}
+
+/// The accepted learned skills for a session in `cwd`.
+pub fn learned_offers(data_dir: &Path, cwd: Option<&Path>) -> Vec<Offer> {
+    let index: LearnedIndex = std::fs::read(learned_dir(data_dir).join("index.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .unwrap_or_default();
+    index
+        .skills
+        .into_iter()
+        .filter(|entry| {
+            entry.global
+                || matches!((&entry.project_path, cwd), (Some(project), Some(cwd)) if cwd.starts_with(project))
+        })
+        .filter(|entry| entry.dir.join("SKILL.md").is_file())
+        .map(|entry| Offer {
+            version: format!("learned-v{}", entry.version),
+            id: entry.name,
+            dir: entry.dir,
+        })
+        .collect()
+}
+
 /// Writes the embedded skills to `<data-dir>/builtin-skills/<hash>/` unless
 /// that version is already complete; returns the folder.
 pub fn materialize(data_dir: &Path) -> Result<PathBuf, String> {
@@ -216,12 +293,21 @@ pub fn link_into(
     skills: &[SkillInfo],
     skip: &BTreeSet<String>,
 ) -> Result<(), String> {
+    link_offers(skills_dir, &builtin_offers(root, skills), skip)
+}
+
+/// [`link_into`] for any offers.
+pub fn link_offers(
+    skills_dir: &Path,
+    offers: &[Offer],
+    skip: &BTreeSet<String>,
+) -> Result<(), String> {
     std::fs::create_dir_all(skills_dir)
         .map_err(|e| format!("cannot create {}: {e}", skills_dir.display()))?;
-    let wanted: Vec<&SkillInfo> = skills.iter().filter(|s| !skip.contains(&s.id)).collect();
+    let wanted: Vec<&Offer> = offers.iter().filter(|s| !skip.contains(&s.id)).collect();
     for skill in &wanted {
         let link = skills_dir.join(&skill.id);
-        let target = skill_dir(root, skill);
+        let target = skill.dir.clone();
         match std::fs::read_link(&link) {
             Ok(existing) if existing == target => continue,
             Ok(_) if points_into_store(&link) => {
@@ -267,10 +353,17 @@ pub fn claude_plugin(
     root: &Path,
     skills: &[SkillInfo],
 ) -> Result<PathBuf, String> {
+    claude_plugin_offers(data_dir, &builtin_offers(root, skills))
+}
+
+/// [`claude_plugin`] for any offers.
+pub fn claude_plugin_offers(data_dir: &Path, offers: &[Offer]) -> Result<PathBuf, String> {
     let mut hasher = Sha256::new();
     hasher.update(content_hash());
-    for skill in skills {
+    for skill in offers {
         hasher.update(skill.id.as_bytes());
+        hasher.update([0]);
+        hasher.update(skill.version.as_bytes());
         hasher.update([0]);
     }
     let key: String = hasher.finalize()[..4]
@@ -289,7 +382,7 @@ pub fn claude_plugin(
         std::fs::write(&manifest, serde_json::to_vec_pretty(&body).unwrap())
             .map_err(|e| e.to_string())?;
     }
-    link_into(&dir.join("skills"), root, skills, &BTreeSet::new())?;
+    link_offers(&dir.join("skills"), offers, &BTreeSet::new())?;
     Ok(dir)
 }
 
@@ -316,30 +409,77 @@ pub fn sync_project(
     skills: &[SkillInfo],
     remove: &dyn Fn(&Path) -> Result<(), String>,
 ) -> Result<(), String> {
+    sync_offers(cwd, &builtin_offers(root, skills), remove)
+}
+
+/// [`sync_project`] for any offers; each copy's marker holds its version.
+pub fn sync_offers(
+    cwd: &Path,
+    skills: &[Offer],
+    remove: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
     let dir = cwd.join(".agents/skills");
     let existing = project_copies(cwd);
     if skills.is_empty() && existing.is_empty() {
         return Ok(());
     }
-    let hash = content_hash();
     for skill in skills {
         let target = dir.join(&skill.id);
         let marker = target.join(MARKER);
         if target.exists() {
             match std::fs::read_to_string(&marker) {
-                Ok(version) if version.trim() == hash => continue,
+                Ok(version) if version.trim() == skill.version => continue,
                 Ok(_) => std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?,
                 Err(_) => continue, // the user's own folder
             }
         }
-        copy_tree(&skill_dir(root, skill), &target)?;
-        std::fs::write(&marker, &hash).map_err(|e| e.to_string())?;
+        copy_tree(&skill.dir, &target)?;
+        std::fs::write(&marker, &skill.version).map_err(|e| e.to_string())?;
     }
     let wanted: BTreeSet<&str> = skills.iter().map(|s| s.id.as_str()).collect();
     for id in &existing {
         if !wanted.contains(id.as_str()) {
             remove(&dir.join(id))?;
         }
+    }
+    write_exclude(cwd, &project_copies(cwd))
+}
+
+/// Learned skills only, as marked copies in `cwd/.agents/skills`: the
+/// built-in copies a direct Codex session keeps there are left alone, and
+/// only learned copies that are no longer wanted go.
+pub fn sync_learned(
+    cwd: &Path,
+    learned: &[Offer],
+    remove: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let dir = cwd.join(".agents/skills");
+    let stale: Vec<String> = project_copies(cwd)
+        .into_iter()
+        .filter(|id| {
+            std::fs::read_to_string(dir.join(id).join(MARKER))
+                .is_ok_and(|v| v.trim().starts_with("learned-"))
+                && !learned.iter().any(|o| &o.id == id)
+        })
+        .collect();
+    if learned.is_empty() && stale.is_empty() {
+        return Ok(());
+    }
+    for skill in learned {
+        let target = dir.join(&skill.id);
+        let marker = target.join(MARKER);
+        if target.exists() {
+            match std::fs::read_to_string(&marker) {
+                Ok(version) if version.trim() == skill.version => continue,
+                Ok(_) => std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?,
+                Err(_) => continue, // the user's own folder
+            }
+        }
+        copy_tree(&skill.dir, &target)?;
+        std::fs::write(&marker, &skill.version).map_err(|e| e.to_string())?;
+    }
+    for id in stale {
+        remove(&dir.join(id))?;
     }
     write_exclude(cwd, &project_copies(cwd))
 }
@@ -472,6 +612,10 @@ pub enum Mount<'a> {
     ClaudePlugin,
     /// A direct Codex session: marked copies in the project (owner's Q9).
     CodexProject,
+    /// CU 2026-10-31: a configured Codex session. Its server is shared by
+    /// every project, so its home holds only the built-in skills; the
+    /// project's learned skills go into the project as marked copies.
+    CodexProjectLearned,
 }
 
 /// Prepares the skills for one launch of `harness` in `cwd`; returns the
@@ -485,7 +629,24 @@ pub fn mount(
     let root = materialize(data_dir)?;
     let home = crate::settings::home_dir();
     let user = user_skill_names(&user_skill_dirs(harness, cwd, home.as_deref()));
-    let offered = offered(data_dir, &user);
+    let mut offers = builtin_offers(&root, &offered(data_dir, &user));
+    // B5-3b: accepted learned skills for this folder; the user's own of the
+    // same name still wins, and a built-in name is never shadowed.
+    let taken: BTreeSet<String> = offers.iter().map(|o| o.id.clone()).collect();
+    // A home shared by every project (no cwd) never holds learned skills.
+    let learned: Vec<Offer> = if matches!(mount, Mount::Home(_)) && cwd.is_none() {
+        Vec::new()
+    } else {
+        learned_offers(data_dir, cwd)
+            .into_iter()
+            .filter(|o| !user.contains(&o.id) && !taken.contains(&o.id))
+            .collect()
+    };
+    if let (Mount::CodexProjectLearned, Some(cwd)) = (&mount, cwd) {
+        sync_learned(cwd, &learned, &move_to_trash)?;
+        return Ok(None);
+    }
+    offers.extend(learned);
     match mount {
         Mount::Home(dir) => {
             // Q17: OMP / DSH also read the project's copies.
@@ -493,15 +654,16 @@ pub fn mount(
                 ("omp" | "dsh", Some(cwd)) => project_copies(cwd),
                 _ => BTreeSet::new(),
             };
-            link_into(&dir.join("skills"), &root, &offered, &skip)?;
+            link_offers(&dir.join("skills"), &offers, &skip)?;
             Ok(None)
         }
-        Mount::ClaudePlugin => claude_plugin(data_dir, &root, &offered).map(Some),
+        Mount::ClaudePlugin => claude_plugin_offers(data_dir, &offers).map(Some),
         Mount::CodexProject => {
             let Some(cwd) = cwd else { return Ok(None) };
-            sync_project(cwd, &root, &offered, &move_to_trash)?;
+            sync_offers(cwd, &offers, &move_to_trash)?;
             Ok(None)
         }
+        Mount::CodexProjectLearned => Ok(None),
     }
 }
 

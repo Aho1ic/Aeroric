@@ -103,6 +103,67 @@ public struct LiveMemoryRun: Equatable, Sendable, Identifiable {
     }
 }
 
+/// Q4 (2026-11-02): one imported session 整理历史会话 could send.
+public struct LiveMemoryHistoryCandidate: Equatable, Sendable, Identifiable {
+    public var id: String
+    public var title: String
+    public var agent: String
+    public var lastAtMs: UInt64
+    /// Already extracted: skipped.
+    public var done: Bool
+
+    public init(id: String, title: String = "", agent: String = "", lastAtMs: UInt64 = 0, done: Bool = false) {
+        self.id = id
+        self.title = title
+        self.agent = agent
+        self.lastAtMs = lastAtMs
+        self.done = done
+    }
+}
+
+/// Q4: what 整理历史会话 would do, estimated before anything is sent.
+public struct LiveMemoryHistoryPlan: Equatable, Sendable {
+    public var sessions: [LiveMemoryHistoryCandidate]
+    public var pending: Int
+    public var inputTokens: UInt64
+    public var outputTokens: UInt64
+    public var costUsd: Double?
+    public var remainingToday: Int
+    public var model: String?
+    public var enabled: Bool
+
+    public init(sessions: [LiveMemoryHistoryCandidate] = [], pending: Int = 0, inputTokens: UInt64 = 0,
+                outputTokens: UInt64 = 0, costUsd: Double? = nil, remainingToday: Int = 0, model: String? = nil,
+                enabled: Bool = false) {
+        self.sessions = sessions
+        self.pending = pending
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.costUsd = costUsd
+        self.remainingToday = remainingToday
+        self.model = model
+        self.enabled = enabled
+    }
+
+    public static func decode(_ value: JSONValue?) -> LiveMemoryHistoryPlan {
+        let f = value?.fields ?? [:]
+        let int = { (key: String) in f[key]?.numberText.flatMap { Int($0) } ?? 0 }
+        let u64 = { (key: String) in f[key]?.numberText.flatMap { UInt64($0) } ?? 0 }
+        let sessions: [LiveMemoryHistoryCandidate] = (f["sessions"]?.arrayValue ?? []).compactMap { value in
+            guard let s = value.objectValue, let id = s["id"]?.stringValue else { return nil }
+            return LiveMemoryHistoryCandidate(id: id, title: s["title"]?.stringValue ?? "",
+                                              agent: s["agent"]?.stringValue ?? "",
+                                              lastAtMs: s["lastAtMs"]?.numberText.flatMap { UInt64($0) } ?? 0,
+                                              done: s["done"]?.boolValue ?? false)
+        }
+        return LiveMemoryHistoryPlan(sessions: sessions, pending: int("pending"), inputTokens: u64("inputTokens"),
+                                     outputTokens: u64("outputTokens"),
+                                     costUsd: f["costUsd"]?.numberText.flatMap { Double($0) },
+                                     remainingToday: int("remainingToday"), model: f["model"]?.stringValue,
+                                     enabled: f["enabled"]?.boolValue ?? false)
+    }
+}
+
 /// 整理记录 with today's count and this month's total.
 public struct LiveMemoryRunsPage: Equatable, Sendable {
     public var runs: [LiveMemoryRun]

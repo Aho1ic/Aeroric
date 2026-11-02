@@ -75,6 +75,8 @@ public struct SshHostsPage: View {
         } message: {
             Text("组里的主机会移到“未分组”，不会被删除。")
         }
+        .windowTitle(WindowTitle("连接", subtitle: "SSH 主机 · \(store.hosts.count) 台 · \(store.groupNames.count) 个分组",
+                                 systemImage: "network"))
         .accessibilityIdentifier("connections.page")
     }
 
@@ -82,16 +84,6 @@ public struct SshHostsPage: View {
 
     private var header: some View {
         HStack(spacing: AeroricSpace.m) {
-            Image(systemName: "network")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(AeroricColor.textSecondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("连接").font(.system(size: AeroricType.title, weight: .semibold))
-                Text("SSH 主机 · \(store.hosts.count) 台 · \(store.groupNames.count) 个分组")
-                    .font(.system(size: AeroricType.caption))
-                    .foregroundStyle(AeroricColor.textTertiary)
-            }
-            Spacer()
             CapsuleField(systemImage: "magnifyingglass", placeholder: "搜索主机", text: $query, height: 30)
                 .frame(width: 200)
             Button { groupSheet = .create(forDraft: false) } label: { Label("新建分组", systemImage: "folder.badge.plus") }
@@ -100,6 +92,7 @@ public struct SshHostsPage: View {
             Button { store.newHost() } label: { Label("添加主机", systemImage: "plus") }
                 .buttonStyle(AeroricCapsuleButtonStyle(.primary))
                 .accessibilityIdentifier("connections.add")
+            Spacer(minLength: 0)
         }
     }
 

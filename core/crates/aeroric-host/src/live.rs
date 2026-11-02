@@ -142,14 +142,21 @@ impl HostRouting {
 
 impl Routing for HostRouting {
     fn before_codex_session(&self, key: &ServerKey, cwd: &str) {
-        if matches!(key, ServerKey::Agent(agent) if agent == "codex") {
-            crate::builtin_skills_services::prepare(
-                &self.context,
-                "codex",
-                Some(std::path::Path::new(cwd)),
-                crate::builtin_skills_services::Mount::CodexProject,
-            );
-        }
+        let mount = match key {
+            ServerKey::Agent(agent) if agent == "codex" => {
+                crate::builtin_skills_services::Mount::CodexProject
+            }
+            // CU 2026-10-31: a configured Codex's home is shared by every
+            // project; its project's learned skills go into the project.
+            ServerKey::Config(_) => crate::builtin_skills_services::Mount::CodexProjectLearned,
+            _ => return,
+        };
+        crate::builtin_skills_services::prepare(
+            &self.context,
+            "codex",
+            Some(std::path::Path::new(cwd)),
+            mount,
+        );
     }
 
     fn route(

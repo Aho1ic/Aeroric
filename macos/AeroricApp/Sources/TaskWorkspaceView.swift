@@ -29,6 +29,8 @@ import SwiftUI
 enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     /// B5-1: long-term memory, at the top of the sidebar (Q-M7 b).
     case memory
+    /// B5.5-1: the project Wiki, under 记忆 (Q-W4).
+    case wiki
     case tasks
     /// A19: tasks waiting on the user, and recent failures.
     case attention
@@ -48,6 +50,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     var title: String {
         switch self {
         case .memory: "记忆"
+        case .wiki: "Wiki"
         case .tasks: "任务"
         case .attention: "需要我处理"
         case .canvas: "画布"
@@ -71,6 +74,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     var systemImage: String {
         switch self {
         case .memory: "brain"
+        case .wiki: "book.closed"
         case .tasks: "checklist"
         case .attention: "bell.badge"
         case .canvas: "square.on.square.dashed"
@@ -93,7 +97,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     /// Agent tools gets real data today; the rest explain what they will do.
     var status: ToolSectionStatus {
         switch self {
-        case .tasks, .attention, .canvas, .agentConfigs, .memory: .wired
+        case .tasks, .attention, .canvas, .agentConfigs, .memory, .wiki: .wired
         case .connections: .wired
         case .infrastructure: .comingSoon("Docker 容器与镜像、端口占用、Conda 环境。")
         case .database: .comingSoon("SQLite、Redis、MongoDB 的浏览与查询。")
@@ -106,7 +110,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
 
     var group: SidebarGroup {
         switch self {
-        case .tasks, .attention, .canvas, .agentConfigs, .memory: .work
+        case .tasks, .attention, .canvas, .agentConfigs, .memory, .wiki: .work
         case .database, .notebook: .tools
         case .connections, .infrastructure, .extensions, .remote, .operations: .system
         }
@@ -149,6 +153,9 @@ struct TaskWorkspaceView: View {
     @State private var taskProjectContexts: [String: String] = [:]
     @State private var taskFilterText = ""
     @State private var draftBook = NewSessionDraftBook()
+    /// 2026-11-02: unsent new-session pages and last choices, across restarts.
+    @AppStorage("aeroric.newSession.memos") private var draftMemos: Data = Data()
+    @State private var draftsRestored = false
     @State private var projectContextID: String?
     @State private var resourceBook = ProjectResourceBook()
     @State private var taskInputGate = TaskPresentationInputGate()
@@ -211,7 +218,8 @@ struct TaskWorkspaceView: View {
                     onCancel: { services.openRemoteRequested = false }
                 )
             }
-            .alert("原交办核对", isPresented: Binding(
+            .alert(submissionCheck?.hasPrefix("已记住") == true || submissionCheck?.hasPrefix("没有记住") == true
+                   ? "记忆" : "原交办核对", isPresented: Binding(
                 get: { submissionCheck != nil },
                 set: { if !$0 { submissionCheck = nil } }
             )) {
@@ -334,6 +342,16 @@ struct TaskWorkspaceView: View {
 
     private func navigationHandlers<Content: View>(_ content: Content) -> some View {
         content
+        .onAppear {
+            guard !draftsRestored else { return }
+            draftsRestored = true
+            if let memos = try? JSONDecoder().decode(NewSessionMemos.self, from: draftMemos) {
+                draftBook.restore(memos)
+            }
+        }
+        .onChange(of: draftBook) { _, book in
+            if let data = try? JSONEncoder().encode(book.memos), data != draftMemos { draftMemos = data }
+        }
         .onChange(of: selection, initial: true) { _, newValue in
             if let scope = SessionNavigation.draftScope(newValue) {
                 draftBook.open(scope)
@@ -750,12 +768,16 @@ struct TaskWorkspaceView: View {
                                                 delegations: services.delegationNeeds,
                                                 boards: services.boardNeeds,
                                                 memories: services.memoryNeeds,
+                                                skills: services.skillNeeds,
                                                 nowMs: UInt64(Date().timeIntervalSince1970 * 1000)),
                     projectName: { id in services.taskStore.projects.first { $0.id == id }?.name },
                     onOpen: { selection = SessionNavigation.task($0) },
                     onOpenItem: { item in
-                        guard item.reason == .memoryNeedsYou else { return false }
-                        services.openMemory(projectID: item.task.projectID)
+                        switch item.reason {
+                        case .memoryNeedsYou: services.openMemory(projectID: item.task.projectID)
+                        case .skillProposalNeedsYou: services.openMemory(projectID: item.task.projectID, tab: .skills)
+                        default: return false
+                        }
                         return true
                     }
                 )
@@ -765,7 +787,24 @@ struct TaskWorkspaceView: View {
             } else if activeSection == .memory {
                 MemoryPage(store: services.memoryStore,
                            projects: services.taskStore.projects.map { (id: $0.id, name: $0.name) },
-                           onOpenTask: { selection = SessionNavigation.task($0) })
+                           onOpenTask: { id in
+                               selection = services.importBook.session(id: id) != nil
+                                   ? SessionNavigation.imported(id) : SessionNavigation.task(id)
+                           })
+                    .opacity(previewActive ? 0 : 1)
+                    .allowsHitTesting(!previewActive)
+                    .accessibilityHidden(previewActive)
+            } else if activeSection == .wiki {
+                WikiPage(store: services.wikiStore,
+                         projects: services.taskStore.projects.map { (id: $0.id, name: $0.name) },
+                         onOpenSource: { projectID, source in
+                             if let path = source.notePath {
+                                 openProjectFile(projectID, path: path)
+                             } else {
+                                 services.openMemory(projectID: projectID,
+                                                     tab: source.kind == "skill" ? .skills : .experience)
+                             }
+                         })
                     .opacity(previewActive ? 0 : 1)
                     .allowsHitTesting(!previewActive)
                     .accessibilityHidden(previewActive)
@@ -785,7 +824,7 @@ struct TaskWorkspaceView: View {
                 CanvasPage(
                     book: services.canvasBook, resolver: canvasResolver,
                     onOpenSession: { selection = $0 },
-                    onOpenFile: { projectID, path in openPreview(.init(projectID: projectID, path: path, kind: .file)) }
+                    onOpenFile: { projectID, path in openProjectFile(projectID, path: path) }
                 )
                 .opacity(previewActive ? 0 : 1)
                 .allowsHitTesting(!previewActive)
@@ -1074,6 +1113,12 @@ struct TaskWorkspaceView: View {
         resourceBook.select(target)
         loadPreview(target)
     }
+    /// A file opened from a full page (a Wiki source, a canvas card) shows on
+    /// its project's task surface: full pages hide the central preview.
+    private func openProjectFile(_ projectID: String, path: String) {
+        selection = projectID
+        openPreview(.init(projectID: projectID, path: path, kind: .file))
+    }
     private func loadPreview(_ target: ResourcePreviewTarget) {
         guard let project = services.taskStore.projects.first(where: { $0.id == target.projectID }) else { return }
         Task {
@@ -1148,6 +1193,19 @@ struct TaskWorkspaceView: View {
     }
 
     private func submit(_ scope: SessionDraftScope) {
+        // `/记住 …` is kept in the project's memory, never sent to a model.
+        if let value = draftBook[scope], let body = MemoryText.rememberCommand(value.task.prompt) {
+            Task { @MainActor in
+                do {
+                    _ = try await services.rememberFromNewSession(projectID: scope.projectID, text: body)
+                    draftBook.edit(scope) { $0.task.prompt = "" }
+                    submissionCheck = "已记住：\(body)\n没有开始会话，也没有调用模型。"
+                } catch {
+                    submissionCheck = "没有记住：\(AgentConfigStore.describe(error))"
+                }
+            }
+            return
+        }
         guard let projectID = scope.projectID,
               let value = draftBook[scope],
               sessionBlockingReasons(value, scope: scope).isEmpty,
@@ -1205,7 +1263,8 @@ struct TaskWorkspaceView: View {
     private var taskContent: some View {
         ZStack {
             VStack(spacing: 0) {
-                if let task = selectedTask {
+                if let task = selectedTask, activeSection == .tasks, draftScope == nil,
+                   SessionNavigation.taskID(selection) != nil {
                     TaskDetailHeader(
                         task: task,
                         onCancel: { Task { await services.cancelTask(taskId: task.id) } },
@@ -1278,7 +1337,7 @@ struct TaskWorkspaceView: View {
     @ViewBuilder
     private var sectionContent: some View {
         switch activeSection {
-        case .tasks, .attention, .canvas, .agentConfigs, .connections, .memory:
+        case .tasks, .attention, .canvas, .agentConfigs, .connections, .memory, .wiki:
             EmptyView() // Mounted directly by centralContent.
         case .infrastructure:
             HSplitView {

@@ -7,6 +7,11 @@ import AeroricProtocol
 public struct MemoryPage: View {
     @Bindable var store: MemoryStore
     let projects: [(id: String, name: String)]
+    @State private var confirmingAll = false
+    @State private var rejectingAll = false
+    /// Pending rows drawn; more on request (thousands after an import).
+    @State private var pendingShown = 100
+    @State private var expanded: Set<String> = []
     @State private var draft = ""
     @State private var category = "preference"
     @State private var showHistory = false
@@ -14,6 +19,9 @@ public struct MemoryPage: View {
     @State private var editText = ""
     @State private var forgetting: LiveMemoryItem?
     @State private var showSettings = false
+    @State private var planningHistory = false
+    @State private var editingSkill: LiveSkillProposal?
+    @State private var showClosedSkills = false
     /// B5-2: a session clue opens its session.
     let onOpenTask: (String) -> Void
 
@@ -29,19 +37,20 @@ public struct MemoryPage: View {
             header
             tabs
             ScrollView {
-                VStack(alignment: .leading, spacing: AeroricSpace.s) {
+                LazyVStack(alignment: .leading, spacing: AeroricSpace.s) {
                     if let later = store.tab.later {
                         PaneEmptyState(systemImage: "hourglass", title: store.tab.title, hint: later)
                             .frame(maxWidth: .infinity)
                             .padding(.top, AeroricSpace.xxl)
                     } else if store.tab == .log {
                         runsContent
+                    } else if store.tab == .skills {
+                        skillsContent
                     } else {
                         content
                     }
                 }
                 .padding(AeroricSpace.xl)
-                .frame(maxWidth: 760, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.never)
@@ -54,9 +63,30 @@ public struct MemoryPage: View {
         .background(AeroricColor.canvas)
         .task(id: "\(store.scope ?? "")|\(store.tab.rawValue)") { await store.reload() }
         .sheet(item: $editing) { item in editSheet(item) }
+        .sheet(item: $editingSkill) { proposal in
+            SkillEditSheet(proposal: proposal, onSave: { edit in
+                editingSkill = nil
+                Task { await store.editProposal(proposal, edit) }
+            }, onCancel: { editingSkill = nil })
+        }
         .sheet(isPresented: $showSettings) {
             MemoryExtractSettingsSheet(store: store, onClose: { showSettings = false })
         }
+        .sheet(isPresented: $planningHistory) {
+            MemoryHistorySheet(store: store, projects: projects, initialProject: store.scope,
+                               onClose: { store.stopHistory(); planningHistory = false })
+        }
+        .confirmationDialog("确认这一页全部 \(store.shown.pending.count) 条待确认？", isPresented: $confirmingAll) {
+            Button("全部确认") { Task { await store.confirmAll(accept: true) } }
+        } message: {
+            Text("它们会生效，新会话会带上其中的事实和偏好。")
+        }
+        .confirmationDialog("拒绝这一页全部 \(store.shown.pending.count) 条待确认？", isPresented: $rejectingAll) {
+            Button("全部拒绝", role: .destructive) { Task { await store.confirmAll(accept: false) } }
+        } message: {
+            Text("拒绝后会被遗忘，Agent 和导入都不能再提同样的内容。")
+        }
+        .onChange(of: store.tab) { _, _ in pendingShown = 100 }
         .confirmationDialog("永久遗忘这条记忆？", isPresented: Binding(
             get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }
         ), presenting: forgetting) { item in
@@ -69,6 +99,7 @@ public struct MemoryPage: View {
         } message: {
             Text(store.errorText ?? "")
         }
+        .windowTitle(windowTitle)
         .accessibilityIdentifier("memory.page")
     }
 
@@ -81,19 +112,6 @@ public struct MemoryPage: View {
 
     private var header: some View {
         HStack(spacing: AeroricSpace.m) {
-            Image(systemName: "brain")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(AeroricColor.textSecondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("记忆").font(.system(size: AeroricType.title, weight: .semibold))
-                Text(store.pending.isEmpty ? "你确认过的长期信息，新会话启动时自动带上"
-                     : "\(store.pending.count) 条待确认")
-                    .font(.system(size: AeroricType.caption))
-                    .foregroundStyle(store.pending.isEmpty ? AeroricColor.textTertiary : AeroricColor.warning)
-                    .lineLimit(1)
-            }
-            .fixedSize()
-            Spacer(minLength: AeroricSpace.m)
             CapsulePicker(title: scopeTitle, systemImage: store.scope == nil ? "globe" : "folder") {
                 Button("全局") { store.scope = nil }
                 if !projects.isEmpty { Divider() }
@@ -103,7 +121,7 @@ public struct MemoryPage: View {
             }
             .accessibilityIdentifier("memory.scope")
             if store.scope != nil {
-                Toggle("这个项目用记忆", isOn: Binding(
+                Toggle("为这个项目启用记忆", isOn: Binding(
                     get: { store.enabled ?? false },
                     set: { on in Task { await store.setEnabled(on) } }
                 ))
@@ -115,13 +133,30 @@ public struct MemoryPage: View {
                 .onSubmit { Task { await store.reload() } }
                 .frame(width: 200)
                 .accessibilityIdentifier("memory.search")
+            Spacer(minLength: 0)
         }
+    }
+
+    private var windowTitle: WindowTitle {
+        WindowTitle("记忆", subtitle: store.pending.isEmpty ? "你确认过的长期信息，新会话启动时自动带上"
+                        : "\(store.pending.count) 条待确认",
+                    systemImage: "brain", subtitleTint: store.pending.isEmpty ? .quiet : .warning)
     }
 
     private var tabs: some View {
         HStack(spacing: AeroricSpace.s) {
             tabButtons
             Spacer(minLength: AeroricSpace.m)
+            if store.tab == .log {
+                Button { planningHistory = true } label: {
+                    Label("整理历史会话…", systemImage: "clock.arrow.circlepath")
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                .disabled(projects.isEmpty)
+                .accessibilityIdentifier("memory.history.open")
+            }
             Button {
                 showSettings = true
             } label: {
@@ -155,8 +190,52 @@ public struct MemoryPage: View {
     @ViewBuilder private var content: some View {
         let shown = store.shown
         if !shown.pending.isEmpty {
-            sectionLabel("待确认 · \(shown.pending.count)", tint: AeroricColor.warning)
-            ForEach(shown.pending) { item in row(item) }
+            HStack(spacing: AeroricSpace.m) {
+                sectionLabel("待确认 · \(shown.pending.count)", tint: AeroricColor.warning)
+                Spacer(minLength: AeroricSpace.m)
+                if let busy = store.busyText {
+                    Text(busy).font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textSecondary)
+                        .lineLimit(1).fixedSize()
+                }
+                if shown.pending.count > 1 {
+                    Button("全部确认") { confirmingAll = true }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                        .fixedSize()
+                        .disabled(store.busyText != nil)
+                    Button("全部拒绝") { rejectingAll = true }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                        .fixedSize()
+                        .disabled(store.busyText != nil)
+                }
+            }
+            let groups = Dictionary(grouping: shown.pending.prefix(pendingShown), by: MemoryText.pendingGroup)
+            if groups.count > 1 {
+                ForEach(groups.keys.sorted(), id: \.self) { group in
+                    let all = shown.pending.filter { MemoryText.pendingGroup($0) == group }
+                    HStack(spacing: AeroricSpace.m) {
+                        Label("\(group) · \(all.count)", systemImage: "tray.full")
+                            .font(.system(size: AeroricType.caption, weight: .medium))
+                            .foregroundStyle(AeroricColor.textSecondary)
+                            .lineLimit(1)
+                        Spacer(minLength: AeroricSpace.m)
+                        Button("确认这组") { Task { await store.confirmAll(accept: true, group: group) } }
+                            .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true)).fixedSize()
+                        Button("拒绝这组") { Task { await store.confirmAll(accept: false, group: group) } }
+                            .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true)).fixedSize()
+                    }
+                    .padding(.top, AeroricSpace.s)
+                    ForEach(groups[group] ?? []) { item in row(item) }
+                }
+            } else {
+                ForEach(shown.pending.prefix(pendingShown)) { item in row(item) }
+            }
+            if shown.pending.count > pendingShown {
+                Button("再显示 \(min(100, shown.pending.count - pendingShown)) 条 · 还有 \(shown.pending.count - pendingShown) 条") {
+                    pendingShown += 100
+                }
+                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                .fixedSize()
+            }
         }
         if store.tab == .experience {
             sectionLabel(shown.active.isEmpty ? "还没有学会的经验"
@@ -205,6 +284,125 @@ public struct MemoryPage: View {
         }
     }
 
+    /// B5-3b 技能提案.
+    @ViewBuilder private var skillsContent: some View {
+        let groups = store.proposalGroups
+        if store.proposals.isEmpty {
+            sectionLabel("还没有技能提案")
+            Text("一条经验被标“有用” 3 次、升到高置信时，会自动提议把它升格为技能。")
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textTertiary)
+                .lineLimit(1)
+                .padding(.horizontal, AeroricSpace.l)
+        }
+        if !groups.pending.isEmpty {
+            sectionLabel("待审 · \(groups.pending.count)", tint: AeroricColor.warning)
+            ForEach(groups.pending) { proposal in skillRow(proposal) }
+        }
+        if !groups.accepted.isEmpty {
+            sectionLabel("已采纳 · \(groups.accepted.count) · 本项目新开的会话会带上")
+            ForEach(groups.accepted) { proposal in skillRow(proposal) }
+        }
+        if !groups.closed.isEmpty {
+            Button {
+                showClosedSkills.toggle()
+            } label: {
+                Label("已停用 · 已拒绝 · \(groups.closed.count)",
+                      systemImage: showClosedSkills ? "chevron.down" : "chevron.right")
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, AeroricSpace.s)
+            if showClosedSkills {
+                ForEach(groups.closed) { proposal in skillRow(proposal).opacity(0.7) }
+            }
+        }
+    }
+
+    private func skillRow(_ proposal: LiveSkillProposal) -> some View {
+        let pending = proposal.state == "pending"
+        return HStack(spacing: AeroricSpace.m) {
+            Image(systemName: proposal.state == "accepted" ? "sparkles" : "lightbulb")
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(pending ? AeroricColor.warning
+                                 : proposal.state == "accepted" ? AeroricColor.success : AeroricColor.textSecondary)
+                .frame(width: 16)
+            Text(proposal.name)
+                .font(.system(size: AeroricType.secondary, weight: .medium).monospaced())
+                .lineLimit(1)
+                .fixedSize()
+            Text(proposal.description)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(proposal.body)
+            CheckpointBadge(text: proposal.global ? "所有项目" : "本项目", tint: AeroricColor.textSecondary)
+            if let v = proposal.activeVersion {
+                CheckpointBadge(text: "v\(v)", tint: AeroricColor.accent)
+            }
+            if pending {
+                Button("采纳") { Task { await store.decide(proposal, accept: true) } }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
+                    .fixedSize()
+                    .accessibilityIdentifier("memory.skill.accept")
+                Button("拒绝") { Task { await store.decide(proposal, accept: false) } }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .fixedSize()
+                    .help("拒绝后这条经验不会再被提议")
+                Button("编辑…") { editingSkill = proposal }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .fixedSize()
+            } else {
+                if proposal.state != "accepted" {
+                    CheckpointBadge(text: MemoryText.proposalState(proposal.state), tint: AeroricColor.textSecondary)
+                }
+                skillMenu(proposal)
+            }
+        }
+        .padding(.horizontal, AeroricSpace.l)
+        .padding(.vertical, 7)
+        .frame(minHeight: 34)
+        .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(pending ? AeroricColor.warning.opacity(0.1) : AeroricColor.layer2))
+        .accessibilityIdentifier("memory.skill.\(proposal.id)")
+    }
+
+    private func skillMenu(_ proposal: LiveSkillProposal) -> some View {
+        Menu {
+            if proposal.state != "rejected" {
+                Button("编辑…", systemImage: "pencil") { editingSkill = proposal }
+                Menu("版本历史") {
+                    ForEach(proposal.versions.reversed()) { version in
+                        Button(version.n == proposal.activeVersion ? "v\(version.n)（当前）" : "回到 v\(version.n)") {
+                            Task { await store.useVersion(proposal, version.n) }
+                        }
+                        .disabled(version.n == proposal.activeVersion)
+                    }
+                }
+                Divider()
+                if proposal.state == "disabled" {
+                    Button("启用", systemImage: "play") { Task { await store.disable(proposal, false) } }
+                } else {
+                    Button("停用", systemImage: "pause") { Task { await store.disable(proposal, true) } }
+                }
+            }
+            if let task = proposal.taskId {
+                Button("打开来源会话", systemImage: "arrow.up.forward") { onOpenTask(task) }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .foregroundStyle(AeroricColor.textTertiary)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+
     /// B5-2 整理记录.
     @ViewBuilder private var runsContent: some View {
         sectionLabel(MemoryText.runsSummary(store.runsPage))
@@ -223,6 +421,7 @@ public struct MemoryPage: View {
         HStack(spacing: AeroricSpace.m) {
             CheckpointBadge(text: MemoryText.runState(run.state),
                             tint: run.state == "done" ? AeroricColor.success
+                                : run.state == "partial" ? AeroricColor.warning
                                 : run.state == "failed" ? AeroricColor.danger : AeroricColor.textSecondary)
             // CU F2: the title gives way; model, tokens, cost and the
             // reason stay readable.
@@ -246,16 +445,17 @@ public struct MemoryPage: View {
             if let reason = MemoryText.runReason(run) {
                 Text(reason)
                     .font(.system(size: AeroricType.caption))
-                    .foregroundStyle(run.state == "failed" ? AeroricColor.danger : AeroricColor.textSecondary)
+                    .foregroundStyle(run.state == "failed" ? AeroricColor.danger
+                                     : run.state == "partial" ? AeroricColor.warning : AeroricColor.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: 260, alignment: .leading)
                     .layoutPriority(1)
             }
-            if run.state == "done" {
+            if run.state == "done" || run.state == "partial" {
                 CheckpointBadge(text: MemoryText.runOutput(run), tint: AeroricColor.accent)
             }
-            if run.state == "failed" {
+            if run.state == "failed" || run.state == "partial" {
                 Button("重试") { Task { await store.retry(run) } }
                     .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
                     .fixedSize()
@@ -294,7 +494,19 @@ public struct MemoryPage: View {
 
     @ViewBuilder private func row(_ item: LiveMemoryItem) -> some View {
         let pending = item.state == "pending"
-        HStack(spacing: AeroricSpace.m) {
+        let foldable = !pending && MemoryText.isLong(item.text)
+        let open = pending || expanded.contains(item.id)
+        HStack(alignment: open ? .top : .center, spacing: AeroricSpace.m) {
+            if foldable {
+                Image(systemName: open ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .frame(width: 10, height: 18)
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggle(item) }
+                    .accessibilityLabel(open ? "收起" : "展开")
+                    .accessibilityAddTraits(.isButton)
+            }
             Image(systemName: symbol(item))
                 .font(.system(size: AeroricType.secondary))
                 .foregroundStyle(pending ? AeroricColor.warning : item.pinned ? AeroricColor.accent : AeroricColor.textSecondary)
@@ -302,12 +514,28 @@ public struct MemoryPage: View {
             if let category = MemoryText.category(item.category) {
                 CheckpointBadge(text: category, tint: AeroricColor.accent)
             }
-            Text(item.text)
-                .font(.system(size: AeroricType.secondary))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(MemoryText.help(item))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.text)
+                    .font(.system(size: AeroricType.secondary))
+                    .lineLimit(open ? nil : 1)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: open)
+                    .textSelection(.enabled)
+                if open, let source = MemoryText.evidenceLine(item) {
+                    Text(source)
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { if foldable { toggle(item) } }
+            .help(MemoryText.help(item))
+            if item.kind == "experience", let promoted = MemoryText.promotion(store.proposal(for: item.id)) {
+                CheckpointBadge(text: promoted, tint: AeroricColor.accent)
+            }
             if item.kind == "experience" && item.state == "active" {
                 CheckpointBadge(text: MemoryText.confidence(item.confidence),
                                 tint: item.confidence == "high" ? AeroricColor.success
@@ -339,9 +567,15 @@ public struct MemoryPage: View {
             }
         }
         .padding(.horizontal, AeroricSpace.l)
-        .frame(height: 34)
-        .background(Capsule(style: .continuous).fill(pending ? AeroricColor.warning.opacity(0.1) : AeroricColor.layer2))
+        .padding(.vertical, open ? AeroricSpace.m : 0)
+        .frame(minHeight: 34)
+        .background(RoundedRectangle(cornerRadius: 17, style: .continuous)
+            .fill(pending ? AeroricColor.warning.opacity(0.1) : AeroricColor.layer2))
         .accessibilityIdentifier("memory.row.\(item.id)")
+    }
+
+    private func toggle(_ item: LiveMemoryItem) {
+        if expanded.contains(item.id) { expanded.remove(item.id) } else { expanded.insert(item.id) }
     }
 
     private func voteButton(_ item: LiveMemoryItem, helpful: Bool) -> some View {
@@ -601,6 +835,175 @@ struct MemoryExtractSettingsSheet: View {
                 .frame(width: 64, alignment: .leading)
             content()
             Spacer(minLength: 0)
+        }
+    }
+}
+
+/// Q4 (2026-11-02): 整理历史会话 — pick a project and a time, see how many
+/// sessions and roughly what it costs, then run it one session at a time.
+struct MemoryHistorySheet: View {
+    let store: MemoryStore
+    let projects: [(id: String, name: String)]
+    let initialProject: String?
+    let onClose: () -> Void
+    @State private var projectID: String?
+    @State private var days = 30
+
+    static let ranges = [(7, "最近 7 天"), (30, "最近 30 天"), (90, "最近 90 天"), (0, "全部")]
+
+    private var sinceMs: UInt64? {
+        days == 0 ? nil : UInt64(Date().timeIntervalSince1970 * 1000) - UInt64(days) * 86_400_000
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.l) {
+            Text("整理历史会话").font(.system(size: AeroricType.title, weight: .semibold))
+            Text("用分析模型读导入的历史会话，整理成历史线索和待确认的记忆。")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+                .lineLimit(1)
+            row("项目") {
+                CapsulePicker(title: projects.first { $0.id == projectID }?.name ?? "选择项目", systemImage: "folder") {
+                    ForEach(projects, id: \.id) { project in
+                        Button(project.name) { projectID = project.id }
+                    }
+                }
+                .disabled(store.history.running)
+                .accessibilityIdentifier("memory.history.project")
+            }
+            row("时间") {
+                CapsuleSlider(selection: $days, groupTitle: "整理哪段时间的会话", mode: .titleOnly,
+                              segments: Self.ranges.map { .init(value: $0.0, title: $0.1) })
+                    .disabled(store.history.running)
+            }
+            summary
+            Text("只发对话文字，不发工具输出 · 密钥先遮掉 · 结果进“待确认” · 关掉这个窗口会停下")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button(store.history.running ? "停止" : "关闭") {
+                    if store.history.running { store.stopHistory() } else { onClose() }
+                }
+                .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
+                .accessibilityIdentifier("memory.history.stop")
+                if !store.history.running {
+                    Button("开始整理") { store.startHistory() }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.primary))
+                        .disabled(store.historyPlan.map { MemoryText.historyBlocker($0) != nil } ?? true)
+                        .keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("memory.history.start")
+                }
+            }
+        }
+        .padding(AeroricSpace.xl)
+        .frame(width: 520)
+        .onAppear { projectID = initialProject ?? projects.first?.id }
+        .task(id: "\(projectID ?? "")|\(days)") {
+            if let projectID { await store.planHistory(projectID: projectID, sinceMs: sinceMs) }
+        }
+    }
+
+    @ViewBuilder private var summary: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            if let plan = store.historyPlan {
+                line(MemoryText.historyCount(plan), symbol: "tray.full")
+                line(MemoryText.historyCost(plan), symbol: "dollarsign.circle")
+                line(MemoryText.historyLimit(plan), symbol: "gauge.with.dots.needle.33percent",
+                     tint: plan.remainingToday < plan.pending ? AeroricColor.warning : nil)
+                if let blocker = MemoryText.historyBlocker(plan), store.history.total == 0 {
+                    line(blocker, symbol: "exclamationmark.triangle", tint: AeroricColor.warning)
+                }
+            } else {
+                line("正在统计…", symbol: "hourglass")
+            }
+            if store.history.total > 0 {
+                ProgressView(value: Double(store.history.finished), total: Double(max(store.history.total, 1)))
+                    .progressViewStyle(.linear)
+                    .tint(AeroricColor.accent)
+                line(MemoryText.historyProgress(store.history),
+                     symbol: store.history.running ? "arrow.triangle.2.circlepath" : "checkmark.circle",
+                     tint: store.history.running ? AeroricColor.accent : nil)
+                    .accessibilityIdentifier("memory.history.progress")
+            }
+        }
+        .padding(AeroricSpace.l)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AeroricColor.layer1, in: AeroricRadius.shape(16))
+    }
+
+    private func line(_ text: String, symbol: String, tint: Color? = nil) -> some View {
+        Label(text, systemImage: symbol)
+            .font(.system(size: AeroricType.secondary))
+            .foregroundStyle(tint ?? AeroricColor.textSecondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    private func row<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: AeroricSpace.m) {
+            Text(title)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .frame(width: 64, alignment: .leading)
+            content()
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// B5-3b: 编辑技能提案 — name, description, scope and the SKILL.md.
+struct SkillEditSheet: View {
+    let proposal: LiveSkillProposal
+    let onSave: (LiveSkillEdit) -> Void
+    let onCancel: () -> Void
+    @State private var name = ""
+    @State private var description = ""
+    @State private var text = ""
+    @State private var global = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.l) {
+            Text("编辑技能提案").font(.system(size: AeroricType.title, weight: .semibold))
+            Text(proposal.state == "pending" ? "采纳前随时可改" : "保存会生成新版本，可随时回到旧版")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+            CapsuleField(placeholder: "技能名，如 learned-1a2b3c", text: $name)
+            CapsuleField(placeholder: "一句话：做什么、什么时候用", text: $description)
+            CapsuleSlider(selection: $global, groupTitle: "作用域", mode: .titleOnly,
+                          segments: [.init(value: false, title: "本项目"), .init(value: true, title: "所有项目")])
+            TextEditor(text: $text)
+                .font(AeroricType.mono(AeroricType.code))
+                .scrollIndicators(.never)
+                .scrollContentBackground(.hidden)
+                .padding(AeroricSpace.m)
+                .frame(height: 260)
+                .background(AeroricRadius.shape(AeroricRadius.m).fill(AeroricColor.layer1))
+                .accessibilityIdentifier("memory.skill.body")
+            HStack {
+                Spacer()
+                Button("取消", action: onCancel)
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
+                Button("保存") {
+                    onSave(LiveSkillEdit(
+                        name: name == proposal.name ? nil : name,
+                        description: description == proposal.description ? nil : description,
+                        body: text == proposal.body ? nil : text,
+                        global: global == proposal.global ? nil : global))
+                }
+                .buttonStyle(AeroricCapsuleButtonStyle(.primary))
+                .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("memory.skill.save")
+            }
+        }
+        .padding(AeroricSpace.xl)
+        .frame(width: 560)
+        .onAppear {
+            name = proposal.name
+            description = proposal.description
+            text = proposal.body
+            global = proposal.global
         }
     }
 }

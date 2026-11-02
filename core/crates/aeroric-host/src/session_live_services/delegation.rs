@@ -7,7 +7,7 @@
 use std::sync::{Arc, Weak};
 
 use aeroric_core::sessions::live::delegation::{
-    Child, DelegationError, DelegationHost, ParentInfo,
+    Child, DelegationError, DelegationHost, ParentInfo, WriterRef,
 };
 use aeroric_core::sessions::live::SessionDriver;
 use aeroric_core::storage::Record;
@@ -353,6 +353,13 @@ impl DelegationHost for HostDelegations {
             .is_none_or(|d| !d.snapshot().turn_active)
     }
 
+    fn writers_beside(&self, task_id: &str) -> Vec<WriterRef> {
+        self.live
+            .upgrade()
+            .map(|live| writers_beside(&live, task_id))
+            .unwrap_or_default()
+    }
+
     fn tokens(&self, task_id: &str) -> Option<u64> {
         let state = self.live.upgrade()?.driver(task_id)?.snapshot();
         match (state.input_tokens, state.output_tokens) {
@@ -360,6 +367,44 @@ impl DelegationHost for HostDelegations {
             (i, o) => Some(i.unwrap_or(0) + o.unwrap_or(0)),
         }
     }
+}
+
+/// A record's real local directory; `None` for a remote project.
+fn real_directory(record: &Record, project: &Record) -> Option<std::path::PathBuf> {
+    match working_directory(record, project)? {
+        aeroric_core::tasks::executor::WorkingDirectory::Local { path } => {
+            std::fs::canonicalize(path).ok()
+        }
+        _ => None,
+    }
+}
+
+/// R1-1: other sessions with a running turn that may write, in `task_id`'s
+/// real directory (symbolic links resolved).
+pub(super) fn writers_beside(live: &Live, task_id: &str) -> Vec<WriterRef> {
+    let Some(mine) = live
+        .record(task_id)
+        .and_then(|(project, record)| real_directory(&record, &project))
+    else {
+        return Vec::new();
+    };
+    live.executor
+        .registry()
+        .all()
+        .into_iter()
+        .filter(|(id, _)| id != task_id)
+        .filter(|(_, driver)| {
+            let state = driver.snapshot();
+            state.turn_active && state.permission.as_deref() != Some("plan")
+        })
+        .filter_map(|(id, _)| {
+            let (project, record) = live.record(&id)?;
+            (real_directory(&record, &project)? == mine).then(|| WriterRef {
+                title: title_of(&record),
+                task_id: id,
+            })
+        })
+        .collect()
 }
 
 fn delegation_failure(request: &Request, error: DelegationError) -> Frame {

@@ -12,7 +12,7 @@ public protocol LiveSessionActions {
     func history(taskID: String) async throws -> [SessionMessage]
     /// History plus the transcript's 统计栏 figures (2026-10-29).
     func historyWithStats(taskID: String) async throws -> (messages: [SessionMessage], stats: SessionTranscriptStats?)
-    func prompt(taskID: String, text: String) async throws
+    func prompt(taskID: String, text: String) async throws -> [LiveSharedWriter]
     func interrupt(taskID: String) async throws
     func respond(taskID: String, requestID: String, decision: LiveDecision, reason: String?) async throws
     /// Answer a question card: exactly one of `value`, `confirmed`, `cancelled`.
@@ -180,6 +180,16 @@ public final class LiveSessionStore {
     public private(set) var delegationRoles: [LiveDelegationRole] = []
     /// B5-1: what the last `/记住` kept (the "已记住" card), until dismissed.
     public private(set) var remembered: LiveMemoryItem?
+    /// R1-1: sessions writing in this directory too, as of the last message.
+    public private(set) var sharedWriters: [LiveSharedWriter] = []
+    private var dismissedWriters: Set<String> = []
+    /// One notice per writer; the session itself is never blocked.
+    public var sharedWriter: LiveSharedWriter? {
+        sharedWriters.first { !dismissedWriters.contains($0.taskId) }
+    }
+    public func dismissSharedWriter() {
+        if let writer = sharedWriter { dismissedWriters.insert(writer.taskId) }
+    }
 
     @ObservationIgnored private let actions: any LiveSessionActions
     @ObservationIgnored private var baseline = 0
@@ -356,7 +366,7 @@ public final class LiveSessionStore {
         }
         if !turnActive { baseline = LiveHistoryMerge.assistantCount(history) }
         model?.echo(text)
-        try await actions.prompt(taskID: taskID, text: text)
+        sharedWriters = try await actions.prompt(taskID: taskID, text: text)
         return .sent
     }
 

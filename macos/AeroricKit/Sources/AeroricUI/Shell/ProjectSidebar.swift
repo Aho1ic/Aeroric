@@ -516,6 +516,7 @@ public struct ProjectSidebar: View {
         }
         Button("会话管理…", systemImage: "list.bullet.rectangle") { managingProject = project }
         Button("项目记忆…", systemImage: "brain") { onProjectAction(project.id, .memory) }
+        Button("项目 Wiki…", systemImage: "book.closed") { onProjectAction(project.id, .wiki) }
         Menu("移动到分组") {
             ForEach(projectGroupNames, id: \.self) { name in
                 Button(project.projectGroup == name ? "✓ \(name)" : name) { onProjectAction(project.id, .group(name)) }

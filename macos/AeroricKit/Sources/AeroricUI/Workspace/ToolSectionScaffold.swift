@@ -14,9 +14,10 @@ public enum ToolSectionStatus: Equatable, Sendable {
     }
 }
 
-/// Uniform chrome for the tool sections (Files, Git, IDE, …): a 44pt header
-/// with icon, title, project breadcrumb, an optional way back to the current
-/// task and section actions, then the content on the canvas.
+/// Uniform chrome for the tool sections (Files, Git, IDE, …). The icon,
+/// title and project go to the window toolbar (`WindowTitle`, 2026-11-02);
+/// a 44pt row keeps the section actions and the way back to the current
+/// task, and is left out when there are neither.
 public struct ToolSectionScaffold<Toolbar: View, Content: View>: View {
     let title: String
     let systemImage: String
@@ -43,8 +44,10 @@ public struct ToolSectionScaffold<Toolbar: View, Content: View>: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            header
-            HairlineDivider()
+            if hasRow {
+                header
+                HairlineDivider()
+            }
             if case let .partial(note) = status {
                 Label(note, systemImage: "info.circle")
                     .font(.system(size: AeroricType.caption))
@@ -65,23 +68,22 @@ public struct ToolSectionScaffold<Toolbar: View, Content: View>: View {
             }
         }
         .background(AeroricColor.canvas)
+        .windowTitle(WindowTitle(title, subtitle: subtitle, systemImage: systemImage))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("section.\(title)")
     }
 
+    private var subtitle: String? {
+        if case .comingSoon = status { return [projectName, "即将支持"].compactMap { $0 }.joined(separator: " · ") }
+        return projectName
+    }
+
+    private var hasRow: Bool {
+        (status.showsContent && Toolbar.self != EmptyView.self) || returnTitle != nil
+    }
+
     private var header: some View {
         HStack(spacing: AeroricSpace.m) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(AeroricColor.textSecondary)
-            Text(title).font(.system(size: AeroricType.headline, weight: .semibold))
-            if let projectName {
-                Text("· \(projectName)")
-                    .font(.system(size: AeroricType.secondary))
-                    .foregroundStyle(AeroricColor.textTertiary)
-                    .lineLimit(1)
-            }
-            if case .comingSoon = status { ComingSoonBadge() }
             Spacer(minLength: AeroricSpace.m)
             if status.showsContent { toolbar }
             if let returnTitle {

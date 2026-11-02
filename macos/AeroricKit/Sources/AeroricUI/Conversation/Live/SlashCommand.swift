@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Composer slash commands (Q15). Only these five are interpreted; any other
 /// `/text` is sent to the Agent as an ordinary message.
@@ -45,6 +46,59 @@ public enum SlashCommand: Equatable, Sendable {
             Suggestion(command: "/clear", detail: "以同样配置开新会话", enabled: true),
         ]
         return all.filter { $0.command.dropFirst().hasPrefix(prefix) }
+    }
+
+    /// 2026-11-02: what `/` offers before a session exists — only what can
+    /// take effect without one.
+    public static func newSessionSuggestions(for text: String, harness: String) -> [Suggestion] {
+        guard text.hasPrefix("/"), !text.contains(" "), !text.contains("\n") else { return [] }
+        let prefix = text.dropFirst().lowercased()
+        let all = [
+            Suggestion(command: "/记住", detail: "记进这个项目的记忆，不开会话", enabled: true),
+            Suggestion(command: "/plan", detail: "以只读规划开始：先出方案再动手", enabled: true),
+            Suggestion(command: "/goal", detail: harness == "codex" ? "目标模式还没接通" : "仅 Codex 支持", enabled: false),
+        ]
+        return all.filter { $0.command.dropFirst().lowercased().hasPrefix(prefix) || prefix.isEmpty }
+    }
+}
+
+/// 2026-11-02: the `/` list above a composer, one capsule row per command.
+public struct SlashSuggestionPopup: View {
+    let suggestions: [SlashCommand.Suggestion]
+    let identifier: String
+    let onPick: (SlashCommand.Suggestion) -> Void
+
+    public init(suggestions: [SlashCommand.Suggestion], identifier: String,
+                onPick: @escaping (SlashCommand.Suggestion) -> Void) {
+        self.suggestions = suggestions
+        self.identifier = identifier
+        self.onPick = onPick
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(suggestions) { suggestion in
+                HoverCapsuleRow(selected: false, height: 30, action: { onPick(suggestion) }) {
+                    HStack(spacing: AeroricSpace.m) {
+                        Text(suggestion.command)
+                            .font(.system(size: AeroricType.secondary, weight: .medium))
+                            .frame(width: 92, alignment: .leading)
+                        Text(suggestion.detail)
+                            .font(.system(size: AeroricType.secondary))
+                            .foregroundStyle(AeroricColor.textSecondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                }
+                .disabled(!suggestion.enabled)
+                .opacity(suggestion.enabled ? 1 : 0.5)
+            }
+        }
+        .padding(AeroricSpace.s)
+        .frame(maxWidth: 420, alignment: .leading)
+        .glassSurface(.popover, in: AeroricRadius.shape(AeroricRadius.l))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier(identifier)
     }
 }
 

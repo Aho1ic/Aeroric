@@ -143,10 +143,29 @@ public struct NewSessionHome: View {
 
     // MARK: - Composer
 
-    private var composer: some View {
+    private var slashSuggestions: [SlashCommand.Suggestion] {
+        draft.isEditable ? SlashCommand.newSessionSuggestions(for: draft.task.prompt, harness: harness) : []
+    }
+
+    private func pick(_ suggestion: SlashCommand.Suggestion) {
+        switch suggestion.command {
+        case "/plan":
+            draft.selectPermission("plan")
+            draft.task.prompt = ""
+        default:
+            draft.task.prompt = suggestion.command + " "
+        }
+        focusRequest += 1
+    }
+
+    @ViewBuilder private var composer: some View {
+        if !slashSuggestions.isEmpty {
+            SlashSuggestionPopup(suggestions: slashSuggestions, identifier: "new-session.slash", onPick: pick)
+                .padding(.bottom, AeroricSpace.s)
+        }
         ComposerCard(
             text: $draft.task.prompt, attachments: $draft.task.attachmentPaths,
-            placeholder: "描述你想完成的事…", minLines: 3, isEditable: draft.isEditable,
+            placeholder: "描述你想完成的事，或输入 / 使用命令", minLines: 3, isEditable: draft.isEditable,
             acceptsAttachments: true,
             sendState: blockingReasons.first.map(ComposerSendState.blocked) ?? .ready,
             identifierPrefix: "new-session", focusRequest: focusRequest, onSend: onSubmit

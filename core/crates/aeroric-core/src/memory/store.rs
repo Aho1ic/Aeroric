@@ -111,7 +111,9 @@ impl Store {
                 counted INTEGER NOT NULL);
              CREATE INDEX IF NOT EXISTS runs_at ON runs(at_ms);
              CREATE TABLE IF NOT EXISTS extracted(task_id TEXT PRIMARY KEY, hash TEXT NOT NULL,
-                at_ms INTEGER NOT NULL);",
+                at_ms INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS proposals(id TEXT PRIMARY KEY, experience_id TEXT NOT NULL UNIQUE,
+                body TEXT NOT NULL, updated_ms INTEGER NOT NULL);",
             cjk::FTS_TOKENIZER
         ))?;
         // B5-3a: schema 1 → 2 only adds columns.
@@ -166,6 +168,69 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// B5-3b: skill proposals, stored whole.
+    pub(super) fn put_proposal(
+        &self,
+        p: &aeroric_protocol::memory::SkillProposal,
+    ) -> Result<(), MemoryError> {
+        self.conn.execute(
+            "INSERT INTO proposals(id, experience_id, body, updated_ms) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET body = excluded.body, updated_ms = excluded.updated_ms",
+            params![
+                p.id,
+                p.experience_id,
+                serde_json::to_string(p).unwrap_or_default(),
+                p.updated_ms as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn proposal_where(
+        &self,
+        filter: &str,
+        arg: &str,
+    ) -> Result<Option<aeroric_protocol::memory::SkillProposal>, MemoryError> {
+        let body: Option<String> = self
+            .conn
+            .query_row(
+                &format!("SELECT body FROM proposals WHERE {filter} = ?1"),
+                [arg],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(body.and_then(|b| serde_json::from_str(&b).ok()))
+    }
+
+    pub(super) fn proposal(
+        &self,
+        id: &str,
+    ) -> Result<Option<aeroric_protocol::memory::SkillProposal>, MemoryError> {
+        self.proposal_where("id", id)
+    }
+
+    pub(super) fn proposal_for(
+        &self,
+        experience_id: &str,
+    ) -> Result<Option<aeroric_protocol::memory::SkillProposal>, MemoryError> {
+        self.proposal_where("experience_id", experience_id)
+    }
+
+    pub(super) fn proposals(
+        &self,
+    ) -> Result<Vec<aeroric_protocol::memory::SkillProposal>, MemoryError> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT body FROM proposals ORDER BY updated_ms DESC")?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .iter()
+            .filter_map(|b| serde_json::from_str(b).ok())
+            .collect())
     }
 
     /// The active session clue a task's extraction left, if any.
@@ -483,6 +548,39 @@ impl Store {
             .optional()?)
     }
 
+    pub(super) fn finish_run(
+        &mut self,
+        run: &aeroric_protocol::memory::MemoryRun,
+        task_id: &str,
+        hash: &str,
+        now_ms: u64,
+    ) -> Result<(), MemoryError> {
+        let tx = self.conn.transaction()?;
+        let counted = run.state != aeroric_protocol::memory::MemoryRunState::Skipped;
+        tx.execute(
+            "INSERT OR REPLACE INTO runs(id, at_ms, body, counted) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                run.id,
+                run.at_ms as i64,
+                serde_json::to_string(run).unwrap_or_default(),
+                counted as i64
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO extracted(task_id, hash, at_ms) VALUES (?1, ?2, ?3)
+             ON CONFLICT(task_id) DO UPDATE SET hash = excluded.hash, at_ms = excluded.at_ms",
+            params![task_id, hash, now_ms as i64],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn execute_for_test(&self, sql: &str) -> Result<(), MemoryError> {
+        self.conn.execute_batch(sql)?;
+        Ok(())
+    }
+
     pub(super) fn mark_extracted(
         &self,
         task_id: &str,
@@ -636,24 +734,21 @@ impl Store {
         };
         let expr = expr.replace(" AND ", " OR ");
         let mut statement = self.conn.prepare(
-            "SELECT id, CAST(bm25(items_fts) * 1000 AS INTEGER) FROM items_fts
-             WHERE items_fts MATCH ?1 ORDER BY bm25(items_fts) LIMIT ?2",
+            "SELECT items.id, CAST(bm25(items_fts) * 1000 AS INTEGER)
+             FROM items_fts JOIN items ON items.id = items_fts.id
+             WHERE items_fts MATCH ?1 AND items.state = 'active'
+               AND (items.project = '' OR items.project = ?2)
+             ORDER BY bm25(items_fts) LIMIT ?3",
         )?;
         let hits = statement
-            .query_map(params![expr, (limit * 4) as i64], |row| {
+            .query_map(params![expr, project_id, limit as i64], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         let mut out = Vec::new();
         for (id, rank) in hits {
-            let Some(item) = self.get(&id)? else { continue };
-            let in_scope =
-                item.project_id.is_none() || item.project_id.as_deref() == Some(project_id);
-            if in_scope && item.state == MemoryState::Active {
+            if let Some(item) = self.get(&id)? {
                 out.push((rank, item));
-            }
-            if out.len() == limit {
-                break;
             }
         }
         Ok(out)

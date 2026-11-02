@@ -425,6 +425,24 @@ public struct LiveSessionView: View {
             // that has ended keeps its figures.
             VStack(spacing: AeroricSpace.xs) {
                 if let item = store.remembered { RememberedCard(item: item, store: store) }
+                if let writer = store.sharedWriter {
+                    HStack(spacing: AeroricSpace.s) {
+                        Image(systemName: "person.2")
+                        Text("「\(writer.title)」也在这个目录里写文件，可能互相覆盖")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                        Button { store.dismissSharedWriter() } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.plain)
+                            .help("知道了")
+                    }
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.warning)
+                    .padding(.horizontal, AeroricSpace.l)
+                    .frame(height: 30)
+                    .background(Capsule(style: .continuous).fill(AeroricColor.warning.opacity(0.12)))
+                    .accessibilityIdentifier("session.live.shared-writer")
+                }
                 if let blocked = store.state?.resumeBlocked, store.state?.live == false {
                     Label(blocked, systemImage: "lock")
                         .font(.system(size: AeroricType.secondary))
@@ -504,29 +522,10 @@ public struct LiveSessionView: View {
     }
 
     private var suggestionList: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(suggestions) { suggestion in
-                Button {
-                    draft = suggestion.command
-                    send()
-                } label: {
-                    HStack {
-                        Text(suggestion.command).font(AeroricType.mono(AeroricType.code))
-                        Text(suggestion.detail).foregroundStyle(AeroricColor.textTertiary)
-                        Spacer()
-                    }
-                    .font(.system(size: AeroricType.secondary))
-                    .padding(.horizontal, AeroricSpace.m)
-                    .frame(height: 26)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!suggestion.enabled)
-            }
+        SlashSuggestionPopup(suggestions: suggestions, identifier: "session.live.slash") { suggestion in
+            draft = suggestion.command
+            send()
         }
-        .padding(AeroricSpace.s)
-        .glassSurface(.popover, in: AeroricRadius.shape(AeroricRadius.m))
-        .accessibilityIdentifier("session.live.slash")
     }
 
     private var modelPicker: some View {

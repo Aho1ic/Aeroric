@@ -503,3 +503,23 @@ public enum LiveSessionRequest {
         return task(taskId, extra)
     }
 }
+
+/// R1-1: another session writing in the same directory (`session.prompt`).
+public struct LiveSharedWriter: Equatable, Sendable, Identifiable {
+    public var taskId: String
+    public var title: String
+    public var id: String { taskId }
+
+    public init(taskId: String, title: String) {
+        self.taskId = taskId
+        self.title = title
+    }
+
+    public static func decodeList(_ value: JSONValue?) -> [LiveSharedWriter] {
+        (value?.arrayValue ?? []).compactMap { item in
+            guard let f = item.objectValue, let id = f["taskId"]?.stringValue else { return nil }
+            return LiveSharedWriter(taskId: id, title: f["title"]?.stringValue ?? "另一个会话")
+        }
+    }
+}
+

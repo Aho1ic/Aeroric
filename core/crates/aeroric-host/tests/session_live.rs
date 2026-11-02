@@ -1468,6 +1468,13 @@ async fn a_delegation_runs_in_a_child_and_its_result_comes_back() {
     assert_eq!(card["origin"], "user");
     assert_eq!(card["sent"], false);
     let child_id = card["childTaskId"].as_str().unwrap().to_string();
+    // The child is renamed just after it is created; wait for that.
+    host.until("the child is renamed", |h| {
+        h.record_of(&child_id)["name"]
+            .as_str()
+            .is_some_and(|n| n.ends_with("（委派·审查员）"))
+    })
+    .await;
     let record = host.record_of(&child_id);
     assert_eq!(record["delegateOf"], "task-1");
     assert_eq!(record["permissionMode"], "plan");
@@ -1762,6 +1769,30 @@ async fn extraction_is_off_until_a_model_is_chosen_and_says_why_it_skips() {
     assert_eq!(outside["code"], "INVALID_ARGUMENT");
 }
 
+/// Q4 (2026-11-02): 整理历史会话 plans from the import index alone and
+/// refuses a session it does not know; nothing reaches a model.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_history_plan_reads_only_the_index() {
+    let host = Host::start(true).await;
+    let plan = host
+        .call(
+            "memory.historyPlan",
+            json!({"projectId": "project-1", "sinceMs": 0}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(plan["sessions"].as_array().unwrap().len(), 0);
+    assert_eq!(plan["pending"], 0);
+    assert_eq!(plan["enabled"], false);
+    assert!(plan.get("model").is_none(), "{plan}");
+    assert!(plan["remainingToday"].as_u64().unwrap() > 0);
+    let unknown = host
+        .call("memory.extractImported", json!({"id": "nope"}))
+        .await
+        .unwrap_err();
+    assert_eq!(unknown["code"], "INVALID_ARGUMENT", "{unknown}");
+}
+
 /// B5-3a (2026-10-31): recall counts and shows how an item fared; the app
 /// and an agent vote; an agent cannot vote on another project's item.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1820,4 +1851,322 @@ async fn feedback_counts_and_stays_in_the_project() {
         .await
         .unwrap();
     assert_eq!(user["item"]["stats"]["wrong"], 1);
+}
+
+/// B5-3b (2026-10-31): three 有用 on an experience propose a skill; it waits
+/// in attention, is edited, accepted (a version), reverted and disabled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_trusted_experience_becomes_a_versioned_skill() {
+    let host = Host::start(true).await;
+    host.start_task("修复超时");
+    let experience = host
+        .structured
+        .memory()
+        .add_experience(
+            "project-1",
+            "CSV 带 BOM：读取改用 utf-8-sig",
+            &aeroric_protocol::memory::ExperienceDetail {
+                problem: "首列名多出 BOM".into(),
+                solution: "encoding=utf-8-sig".into(),
+                ..Default::default()
+            },
+            aeroric_protocol::memory::Confidence::Low,
+            aeroric_core::memory::evidence(Some("task-1"), None, None, "x", 1),
+            1,
+        )
+        .unwrap();
+    for _ in 0..3 {
+        host.call(
+            "memory.feedback",
+            json!({"id": experience.id, "helpful": true}),
+        )
+        .await
+        .unwrap();
+    }
+    let attention = host.call("memory.attention", json!({})).await.unwrap();
+    let proposal = &attention["proposals"][0];
+    assert_eq!(proposal["state"], "pending", "{attention}");
+    let id = proposal["id"].as_str().unwrap().to_string();
+    let edited = host
+        .call(
+            "memory.proposalEdit",
+            json!({"id": id, "edit": {"description": "读带 BOM 的 CSV"}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(edited["proposal"]["description"], "读带 BOM 的 CSV");
+    let accepted = host
+        .call("memory.proposalDecide", json!({"id": id, "accept": true}))
+        .await
+        .unwrap();
+    assert_eq!(accepted["proposal"]["activeVersion"], 1);
+    let v2 = host
+        .call(
+            "memory.proposalEdit",
+            json!({"id": id, "edit": {"body": "# v2"}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(v2["proposal"]["activeVersion"], 2);
+    let back = host
+        .call("memory.skillVersion", json!({"id": id, "version": 1}))
+        .await
+        .unwrap();
+    assert_eq!(back["proposal"]["activeVersion"], 1);
+    let off = host
+        .call("memory.skillDisable", json!({"id": id, "disabled": true}))
+        .await
+        .unwrap();
+    assert_eq!(off["proposal"]["state"], "disabled");
+    let list = host.call("memory.proposals", json!({})).await.unwrap();
+    assert_eq!(list["proposals"].as_array().unwrap().len(), 1);
+    let none = host.call("memory.attention", json!({})).await.unwrap();
+    assert!(none["proposals"].as_array().unwrap().is_empty());
+}
+
+/// B5.5-1 (2026-10-31): a project's notes compile into a Wiki the app reads
+/// and edits and an agent reads, searches and flags.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_projects_notes_become_its_wiki() {
+    let host = Host::start(true).await;
+    host.start_task("修复超时");
+    let root = host._root.join("workspace");
+    let notes = root.join(".agents/notes/implemented/feature");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("2026-10-31-wiki.md"),
+        "# Agent Note: 项目 Wiki\n\nStatus: implemented\n\n## Problem\n\n知识散落。\n\n## Decision\n\n编译成页面。\n",
+    )
+    .unwrap();
+    let report = host
+        .call("wiki.compile", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert_eq!(report["report"]["pages"], 2, "{report}");
+    let page = host
+        .call(
+            "wiki.page",
+            json!({"projectId": "project-1", "slug": "decision-wiki"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page["page"]["status"], "implemented");
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+    let available = host
+        .call("context.wikiAvailable", json!({"token": token}))
+        .await
+        .unwrap();
+    assert_eq!(available["available"], true);
+    let found = host
+        .call(
+            "context.wikiSearch",
+            json!({"token": token, "query": "编译"}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        found["text"].as_str().unwrap().contains("decision-wiki"),
+        "{found}"
+    );
+    let index = host
+        .call("context.wikiRead", json!({"token": token}))
+        .await
+        .unwrap();
+    assert!(index["text"].as_str().unwrap().starts_with("# 索引"));
+    host.call(
+        "context.wikiFlag",
+        json!({"token": token, "slug": "decision-wiki", "text": "缺少后果一节"}),
+    )
+    .await
+    .unwrap();
+    let issues = host
+        .call("wiki.issues", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert_eq!(issues["issues"][0]["kind"], "agent");
+    let bad = host
+        .call(
+            "wiki.exportPlan",
+            json!({"projectId": "project-1", "dir": "../out"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(bad["code"], "INVALID_ARGUMENT");
+}
+
+/// CU 2026-10-31: 停止 on a native session mid-turn settles the task as
+/// cancelled (closing it sends no turn end), and so does a cancel after the
+/// session already went away.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_a_native_session_settles_the_task() {
+    let mut host = Host::start(true).await;
+    host.start_task("修复超时");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(&start, json!({"thread": {"id": "th-c"}}));
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-c", "turn": {"id": "u1"}}),
+    );
+    host.until("running", |h| h.record()["status"] == "running")
+        .await;
+    host.service.cancel(&host.project, "task-1").unwrap();
+    host.until("cancelled", |h| h.record()["status"] == "cancelled")
+        .await;
+}
+
+/// R1-1: another session writing in the real directory refuses a writing
+/// delegation from a different parent and is mentioned on a plain message.
+#[tokio::test]
+async fn a_second_session_in_the_directory_is_refused_or_told() {
+    let mut host = Host::start(true).await;
+    host.start_task("重构会话列表");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(&start, json!({"thread": {"id": "th-1"}}));
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-1", "turn": {"id": "u1"}}),
+    );
+    host.until("the first turn is running", |h| {
+        h.structured
+            .registry()
+            .get("task-1")
+            .is_some_and(|d| d.snapshot().turn_active)
+    })
+    .await;
+
+    host.service
+        .create(
+            &host.project,
+            NewTask {
+                id: "task-2".into(),
+                project_id: "project-1".into(),
+                prompt: "写文档".into(),
+                agent: "codex".into(),
+                permission_mode: "ask".into(),
+                immediate: true,
+                selected_model: None,
+                reasoning_effort: None,
+                speed: None,
+                dsh_agent_preset: None,
+                agent_config_id: None,
+                images: vec![],
+                texts: vec![],
+            },
+        )
+        .expect("create");
+    host.service
+        .start(
+            &host.project,
+            "task-2",
+            "op-2",
+            true,
+            None,
+            false,
+            Attachments {
+                images: vec![],
+                texts: vec![],
+            },
+            HostWindowFacts::default(),
+        )
+        .expect("start");
+    let start = peer.expect("thread/start").await;
+    peer.reply(&start, json!({"thread": {"id": "th-2"}}));
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u2"}}));
+
+    let refused = host
+        .call(
+            "delegation.start",
+            json!({"taskId": "task-2", "contract": {"instruction": "改",
+                "workspace": "shared", "permission": "ask"}}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        refused["message"].as_str().unwrap().contains("正被"),
+        "{refused}"
+    );
+    let reader = host
+        .call(
+            "delegation.start",
+            json!({"taskId": "task-2", "contract": {"instruction": "查"}}),
+        )
+        .await;
+    assert!(reader.is_ok(), "{reader:?}");
+    let sent = host
+        .call(
+            "session.prompt",
+            json!({"taskId": "task-2", "text": "接着写"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent["sharedWriters"][0]["taskId"], "task-1", "{sent}");
+    assert_eq!(sent["accepted"], true);
+}
+
+/// R1-1: a project folder that went away keeps its pages and says so.
+#[tokio::test]
+async fn a_missing_project_folder_keeps_the_wiki_and_says_so() {
+    let host = Host::start(true).await;
+    host.start_task("修复超时");
+    let root = host._root.join("workspace");
+    let notes = root.join(".agents/notes/implemented/feature");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("2026-10-31-wiki.md"),
+        "# Agent Note: 项目 Wiki\n\nStatus: implemented\n\n## Problem\n\n知识散落。\n",
+    )
+    .unwrap();
+    host.call("wiki.compile", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    let away = host._root.join("workspace-away");
+    std::fs::rename(&root, &away).unwrap();
+    let report = host
+        .call("wiki.compile", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert_eq!(report["report"]["removed"], 0, "{report}");
+    let pages = host
+        .call("wiki.pages", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert_eq!(pages["sourcesUnavailable"]["all"], true, "{pages}");
+    assert!(host
+        .call(
+            "wiki.page",
+            json!({"projectId": "project-1", "slug": "decision-wiki"}),
+        )
+        .await
+        .is_ok());
+    std::fs::rename(&away, &root).unwrap();
+    host.call("wiki.compile", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    let pages = host
+        .call("wiki.pages", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert_eq!(pages["sourcesUnavailable"]["all"], false, "{pages}");
 }

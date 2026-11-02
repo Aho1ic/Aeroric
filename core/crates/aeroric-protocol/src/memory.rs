@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub const LIST_METHOD: &str = "memory.list";
 pub const REMEMBER_METHOD: &str = "memory.remember";
 pub const CONFIRM_METHOD: &str = "memory.confirm";
+pub const CONFIRM_MANY_METHOD: &str = "memory.confirmMany";
 pub const ARCHIVE_METHOD: &str = "memory.archive";
 pub const PIN_METHOD: &str = "memory.pin";
 pub const MOVE_METHOD: &str = "memory.move";
@@ -27,6 +28,16 @@ pub const MODELS_METHOD: &str = "memory.models";
 pub const IMPORT_NATIVE_METHOD: &str = "memory.importNative";
 // B5-3a (2026-10-31): was it any use.
 pub const FEEDBACK_METHOD: &str = "memory.feedback";
+// B5-3b (2026-10-31): skill proposals.
+pub const PROPOSALS_METHOD: &str = "memory.proposals";
+pub const PROPOSAL_EDIT_METHOD: &str = "memory.proposalEdit";
+pub const PROPOSAL_DECIDE_METHOD: &str = "memory.proposalDecide";
+pub const SKILL_VERSION_METHOD: &str = "memory.skillVersion";
+pub const SKILL_DISABLE_METHOD: &str = "memory.skillDisable";
+/// Q4 (2026-11-02): 整理历史会话 — what one project's imported sessions
+/// would cost, then one session at a time.
+pub const HISTORY_PLAN_METHOD: &str = "memory.historyPlan";
+pub const EXTRACT_IMPORTED_METHOD: &str = "memory.extractImported";
 /// B5-3a: experiences kept from one extraction.
 pub const EXTRACT_MAX_EXPERIENCES: usize = 2;
 
@@ -226,6 +237,8 @@ impl Default for MemorySettings {
 #[serde(rename_all = "camelCase")]
 pub enum MemoryRunState {
     Done,
+    /// R1-1: some of what the model produced did not reach the store.
+    Partial,
     Failed,
     Skipped,
 }
@@ -258,6 +271,106 @@ pub struct MemoryRun {
     /// B5-3a.
     #[serde(default)]
     pub experiences: u32,
+    /// R1-1: items the store failed to write; the run is retried.
+    #[serde(default)]
+    pub failed_writes: u32,
+}
+
+/// Q4: one imported session 整理历史会话 could send.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryCandidate {
+    pub id: String,
+    pub title: String,
+    pub agent: String,
+    pub last_at_ms: u64,
+    /// Already extracted: skipped, not counted.
+    pub done: bool,
+}
+
+/// Q4: what 整理历史会话 would do, before anything is sent. The tokens and
+/// cost are estimated from file sizes; nothing is read or called to plan.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPlan {
+    pub sessions: Vec<HistoryCandidate>,
+    /// Not extracted yet.
+    pub pending: u32,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// `None` when no analysis model is chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// Extractions left under today's limit.
+    pub remaining_today: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The project uses memory; nothing is extracted otherwise.
+    pub enabled: bool,
+}
+
+/// B5-3b: where a skill proposal stands (Q-M25, Q-M26).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SkillProposalState {
+    Pending,
+    Accepted,
+    Rejected,
+    Disabled,
+}
+
+/// One accepted version of a learned skill (written once, never changed).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillVersion {
+    pub n: u32,
+    pub name: String,
+    pub description: String,
+    pub body: String,
+    pub at_ms: u64,
+}
+
+/// B5-3b: an experience proposed as a skill (Q-M22–Q-M26).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillProposal {
+    pub id: String,
+    pub experience_id: String,
+    /// The session the experience came from (需要我处理 hangs it there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Set when accepted: sessions under this folder get it (unless global).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
+    #[serde(default)]
+    pub global: bool,
+    pub name: String,
+    pub description: String,
+    /// The SKILL.md (what the next version, or the pending proposal, holds).
+    pub body: String,
+    pub state: SkillProposalState,
+    #[serde(default)]
+    pub versions: Vec<SkillVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_version: Option<u32>,
+    pub created_ms: u64,
+    pub updated_ms: u64,
+}
+
+/// 编辑: any of these.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkillEdit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global: Option<bool>,
 }
 
 /// A harness's own memory file, shown read-only (Q-M8).

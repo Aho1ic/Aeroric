@@ -134,12 +134,17 @@ pub struct StructuredExecutor {
     boards: Arc<super::board::Boards>,
     /// B5-1: long-term memory (the profile a starting session is handed).
     memory: Arc<crate::memory::Memory>,
+    /// B5.5-1: project Wikis.
+    wikis: Arc<crate::knowledge::Wikis>,
     /// B4′: how to start the context server (`program`, `data_dir`); unset
     /// gives sessions none (tests, and hosts that opt out).
     context_program: Mutex<Option<(String, String)>>,
     context_tokens: Arc<super::context_server::ContextTokens>,
     runtime: tokio::runtime::Handle,
     registry: Arc<DriverRegistry>,
+    /// CU 2026-10-31: each native session's (project, generation), so a
+    /// cancel can settle the task even when no turn end will arrive.
+    owners: Mutex<std::collections::HashMap<String, (String, u64)>>,
     servers: Mutex<HashMap<ServerKey, Arc<CodexServer>>>,
     claude_launchers: Mutex<HashMap<ClaudeKey, ClaudeLauncher>>,
 }
@@ -195,10 +200,12 @@ impl StructuredExecutor {
             delegations,
             boards: Arc::default(),
             memory: Arc::default(),
+            wikis: Arc::default(),
             context_program: Mutex::new(None),
             context_tokens: Arc::default(),
             runtime: runtime.clone(),
             registry,
+            owners: Mutex::default(),
             servers: Mutex::default(),
             claude_launchers: Mutex::default(),
         });
@@ -335,6 +342,10 @@ impl StructuredExecutor {
         &self.memory
     }
 
+    pub fn wikis(&self) -> &Arc<crate::knowledge::Wikis> {
+        &self.wikis
+    }
+
     /// Tasks whose latest check run failed (the attention queue).
     pub fn check_failures(&self) -> Vec<super::auto_check::CheckFailure> {
         self.turn_changes.checks.failures()
@@ -418,6 +429,10 @@ impl StructuredExecutor {
         if let Some(old) = self.registry.remove(&spec.task_id) {
             let _ = old.close();
         }
+        self.owners.lock().insert(
+            spec.task_id.clone(),
+            (spec.project_id.clone(), spec.generation),
+        );
         let log = self
             .registry
             .log(&spec.task_id)
@@ -639,6 +654,9 @@ impl TaskExecutor for StructuredExecutor {
         if let Some(driver) = self.registry.get(&request.task_id) {
             // Still open here: the same session continues under the new generation.
             driver.rebind(request.generation);
+            if let Some(owner) = self.owners.lock().get_mut(&request.task_id) {
+                owner.1 = request.generation;
+            }
             return driver.attach().map_err(|error| ExecutorFailure::Spawn {
                 reason: error.to_string(),
             });
@@ -668,7 +686,27 @@ impl TaskExecutor for StructuredExecutor {
     }
 
     fn cancel(&self, task_id: &str, target: &CancelTarget) -> Execution<()> {
-        if self.close_session(task_id) {
+        // CU 2026-10-31: closing a native session sends no turn end (it
+        // unsubscribes first), so the task stayed `running` after 停止 —
+        // also when its process had already gone. Settle it here.
+        let owner = self.owners.lock().remove(task_id);
+        let closed = self.close_session(task_id);
+        if let Some((project_id, generation)) = owner.clone() {
+            // Off this call: the task service holds its lock while it cancels,
+            // and recording the status takes the same lock.
+            let sink = Arc::clone(&self.sink);
+            let task = task_id.to_string();
+            self.runtime.spawn_blocking(move || {
+                sink.status(
+                    &project_id,
+                    &task,
+                    generation,
+                    aeroric_protocol::task::TaskStatus::Cancelled,
+                    None,
+                );
+            });
+        }
+        if closed || owner.is_some() {
             return Ok(());
         }
         self.inner.cancel(task_id, target)

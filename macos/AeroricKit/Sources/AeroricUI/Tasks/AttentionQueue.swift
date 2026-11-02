@@ -20,6 +20,8 @@ public enum AttentionQueue {
         case boardNeedsYou
         /// B5-1: an agent proposed a memory.
         case memoryNeedsYou
+        /// B5-3b: an experience was proposed as a skill.
+        case skillProposalNeedsYou
 
         public var text: String {
             switch self {
@@ -31,6 +33,7 @@ public enum AttentionQueue {
             case .delegationNeedsYou: "委派要你定"
             case .boardNeedsYou: "黑板要你定"
             case .memoryNeedsYou: "记忆待确认"
+            case .skillProposalNeedsYou: "技能提案待审"
             }
         }
     }
@@ -52,53 +55,79 @@ public enum AttentionQueue {
         public var detail: String?
         /// When the row's reason happened; the queue sorts by it.
         public var atMs: UInt64
-        public var id: String { task.id }
+        /// CU 2026-10-31: memory and skill rows stand beside the task's own
+        /// row, so they get their own id.
+        public var id: String {
+            switch reason {
+            case .memoryNeedsYou: "\(task.id)#memory"
+            case .skillProposalNeedsYou: "\(task.id)#skill"
+            default: task.id
+            }
+        }
     }
 
     /// Failed and interrupted tasks stay listed this long, so old ones do not pile up.
     public static let recentWindowMs: UInt64 = 24 * 60 * 60 * 1000
 
-    /// Waiting first (they block an agent), then the newest. A task is listed
-    /// once: its own status wins over a failed check, which then shows as detail.
+    /// Waiting first (they block an agent), then the newest. A task's own row
+    /// is listed once: its status wins over a failed check, which then shows
+    /// as detail. Memory proposals and skill proposals get rows of their own
+    /// beside it (CU 2026-10-31: a pending memory hid a skill proposal).
     public static func items(_ tasks: [TaskStore.TaskEntry], checkFailures: [String: CheckFailure] = [:],
                              reviews: [String: CheckFailure] = [:], delegations: [String: CheckFailure] = [:],
                              boards: [String: CheckFailure] = [:], memories: [String: CheckFailure] = [:],
-                             nowMs: UInt64) -> [Item] {
-        tasks.compactMap { task -> Item? in
-            guard !task.archived else { return nil }
-            let updated = task.updatedAtMs ?? task.createdAtMs ?? 0
-            let check = checkFailures[task.id].flatMap { nowMs <= $0.atMs + recentWindowMs ? $0 : nil }
-            switch task.status {
-            case "input_required":
-                return Item(task: task, reason: .waitingOnYou, detail: check?.summary, atMs: updated)
-            // A `where` binds only the pattern before it, so both share one guard.
-            case "failed" where nowMs <= updated + recentWindowMs,
-                 "interrupted" where nowMs <= updated + recentWindowMs:
-                return Item(task: task, reason: task.status == "failed" ? .failed : .interrupted,
-                            detail: check?.summary, atMs: updated)
-            default:
-                if let check {
-                    return Item(task: task, reason: .checksFailed, detail: check.summary, atMs: check.atMs)
-                }
-                if let review = reviews[task.id] {
-                    return Item(task: task, reason: .reviewNeedsYou, detail: review.summary, atMs: review.atMs)
-                }
-                if let delegation = delegations[task.id] {
-                    return Item(task: task, reason: .delegationNeedsYou, detail: delegation.summary,
-                                atMs: delegation.atMs)
-                }
-                if let board = boards[task.id] {
-                    return Item(task: task, reason: .boardNeedsYou, detail: board.summary, atMs: board.atMs)
-                }
-                guard let memory = memories[task.id] else { return nil }
-                return Item(task: task, reason: .memoryNeedsYou, detail: memory.summary, atMs: memory.atMs)
+                             skills: [String: CheckFailure] = [:], nowMs: UInt64) -> [Item] {
+        tasks.flatMap { task -> [Item] in
+            guard !task.archived else { return [] }
+            var rows: [Item] = []
+            if let row = primary(task, checkFailures: checkFailures, reviews: reviews, delegations: delegations,
+                                 boards: boards, nowMs: nowMs) {
+                rows.append(row)
             }
+            if let memory = memories[task.id] {
+                rows.append(Item(task: task, reason: .memoryNeedsYou, detail: memory.summary, atMs: memory.atMs))
+            }
+            if let skill = skills[task.id] {
+                rows.append(Item(task: task, reason: .skillProposalNeedsYou, detail: skill.summary, atMs: skill.atMs))
+            }
+            return rows
         }
         .sorted { lhs, rhs in
             let l = lhs.reason == .waitingOnYou ? 0 : 1
             let r = rhs.reason == .waitingOnYou ? 0 : 1
             if l != r { return l < r }
             return lhs.atMs > rhs.atMs
+        }
+    }
+
+    /// The task's own row: its status, else a failed check, review,
+    /// delegation or board.
+    private static func primary(_ task: TaskStore.TaskEntry, checkFailures: [String: CheckFailure],
+                                reviews: [String: CheckFailure], delegations: [String: CheckFailure],
+                                boards: [String: CheckFailure], nowMs: UInt64) -> Item? {
+        let updated = task.updatedAtMs ?? task.createdAtMs ?? 0
+        let check = checkFailures[task.id].flatMap { nowMs <= $0.atMs + recentWindowMs ? $0 : nil }
+        switch task.status {
+        case "input_required":
+            return Item(task: task, reason: .waitingOnYou, detail: check?.summary, atMs: updated)
+        // A `where` binds only the pattern before it, so both share one guard.
+        case "failed" where nowMs <= updated + recentWindowMs,
+             "interrupted" where nowMs <= updated + recentWindowMs:
+            return Item(task: task, reason: task.status == "failed" ? .failed : .interrupted,
+                        detail: check?.summary, atMs: updated)
+        default:
+            if let check {
+                return Item(task: task, reason: .checksFailed, detail: check.summary, atMs: check.atMs)
+            }
+            if let review = reviews[task.id] {
+                return Item(task: task, reason: .reviewNeedsYou, detail: review.summary, atMs: review.atMs)
+            }
+            if let delegation = delegations[task.id] {
+                return Item(task: task, reason: .delegationNeedsYou, detail: delegation.summary,
+                            atMs: delegation.atMs)
+            }
+            guard let board = boards[task.id] else { return nil }
+            return Item(task: task, reason: .boardNeedsYou, detail: board.summary, atMs: board.atMs)
         }
     }
 }
@@ -121,9 +150,6 @@ public struct AttentionListView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("需要我处理")
-                .font(.system(size: AeroricType.title, weight: .semibold))
-                .padding(AeroricSpace.xl)
             if items.isEmpty {
                 ContentUnavailableView("没有需要你处理的事", systemImage: "checkmark.circle",
                                        description: Text("等你回答的审批与问题，以及最近 24 小时失败、被中断或检查没通过的任务会出现在这里。"))
@@ -134,13 +160,15 @@ public struct AttentionListView: View {
                         if onOpenItem?(item) != true { onOpen(item.task.id) }
                     } label: { row(item) }
                         .buttonStyle(.plain)
-                        .accessibilityIdentifier("attention.row.\(item.task.id)")
+                        .accessibilityIdentifier("attention.row.\(item.id)")
                 }
                 .listStyle(.inset)
             }
         }
         .frame(maxWidth: NativePanelGeometry.mainShell.readingColumnWidth, maxHeight: .infinity, alignment: .topLeading)
         .frame(maxWidth: .infinity)
+        .windowTitle(WindowTitle("需要我处理", subtitle: items.isEmpty ? nil : "\(items.count) 项",
+                                 systemImage: "bell.badge"))
         .accessibilityIdentifier("attention.page")
     }
 

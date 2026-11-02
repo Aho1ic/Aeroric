@@ -5,11 +5,50 @@
 
 use std::collections::HashSet;
 
-use aeroric_protocol::memory::{MemoryDraft, MemoryKind, MemoryRun, MemoryRunState};
+use aeroric_protocol::memory::{
+    HistoryCandidate, HistoryPlan, MemoryDraft, MemoryKind, MemoryRun, MemoryRunState,
+    EXTRACT_MAX_CHARS,
+};
 
 use super::extract::{self, Transcript};
-use super::{evidence, Memory};
+use super::{evidence, Memory, MemoryError};
 use crate::settings::model_detect::ChatOnce;
+
+/// R1-1: how one extraction's writes went. A refusal (forgotten, looks like a
+/// key, malformed) is the store doing its job; anything else lost data.
+#[derive(Default)]
+struct Writes {
+    written: u32,
+    refused: u32,
+    failed: u32,
+    first_failure: Option<String>,
+}
+
+impl Writes {
+    fn note<T>(&mut self, result: Result<T, MemoryError>) -> Option<T> {
+        match result {
+            Ok(value) => {
+                self.written += 1;
+                Some(value)
+            }
+            Err(
+                MemoryError::Empty
+                | MemoryError::TooLong
+                | MemoryError::Secret(_)
+                | MemoryError::Forgotten
+                | MemoryError::WrongState,
+            ) => {
+                self.refused += 1;
+                None
+            }
+            Err(error) => {
+                self.failed += 1;
+                self.first_failure.get_or_insert(error.to_string());
+                None
+            }
+        }
+    }
+}
 
 /// What the host knows about the session being extracted.
 pub struct Session<'a> {
@@ -53,7 +92,80 @@ pub fn day_start_ms(now_ms: u64) -> u64 {
         .unwrap_or(now_ms - now_ms % 86_400_000)
 }
 
+/// Q4: an imported session as 整理历史会话 plans it — its file size stands
+/// in for its text, which is not read to plan.
+pub struct HistorySource {
+    pub id: String,
+    pub title: String,
+    pub agent: String,
+    pub last_at_ms: u64,
+    pub bytes: u64,
+}
+
+/// The instructions and what is kept, sent with every extraction.
+const PROMPT_TOKENS: u64 = 1_500;
+/// A reply is a clue and a few candidates.
+const REPLY_TOKENS: u64 = 400;
+
+/// Rough tokens for one session: a transcript file is mostly JSON around the
+/// text (about a quarter is text), the text is cut at `EXTRACT_MAX_CHARS`,
+/// and a character is about half a token.
+pub fn history_tokens(bytes: u64) -> (u64, u64) {
+    let chars = (bytes / 4).min(EXTRACT_MAX_CHARS as u64);
+    (chars / 2 + PROMPT_TOKENS, REPLY_TOKENS)
+}
+
 impl Memory {
+    /// Q4: what extracting these sessions would cost; already extracted
+    /// ones are listed as done and left out of the sums.
+    pub fn history_plan(
+        &self,
+        project_id: &str,
+        sources: &[HistorySource],
+        now_ms: u64,
+    ) -> HistoryPlan {
+        let settings = self.settings();
+        let model = settings
+            .model
+            .clone()
+            .filter(|_| settings.connection_id.is_some());
+        let mut plan = HistoryPlan {
+            enabled: self.project_enabled(project_id),
+            remaining_today: settings
+                .daily_limit
+                .saturating_sub(self.counted_since(day_start_ms(now_ms))),
+            model: model.clone(),
+            ..HistoryPlan::default()
+        };
+        for source in sources {
+            let done = self.extracted(&source.id).is_some();
+            if !done {
+                let (input, output) = history_tokens(source.bytes);
+                plan.pending += 1;
+                plan.input_tokens += input;
+                plan.output_tokens += output;
+            }
+            plan.sessions.push(HistoryCandidate {
+                id: source.id.clone(),
+                title: source.title.clone(),
+                agent: source.agent.clone(),
+                last_at_ms: source.last_at_ms,
+                done,
+            });
+        }
+        plan.sessions
+            .sort_by(|a, b| b.last_at_ms.cmp(&a.last_at_ms));
+        plan.cost_usd = model.map(|model| {
+            crate::metrics::analytics::estimate_cost_usd(
+                &model,
+                plan.input_tokens,
+                plan.output_tokens,
+            )
+            .0
+        });
+        plan
+    }
+
     /// Extract one session. `Err` means nothing was done and nothing is
     /// recorded (no model chosen, the day's limit reached, already done);
     /// otherwise the row it recorded.
@@ -91,6 +203,7 @@ impl Memory {
             facts: 0,
             candidates: 0,
             experiences: 0,
+            failed_writes: 0,
         };
         if let Some(reason) = skip_reason(self, &session, &transcript) {
             run.reason = Some(reason);
@@ -133,6 +246,7 @@ impl Memory {
                 return Ok(run);
             }
         };
+        let mut writes = Writes::default();
         if let Some(fact) = &extracted.fact {
             let proof = evidence(
                 Some(session.task_id),
@@ -141,9 +255,9 @@ impl Memory {
                 fact,
                 now_ms,
             );
-            if self
-                .add_session_fact(session.project_id, fact, proof, now_ms)
-                .is_ok()
+            if writes
+                .note(self.add_session_fact(session.project_id, fact, proof, now_ms))
+                .is_some()
             {
                 run.facts = 1;
             }
@@ -161,9 +275,16 @@ impl Memory {
                 &transcript.text,
                 now_ms,
             );
-            if self
-                .add_experience(session.project_id, title, detail, confidence, proof, now_ms)
-                .is_ok()
+            if writes
+                .note(self.add_experience(
+                    session.project_id,
+                    title,
+                    detail,
+                    confidence,
+                    proof,
+                    now_ms,
+                ))
+                .is_some()
             {
                 run.experiences += 1;
             }
@@ -186,14 +307,41 @@ impl Memory {
                 &candidate.quote,
                 now_ms,
             );
-            if let Ok(item) = self.propose(draft, proof, now_ms) {
+            if let Some(item) = writes.note(self.propose(draft, proof, now_ms)) {
                 if item.state == aeroric_protocol::memory::MemoryState::Pending {
                     run.candidates += 1;
                 }
             }
         }
+        let mut notes = Vec::new();
+        if writes.failed > 0 {
+            notes.push(format!(
+                "{} 条没写进去，下次整理时重试：{}",
+                writes.failed,
+                writes.first_failure.as_deref().unwrap_or("存储出错")
+            ));
+        }
         if extracted.dropped > 0 {
-            run.reason = Some(format!("丢掉 {} 条没有原话依据的候选", extracted.dropped));
+            notes.push(format!("丢掉 {} 条没有原话依据的候选", extracted.dropped));
+        }
+        if writes.refused > 0 {
+            notes.push(format!(
+                "{} 条被记忆规则拦下（已遗忘或疑似密钥）",
+                writes.refused
+            ));
+        }
+        run.reason = (!notes.is_empty()).then(|| notes.join("；"));
+        run.failed_writes = writes.failed;
+        if writes.failed > 0 {
+            run.state = if writes.written > 0 {
+                MemoryRunState::Partial
+            } else {
+                MemoryRunState::Failed
+            };
+            // The transcript stays unmarked so the next trigger writes the
+            // rest; `insert` merges what is already there.
+            self.add_run(&run).map_err(|e| e.to_string())?;
+            return Ok(run);
         }
         run.state = MemoryRunState::Done;
         self.record(&run, session.task_id, &transcript.hash, now_ms)?;
@@ -207,8 +355,7 @@ impl Memory {
         hash: &str,
         now_ms: u64,
     ) -> Result<(), String> {
-        self.add_run(run).map_err(|e| e.to_string())?;
-        self.mark_extracted(task_id, hash, now_ms)
+        self.finish_run(run, task_id, hash, now_ms)
             .map_err(|e| e.to_string())
     }
 }
@@ -235,6 +382,124 @@ mod tests {
             })
             .unwrap();
         memory
+    }
+
+    fn source(id: &str, bytes: u64, at: u64) -> super::HistorySource {
+        super::HistorySource {
+            id: id.into(),
+            title: id.into(),
+            agent: "claude".into(),
+            last_at_ms: at,
+            bytes,
+        }
+    }
+
+    /// Q4: the plan sums what is not done yet, newest first, and says how
+    /// many runs are left today.
+    #[test]
+    fn a_history_plan_counts_only_what_is_not_extracted() {
+        let memory = rig();
+        let now = 1_800_000_000_000;
+        let talk = talk();
+        memory
+            .extract_session(
+                session(&talk, "p1", false),
+                None,
+                |_, _| {
+                    Ok(ChatOnce {
+                        text: REPLY.into(),
+                        input_tokens: 10,
+                        output_tokens: 5,
+                    })
+                },
+                now,
+            )
+            .unwrap();
+        let plan = memory.history_plan(
+            "p1",
+            &[source("t1", 4_000, 1), source("old", 400_000, 2)],
+            now,
+        );
+        assert!(plan.enabled);
+        assert_eq!(plan.pending, 1);
+        assert_eq!(plan.sessions[0].id, "old");
+        assert!(plan.sessions[1].done);
+        // 400 KB is cut at the extraction cap.
+        assert_eq!(
+            plan.input_tokens,
+            aeroric_protocol::memory::EXTRACT_MAX_CHARS as u64 / 2 + 1_500
+        );
+        assert_eq!(plan.output_tokens, 400);
+        assert!(plan.cost_usd.is_some());
+        assert_eq!(
+            plan.remaining_today,
+            MemorySettings::default().daily_limit - 1
+        );
+        assert!(!memory.history_plan("p2", &[], now).enabled);
+    }
+
+    /// R1-1: a store that loses one kind of write reports it and retries.
+    #[test]
+    fn a_failed_write_is_partial_and_the_next_run_finishes_it() {
+        let memory = rig();
+        let messages = talk();
+        let reply = || {
+            Ok(ChatOnce {
+                text: REPLY.into(),
+                input_tokens: 1,
+                output_tokens: 1,
+            })
+        };
+        memory.execute_for_test(
+            "CREATE TRIGGER boom BEFORE INSERT ON items WHEN NEW.kind = 'experience'
+             BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+        );
+        let first = memory
+            .extract_session(session(&messages, "p1", false), None, |_, _| reply(), 1)
+            .unwrap();
+        assert_eq!(first.state, MemoryRunState::Partial);
+        assert_eq!(
+            (first.facts, first.experiences, first.failed_writes),
+            (1, 0, 1)
+        );
+        assert!(first.reason.as_deref().unwrap().contains("没写进去"));
+        assert_eq!(memory.extracted("t1"), None, "stays unmarked to be retried");
+
+        memory.execute_for_test("DROP TRIGGER boom;");
+        let second = memory
+            .extract_session(session(&messages, "p1", false), None, |_, _| reply(), 2)
+            .unwrap();
+        assert_eq!(second.state, MemoryRunState::Done);
+        assert_eq!(second.experiences, 1);
+        assert!(memory.extracted("t1").is_some());
+    }
+
+    /// R1-1: nothing reached the store: failed, not done.
+    #[test]
+    fn every_write_failing_is_a_failed_run() {
+        let memory = rig();
+        let messages = talk();
+        memory.execute_for_test(
+            "CREATE TRIGGER boom BEFORE INSERT ON items
+             BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+        );
+        let run = memory
+            .extract_session(
+                session(&messages, "p1", false),
+                None,
+                |_, _| {
+                    Ok(ChatOnce {
+                        text: REPLY.into(),
+                        input_tokens: 1,
+                        output_tokens: 1,
+                    })
+                },
+                1,
+            )
+            .unwrap();
+        assert_eq!(run.state, MemoryRunState::Failed);
+        assert!(run.failed_writes > 0);
+        assert_eq!(memory.extracted("t1"), None);
     }
 
     fn talk() -> Vec<(String, String)> {

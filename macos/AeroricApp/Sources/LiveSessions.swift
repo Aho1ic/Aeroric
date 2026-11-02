@@ -36,7 +36,9 @@ struct HostLiveSessionActions: LiveSessionActions {
         return (page.messages.map(SessionBlockMapping.message), page.stats)
     }
 
-    func prompt(taskID: String, text: String) async throws { try await client().prompt(taskId: taskID, text: text) }
+    func prompt(taskID: String, text: String) async throws -> [LiveSharedWriter] {
+        try await client().prompt(taskId: taskID, text: text)
+    }
     func interrupt(taskID: String) async throws { try await client().interrupt(taskId: taskID) }
 
     func respond(taskID: String, requestID: String, decision: LiveDecision, reason: String?) async throws {
@@ -314,6 +316,17 @@ extension AppServices {
             if items.count != memoryPendingCount { memoryPendingCount = items.count }
             await memoryStore.refreshPending()
         }
+        // B5-3b: skill proposals, under the session their experience came from.
+        if let pending = try? await client.skillAttention() {
+            let now = UInt64(Date().timeIntervalSince1970 * 1000)
+            var next: [String: AttentionQueue.CheckFailure] = [:]
+            for proposal in pending {
+                guard let task = proposal.taskId, next[task] == nil else { continue }
+                next[task] = AttentionQueue.CheckFailure(summary: MemoryText.skillAttention(proposal),
+                                                         atMs: skillNeeds[task]?.atMs ?? now)
+            }
+            if next != skillNeeds { skillNeeds = next }
+        }
         // B4-1: review loops that need the user join the same queue; a loop
         // keeps the time it was first seen so the queue order holds still.
         guard let reviews = try? await client.reviewAttention() else { return }
@@ -467,6 +480,12 @@ struct HostMemoryService: MemoryService {
         try await client().memoryAction("memory.confirm", id: id, ["accept": .bool(accept)])
     }
 
+    func confirmMany(ids: [String], accept: Bool) async throws -> Int {
+        let reply = try await client().memoryCall("memory.confirmMany",
+                                                  ["ids": .array(ids.map { .string($0) }), "accept": .bool(accept)])
+        return reply["decided"]?.numberText.flatMap { Int($0) } ?? 0
+    }
+
     func archive(id: String, archived: Bool) async throws {
         try await client().memoryAction("memory.archive", id: id, ["archived": .bool(archived)])
     }
@@ -519,7 +538,94 @@ struct HostMemoryService: MemoryService {
         try await client().memoryImportNative(path: path, projectId: projectID)
     }
 
+    func historyPlan(projectID: String, sinceMs: UInt64?) async throws -> LiveMemoryHistoryPlan {
+        try await client().memoryHistoryPlan(projectId: projectID, sinceMs: sinceMs)
+    }
+
+    func extractImported(id: String) async throws -> LiveMemoryRun? {
+        try await client().memoryExtractImported(id: id)
+    }
+
     func feedback(id: String, helpful: Bool) async throws {
         try await client().memoryAction("memory.feedback", id: id, ["helpful": .bool(helpful)])
+    }
+
+    func proposals() async throws -> [LiveSkillProposal] {
+        try await client().skillProposals()
+    }
+
+    func editProposal(id: String, edit: LiveSkillEdit) async throws {
+        try await client().skillAction("memory.proposalEdit", id: id, ["edit": edit.json])
+    }
+
+    func decideProposal(id: String, accept: Bool) async throws {
+        try await client().skillAction("memory.proposalDecide", id: id, ["accept": .bool(accept)])
+    }
+
+    func useSkillVersion(id: String, version: Int) async throws {
+        try await client().skillAction("memory.skillVersion", id: id, ["version": .number(String(version))])
+    }
+
+    func disableSkill(id: String, disabled: Bool) async throws {
+        try await client().skillAction("memory.skillDisable", id: id, ["disabled": .bool(disabled)])
+    }
+}
+
+/// B5.5-1 (2026-10-31): the Wiki page's host calls, over `SessionsClient`.
+@MainActor
+struct HostWikiService: WikiService {
+    weak var services: AppServices?
+
+    private func call(_ method: String, _ projectID: String, _ extra: [String: JSONValue] = [:]) async throws -> JSONValue {
+        guard let client = services?.sessionsClient else { throw AppServices.ProjectError.notConnected }
+        return try await client.wiki(method, projectId: projectID, extra)
+    }
+
+    func pages(projectID: String) async throws -> LiveWikiPageList {
+        let reply = try await call("wiki.pages", projectID)
+        return LiveWikiPageList(pages: (reply["pages"]?.arrayValue ?? []).compactMap(LiveWikiPageSummary.decode),
+                                gaps: LiveWikiSourceGaps.decode(reply["sourcesUnavailable"]))
+    }
+
+    func page(projectID: String, slug: String) async throws -> LiveWikiPage? {
+        LiveWikiPage.decode(try await call("wiki.page", projectID, ["slug": .string(slug)])["page"])
+    }
+
+    func compile(projectID: String) async throws -> LiveWikiReport {
+        LiveWikiReport.decode(try await call("wiki.compile", projectID)["report"])
+    }
+
+    func edit(projectID: String, slug: String, markdown: String) async throws -> LiveWikiPage? {
+        LiveWikiPage.decode(try await call("wiki.edit", projectID,
+                                           ["slug": .string(slug), "markdown": .string(markdown)])["page"])
+    }
+
+    func revisions(projectID: String, slug: String) async throws -> [LiveWikiRevision] {
+        (try await call("wiki.revisions", projectID, ["slug": .string(slug)])["revisions"]?.arrayValue ?? [])
+            .compactMap(LiveWikiRevision.decode)
+    }
+
+    func revert(projectID: String, slug: String, n: Int) async throws -> LiveWikiPage? {
+        LiveWikiPage.decode(try await call("wiki.revert", projectID,
+                                           ["slug": .string(slug), "n": .number(String(n))])["page"])
+    }
+
+    func issues(projectID: String) async throws -> [LiveWikiIssue] {
+        (try await call("wiki.issues", projectID)["issues"]?.arrayValue ?? []).compactMap(LiveWikiIssue.decode)
+    }
+
+    func issueAction(projectID: String, id: String, accept: Bool) async throws {
+        _ = try await call("wiki.issueAction", projectID, ["id": .string(id), "accept": .bool(accept)])
+    }
+
+    func exportPlan(projectID: String, dir: String) async throws -> LiveWikiExportPlan {
+        let reply = try await call("wiki.exportPlan", projectID, ["dir": .string(dir)])
+        return LiveWikiExportPlan(files: (reply["files"]?.arrayValue ?? []).compactMap(\.stringValue),
+                                  overwrites: (reply["overwrites"]?.arrayValue ?? []).compactMap(\.stringValue))
+    }
+
+    func export(projectID: String, dir: String) async throws -> [String] {
+        (try await call("wiki.export", projectID, ["dir": .string(dir)])["files"]?.arrayValue ?? [])
+            .compactMap(\.stringValue)
     }
 }

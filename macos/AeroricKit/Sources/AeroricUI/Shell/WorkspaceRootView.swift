@@ -56,6 +56,13 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
     /// closes it and the stored column toggle takes over again.
     @State private var inspectorOverlay = false
     @State private var inspectorNarrow = false
+    /// The current page's title, reported through `WindowTitleKey`.
+    @State private var windowTitle: WindowTitle?
+    /// Where the sidebar toggle ends, from the window's leading edge: a
+    /// narrow (rail) sidebar pushes the title past it.
+    private static var toggleTrailingEdge: CGFloat { 128 }
+    /// Room kept for the toolbar's trailing buttons (and a session's 置顶, 更多).
+    private static var trailingToolbarWidth: CGFloat { 300 }
 
     /// The column toggle on a wide window, the overlay on a narrow one.
     private var inspectorToggle: Binding<Bool> {
@@ -116,6 +123,22 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                 .frame(width: handle)
                 WorkspaceDetail(state: state, selection: navigationSelection, readyContent: readyContent)
                     .frame(width: max(0, budget.contentWidth))
+                    // 2026-11-02 (owner): the page title sits in the title bar
+                    // over the content column, from its leading edge — not
+                    // after the toggle, over the sidebar. Drawn, not a toolbar
+                    // item, so it follows the column; clicks pass through.
+                    .overlay(alignment: .topLeading) {
+                        if let windowTitle {
+                            let bar = geometry.safeAreaInsets.top
+                            WindowTitleView(title: windowTitle)
+                                .padding(.leading, max(AeroricSpace.xl,
+                                                       Self.toggleTrailingEdge - budget.sidebarWidth - handle))
+                                .frame(width: max(0, budget.contentWidth - Self.trailingToolbarWidth), alignment: .leading)
+                                .frame(height: bar > 0 ? bar : 38)
+                                .offset(y: -bar)
+                                .allowsHitTesting(false)
+                        }
+                    }
             }
             .environment(\.mainShellBudget, budget)
             .environment(\.mainShellNavigationEpoch, navigationEpoch)
@@ -157,6 +180,9 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                                  identifier: "workspace.new-session") { openDraft() }
             }
             .bareToolbarItem()
+        }
+        .onPreferenceChange(WindowTitleKey.self) { title in
+            if windowTitle != title { windowTitle = title }
         }
         .background(alignment: .topLeading) { selectionProbe }
         .modifier(HiddenWindowTitle())

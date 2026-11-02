@@ -245,6 +245,54 @@ private extension NewSessionDraft {
     }
 }
 
+/// 2026-11-02: what of a new-session page survives a restart — the words
+/// and the choices, never a submission's identity or state.
+public struct NewSessionMemo: Codable, Equatable, Sendable {
+    public var prompt: String
+    public var agent: String
+    public var harness: String
+    public var model: String?
+    public var effort: String?
+    public var permissionMode: String
+    public var permissionAgent: String?
+    public var configurationID: String?
+    public var configurationVersion: String?
+
+    init(_ draft: NewSessionDraft) {
+        prompt = draft.task.prompt
+        agent = draft.task.agent
+        harness = draft.selectedHarness
+        model = draft.task.model
+        effort = draft.task.effort
+        permissionMode = draft.task.permissionMode
+        permissionAgent = draft.permissionAgent
+        configurationID = draft.configurationID
+        configurationVersion = draft.configurationVersion
+    }
+
+    func draft() -> NewSessionDraft {
+        var next = NewSessionDraft()
+        next.task.agent = agent
+        next.restorePresentationIdentity(harness: harness, permissionAgent: permissionAgent)
+        next.task.model = model
+        next.task.effort = effort
+        next.task.permissionMode = permissionMode
+        next.configurationID = configurationID
+        next.configurationVersion = configurationVersion
+        next.task.prompt = prompt
+        return next
+    }
+}
+
+/// Everything `NewSessionDraftBook` keeps across restarts.
+public struct NewSessionMemos: Codable, Equatable, Sendable {
+    /// Unsent pages, by project id ("" for the global page).
+    public var drafts: [String: NewSessionMemo] = [:]
+    /// The last started session's choices, by project id.
+    public var preferences: [String: NewSessionMemo] = [:]
+    public init() {}
+}
+
 public struct NewSessionDraftBook: Equatable, Sendable {
     private var drafts: [SessionDraftScope: NewSessionDraft] = [:]
     private var successfulPreferences: [String: SuccessfulSessionPreferences] = [:]
@@ -260,6 +308,36 @@ public struct NewSessionDraftBook: Equatable, Sendable {
     }
 
     public subscript(scope: SessionDraftScope) -> NewSessionDraft? { drafts[scope] }
+
+    /// Pages being edited (or that failed before sending) and the last choices.
+    /// A page that is sending or whose outcome is unknown is left out: bringing
+    /// it back after a restart could send it twice.
+    public var memos: NewSessionMemos {
+        var memos = NewSessionMemos()
+        for (scope, draft) in drafts {
+            switch draft.submission {
+            case .editing, .failed: memos.drafts[scope.projectID ?? ""] = NewSessionMemo(draft)
+            case .sending, .unknown: continue
+            }
+        }
+        for (projectID, preferences) in successfulPreferences {
+            var draft = NewSessionDraft()
+            preferences.restoreChoices(into: &draft)
+            memos.preferences[projectID] = NewSessionMemo(draft)
+        }
+        return memos
+    }
+
+    /// Bring back what `memos` kept; what this run already holds wins.
+    public mutating func restore(_ memos: NewSessionMemos) {
+        for (projectID, memo) in memos.preferences where successfulPreferences[projectID] == nil {
+            successfulPreferences[projectID] = SuccessfulSessionPreferences(memo.draft())
+        }
+        for (key, memo) in memos.drafts {
+            let scope: SessionDraftScope = key.isEmpty ? .global : .project(key)
+            if drafts[scope] == nil { drafts[scope] = memo.draft() }
+        }
+    }
 
     public mutating func edit(_ scope: SessionDraftScope, _ update: (inout NewSessionDraft) -> Void) {
         open(scope)

@@ -19,6 +19,7 @@ pub mod files;
 pub mod git;
 pub mod ide;
 pub mod infrastructure;
+pub mod knowledge;
 pub mod local_router;
 pub mod location;
 pub mod location_probe;

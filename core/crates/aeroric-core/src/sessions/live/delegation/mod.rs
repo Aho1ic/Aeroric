@@ -63,12 +63,25 @@ pub trait DelegationHost: Send + Sync {
     fn idle(&self, task_id: &str) -> bool;
     /// Input plus output tokens the task's session has used.
     fn tokens(&self, task_id: &str) -> Option<u64>;
+    /// R1-1: other local sessions now writing in the task's real directory.
+    fn writers_beside(&self, _task_id: &str) -> Vec<WriterRef> {
+        Vec::new()
+    }
+}
+
+/// A session writing in a directory another one wants.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WriterRef {
+    pub task_id: String,
+    pub title: String,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DelegationError {
     #[error("没有这个会话")]
     NoParent,
+    #[error("这个目录正被「{0}」写入。等它结束，或改成只读委派。")]
+    DirectoryBusy(String),
     #[error("子会话、审查会话和侧支不能再委派（委派深度为 1）")]
     Nested,
     #[error("委派指令不能为空")]
@@ -448,6 +461,12 @@ impl Delegations {
             Err(error) => return Err(refuse(self, error)),
         };
         let writes = resolved.workspace == Workspace::Shared && resolved.permission != "plan";
+        // Asked before taking `state`: the host reads the task files.
+        let beside = if writes {
+            host.writers_beside(parent)
+        } else {
+            Vec::new()
+        };
         let mut state = self.state.lock();
         self.ensure_loaded(&mut state, parent);
         if writes
@@ -461,6 +480,13 @@ impl Delegations {
         {
             drop(state);
             return Err(refuse(self, DelegationError::SecondWriter));
+        }
+        if let Some(writer) = beside.first() {
+            drop(state);
+            return Err(refuse(
+                self,
+                DelegationError::DirectoryBusy(writer.title.clone()),
+            ));
         }
         let brief = (resolved.context_mode == aeroric_protocol::delegation::ContextMode::Brief)
             .then(|| self.brief_of(parent))
@@ -651,6 +677,7 @@ impl Delegations {
         actor: &str,
     ) -> Result<(), DelegationError> {
         let host = self.host.lock().clone().ok_or(DelegationError::NoParent)?;
+        let beside = host.writers_beside(parent);
         let mut state = self.state.lock();
         self.ensure_loaded(&mut state, parent);
         let entry = find_mut(&mut state, parent, id).ok_or(DelegationError::NotFound)?;
@@ -662,6 +689,12 @@ impl Delegations {
             .child_task_id
             .clone()
             .ok_or(DelegationError::NoChild)?;
+        let contract = &entry.card.contract;
+        if contract.workspace == Workspace::Shared && contract.permission != "plan" {
+            if let Some(writer) = beside.iter().find(|w| w.task_id != child) {
+                return Err(DelegationError::DirectoryBusy(writer.title.clone()));
+            }
+        }
         entry.card.state = DelegationState::Running;
         entry.card.reworks += 1;
         entry.card.sent = false;

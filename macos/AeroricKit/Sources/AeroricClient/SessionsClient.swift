@@ -143,9 +143,11 @@ public struct SessionsClient: Sendable {
 extension SessionsClient {
     public static let liveCapability = LiveSessionContract.capability
 
-    public func prompt(taskId: String, text: String) async throws {
-        _ = try await connection.request(LiveSessionContract.promptMethod,
-                                         params: LiveSessionRequest.prompt(taskId: taskId, text: text))
+    @discardableResult
+    public func prompt(taskId: String, text: String) async throws -> [LiveSharedWriter] {
+        let frame = try await connection.request(LiveSessionContract.promptMethod,
+                                                 params: LiveSessionRequest.prompt(taskId: taskId, text: text))
+        return LiveSharedWriter.decodeList(frame.result["sharedWriters"])
     }
 
     public func interrupt(taskId: String) async throws {
@@ -446,7 +448,12 @@ extension SessionsClient {
         _ = try await connection.request(method, params: .object(params))
     }
 
-    /// Read or set "这个项目用记忆".
+    /// A memory method's reply.
+    public func memoryCall(_ method: String, _ params: [String: JSONValue]) async throws -> JSONValue {
+        try await connection.request(method, params: .object(params)).result
+    }
+
+    /// Read or set "为这个项目启用记忆".
     public func memoryProject(projectId: String, enabled: Bool? = nil) async throws -> Bool {
         var params: [String: JSONValue] = ["projectId": .string(projectId)]
         if let enabled { params["enabled"] = .bool(enabled) }
@@ -491,12 +498,55 @@ extension SessionsClient {
         return LiveMemoryRun.decode(frame.result["run"])
     }
 
+    /// Q4: 整理历史会话's plan — counts and estimated cost, nothing sent.
+    public func memoryHistoryPlan(projectId: String, sinceMs: UInt64?) async throws -> LiveMemoryHistoryPlan {
+        var params: [String: JSONValue] = ["projectId": .string(projectId)]
+        if let sinceMs { params["sinceMs"] = .number(String(sinceMs)) }
+        let frame = try await connection.request("memory.historyPlan", params: .object(params))
+        return LiveMemoryHistoryPlan.decode(frame.result)
+    }
+
+    /// Q4: extract one imported session.
+    public func memoryExtractImported(id: String) async throws -> LiveMemoryRun? {
+        let frame = try await connection.request("memory.extractImported", params: .object(["id": .string(id)]))
+        return LiveMemoryRun.decode(frame.result["run"])
+    }
+
     public func memoryImportNative(path: String, projectId: String?) async throws -> (imported: Int, skipped: Int) {
         var params: [String: JSONValue] = ["path": .string(path)]
         if let projectId { params["projectId"] = .string(projectId) }
         let frame = try await connection.request("memory.importNative", params: .object(params))
         return (frame.result["imported"]?.numberText.flatMap { Int($0) } ?? 0,
                 frame.result["skipped"]?.numberText.flatMap { Int($0) } ?? 0)
+    }
+
+    // MARK: B5-3b skill proposals
+
+    public func skillProposals() async throws -> [LiveSkillProposal] {
+        let frame = try await connection.request("memory.proposals", params: .object([:]))
+        return (frame.result["proposals"]?.arrayValue ?? []).compactMap { LiveSkillProposal.decode($0) }
+    }
+
+    /// Pending proposals (they come with `memory.attention`).
+    public func skillAttention() async throws -> [LiveSkillProposal] {
+        let frame = try await connection.request("memory.attention", params: .object([:]))
+        return (frame.result["proposals"]?.arrayValue ?? []).compactMap { LiveSkillProposal.decode($0) }
+    }
+
+    /// `memory.proposalEdit` / `proposalDecide` / `skillVersion` / `skillDisable`.
+    public func skillAction(_ method: String, id: String, _ extra: [String: JSONValue]) async throws {
+        var params = extra
+        params["id"] = .string(id)
+        _ = try await connection.request(method, params: .object(params))
+    }
+
+    // MARK: B5.5-1 project Wiki
+
+    /// One `wiki.*` call for `projectId`; the reply's result.
+    public func wiki(_ method: String, projectId: String, _ extra: [String: JSONValue] = [:]) async throws -> JSONValue {
+        var params = extra
+        params["projectId"] = .string(projectId)
+        return try await connection.request(method, params: .object(params)).result
     }
 
     /// B4-1: loops that need the user (`review.attention`): task id → card.

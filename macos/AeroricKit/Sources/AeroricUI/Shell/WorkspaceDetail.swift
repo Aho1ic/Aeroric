@@ -304,6 +304,8 @@ public enum ProjectRowAction: Sendable, Equatable {
     case group(String?)
     /// B5-1: 项目记忆… opens the memory page on this project.
     case memory
+    /// B5.5-1: 项目 Wiki… opens the Wiki on this project.
+    case wiki
     case remove
 }
 

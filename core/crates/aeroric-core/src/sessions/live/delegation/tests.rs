@@ -21,9 +21,13 @@ struct FakeHost {
     busy: Mutex<HashSet<String>>,
     tokens: Mutex<HashMap<String, u64>>,
     fail_start: Mutex<bool>,
+    writers: Mutex<Vec<WriterRef>>,
 }
 
 impl DelegationHost for FakeHost {
+    fn writers_beside(&self, _task_id: &str) -> Vec<WriterRef> {
+        self.writers.lock().clone()
+    }
     fn parent(&self, task_id: &str) -> Option<ParentInfo> {
         self.parents.lock().get(task_id).cloned()
     }
@@ -469,6 +473,38 @@ fn over_budget_interrupts_and_asks_the_user() {
     // The agent still hears that it came back over budget.
     wait("returned", || rig.sent_to("p").len() == 1);
     assert!(rig.sent_to("p")[0].contains("超出预算"));
+}
+
+/// R1-1: another session writing here refuses a writer, not a reader, and
+/// names who holds the directory; a redo is checked the same way.
+#[test]
+fn a_directory_someone_else_is_writing_refuses_writers() {
+    let rig = rig("full_access");
+    let writer = || Contract {
+        workspace: Some(Workspace::Shared),
+        permission: Some("auto_edit".into()),
+        ..contract("改")
+    };
+    let (id, _child) = rig.running(writer(), Origin::User);
+    rig.d.stop("p", &id, "user").unwrap();
+    *rig.host.writers.lock() = vec![WriterRef {
+        task_id: "other".into(),
+        title: "重构会话列表".into(),
+    }];
+    let refused = rig
+        .d
+        .start("p", writer(), Origin::User, "user")
+        .unwrap_err();
+    assert_eq!(
+        refused,
+        DelegationError::DirectoryBusy("重构会话列表".into())
+    );
+    assert!(refused.to_string().contains("「重构会话列表」"));
+    assert_eq!(
+        rig.d.redo("p", &id, "再来", "user").unwrap_err(),
+        DelegationError::DirectoryBusy("重构会话列表".into())
+    );
+    rig.running(contract("查"), Origin::User);
 }
 
 #[test]

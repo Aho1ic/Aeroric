@@ -18,7 +18,11 @@ private final class FakeLiveActions: LiveSessionActions {
         return batches.isEmpty ? LiveUpdatesBatch(updates: [], latestSeq: after) : batches.removeFirst()
     }
     func history(taskID: String) async throws -> [AeroricUI.SessionMessage] { calls.append("history"); return historyValue }
-    func prompt(taskID: String, text: String) async throws { calls.append("prompt \(text)") }
+    var writers: [LiveSharedWriter] = []
+    func prompt(taskID: String, text: String) async throws -> [LiveSharedWriter] {
+        calls.append("prompt \(text)")
+        return writers
+    }
     func interrupt(taskID: String) async throws { calls.append("interrupt") }
     func respond(taskID: String, requestID: String, decision: LiveDecision, reason: String?) async throws {
         calls.append("respond \(requestID) \(decision.rawValue) \(reason ?? "-")")

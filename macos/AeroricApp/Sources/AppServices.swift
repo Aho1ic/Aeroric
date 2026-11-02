@@ -65,10 +65,14 @@ final class AppServices {
     let sshHostsStore = SshHostsStore()
     /// B5-1: the memory page (proposals feed its badge and 需要我处理).
     @ObservationIgnored lazy var memoryStore = MemoryStore(service: HostMemoryService(services: self))
+    /// B5.5-1: the project Wiki page.
+    @ObservationIgnored lazy var wikiStore = WikiStore(service: HostWikiService(services: self))
     /// B5-1 → A19: proposing task id → a memory proposal waiting for the user.
     var memoryNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// B5-1: proposals in every scope (the 记忆 row's badge).
     var memoryPendingCount = 0
+    /// B5-3b → A19: source task id → a skill proposal waiting for the user.
+    var skillNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// The sidebar's "打开远程项目…" asks the workspace to show its sheet.
     var openRemoteRequested = false
     let keepAwakeStore = KeepAwakeStore()
@@ -1184,7 +1188,7 @@ extension AppServices: WorkspaceStateProviding {
     var attentionCount: Int? {
         let count = AttentionQueue.items(taskStore.tasks, checkFailures: checkFailures, reviews: reviewNeeds,
                                          delegations: delegationNeeds, boards: boardNeeds, memories: memoryNeeds,
-                                         nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
+                                         skills: skillNeeds, nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
         return count > 0 ? count : nil
     }
 
@@ -1253,15 +1257,34 @@ extension AppServices: WorkspaceStateProviding {
         NativeHarnessPicker.harnesses.map { AgentChoice(id: $0.id, title: $0.title, harness: $0.id) }
     }
 
+    /// `/记住 …` typed on the new-session page: kept, no session started.
+    func rememberFromNewSession(projectID: String?, text: String) async throws -> LiveMemoryItem {
+        guard let client = sessionsClient else { throw ProjectError.notConnected }
+        let item = try await client.remember(projectId: projectID, kind: MemoryText.guessKind(text), text: text,
+                                             source: "/记住 \(text)")
+        await memoryStore.reload()
+        return item
+    }
+
     /// B5-1: show the memory page on a project (项目记忆…, a 需要我处理 row).
-    func openMemory(projectID: String?) {
-        memoryStore.show(scope: projectID, tab: projectID == nil ? .about : .context)
+    func openMemory(projectID: String?, tab: MemoryTab? = nil) {
+        memoryStore.show(scope: projectID, tab: tab ?? (projectID == nil ? .about : .context))
         requestedSelection = WorkspaceSection.memory.sidebarID
+    }
+
+    /// B5.5-1: show the Wiki on a project (项目 Wiki…).
+    func openWiki(projectID: String) {
+        wikiStore.show(scope: projectID)
+        requestedSelection = WorkspaceSection.wiki.sidebarID
     }
 
     func projectAction(_ id: String, _ action: ProjectRowAction) {
         if action == .memory {
             openMemory(projectID: id)
+            return
+        }
+        if action == .wiki {
+            openWiki(projectID: id)
             return
         }
         guard let client = workspaceClient else { return }
@@ -1279,7 +1302,7 @@ extension AppServices: WorkspaceStateProviding {
                     try await client.updateProjectMeta(projectId: id, ["group": group.map { .string($0) } ?? .null])
                 case .remove:
                     try await client.removeProject(projectId: id)
-                case .memory:
+                case .memory, .wiki:
                     break
                 }
             } catch {

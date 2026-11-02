@@ -139,6 +139,9 @@ fn method_of(tool: &str) -> Option<&'static str> {
         "memory_recall" => Some("context.memoryRecall"),
         "memory_propose" => Some("context.memoryPropose"),
         "memory_feedback" => Some("context.memoryFeedback"),
+        "read_wiki" => Some("context.wikiRead"),
+        "search_wiki" => Some("context.wikiSearch"),
+        "flag_wiki_issue" => Some("context.wikiFlag"),
         _ => None,
     }
 }
@@ -169,6 +172,17 @@ async fn answer(
             if memory_enabled(client, data_dir, token).await {
                 list.extend(memory_tools().as_array().cloned().unwrap_or_default());
             }
+            if host_says(
+                client,
+                data_dir,
+                token,
+                "context.wikiAvailable",
+                "available",
+            )
+            .await
+            {
+                list.extend(wiki_tools().as_array().cloned().unwrap_or_default());
+            }
             Ok(json!({"tools": list}))
         }
         "tools/call" => Ok(call_tool(client, data_dir, token, &params).await),
@@ -182,6 +196,61 @@ async fn answer(
 
 /// Whether the session's project uses memory; `false` when the host cannot
 /// be reached.
+/// B5.5-1: offered when the session's project has Wiki pages (Q-W5).
+fn wiki_tools() -> Value {
+    json!([
+        {
+            "name": "read_wiki",
+            "description": "读本项目 Wiki 的一页（Markdown，段落带来源）。不给 slug 时读索引页，索引里列出所有页面。决策页记录了项目做过的设计决定与理由，操作手册记录了可复用的做法。",
+            "inputSchema": {"type": "object", "properties": {
+                "slug": {"type": "string", "description": "页面 slug，如 decision-delegation、runbook；省略读索引"}
+            }}
+        },
+        {
+            "name": "search_wiki",
+            "description": "按关键词检索本项目 Wiki，返回页面 slug、标题与片段；再用 read_wiki 读全文。",
+            "inputSchema": {"type": "object", "required": ["query"], "properties": {
+                "query": {"type": "string", "description": "关键词，空格分开，任一命中即可"}
+            }}
+        },
+        {
+            "name": "flag_wiki_issue",
+            "description": "发现 Wiki 某页内容过时、错误或缺失时报告给用户（进入该项目 Wiki 的 issue 列表），不会直接改页面。",
+            "inputSchema": {"type": "object", "required": ["slug", "text"], "properties": {
+                "slug": {"type": "string"},
+                "text": {"type": "string", "description": "哪里不对、依据是什么"}
+            }}
+        }
+    ])
+}
+
+/// Asks the host a yes/no about this session (`field` of `method`'s reply);
+/// `false` when the host cannot be reached.
+async fn host_says(
+    client: &mut Option<HostClient>,
+    data_dir: &Path,
+    token: &str,
+    method: &str,
+    field: &str,
+) -> bool {
+    if client.is_none() {
+        match HostClient::connect(data_dir, &uuid::Uuid::new_v4().to_string()).await {
+            Ok(connected) => *client = Some(connected),
+            Err(_) => return false,
+        }
+    }
+    let Some(host) = client.as_mut() else {
+        return false;
+    };
+    match host.call(method, json!({ "token": token })).await {
+        Ok(result) => result[field].as_bool().unwrap_or(false),
+        Err(_) => {
+            *client = None;
+            false
+        }
+    }
+}
+
 async fn memory_enabled(client: &mut Option<HostClient>, data_dir: &Path, token: &str) -> bool {
     if client.is_none() {
         match HostClient::connect(data_dir, &uuid::Uuid::new_v4().to_string()).await {
@@ -355,6 +424,14 @@ mod tests {
             ["memory_recall", "memory_propose", "memory_feedback"]
         );
         assert_eq!(method_of("memory_feedback"), Some("context.memoryFeedback"));
+        let wiki: Vec<String> = wiki_tools()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(wiki, ["read_wiki", "search_wiki", "flag_wiki_issue"]);
+        assert_eq!(method_of("search_wiki"), Some("context.wikiSearch"));
     }
 
     #[tokio::test]

@@ -216,3 +216,109 @@ fn invocations_follow_each_harness() {
     );
     assert_eq!(invocation("omp", "peer-review", false), "/peer-review");
 }
+
+/// B5-3b: an accepted learned skill joins the offers for its project's
+/// folders (or everywhere when global) in all three mounts.
+#[test]
+fn learned_skills_are_offered_where_they_belong() {
+    let data = temp();
+    let project = temp();
+    let elsewhere = temp();
+    let skill = learned_dir(&data).join("learned-abc123").join("v2");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: learned-abc123\n---\n# x\n",
+    )
+    .unwrap();
+    write_learned_index(
+        &data,
+        &LearnedIndex {
+            skills: vec![LearnedEntry {
+                name: "learned-abc123".into(),
+                dir: skill.clone(),
+                version: 2,
+                global: false,
+                project_path: Some(project.clone()),
+            }],
+        },
+    )
+    .unwrap();
+    let here = learned_offers(&data, Some(&project.join("sub")));
+    assert_eq!(here.len(), 1);
+    assert_eq!(here[0].version, "learned-v2");
+    assert!(learned_offers(&data, Some(&elsewhere)).is_empty());
+
+    let home = temp();
+    mount(&data, "omp", Some(&project), Mount::Home(&home)).unwrap();
+    assert_eq!(
+        std::fs::read_link(home.join("skills/learned-abc123")).unwrap(),
+        skill
+    );
+    let plugin = mount(&data, "claude", Some(&project), Mount::ClaudePlugin)
+        .unwrap()
+        .unwrap();
+    assert!(plugin.join("skills/learned-abc123/SKILL.md").is_file());
+    git_init(&project);
+    mount(&data, "codex", Some(&project), Mount::CodexProject).unwrap();
+    let copy = project.join(".agents/skills/learned-abc123");
+    assert_eq!(
+        std::fs::read_to_string(copy.join(MARKER)).unwrap(),
+        "learned-v2"
+    );
+    // Elsewhere: not offered, and the link goes away.
+    let other_home = temp();
+    mount(&data, "omp", Some(&elsewhere), Mount::Home(&other_home)).unwrap();
+    assert!(!other_home.join("skills/learned-abc123").exists());
+}
+
+/// CU 2026-10-31: a configured Codex server is shared by every project, so
+/// its home gets no learned skill; each session's project gets its own as a
+/// marked copy, next to (not instead of) the built-in copies.
+#[test]
+fn a_configured_codex_gets_learned_skills_in_its_project_only() {
+    let data = temp();
+    let project = temp();
+    git_init(&project);
+    let skill = learned_dir(&data).join("learned-cfg001").join("v1");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "---\nname: learned-cfg001\n---\n").unwrap();
+    write_learned_index(
+        &data,
+        &LearnedIndex {
+            skills: vec![LearnedEntry {
+                name: "learned-cfg001".into(),
+                dir: skill.clone(),
+                version: 1,
+                global: false,
+                project_path: Some(project.clone()),
+            }],
+        },
+    )
+    .unwrap();
+    let home = temp();
+    mount(&data, "codex", None, Mount::Home(&home)).unwrap();
+    assert!(
+        !home.join("skills/learned-cfg001").exists(),
+        "a shared home gets none"
+    );
+    // A direct Codex session left built-in copies here.
+    mount(&data, "codex", Some(&project), Mount::CodexProject).unwrap();
+    let builtin = project_copies(&project).len();
+    mount(&data, "codex", Some(&project), Mount::CodexProjectLearned).unwrap();
+    let copy = project.join(".agents/skills/learned-cfg001");
+    assert_eq!(
+        std::fs::read_to_string(copy.join(MARKER)).unwrap(),
+        "learned-v1"
+    );
+    assert_eq!(
+        project_copies(&project).len(),
+        builtin,
+        "the built-in copies stay"
+    );
+    // Disabled (out of the index): the learned copy goes, the rest stays.
+    write_learned_index(&data, &LearnedIndex::default()).unwrap();
+    mount(&data, "codex", Some(&project), Mount::CodexProjectLearned).unwrap();
+    assert!(!copy.exists());
+    assert_eq!(project_copies(&project).len(), builtin - 1);
+}

@@ -364,6 +364,7 @@ fn settings_runs_and_the_extracted_mark_persist() {
         facts: 0,
         candidates: 0,
         experiences: 0,
+        failed_writes: 0,
     };
     memory
         .add_run(&run("r1", 10, MemoryRunState::Done))
@@ -518,4 +519,37 @@ fn a_schema_one_database_gains_the_new_columns() {
         )
         .unwrap();
     assert_eq!(version, 2);
+}
+
+/// R1-1: other projects' stronger hits must not crowd this project out.
+#[test]
+fn search_filters_by_project_before_ranking() {
+    let (memory, _dir) = rig();
+    for n in 0..200 {
+        memory
+            .remember(
+                draft(
+                    Some("other"),
+                    MemoryKind::Fact,
+                    &format!("超时 超时 超时 超时 第{n}条"),
+                ),
+                said("x"),
+                1,
+            )
+            .unwrap();
+    }
+    memory
+        .remember(
+            draft(
+                Some("mine"),
+                MemoryKind::Fact,
+                "这个项目的连接超时要用 connect_timeout，还有很长的说明文字",
+            ),
+            said("x"),
+            1,
+        )
+        .unwrap();
+    let hits = memory.recall("mine", "超时").unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].project_id.as_deref(), Some("mine"));
 }

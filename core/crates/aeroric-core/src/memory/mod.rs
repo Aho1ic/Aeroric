@@ -13,6 +13,7 @@ pub mod native;
 mod profile;
 pub mod run;
 mod secrets;
+pub mod skills;
 mod store;
 
 #[cfg(test)]
@@ -40,6 +41,8 @@ pub enum MemoryError {
     /// The user forgot this; an agent may not bring it back.
     Forgotten,
     UnknownItem,
+    /// B5-3b: a skill name or file problem.
+    Skill(String),
     /// The operation does not apply to an item in this state.
     WrongState,
     Storage(String),
@@ -54,6 +57,7 @@ impl std::fmt::Display for MemoryError {
             Self::Secret(what) => write!(f, "看起来像密钥（{what}），不能写进记忆"),
             Self::Forgotten => write!(f, "用户已经让 Aeroric 永久忘掉这条内容，不能再提议"),
             Self::UnknownItem => write!(f, "没有这条记忆"),
+            Self::Skill(why) => write!(f, "技能：{why}"),
             Self::WrongState => write!(f, "这条记忆现在的状态不能这样操作"),
             Self::Storage(why) => write!(f, "记忆存储出错：{why}"),
         }
@@ -61,6 +65,14 @@ impl std::fmt::Display for MemoryError {
 }
 
 impl std::error::Error for MemoryError {}
+
+#[cfg(test)]
+impl Memory {
+    /// Fail writes the way a damaged store would.
+    pub(crate) fn execute_for_test(&self, sql: &str) {
+        self.with(|store| store.execute_for_test(sql)).unwrap();
+    }
+}
 
 impl From<rusqlite::Error> for MemoryError {
     fn from(error: rusqlite::Error) -> Self {
@@ -109,6 +121,8 @@ pub(crate) fn normalize(text: &str) -> String {
 #[derive(Default)]
 pub struct Memory {
     store: Mutex<Option<Store>>,
+    /// B5-3b: the data folder (learned skills live beside the built-in ones).
+    data_dir: Mutex<Option<PathBuf>>,
 }
 
 impl Memory {
@@ -116,6 +130,7 @@ impl Memory {
     pub fn set_dir(&self, dir: PathBuf) -> Result<(), MemoryError> {
         let store = Store::open(&dir)?;
         *self.store.lock() = Some(store);
+        *self.data_dir.lock() = dir.parent().map(PathBuf::from);
         Ok(())
     }
 
@@ -214,6 +229,25 @@ impl Memory {
                 Ok(None)
             }
         })
+    }
+
+    /// 全部确认 / 全部拒绝: many proposals under one lock; returns how many
+    /// were decided (an item no longer pending is skipped, not an error).
+    pub fn confirm_many(
+        &self,
+        ids: &[String],
+        accept: bool,
+        now_ms: u64,
+    ) -> Result<usize, MemoryError> {
+        let mut done = 0;
+        for id in ids {
+            match self.confirm(id, accept, now_ms) {
+                Ok(_) => done += 1,
+                Err(MemoryError::WrongState | MemoryError::UnknownItem) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(done)
     }
 
     pub fn archive(
@@ -357,6 +391,17 @@ impl Memory {
         self.with(|store| store.add_run(run))
     }
 
+    /// R1-1: the run and its transcript's mark commit together.
+    pub fn finish_run(
+        &self,
+        run: &aeroric_protocol::memory::MemoryRun,
+        task_id: &str,
+        hash: &str,
+        now_ms: u64,
+    ) -> Result<(), MemoryError> {
+        self.with(|store| store.finish_run(run, task_id, hash, now_ms))
+    }
+
     pub fn runs(
         &self,
         limit: usize,
@@ -480,13 +525,20 @@ impl Memory {
         helpful: bool,
         now_ms: u64,
     ) -> Result<MemoryItem, MemoryError> {
-        self.with(|store| {
+        let (before, after) = self.with(|store| {
             let item = store.get(id)?.ok_or(MemoryError::UnknownItem)?;
             if item.state != MemoryState::Active {
                 return Err(MemoryError::WrongState);
             }
-            store.feedback(&item, helpful, now_ms)
-        })
+            let after = store.feedback(&item, helpful, now_ms)?;
+            Ok((item.confidence, after))
+        })?;
+        // B5-3b: reaching 高 proposes the experience as a skill (once).
+        let high = Some(aeroric_protocol::memory::Confidence::High);
+        if after.confidence == high && before != high {
+            self.propose_skill(&after, now_ms)?;
+        }
+        Ok(after)
     }
 
     /// `memory_recall`: active items of the project and global that match,
