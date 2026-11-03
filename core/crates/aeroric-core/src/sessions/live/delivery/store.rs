@@ -71,6 +71,14 @@ impl Store {
         }
     }
 
+    /// A new item's creation time, later than every earlier one's: two
+    /// queued within one millisecond kept no order, so the queue could send
+    /// the second first.
+    pub(super) fn next_created(&self, now: u64) -> u64 {
+        let last = self.items.values().map(|d| d.created_ms).max().unwrap_or(0);
+        now.max(last + 1)
+    }
+
     pub(super) fn of_task(&self, task_id: &str) -> Vec<Delivery> {
         let mut list: Vec<_> = self
             .items

@@ -99,6 +99,15 @@ impl Deliveries {
             step(&mut item, Event::Lost, now);
             store.save(&item);
         }
+        let unsent: Vec<Delivery> = store
+            .in_state(DeliveryState::Waiting)
+            .into_iter()
+            .filter(|d| d.kind == DeliveryKind::User)
+            .collect();
+        for mut item in unsent {
+            step(&mut item, Event::Restarted, now);
+            store.save(&item);
+        }
         *self.store.lock() = store;
         Ok(())
     }
@@ -143,7 +152,7 @@ impl Deliveries {
         source_ref: Option<&str>,
     ) -> Delivery {
         let now = now_ms();
-        let item = Delivery {
+        let mut item = Delivery {
             id: format!("dv-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]),
             task_id: task_id.to_string(),
             kind,
@@ -168,6 +177,7 @@ impl Deliveries {
                     changed.push(failed);
                 }
             }
+            item.created_ms = store.next_created(now);
             store.save(&item);
         }
         changed.push(item.clone());
@@ -249,26 +259,28 @@ impl Deliveries {
 
     /// Send this session's next waiting item, if it may go now: one at a
     /// time per session; ours and "after this turn" wait for the turn to
-    /// end (Q-S5).
+    /// end (Q-S5). Oldest first (R1-2b Q7), except that the user's own
+    /// message during a turn is a steer: it does not wait behind what waits
+    /// for the turn to end.
     pub fn pump(&self, task_id: &str) {
         let Some(host) = self.host.lock().clone() else {
             return;
         };
+        let idle = host.idle(task_id);
         let next = {
             let store = self.store.lock();
             let list = store.of_task(task_id);
             if list.iter().any(|d| d.state == DeliveryState::Sending) {
                 return;
             }
-            let Some(next) = list.into_iter().find(|d| d.state == DeliveryState::Waiting) else {
+            let Some(next) = list.into_iter().find(|d| {
+                d.state == DeliveryState::Waiting
+                    && (idle || (d.kind == DeliveryKind::User && d.mode == DeliveryMode::Now))
+            }) else {
                 return;
             };
             next
         };
-        let waits = next.kind != DeliveryKind::User || next.mode == DeliveryMode::AfterTurn;
-        if waits && !host.idle(task_id) {
-            return;
-        }
         let Some(item) = self.change(&next.id, Event::Send) else {
             return;
         };

@@ -19,9 +19,9 @@ private final class FakeLiveActions: LiveSessionActions {
     }
     func history(taskID: String) async throws -> [AeroricUI.SessionMessage] { calls.append("history"); return historyValue }
     var writers: [LiveSharedWriter] = []
-    func prompt(taskID: String, text: String) async throws -> [LiveSharedWriter] {
-        calls.append("prompt \(text)")
-        return writers
+    func prompt(taskID: String, text: String, afterTurn: Bool) async throws -> LivePromptReceipt {
+        calls.append(afterTurn ? "prompt after \(text)" : "prompt \(text)")
+        return LivePromptReceipt(deliveryId: "dv-\(calls.count)", sharedWriters: writers)
     }
     func interrupt(taskID: String) async throws { calls.append("interrupt") }
     func respond(taskID: String, requestID: String, decision: LiveDecision, reason: String?) async throws {

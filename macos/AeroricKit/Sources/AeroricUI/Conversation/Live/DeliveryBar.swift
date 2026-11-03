@@ -5,7 +5,8 @@ import SwiftUI
 /// everything arrives). One line for the most pressing group.
 public struct DeliveryNotice: Equatable, Sendable {
     public enum Tone: Equatable, Sendable { case quiet, warning, danger }
-    public enum Action: Equatable, Sendable { case resume, discard, resend }
+    /// `edit`: the user's own message back into the composer (R1-2b).
+    public enum Action: Equatable, Sendable { case resume, discard, resend, edit }
 
     public var tone: Tone
     public var symbol: String
@@ -22,16 +23,21 @@ public struct DeliveryNotice: Equatable, Sendable {
 }
 
 public enum DeliveryText {
-    /// Failed first (it needs the user), then unknown, then paused, then
-    /// what waits for this turn to end.
+    /// Why the user's message waits for them after a restart (core `RESTARTED`).
+    public static let restarted = "Aeroric 重启了"
+
+    /// Failed first (it needs the user), then unknown, then paused. What
+    /// waits for this turn shows on its own bubble instead (R1-2b Q3).
     public static func notice(_ deliveries: [LiveDelivery]) -> DeliveryNotice? {
         let open = deliveries.filter(\.isOpen).sorted { $0.createdMs < $1.createdMs }
         let failed = open.filter { $0.state == "failed" }
         if let first = failed.first {
+            let mine = failed.count == 1 && first.kind == "user"
             return DeliveryNotice(tone: .danger, symbol: "exclamationmark.circle",
                                   text: failed.count == 1 ? "没送达：\(first.reason ?? "原因不明")"
                                       : "\(failed.count) 条没送达：\(first.reason ?? "原因不明")",
-                                  actions: [(.resend, "重试"), (.discard, "丢弃")], ids: failed.map(\.id))
+                                  actions: [(.resend, "重试"), mine ? (.edit, "修改") : (.discard, "丢弃")],
+                                  ids: failed.map(\.id))
         }
         let unknown = open.filter { $0.state == "unknown" }
         if let first = unknown.first {
@@ -41,18 +47,40 @@ public enum DeliveryText {
                                   actions: [(.resend, "重发"), (.discard, "不用了")], ids: unknown.map(\.id))
         }
         let paused = open.filter { $0.state == "paused" }
+        if paused.allSatisfy({ $0.reason == restarted }), let first = paused.first {
+            let edit: [(action: DeliveryNotice.Action, title: String)] =
+                paused.count == 1 && first.kind == "user" ? [(.edit, "修改")] : []
+            return DeliveryNotice(tone: .warning, symbol: "pause.circle",
+                                  text: "\(paused.count) 条消息未发送（\(restarted)）",
+                                  actions: [(.resume, "发送")] + edit + [(.discard, "丢弃")], ids: paused.map(\.id))
+        }
         if !paused.isEmpty {
             return DeliveryNotice(tone: .warning, symbol: "pause.circle",
                                   text: "\(paused.count) 条未发出（你按了停止）",
                                   actions: [(.resume, "继续发送"), (.discard, "丢弃")], ids: paused.map(\.id))
         }
-        let waiting = open.filter { $0.state == "waiting" && $0.kind == "user" }
-        if !waiting.isEmpty {
-            return DeliveryNotice(tone: .quiet, symbol: "clock",
-                                  text: "\(waiting.count) 条消息等这轮结束后发送",
-                                  actions: [(.discard, "撤回")], ids: waiting.map(\.id))
-        }
         return nil
+    }
+
+    /// R1-2b: under the user's own message while it is not simply on its
+    /// way; nil once it went out.
+    public static func userState(_ delivery: LiveDelivery) -> String? {
+        switch delivery.state {
+        case "waiting": delivery.mode == "afterTurn" ? "等这轮结束后发送" : "等待发送"
+        case "paused": delivery.reason == restarted ? "未发送" : "已暂停"
+        case "failed": "没送达"
+        case "unknown": "不确定是否送达"
+        default: nil
+        }
+    }
+
+    static func userSymbol(_ delivery: LiveDelivery) -> String {
+        switch delivery.state {
+        case "paused": "pause.circle"
+        case "failed": "exclamationmark.circle"
+        case "unknown": "questionmark.circle"
+        default: "clock"
+        }
     }
 
     public static func state(_ delivery: LiveDelivery) -> String {
@@ -84,6 +112,41 @@ public enum DeliveryText {
         case .resume: "delivery.resume"
         case .discard: "delivery.discard"
         case .resend: "delivery.resend"
+        case .edit: "delivery.edit"
+        }
+    }
+}
+
+/// R1-2b: under the user's own message — where it is in the queue, with
+/// 撤回 and 修改 while it has not gone out.
+struct UserEchoLabel: View {
+    let delivery: LiveDelivery?
+    let steer: LiveSteer
+    let withdraw: (String) -> Void
+    let edit: (String) -> Void
+
+    var body: some View {
+        if let delivery, let state = DeliveryText.userState(delivery) {
+            HStack(spacing: AeroricSpace.m) {
+                Label(state, systemImage: DeliveryText.userSymbol(delivery))
+                    .lineLimit(1)
+                    .foregroundStyle(delivery.state == "failed" ? AeroricColor.danger : AeroricColor.textTertiary)
+                if delivery.state != "unknown" {
+                    Button("撤回") { withdraw(delivery.id) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(AeroricColor.accent)
+                        .accessibilityIdentifier("session.live.echo.withdraw")
+                }
+                Button("修改") { edit(delivery.id) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(AeroricColor.accent)
+                    .accessibilityIdentifier("session.live.echo.edit")
+            }
+            .font(.system(size: AeroricType.caption))
+            .fixedSize()
+            .accessibilityIdentifier("session.live.echo.\(delivery.state)")
+        } else {
+            LiveSteerLabel(steer: steer)
         }
     }
 }

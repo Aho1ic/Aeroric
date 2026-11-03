@@ -23,6 +23,9 @@ pub enum Event<'a> {
     Unreadable,
     /// The user pressed stop.
     Stop,
+    /// R1-2b (Q-S7): the host restarted with the user's own message still
+    /// waiting; it is not sent until they say so.
+    Restarted,
     Resume,
     Discard,
     Resend,
@@ -33,6 +36,9 @@ pub enum Event<'a> {
 
 /// Why an unknown item could not be settled: it goes to 需要我处理.
 pub const UNREADABLE: &str = "读不到会话记录";
+
+/// Why the user's message waits for them after a restart.
+pub const RESTARTED: &str = "Aeroric 重启了";
 
 /// Apply `event`; false when it does not apply in this state.
 pub fn step(d: &mut Delivery, event: Event<'_>, now_ms: u64) -> bool {
@@ -87,7 +93,14 @@ pub fn step(d: &mut Delivery, event: Event<'_>, now_ms: u64) -> bool {
             S::Unknown
         }
         (S::Waiting | S::Sending, Event::Stop) => S::Paused,
-        (S::Paused, Event::Resume) => S::Waiting,
+        (S::Waiting, Event::Restarted) => {
+            d.reason = Some(RESTARTED.into());
+            S::Paused
+        }
+        (S::Paused, Event::Resume) => {
+            d.reason = None;
+            S::Waiting
+        }
         (S::Waiting | S::Paused | S::Failed | S::Unknown, Event::Discard) => S::Withdrawn,
         (S::Failed | S::Unknown, Event::Resend) => {
             d.blocked = false;

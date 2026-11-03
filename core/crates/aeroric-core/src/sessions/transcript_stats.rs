@@ -49,6 +49,15 @@ pub struct TurnStat {
     /// finished, so only this tells a stopped turn from a completed one.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub interrupted: bool,
+    /// CU 2026-11-03 (R1-2b): the person's messages this turn took — more
+    /// than one when they steered it. History shows each as its own turn,
+    /// so without this the timings of older turns slid by one.
+    #[serde(skip_serializing_if = "one")]
+    pub messages: u32,
+}
+
+fn one(n: &u32) -> bool {
+    *n == 1
 }
 
 impl TranscriptStats {
@@ -75,6 +84,7 @@ impl Clock {
             ended_at: None,
             tokens: 0,
             interrupted: false,
+            messages: 1,
         });
         self.turn_start = Some(at);
         self.turn_tool_ms = 0;
@@ -138,12 +148,22 @@ fn u64_at(value: &Value, path: &[&str]) -> Option<u64> {
     path.iter().try_fold(value, |v, key| v.get(key))?.as_u64()
 }
 
+/// A user message the person typed, not context Codex injects as one.
+fn typed_by_person(payload: &Value) -> bool {
+    payload["content"]
+        .as_array()
+        .and_then(|blocks| blocks.iter().find_map(|b| b["text"].as_str()))
+        .is_some_and(|text| !super::codex::is_injected_context(text))
+}
+
 /// A Codex rollout: `token_count` carries cumulative usage and the context
 /// window; `task_started` / `task_complete` bound turns; tool calls pair by
 /// `call_id`.
 pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
     let mut stats = TranscriptStats::default();
     let mut clock = Clock::default();
+    // The person's messages since this turn started (a steer adds one).
+    let mut typed = 0u32;
     for line in lines {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -153,7 +173,10 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
         let kind = payload["type"].as_str().unwrap_or_default();
         match value["type"].as_str().unwrap_or_default() {
             "event_msg" => match kind {
-                "task_started" => clock.start_turn(&mut stats, at),
+                "task_started" => {
+                    clock.start_turn(&mut stats, at);
+                    typed = 0;
+                }
                 "task_complete" => clock.end_turn(&mut stats, at),
                 "turn_aborted" => {
                     clock.end_turn(&mut stats, at);
@@ -184,6 +207,13 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
                 let call_id = payload["call_id"].as_str().unwrap_or_default();
                 match kind {
                     "message" if payload["role"] == "assistant" => clock.output(&mut stats, at),
+                    "message" if payload["role"] == "user" && typed_by_person(payload) => {
+                        typed += 1;
+                        if let Some(turn) = stats.turns.last_mut().filter(|t| t.ended_at.is_none())
+                        {
+                            turn.messages = typed.max(1);
+                        }
+                    }
                     "reasoning" => clock.output(&mut stats, at),
                     "function_call" | "custom_tool_call" | "local_shell_call" => {
                         clock.output(&mut stats, at);
@@ -506,6 +536,35 @@ mod tests {
             stats.turns[1].ended_at,
             Some(stats.turns[1].started_at + 30_000)
         );
+    }
+
+    /// CU 2026-11-03: a steer is a second message of the person's inside
+    /// one Codex turn; injected context is not counted.
+    #[test]
+    fn a_steered_codex_turn_counts_the_persons_messages() {
+        let t = |s: &str| format!("2026-11-03T13:16:{s}Z");
+        let event = |at: &str, kind: &str| {
+            serde_json::json!({"timestamp": t(at), "type": "event_msg", "payload": {"type": kind}})
+                .to_string()
+        };
+        let user = |at: &str, text: &str| {
+            serde_json::json!({"timestamp": t(at), "type": "response_item", "payload": {
+                "type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}})
+            .to_string()
+        };
+        let lines = vec![
+            event("00.000", "task_started"),
+            user("00.100", "<environment_context>x</environment_context>"),
+            user("00.200", "sleep 120"),
+            user("30.000", "also this"),
+            event("50.000", "task_complete"),
+            event("51.000", "task_started"),
+            user("51.100", "next"),
+            event("55.000", "task_complete"),
+        ];
+        let stats = codex(&lines).unwrap();
+        assert_eq!(stats.turns[0].messages, 2);
+        assert_eq!(stats.turns[1].messages, 1);
     }
 
     #[test]

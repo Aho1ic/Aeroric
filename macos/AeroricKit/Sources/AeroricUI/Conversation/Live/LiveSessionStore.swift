@@ -12,7 +12,8 @@ public protocol LiveSessionActions {
     func history(taskID: String) async throws -> [SessionMessage]
     /// History plus the transcript's 统计栏 figures (2026-10-29).
     func historyWithStats(taskID: String) async throws -> (messages: [SessionMessage], stats: SessionTranscriptStats?)
-    func prompt(taskID: String, text: String) async throws -> [LiveSharedWriter]
+    /// R1-2b: queued; `afterTurn` waits for the running turn to end.
+    func prompt(taskID: String, text: String, afterTurn: Bool) async throws -> LivePromptReceipt
     func interrupt(taskID: String) async throws
     func respond(taskID: String, requestID: String, decision: LiveDecision, reason: String?) async throws
     /// Answer a question card: exactly one of `value`, `confirmed`, `cancelled`.
@@ -365,7 +366,7 @@ public final class LiveSessionStore {
     // MARK: - User actions
 
     /// Sends the composer text, or runs it when it is one of the five commands.
-    public func send(_ text: String) async throws -> LiveSendResult {
+    public func send(_ text: String, afterTurn: Bool = false) async throws -> LiveSendResult {
         if let command = SlashCommand.parse(text) {
             switch command {
             case .compact:
@@ -396,10 +397,31 @@ public final class LiveSessionStore {
             try await actions.delegate(taskID: taskID, contract: contract)
             return .ranCommand
         }
+        let waits = afterTurn && turnActive
         if !turnActive { baseline = LiveHistoryMerge.assistantCount(history) }
-        model?.echo(text)
-        sharedWriters = try await actions.prompt(taskID: taskID, text: text)
+        let receipt = try await actions.prompt(taskID: taskID, text: text, afterTurn: waits)
+        model?.echo(text, afterTurn: waits, delivery: receipt.deliveryId)
+        sharedWriters = receipt.sharedWriters
         return .sent
+    }
+
+    /// R1-2b: 撤回 a message of the user's that has not gone out.
+    public func withdraw(_ deliveryID: String) async {
+        await actOnDeliveries(.discard, ids: [deliveryID])
+    }
+
+    /// R1-2b: 修改 — out of the queue; the caller puts the text back in the
+    /// composer. Nil when it could not be taken back.
+    public func takeBack(_ deliveryID: String) async -> String? {
+        guard let text = model?.deliveries[deliveryID]?.text else { return nil }
+        do {
+            try await actions.deliveryAction(DeliveryText.method(.discard), id: deliveryID)
+        } catch {
+            errorText = "修改失败：\(error)"
+            return nil
+        }
+        await restoreDeliveries()
+        return text
     }
 
     /// B4-2: "#调研员 …" or "#codex …" as a contract; nil when `target`

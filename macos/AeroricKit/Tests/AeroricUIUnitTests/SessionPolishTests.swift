@@ -178,4 +178,21 @@ final class SessionPolishTests: XCTestCase {
         let stopped = SessionTranscriptStats.TurnStat(startedAt: 1_000, endedAt: 37_000, tokens: 0, interrupted: true)
         XCTAssertEqual(TranscriptTurns.header(stopped), "已中断，用时 36 秒")
     }
+
+    /// CU 2026-11-03: a steer is its own turn in history but not in the
+    /// agent's timings; the older turns keep theirs.
+    func testASteeredTurnKeepsOlderTimingsInPlace() {
+        func turn(_ id: String) -> TranscriptTurn {
+            TranscriptTurn(id: id, user: .message(id: id, role: "user", content: [.text(text: id)]),
+                           process: [], answer: nil)
+        }
+        let turns = [turn("old"), turn("sleep"), turn("steer"), turn("next")]
+        let stats: [SessionTranscriptStats.TurnStat] = [
+            .init(startedAt: 0, endedAt: 3_000, tokens: 0),
+            .init(startedAt: 10_000, endedAt: 130_000, tokens: 0, messages: 2),
+            .init(startedAt: 131_000, endedAt: 135_000, tokens: 0),
+        ]
+        let timed = TranscriptTurns.attach(stats, to: turns)
+        XCTAssertEqual(timed.map { $0.stat?.endedAt }, [3_000, 130_000, nil, 135_000])
+    }
 }

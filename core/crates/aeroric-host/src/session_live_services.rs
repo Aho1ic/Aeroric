@@ -18,6 +18,7 @@ use aeroric_core::storage::Record;
 use aeroric_core::tasks::launch_plan::working_directory;
 use aeroric_core::tasks::session_owner::launch_family_of;
 use aeroric_core::tasks::{AgentFamilies, ProtocolFamily, TaskService};
+use aeroric_protocol::delivery::{DeliveryKind, DeliveryMode};
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
 use aeroric_protocol::session_live::{
@@ -980,43 +981,67 @@ fn prompt(live: &Live, request: &Request) -> Frame {
             "session.prompt needs text",
         );
     }
+    let Some((_, record)) = live.record(&p.task_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no task with that id in any known project",
+        );
+    };
+    let driver = live.driver(&p.task_id);
+    // R1-2b: the message goes through the delivery queue; Q8 — a pending
+    // handoff travels in the same delivery.
+    let handoff = driver.is_none() && record.get(HANDOFF_KEY).is_some();
+    let item = live.executor.deliveries().enqueue(
+        &p.task_id,
+        DeliveryKind::User,
+        p.mode.unwrap_or(DeliveryMode::Now),
+        &delivery::label("你的消息", &p.text),
+        &p.text,
+        handoff.then_some("handoff"),
+    );
+    // R1-1: not refused — the user's own sessions are theirs to run — but said.
+    let own_turn_writes = driver.is_none_or(|d| d.snapshot().permission.as_deref() != Some("plan"));
+    let shared: Vec<Value> = if own_turn_writes {
+        delegation::writers_beside(live, &p.task_id)
+            .into_iter()
+            .map(|w| json!({"taskId": w.task_id, "title": w.title}))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    ok(
+        request,
+        json!({"accepted": true, "deliveryId": item.id, "sharedWriters": shared}),
+    )
+}
+
+/// R1-2b: what `session.prompt` did on the spot, now done when the queue
+/// sends the user's message. `Ok(true)`: the driver answers with a receipt.
+fn send_user(live: &Live, task_id: &str, id: &str, text: &str) -> Result<bool, String> {
     // A source move that could not carry the session over (2026-10-29) left a
     // handoff: the next message starts a fresh run with it in front.
-    if live.driver(&p.task_id).is_none() {
-        if let Some(frame) = start_with_handoff(live, request, &p.task_id, &p.text) {
-            return frame;
+    if live.driver(task_id).is_none() {
+        if let Some(started) = start_with_handoff(live, task_id, text) {
+            return started.map(|()| false);
         }
     }
-    let driver = match live.driver(&p.task_id) {
+    let driver = match live.driver(task_id) {
         Some(driver) => driver,
-        None => match live.reopen(request, &p.task_id) {
-            Ok(driver) => driver,
-            Err(frame) => return *frame,
-        },
+        None => live.reopen_quiet(task_id)?,
     };
     let checkpoints = live.executor.checkpoints();
-    checkpoints.note_prompt(&p.task_id, &p.text);
+    checkpoints.note_prompt(task_id, text);
     // B4′: same session, new model or compacted — remind it of what is open.
-    let text = match checkpoints.take_reminder(&p.task_id) {
-        Some(reminder) => format!("{reminder}{}", p.text),
-        None => p.text,
+    let text = match checkpoints.take_reminder(task_id) {
+        Some(reminder) => format!("{reminder}{text}"),
+        None => text.to_string(),
     };
-    // R1-1: not refused — the user's own sessions are theirs to run — but said.
-    let own_turn_writes = driver.snapshot().permission.as_deref() != Some("plan");
-    match driver.prompt(text) {
-        Ok(()) => {
-            let shared: Vec<Value> = if own_turn_writes {
-                delegation::writers_beside(live, &p.task_id)
-                    .into_iter()
-                    .map(|w| json!({"taskId": w.task_id, "title": w.title}))
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            ok(request, json!({"accepted": true, "sharedWriters": shared}))
-        }
-        Err(error) => driver_failure(request, error),
-    }
+    let receipts = driver.receipts();
+    driver
+        .deliver(id.to_string(), text)
+        .map_err(|e| e.to_string())?;
+    Ok(receipts)
 }
 
 fn with_driver(
@@ -1840,7 +1865,7 @@ fn handoff_digest(
 
 /// After a `handoff` move: the first message starts a fresh run with the
 /// handoff in front, then the handoff is cleared. `None` when there is none.
-fn start_with_handoff(live: &Live, request: &Request, task_id: &str, text: &str) -> Option<Frame> {
+fn start_with_handoff(live: &Live, task_id: &str, text: &str) -> Option<Result<(), String>> {
     let (project, record) = live.record(task_id)?;
     let handoff = record.get(HANDOFF_KEY).and_then(Value::as_str)?.to_string();
     let project_id = project.get("id").and_then(Value::as_str)?.to_string();
@@ -1860,23 +1885,19 @@ fn start_with_handoff(live: &Live, request: &Request, task_id: &str, text: &str)
     });
     let operation_key = format!("session-handoff-{task_id}-{}", now_ms());
     Some(
-        match live.service.start(
-            &project,
-            task_id,
-            &operation_key,
-            true,
-            Some(format!("{handoff}{text}")),
-            false,
-            Default::default(),
-            Default::default(),
-        ) {
-            Ok(_) => ok(request, json!({"accepted": true})),
-            Err(error) => failure(
-                request.id.clone(),
-                ErrorCode::InvalidArgument,
-                &error.to_string(),
-            ),
-        },
+        live.service
+            .start(
+                &project,
+                task_id,
+                &operation_key,
+                true,
+                Some(format!("{handoff}{text}")),
+                false,
+                Default::default(),
+                Default::default(),
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
     )
 }
 

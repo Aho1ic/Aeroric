@@ -267,6 +267,8 @@ public struct LiveSessionModel: Equatable, Sendable {
     /// A13: this turn's tool calls as signatures, for the runaway-loop hint.
     public private(set) var turnToolSignatures: [String] = []
     private var echoCount = 0
+    /// R1-2b: echo id → the delivery it is.
+    public private(set) var echoDeliveries: [String: String] = [:]
 
     public init(state: LiveSessionState) {
         cursor = state.latestSeq
@@ -291,10 +293,16 @@ public struct LiveSessionModel: Equatable, Sendable {
     /// CU F2 (2026-10-31): a delegation card the user can still act on is not
     /// in the transcript, so it stays.
     public mutating func clearItems() {
+        // R1-2b: still queued, so not in history yet.
+        let queued = Set(echoDeliveries.keys.filter { echo in
+            delivery(forEcho: echo).map(Self.waitsForUser) ?? false
+        })
         items.removeAll { item in
             if case let .delegation(_, card) = item { return !card.wantsUser }
+            if case let .userEcho(id, _, _) = item { return !queued.contains(id) }
             return true
         }
+        echoDeliveries = echoDeliveries.filter { echo, _ in items.contains { $0.id == "user:\(echo)" } }
     }
 
     /// CU F2: put back a delegation card the live rows no longer hold (the
@@ -307,10 +315,44 @@ public struct LiveSessionModel: Equatable, Sendable {
         if !held { items.append(.delegation(id: card.delegationId, card)) }
     }
 
-    /// The message the user just sent, until history has it.
-    public mutating func echo(_ text: String) {
+    /// The message the user just sent, until history has it. R1-2b: bound to
+    /// its delivery; a delivery the live updates already showed is not
+    /// echoed twice.
+    public mutating func echo(_ text: String, afterTurn: Bool = false, delivery: String? = nil) {
+        if let delivery, echoDeliveries.values.contains(delivery) { return }
         echoCount += 1
-        items.append(.userEcho(id: "local-\(echoCount)", text: text, steer: turnActive ? .waiting : .none))
+        let id = "local-\(echoCount)"
+        items.append(.userEcho(id: id, text: text, steer: turnActive && !afterTurn ? .waiting : .none))
+        if let delivery { echoDeliveries[id] = delivery }
+    }
+
+    /// R1-2b: the delivery behind an echoed message.
+    public func delivery(forEcho id: String) -> LiveDelivery? {
+        echoDeliveries[id].flatMap { deliveries[$0] }
+    }
+
+    /// R1-2b: a message of the user's that has not gone out (or did not
+    /// arrive) and so is not in history yet.
+    static func waitsForUser(_ delivery: LiveDelivery) -> Bool {
+        ["waiting", "paused", "failed", "unknown"].contains(delivery.state)
+    }
+
+    /// R1-2b: the user's queued messages show where they will land — also
+    /// after the page reopened or history replaced the live rows — and go
+    /// once withdrawn.
+    mutating func syncUserEchoes() {
+        let held = Set(echoDeliveries.values)
+        for delivery in deliveries.values.sorted(by: { $0.createdMs < $1.createdMs })
+        where delivery.kind == "user" && Self.waitsForUser(delivery) && !held.contains(delivery.id) {
+            echoCount += 1
+            let id = "local-\(echoCount)"
+            items.append(.userEcho(id: id, text: delivery.text, steer: .none))
+            echoDeliveries[id] = delivery.id
+        }
+        for (echo, delivery) in echoDeliveries where deliveries[delivery]?.state == "withdrawn" {
+            items.removeAll { $0.id == "user:\(echo)" }
+            echoDeliveries[echo] = nil
+        }
     }
 
     /// The agent produced something after a 插话: it has seen it.
@@ -468,6 +510,7 @@ public struct LiveSessionModel: Equatable, Sendable {
             }
         case let .delivery(delivery):
             deliveries[delivery.id] = delivery
+            syncUserEchoes()
         case .deliveryReceipt:
             break
         case let .unknown(kind, _):
@@ -481,6 +524,7 @@ public struct LiveSessionModel: Equatable, Sendable {
         for item in list where (deliveries[item.id]?.updatedMs ?? 0) <= item.updatedMs {
             deliveries[item.id] = item
         }
+        syncUserEchoes()
     }
 }
 

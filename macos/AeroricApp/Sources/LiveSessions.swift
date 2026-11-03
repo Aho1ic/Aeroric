@@ -36,8 +36,8 @@ struct HostLiveSessionActions: LiveSessionActions {
         return (page.messages.map(SessionBlockMapping.message), page.stats)
     }
 
-    func prompt(taskID: String, text: String) async throws -> [LiveSharedWriter] {
-        try await client().prompt(taskId: taskID, text: text)
+    func prompt(taskID: String, text: String, afterTurn: Bool) async throws -> LivePromptReceipt {
+        try await client().prompt(taskId: taskID, text: text, afterTurn: afterTurn)
     }
     func interrupt(taskID: String) async throws { try await client().interrupt(taskId: taskID) }
 

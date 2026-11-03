@@ -28,10 +28,46 @@ final class DeliveryTests: XCTestCase {
         XCTAssertEqual(DeliveryText.method(.resume), "delivery.resume")
     }
 
-    func testAUserMessageWaitingForTheTurnIsSaid() {
-        let notice = DeliveryText.notice([item("w", "waiting", kind: "user")])
-        XCTAssertEqual(notice?.text, "1 条消息等这轮结束后发送")
-        XCTAssertEqual(notice?.tone, .quiet)
+    /// R1-2b Q3: what waits for the turn shows on its own bubble, not the bar.
+    func testAUserMessageWaitingForTheTurnIsOnItsBubble() {
+        var waiting = item("w", "waiting", kind: "user")
+        waiting.mode = "afterTurn"
+        XCTAssertNil(DeliveryText.notice([waiting]))
+        XCTAssertEqual(DeliveryText.userState(waiting), "等这轮结束后发送")
+        XCTAssertNil(DeliveryText.userState(item("d", "delivered", kind: "user")))
+    }
+
+    /// R1-2b (Q-S7): after a restart the user's message waits for them.
+    func testAfterARestartTheUsersMessageIsUnsent() {
+        let unsent = DeliveryText.notice([item("u", "paused", kind: "user", reason: DeliveryText.restarted)])
+        XCTAssertEqual(unsent?.text, "1 条消息未发送（Aeroric 重启了）")
+        XCTAssertEqual(unsent?.actions.map(\.title), ["发送", "修改", "丢弃"])
+        XCTAssertEqual(DeliveryText.userState(item("u", "paused", kind: "user", reason: DeliveryText.restarted)),
+                       "未发送")
+        let failed = DeliveryText.notice([item("f", "failed", kind: "user", reason: "Claude 未登录")])
+        XCTAssertEqual(failed?.actions.map(\.title), ["重试", "修改"])
+    }
+
+    /// R1-2b: the echo is bound to its delivery, a queued one survives
+    /// history taking over, and a withdrawn one goes.
+    func testAQueuedMessageStaysUntilItLandsAndGoesWhenWithdrawn() {
+        var model = LiveSessionModel(state: LiveSessionState(
+            taskId: "t", live: true, structured: true, family: "codex", sessionId: "th", turnActive: true,
+            pending: [], plan: [], model: "gpt-5", permission: "ask", effort: nil, contextUsed: nil,
+            contextLimit: nil, inputTokens: nil, outputTokens: nil, latestSeq: 0))
+        var queued = item("dv-1", "waiting", kind: "user", at: 1)
+        queued.mode = "afterTurn"
+        queued.text = "稍后"
+        model.restoreDeliveries([queued])
+        XCTAssertEqual(model.items.count, 1, "adopted from the queue")
+        model.echo("稍后", afterTurn: true, delivery: "dv-1")
+        XCTAssertEqual(model.items.count, 1, "not echoed twice")
+        model.clearItems()
+        XCTAssertEqual(model.items.count, 1, "still queued: kept")
+        queued.state = "withdrawn"
+        queued.updatedMs = 2
+        model.restoreDeliveries([queued])
+        XCTAssertTrue(model.items.isEmpty)
     }
 
     func testDeliveryUpdatesDecodeAndTheLatestWins() throws {

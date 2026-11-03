@@ -256,6 +256,67 @@ fn a_restart_settles_what_was_out_and_sends_what_waited() {
     assert!(again.act(&lost.id, Action::Resend).is_ok());
 }
 
+fn user(queue: &Deliveries, task: &str, mode: DeliveryMode, text: &str) -> Delivery {
+    queue.enqueue(task, DeliveryKind::User, mode, "你的消息", text, None)
+}
+
+/// R1-2b: the user's message during a turn steers it at once, even with a
+/// result waiting for the turn to end; "after this turn" waits its turn.
+#[test]
+fn a_users_steer_goes_at_once_and_after_turn_waits_in_order() {
+    let (queue, host, _) = rig();
+    host.busy.lock().insert("p".into());
+    let waiting = result(&queue, "p", "结果");
+    let later = user(&queue, "p", DeliveryMode::AfterTurn, "稍后");
+    let steer = user(&queue, "p", DeliveryMode::Now, "插话");
+    wait("steer sent", || host.sent.lock().len() == 1);
+    assert_eq!(host.sent.lock()[0].1, steer.id);
+    receipt(&queue, "p", &steer.id, ReceiptOutcome::Delivered);
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(host.sent.lock().len(), 1, "the rest waits for the turn");
+    host.busy.lock().clear();
+    turn_ended(&queue, "p");
+    wait("result sent", || host.sent.lock().len() == 2);
+    assert_eq!(host.sent.lock()[1].1, waiting.id, "oldest first");
+    host.busy.lock().insert("p".into());
+    receipt(&queue, "p", &waiting.id, ReceiptOutcome::Delivered);
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(state(&queue, &later.id), DeliveryState::Waiting);
+    host.busy.lock().clear();
+    turn_ended(&queue, "p");
+    wait("after-turn sent", || host.sent.lock().len() == 3);
+    assert_eq!(host.sent.lock()[2].1, later.id);
+}
+
+/// R1-2b (Q-S7): after a restart the user's waiting message is not sent on
+/// its own; it waits, paused, for them to send or drop it.
+#[test]
+fn after_a_restart_the_users_message_waits_for_them() {
+    let (queue, host, dir) = rig();
+    host.busy.lock().insert("p".into());
+    let mine = user(&queue, "p", DeliveryMode::AfterTurn, "我的");
+    let ours = result(&queue, "p", "结果");
+    drop(queue);
+
+    let again = Deliveries::new(Arc::new(Quiet));
+    again.set_dir(&dir).unwrap();
+    let host = Arc::new(FakeHost::default());
+    again.set_host(Arc::clone(&host) as Arc<dyn DeliveryHost>);
+    let paused = again.get(&mine.id).unwrap();
+    assert_eq!(paused.state, DeliveryState::Paused);
+    assert_eq!(paused.reason.as_deref(), Some(state::RESTARTED));
+    wait("ours sent", || {
+        host.sent.lock().iter().any(|(_, id, _)| *id == ours.id)
+    });
+    assert!(!host.sent.lock().iter().any(|(_, id, _)| *id == mine.id));
+    receipt(&again, "p", &ours.id, ReceiptOutcome::Delivered);
+    let resumed = again.act(&mine.id, Action::Resume).unwrap();
+    assert_eq!(resumed.reason, None);
+    wait("mine sent", || {
+        host.sent.lock().iter().any(|(_, id, _)| *id == mine.id)
+    });
+}
+
 #[test]
 fn the_state_machine_refuses_what_does_not_apply() {
     let mut d = Delivery {

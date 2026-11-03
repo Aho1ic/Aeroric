@@ -639,6 +639,73 @@ async fn every_session_method_round_trips_through_the_host() {
     assert_eq!(strict["code"], "INVALID_ARGUMENT");
 }
 
+/// R1-2b: the user's message goes through the queue. During a turn, "now"
+/// steers it at once; "after this turn" waits and gets a turn of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_users_message_steers_now_or_waits_for_the_turn() {
+    let mut host = Host::start(true).await;
+    host.start_task("hi");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th-1", "path": "/tmp/th-1.jsonl"}}),
+    );
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-1", "turn": {"id": "u1"}}),
+    );
+    host.until("running", |h| h.record()["status"] == "running")
+        .await;
+
+    let later = host
+        .call(
+            "session.prompt",
+            json!({"taskId": "task-1", "text": "稍后", "mode": "afterTurn"}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        later["deliveryId"].as_str().unwrap().starts_with("dv-"),
+        "{later}"
+    );
+    host.call(
+        "session.prompt",
+        json!({"taskId": "task-1", "text": "插话"}),
+    )
+    .await
+    .unwrap();
+    let steer = peer.expect("turn/steer").await;
+    assert_eq!(steer["params"]["input"][0]["text"], "插话");
+    peer.reply(&steer, json!({"turnId": "u1"}));
+
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": "u1", "status": "completed"}}),
+    );
+    let next = peer.expect("turn/start").await;
+    assert_eq!(next["params"]["input"][0]["text"], "稍后");
+    let queue = host
+        .call("delivery.list", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    let kinds: Vec<_> = queue["deliveries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(kinds, ["user", "user"], "{queue}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_task_without_a_session_answers_not_found() {
     let host = Host::start(true).await;

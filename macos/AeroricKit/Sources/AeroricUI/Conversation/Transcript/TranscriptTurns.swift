@@ -42,12 +42,28 @@ public enum TranscriptTurns {
     /// Pure: attaches each turn's timing, matched from the newest turn back
     /// (the transcript and the history may disagree on early turns, e.g. a
     /// resumed session's preamble).
+    /// CU 2026-11-03: a steered turn took several of the person's messages,
+    /// which history shows as turns of their own; its timing goes on the
+    /// first of them and the rest get none.
     public static func attach(_ stats: [SessionTranscriptStats.TurnStat], to turns: [TranscriptTurn]) -> [TranscriptTurn] {
         var out = turns
         var statIndex = stats.count - 1
-        for index in out.indices.reversed() where out[index].user != nil {
-            guard statIndex >= 0 else { break }
-            out[index].stat = stats[statIndex]
+        var index = out.count - 1
+        while index >= 0, statIndex >= 0 {
+            guard out[index].user != nil else {
+                index -= 1
+                continue
+            }
+            var remaining = max(1, stats[statIndex].messages)
+            var first = index
+            while index >= 0, remaining > 0 {
+                if out[index].user != nil {
+                    first = index
+                    remaining -= 1
+                }
+                index -= 1
+            }
+            out[first].stat = stats[statIndex]
             statIndex -= 1
         }
         return out

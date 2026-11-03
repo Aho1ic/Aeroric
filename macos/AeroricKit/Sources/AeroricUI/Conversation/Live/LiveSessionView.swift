@@ -283,10 +283,15 @@ public struct LiveSessionView: View {
 
     @ViewBuilder private func liveRow(_ item: LiveItem, column: CGFloat) -> some View {
         switch item {
-        case let .userEcho(_, text, steer):
+        case let .userEcho(id, text, steer):
+            let delivery = store.model?.delivery(forEcho: id)
             VStack(alignment: .trailing, spacing: AeroricSpace.xs) {
                 MessageBubble(role: "user", content: [.text(text: text)], columnWidth: column)
-                LiveSteerLabel(steer: steer).padding(.trailing, AeroricSpace.s)
+                    .opacity(delivery.flatMap(DeliveryText.userState) == nil ? 1 : 0.6)
+                UserEchoLabel(delivery: delivery, steer: steer,
+                              withdraw: { target in Task { await store.withdraw(target) } },
+                              edit: { target in Task { if let text = await store.takeBack(target) { draft = text } } })
+                    .padding(.trailing, AeroricSpace.s)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         case let .message(_, text):
@@ -427,7 +432,13 @@ public struct LiveSessionView: View {
                 if let item = store.remembered { RememberedCard(item: item, store: store) }
                 if let notice = store.deliveryNotice {
                     DeliveryBar(notice: notice) { action in
-                        Task { await store.actOnDeliveries(action, ids: notice.ids) }
+                        Task {
+                            if action == .edit, let first = notice.ids.first {
+                                if let text = await store.takeBack(first) { draft = text }
+                            } else {
+                                await store.actOnDeliveries(action, ids: notice.ids)
+                            }
+                        }
                     }
                 }
                 if let writer = store.sharedWriter {
@@ -511,7 +522,8 @@ public struct LiveSessionView: View {
         ComposerCard(
             text: $draft, placeholder: store.turnActive ? "补充说明会发给正在进行的这一轮…" : "继续对话，或输入 / 使用命令",
             isEditable: store.state != nil, sendState: sendState, identifierPrefix: "session.live",
-            onSend: send, onStop: { Task { await store.interrupt() } }
+            onSend: { send() }, onStop: { Task { await store.interrupt() } },
+            onSendAfterTurn: store.turnActive ? { send(afterTurn: true) } : nil
         ) {
             HStack(spacing: AeroricSpace.xs) {
                 modelPicker
@@ -639,7 +651,7 @@ public struct LiveSessionView: View {
 
     // MARK: - Actions
 
-    private func send() {
+    private func send(afterTurn: Bool = false) {
         let text = draft
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         // Below the native-session minimum the agent cannot run: keep the draft
@@ -652,7 +664,7 @@ public struct LiveSessionView: View {
         draft = ""
         Task { @MainActor in
             do {
-                switch try await store.send(text) {
+                switch try await store.send(text, afterTurn: afterTurn) {
                 case .sent, .ranCommand, .clearedToNewSession: break
                 case .openModelPicker: modelPickerRequest += 1
                 case .openPermissionPicker: permissionPickerRequest += 1

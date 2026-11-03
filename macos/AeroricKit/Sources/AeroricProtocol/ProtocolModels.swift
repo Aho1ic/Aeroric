@@ -245,12 +245,17 @@ public struct SessionTranscriptStats: Equatable, Sendable {
         public var tokens: UInt64
         /// The person stopped this turn (CU 2026-11-03).
         public var interrupted: Bool
+        /// The person's messages this turn took: more than one when they
+        /// steered it (CU 2026-11-03).
+        public var messages: Int
 
-        public init(startedAt: UInt64, endedAt: UInt64?, tokens: UInt64, interrupted: Bool = false) {
+        public init(startedAt: UInt64, endedAt: UInt64?, tokens: UInt64, interrupted: Bool = false,
+                    messages: Int = 1) {
             self.startedAt = startedAt
             self.endedAt = endedAt
             self.tokens = tokens
             self.interrupted = interrupted
+            self.messages = messages
         }
     }
 
@@ -282,7 +287,8 @@ public struct SessionTranscriptStats: Equatable, Sendable {
             func n(_ key: String) -> UInt64? { row[key]?.numberText.flatMap { UInt64($0) } }
             guard let started = n("startedAt") else { return nil }
             return TurnStat(startedAt: started, endedAt: n("endedAt"), tokens: n("tokens") ?? 0,
-                            interrupted: row["interrupted"]?.boolValue ?? false)
+                            interrupted: row["interrupted"]?.boolValue ?? false,
+                            messages: Int(n("messages") ?? 1))
         }
         return stats
     }

@@ -464,6 +464,9 @@ pub struct TaskParams {
 pub struct PromptParams {
     pub task_id: String,
     pub text: String,
+    /// R1-2b: during a turn, steer it now (the default) or wait for it to end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<crate::delivery::DeliveryMode>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

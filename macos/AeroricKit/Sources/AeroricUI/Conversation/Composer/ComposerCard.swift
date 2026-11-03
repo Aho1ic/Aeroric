@@ -22,6 +22,8 @@ public struct ComposerCard<Footer: View>: View {
     let focusRequest: Int
     let onSend: () -> Void
     let onStop: () -> Void
+    /// R1-2b: during a turn, "这轮结束后再发" beside send (⌥↩); nil hides it.
+    let onSendAfterTurn: (() -> Void)?
     let footer: () -> Footer
     @FocusState private var focused: Bool
     @Environment(\.colorSchemeContrast) private var contrast
@@ -32,6 +34,7 @@ public struct ComposerCard<Footer: View>: View {
                 minLines: Int = 1, isEditable: Bool = true, acceptsAttachments: Bool = false,
                 sendState: ComposerSendState, identifierPrefix: String, focusRequest: Int = 0,
                 onSend: @escaping () -> Void, onStop: @escaping () -> Void = {},
+                onSendAfterTurn: (() -> Void)? = nil,
                 @ViewBuilder footer: @escaping () -> Footer) {
         _text = text
         _attachments = attachments
@@ -44,6 +47,7 @@ public struct ComposerCard<Footer: View>: View {
         self.focusRequest = focusRequest
         self.onSend = onSend
         self.onStop = onStop
+        self.onSendAfterTurn = onSendAfterTurn
         self.footer = footer
     }
 
@@ -105,6 +109,13 @@ public struct ComposerCard<Footer: View>: View {
                         .scrollContentBackground(.hidden)
                         .scrollIndicators(.never)
                         .focused($focused)
+                        // CU 2026-11-03: the text view took ⌥↩ as a line break
+                        // before the menu's shortcut saw it.
+                        .onKeyPress(.return, phases: .down) { press in
+                            guard press.modifiers == .option, let onSendAfterTurn, canSend else { return .ignored }
+                            onSendAfterTurn()
+                            return .handled
+                        }
                         .disabled(!isEditable)
                         .accessibilityLabel(placeholder)
                         .accessibilityIdentifier("\(identifierPrefix).prompt")
@@ -171,7 +182,39 @@ public struct ComposerCard<Footer: View>: View {
             .help(blockedReason ?? "发送 ⌘↩")
             .accessibilityLabel("发送")
             .accessibilityIdentifier("\(identifierPrefix).submit")
+            if ready, let onSendAfterTurn { sendMode(onSendAfterTurn) }
         }
+    }
+
+    /// R1-2b: steer now (the send button) or wait for this turn to end.
+    private func sendMode(_ afterTurn: @escaping () -> Void) -> some View {
+        Menu {
+            Button("立即插话  ⌘↩", action: onSend)
+            Button("这轮结束后再发  ⌥↩", action: afterTurn)
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .frame(width: 18, height: 30)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("立即插话，或等这轮结束后再发（⌥↩）")
+        .accessibilityLabel("发送方式")
+        .accessibilityIdentifier("\(identifierPrefix).send-mode")
+        .background {
+            Button("", action: afterTurn)
+                .keyboardShortcut(.return, modifiers: .option)
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var canSend: Bool {
+        sendState == .ready && isEditable && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var blockedReason: String? {

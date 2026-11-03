@@ -465,7 +465,10 @@ public enum LiveSessionRequest {
         .object(extra.merging(["taskId": .string(taskId)]) { _, new in new })
     }
 
-    public static func prompt(taskId: String, text: String) -> JSONValue { task(taskId, ["text": .string(text)]) }
+    /// R1-2b: `afterTurn` waits for the running turn to end instead of steering it.
+    public static func prompt(taskId: String, text: String, afterTurn: Bool = false) -> JSONValue {
+        task(taskId, afterTurn ? ["text": .string(text), "mode": .string("afterTurn")] : ["text": .string(text)])
+    }
     public static func interrupt(taskId: String) -> JSONValue { task(taskId) }
     public static func close(taskId: String) -> JSONValue { task(taskId) }
     public static func state(taskId: String) -> JSONValue { task(taskId) }
@@ -514,6 +517,18 @@ public enum LiveSessionRequest {
 }
 
 /// R1-1: another session writing in the same directory (`session.prompt`).
+/// R1-2b: what `session.prompt` answers — the queued message and the
+/// sessions writing beside this one.
+public struct LivePromptReceipt: Equatable, Sendable {
+    public var deliveryId: String?
+    public var sharedWriters: [LiveSharedWriter]
+
+    public init(deliveryId: String? = nil, sharedWriters: [LiveSharedWriter] = []) {
+        self.deliveryId = deliveryId
+        self.sharedWriters = sharedWriters
+    }
+}
+
 public struct LiveSharedWriter: Equatable, Sendable, Identifiable {
     public var taskId: String
     public var title: String

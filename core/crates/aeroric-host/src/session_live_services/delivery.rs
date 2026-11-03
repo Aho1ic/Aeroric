@@ -23,6 +23,14 @@ struct HostDeliveries {
 impl DeliveryHost for HostDeliveries {
     fn send(&self, task_id: &str, id: &str, text: &str) -> Result<bool, String> {
         let live = self.live.upgrade().ok_or("宿主已关闭")?;
+        let user = live
+            .executor
+            .deliveries()
+            .get(id)
+            .is_some_and(|d| d.kind == DeliveryKind::User);
+        if user {
+            return super::send_user(&live, task_id, id, text);
+        }
         let driver: Arc<dyn SessionDriver> = match live.driver(task_id) {
             Some(driver) => driver,
             None => live.reopen_quiet(task_id)?,
