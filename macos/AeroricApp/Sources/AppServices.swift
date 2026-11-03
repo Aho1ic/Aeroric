@@ -112,6 +112,8 @@ final class AppServices {
     var reviewNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// B4-2 → A19: parent task id → a delegation of it that needs the user.
     var delegationNeeds: [String: AttentionQueue.CheckFailure] = [:]
+    /// R1-2 → A19: task → a delivery not known to have arrived.
+    var deliveryNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// B4-3 → A19: board owner → a decision waiting or a stale claim.
     var boardNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// Group names the 移动到分组 menu offers (host `project.group_names`).
@@ -1188,7 +1190,7 @@ extension AppServices: WorkspaceStateProviding {
     var attentionCount: Int? {
         let count = AttentionQueue.items(taskStore.tasks, checkFailures: checkFailures, reviews: reviewNeeds,
                                          delegations: delegationNeeds, boards: boardNeeds, memories: memoryNeeds,
-                                         skills: skillNeeds, nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
+                                         skills: skillNeeds, deliveries: deliveryNeeds, nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
         return count > 0 ? count : nil
     }
 

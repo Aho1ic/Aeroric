@@ -333,3 +333,37 @@ async fn the_process_exiting_mid_turn_fails_it() {
     wait_status(&h.sink, TaskStatus::Failed).await;
     assert!(!h.session.snapshot().turn_active);
 }
+
+/// R1-2: the delivery receipts the driver pushed.
+fn receipts(sink: &Sink) -> Vec<(String, ReceiptOutcome)> {
+    sink.updates
+        .lock()
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::DeliveryReceipt { id, outcome, .. } => Some((id.clone(), *outcome)),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn receipt(sink: &Arc<Sink>, outcome: ReceiptOutcome) {
+    let sink = Arc::clone(sink);
+    until("receipt", move || {
+        receipts(&sink).contains(&("dv-1".to_string(), outcome))
+    })
+    .await;
+}
+
+/// R1-2: omp's answer to the steer is the receipt.
+#[tokio::test]
+async fn a_delivered_message_is_receipted_by_omps_answer() {
+    let mut h = start();
+    let (mut peer, _) = running(&mut h).await;
+    h.session
+        .deliver("dv-1".into(), "委派的结果".into())
+        .unwrap();
+    let (id, frame) = peer.expect("steer").await;
+    assert_eq!(frame["message"], "委派的结果");
+    peer.ok(&id, "steer", json!({}));
+    receipt(&h.sink, ReceiptOutcome::Delivered).await;
+}

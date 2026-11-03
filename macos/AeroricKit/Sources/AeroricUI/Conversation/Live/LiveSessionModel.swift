@@ -260,6 +260,8 @@ public struct LiveSessionModel: Equatable, Sendable {
     }
     /// A05: the latest project check (kept apart from `items` like the changes).
     public private(set) var lastAutoCheck: LiveAutoCheck?
+    /// R1-2: this session's queued messages by id (kept apart from `items`).
+    public private(set) var deliveries: [String: LiveDelivery] = [:]
     /// A14: host time (ms) of the newest update applied; nil until one arrives.
     public private(set) var lastActivityAtMs: UInt64?
     /// A13: this turn's tool calls as signatures, for the runaway-loop hint.
@@ -464,10 +466,21 @@ public struct LiveSessionModel: Equatable, Sendable {
             } else {
                 items.append(.delegation(id: card.delegationId, card))
             }
+        case let .delivery(delivery):
+            deliveries[delivery.id] = delivery
+        case .deliveryReceipt:
+            break
         case let .unknown(kind, _):
             items.append(.unknown(id: "seq\(update.seq)", kind: kind))
         }
         return false
+    }
+
+    /// R1-2: the host's list; a newer live update of an item wins.
+    mutating func restoreDeliveries(_ list: [LiveDelivery]) {
+        for item in list where (deliveries[item.id]?.updatedMs ?? 0) <= item.updatedMs {
+            deliveries[item.id] = item
+        }
     }
 }
 

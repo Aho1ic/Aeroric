@@ -137,6 +137,14 @@ struct HostLiveSessionActions: LiveSessionActions {
         try await client().delegationAction("delegation.redo", taskId: taskID, delegationId: delegationID, note: note)
     }
 
+    func deliveries(taskID: String) async throws -> [LiveDelivery] {
+        try await client().deliveryList(taskId: taskID)
+    }
+
+    func deliveryAction(_ method: String, id: String) async throws {
+        try await client().deliveryAction(method, id: id)
+    }
+
     func delegationRoles() async throws -> [LiveDelegationRole] {
         try await client().delegationRoles()
     }
@@ -292,6 +300,15 @@ extension AppServices {
                     summary: DelegationText.summary(card), atMs: delegationNeeds[card.parentTaskId]?.atMs ?? now)
             }
             if next != delegationNeeds { delegationNeeds = next }
+        }
+        // R1-2: deliveries that may or may not have arrived and cannot be checked.
+        if let unknown = try? await client.deliveryAttention() {
+            var next: [String: AttentionQueue.CheckFailure] = [:]
+            for item in unknown where next[item.taskId] == nil {
+                next[item.taskId] = AttentionQueue.CheckFailure(
+                    summary: "\(item.label.isEmpty ? "一条消息" : item.label) 不确定是否送达", atMs: item.updatedMs)
+            }
+            if next != deliveryNeeds { deliveryNeeds = next }
         }
         // B4-3: board decisions waiting for the user and stale claims, under the board's owner.
         if let items = try? await client.boardAttention() {

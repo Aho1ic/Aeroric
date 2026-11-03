@@ -7,7 +7,6 @@
 use std::sync::{Arc, Weak};
 
 use aeroric_core::sessions::live::review::{ReviewError, ReviewHost, Reviewer};
-use aeroric_core::sessions::live::SessionDriver;
 use aeroric_core::storage::Record;
 use aeroric_core::tasks::launch_plan::working_directory;
 use aeroric_core::tasks::session_owner::launch_family_of;
@@ -242,13 +241,16 @@ impl ReviewHost for HostReviews {
         })
     }
 
+    /// R1-2: comments and review requests go through the delivery queue.
     fn prompt(&self, task_id: &str, text: String) -> Result<(), String> {
         let live = self.live.upgrade().ok_or("宿主已关闭")?;
-        let driver: Arc<dyn SessionDriver> = match live.driver(task_id) {
-            Some(driver) => driver,
-            None => live.reopen_quiet(task_id)?,
-        };
-        driver.prompt(text).map_err(|e| e.to_string())
+        super::delivery::enqueue_internal(
+            &live,
+            task_id,
+            aeroric_protocol::delivery::DeliveryKind::Review,
+            text,
+        );
+        Ok(())
     }
 }
 

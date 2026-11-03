@@ -128,8 +128,10 @@ pub struct StructuredExecutor {
     checkpoints: Arc<super::checkpoint::CheckpointSink>,
     /// B4-1: the review loops, between the delegations and the checkpoints.
     reviews: Arc<super::review::ReviewLoop>,
-    /// B4-2: delegations, between the host's sink and the review loops.
+    /// B4-2: delegations, between the delivery queue and the review loops.
     delegations: Arc<super::delegation::Delegations>,
+    /// R1-2: the delivery queue, right above the host's sink.
+    deliveries: Arc<super::delivery::Deliveries>,
     /// B4-3: the shared boards.
     boards: Arc<super::board::Boards>,
     /// B5-1: long-term memory (the profile a starting session is handed).
@@ -160,6 +162,9 @@ impl StructuredExecutor {
         let registry: Arc<DriverRegistry> = Arc::default();
         // Beneath the turn-change tracker, so it also sees the updates that
         // tracker appends after a turn (turnChanges, autoCheck).
+        let deliveries = super::delivery::Deliveries::new(sink);
+        deliveries.set_registry(Arc::clone(&registry));
+        let sink: Arc<dyn LiveStatusSink> = Arc::clone(&deliveries) as Arc<dyn LiveStatusSink>;
         let delegations = super::delegation::Delegations::new(sink);
         delegations.set_registry(Arc::clone(&registry));
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&delegations) as Arc<dyn LiveStatusSink>;
@@ -198,6 +203,7 @@ impl StructuredExecutor {
             checkpoints,
             reviews,
             delegations,
+            deliveries,
             boards: Arc::default(),
             memory: Arc::default(),
             wikis: Arc::default(),
@@ -328,6 +334,10 @@ impl StructuredExecutor {
     /// B4-1: the review loops (the host sets their host and directory).
     pub fn reviews(&self) -> &Arc<super::review::ReviewLoop> {
         &self.reviews
+    }
+
+    pub fn deliveries(&self) -> &Arc<super::delivery::Deliveries> {
+        &self.deliveries
     }
 
     pub fn delegations(&self) -> &Arc<super::delegation::Delegations> {
@@ -689,6 +699,9 @@ impl TaskExecutor for StructuredExecutor {
         // CU 2026-10-31: closing a native session sends no turn end (it
         // unsubscribes first), so the task stayed `running` after 停止 —
         // also when its process had already gone. Settle it here.
+        // R1-2 stop barrier (CU 2026-11-02, F2): the toolbar's 停止 comes
+        // here, not through `session.interrupt`.
+        self.deliveries.pause(task_id);
         let owner = self.owners.lock().remove(task_id);
         let closed = self.close_session(task_id);
         if let Some((project_id, generation)) = owner.clone() {

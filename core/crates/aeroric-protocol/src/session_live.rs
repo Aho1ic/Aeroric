@@ -296,6 +296,19 @@ pub enum SessionUpdateKind {
     Delegation {
         delegation: crate::delegation::DelegationCard,
     },
+    /// R1-2: a queued message for this session; the latest update of an
+    /// `id` replaces it.
+    Delivery {
+        delivery: crate::delivery::Delivery,
+    },
+    /// R1-2: what the agent answered to a queued message (the driver's
+    /// receipt); the host's queue reads it, clients ignore it.
+    DeliveryReceipt {
+        id: String,
+        outcome: crate::delivery::ReceiptOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     Error {
         message: String,
         recoverable: bool,
@@ -742,6 +755,29 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
                 probes: Vec::new(),
             },
         },
+        K::Delivery {
+            delivery: crate::delivery::Delivery {
+                id: "dv-1".into(),
+                task_id: "task-1".into(),
+                kind: crate::delivery::DeliveryKind::Delegation,
+                mode: crate::delivery::DeliveryMode::AfterTurn,
+                label: "委派结果 · 调研重试".into(),
+                text: "委派的结果回来了".into(),
+                state: crate::delivery::DeliveryState::Delivered,
+                attempts: 1,
+                reason: None,
+                evidence: Some(crate::delivery::DeliveryEvidence::Protocol),
+                blocked: false,
+                source_ref: Some("dg-1".into()),
+                created_ms: 1_761_350_400_000,
+                updated_ms: 1_761_350_401_000,
+            },
+        },
+        K::DeliveryReceipt {
+            id: "dv-1".into(),
+            outcome: crate::delivery::ReceiptOutcome::Delivered,
+            reason: None,
+        },
         K::Unknown {
             kind: "item/futureThing".into(),
             payload: json!({"x": 1}),
@@ -1096,6 +1132,24 @@ pub fn schema() -> Value {
                     "properties": {"kind": s, "detail": s, "atMs": {"type": "integer"}, "acknowledged": {"type": "boolean"}}}}}}}),
         ),
         update_variant(
+            "delivery",
+            json!(["delivery"]),
+            json!({"delivery": {"type": "object",
+                "required": ["id", "taskId", "kind", "mode", "label", "text", "state", "createdMs", "updatedMs"],
+                "properties": {"id": s, "taskId": s, "kind": {"enum": ["delegation", "review", "handoff", "user"]},
+                "mode": {"enum": ["now", "afterTurn"]}, "label": s, "text": s,
+                "state": {"enum": ["waiting", "sending", "accepted", "delivered", "failed", "unknown", "paused", "withdrawn"]},
+                "attempts": {"type": "integer"}, "reason": s,
+                "evidence": {"enum": ["protocol", "echo", "turnStarted", "transcript"]},
+                "blocked": {"type": "boolean"}, "sourceRef": s,
+                "createdMs": {"type": "integer"}, "updatedMs": {"type": "integer"}}}}),
+        ),
+        update_variant(
+            "deliveryReceipt",
+            json!(["id", "outcome"]),
+            json!({"id": s, "outcome": {"enum": ["accepted", "delivered", "rejected"]}, "reason": s}),
+        ),
+        update_variant(
             "error",
             json!(["message", "recoverable"]),
             json!({"message": s, "recoverable": {"type": "boolean"}}),
@@ -1208,6 +1262,8 @@ mod tests {
             "branchReturned",
             "review",
             "delegation",
+            "delivery",
+            "deliveryReceipt",
             "error",
             "unknown",
         ] {

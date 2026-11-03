@@ -26,6 +26,7 @@ use crate::sessions::live::{
     SessionDriver, SessionState, SharedLog, SlashCommand,
 };
 use crate::tasks::{ProtocolFamily, TaskStatus};
+use aeroric_protocol::delivery::ReceiptOutcome;
 
 /// What one omp process is started with (the host builds argv and environment).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -86,7 +87,8 @@ pub struct OmpSessionSpec {
 #[derive(Debug)]
 enum Command {
     Attach,
-    Prompt(String),
+    /// The text, and the delivery id to answer for (R1-2).
+    Prompt(String, Option<String>),
     Interrupt,
     Respond(String, Decision),
     Answer(String, Answer),
@@ -218,7 +220,18 @@ impl SessionDriver for OmpSession {
         if text.trim().is_empty() {
             return Err(DriverError::Unsupported("消息为空".into()));
         }
-        self.send(Command::Prompt(text))
+        self.send(Command::Prompt(text, None))
+    }
+
+    fn deliver(&self, id: String, text: String) -> Result<(), DriverError> {
+        if text.trim().is_empty() {
+            return Err(DriverError::Unsupported("消息为空".into()));
+        }
+        self.send(Command::Prompt(text, Some(id)))
+    }
+
+    fn receipts(&self) -> bool {
+        true
     }
 
     fn interrupt(&self) -> Result<(), DriverError> {
@@ -399,6 +412,17 @@ impl Actor {
         self.close().await;
     }
 
+    /// R1-2: tell the delivery queue what the agent answered.
+    fn receipt(&self, id: &Option<String>, outcome: ReceiptOutcome, reason: Option<String>) {
+        if let Some(id) = id {
+            self.push(SessionUpdateKind::DeliveryReceipt {
+                id: id.clone(),
+                outcome,
+                reason,
+            });
+        }
+    }
+
     fn push(&self, kind: SessionUpdateKind) {
         let update = self.log.push(kind, now_ms());
         self.sink.update(&update);
@@ -574,7 +598,7 @@ impl Actor {
                     self.status(TaskStatus::Done, None);
                 }
             }
-            Command::Prompt(text) => self.prompt(text).await,
+            Command::Prompt(text, receipt) => self.prompt(text, receipt).await,
             Command::Interrupt => {
                 if let Some(client) = self.client() {
                     self.interrupted = true;
@@ -679,15 +703,23 @@ impl Actor {
         self.status(TaskStatus::Running, None);
     }
 
-    async fn prompt(&mut self, text: String) {
+    async fn prompt(&mut self, text: String, receipt: Option<String>) {
         let client = match self.process().await {
             Ok(client) => client,
-            Err(message) => return self.fail(message),
+            Err(message) => {
+                self.receipt(&receipt, ReceiptOutcome::Rejected, Some(message.clone()));
+                return self.fail(message);
+            }
         };
         if self.state.lock().active_turn.is_some() {
             // Q8: a message during a turn steers it (delivered after the running tool).
-            if let Err(error) = client.command("steer", json!({"message": text})).await {
-                self.recoverable(format!("插话没有送达：{error}"));
+            match client.command("steer", json!({"message": text})).await {
+                Ok(_) => self.receipt(&receipt, ReceiptOutcome::Delivered, None),
+                Err(error) => {
+                    let message = format!("插话没有送达：{error}");
+                    self.receipt(&receipt, ReceiptOutcome::Rejected, Some(message.clone()));
+                    self.recoverable(message);
+                }
             }
             return;
         }
@@ -699,6 +731,7 @@ impl Actor {
             .await
         {
             Ok(data) => {
+                self.receipt(&receipt, ReceiptOutcome::Delivered, None);
                 // A prompt omp handled without the model (e.g. an omp slash
                 // command) has no `prompt_result`.
                 if data.get("agentInvoked").and_then(Value::as_bool) == Some(false) {
@@ -708,7 +741,9 @@ impl Actor {
             Err(error) => {
                 self.prompt_id = None;
                 self.state.lock().active_turn = None;
-                self.fail(format!("omp 没有收到这条消息：{error}"));
+                let message = format!("omp 没有收到这条消息：{error}");
+                self.receipt(&receipt, ReceiptOutcome::Rejected, Some(message.clone()));
+                self.fail(message);
             }
         }
     }

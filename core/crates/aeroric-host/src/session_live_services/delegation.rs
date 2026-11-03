@@ -331,13 +331,16 @@ impl DelegationHost for HostDelegations {
         })
     }
 
+    /// R1-2: results and rework notes go through the delivery queue.
     fn prompt(&self, task_id: &str, text: String) -> Result<(), String> {
         let live = self.live.upgrade().ok_or("宿主已关闭")?;
-        let driver: Arc<dyn SessionDriver> = match live.driver(task_id) {
-            Some(driver) => driver,
-            None => live.reopen_quiet(task_id)?,
-        };
-        driver.prompt(text).map_err(|e| e.to_string())
+        super::delivery::enqueue_internal(
+            &live,
+            task_id,
+            aeroric_protocol::delivery::DeliveryKind::Delegation,
+            text,
+        );
+        Ok(())
     }
 
     fn interrupt(&self, task_id: &str) {

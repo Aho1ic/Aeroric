@@ -56,6 +56,10 @@ public protocol LiveSessionActions {
     func ackDelegationProbes(taskID: String, delegationID: String) async throws
     /// CU F2: this task's delegations, to put back cards still waiting on the user.
     func delegationCards(taskID: String) async throws -> [LiveDelegationCard]
+    /// R1-2: this session's delivery queue, and acting on one item
+    /// (`delivery.resume` / `.discard` / `.resend`).
+    func deliveries(taskID: String) async throws -> [LiveDelivery]
+    func deliveryAction(_ method: String, id: String) async throws
     /// B5-1: `/记住 …` in this task's project; the item as kept.
     func remember(taskID: String, text: String, kind: String) async throws -> LiveMemoryItem
     /// B5-1: the "已记住" card's 改为全局 and 撤销.
@@ -118,6 +122,8 @@ extension LiveSessionActions {
     }
     public func delegationRoles() async throws -> [LiveDelegationRole] { [] }
     public func delegationCards(taskID: String) async throws -> [LiveDelegationCard] { [] }
+    public func deliveries(taskID: String) async throws -> [LiveDelivery] { [] }
+    public func deliveryAction(_ method: String, id: String) async throws {}
     public func ackDelegationProbes(taskID: String, delegationID: String) async throws {
         throw LiveSessionError.unsupported("这个宿主不支持委派")
     }
@@ -235,6 +241,7 @@ public final class LiveSessionStore {
             await reloadHistory()
             baseline = LiveHistoryMerge.assistantCount(history)
             await restoreDelegations()
+            await restoreDeliveries()
         } catch {
             errorText = "读取会话失败：\(error)"
         }
@@ -300,9 +307,34 @@ public final class LiveSessionStore {
             await reloadHistory()
             baseline = LiveHistoryMerge.assistantCount(history)
             await restoreDelegations()
+            await restoreDeliveries()
         } catch {
             noteConnectionFailure(error)
         }
+    }
+
+    /// R1-2: the host's queue for this session (it survives restarts; the
+    /// update log does not).
+    private func restoreDeliveries() async {
+        guard let list = try? await actions.deliveries(taskID: taskID) else { return }
+        model?.restoreDeliveries(list)
+    }
+
+    /// R1-2: the bar above the composer, when something did not simply arrive.
+    public var deliveryNotice: DeliveryNotice? {
+        DeliveryText.notice(model.map { Array($0.deliveries.values) } ?? [])
+    }
+
+    public func actOnDeliveries(_ action: DeliveryNotice.Action, ids: [String]) async {
+        for id in ids {
+            do {
+                try await actions.deliveryAction(DeliveryText.method(action), id: id)
+            } catch {
+                errorText = "操作失败：\(error)"
+                break
+            }
+        }
+        await restoreDeliveries()
     }
 
     /// CU F2: cards of this task's delegations that still want the user.

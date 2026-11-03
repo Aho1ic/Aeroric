@@ -1,6 +1,6 @@
 use super::*;
 use crate::sessions::live::codex::fake::{launched, launcher, until, Peer, Sink};
-use crate::sessions::live::update::Replay;
+use crate::sessions::live::update::{Replay, SessionUpdate};
 
 struct Harness {
     session: Arc<CodexSession>,
@@ -456,4 +456,98 @@ async fn the_context_server_is_required() {
     assert_eq!(server["required"], true, "{start}");
     assert_eq!(server["default_tools_approval_mode"], "approve");
     assert_eq!(server["command"], "aeroric-cli");
+}
+
+/// R1-2: the delivery receipts the driver pushed.
+fn receipts(sink: &Sink) -> Vec<(String, ReceiptOutcome)> {
+    sink.updates
+        .lock()
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::DeliveryReceipt { id, outcome, .. } => Some((id.clone(), *outcome)),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn receipt(sink: &Arc<Sink>, outcome: ReceiptOutcome) {
+    let sink = Arc::clone(sink);
+    until("receipt", move || {
+        receipts(&sink).contains(&("dv-1".to_string(), outcome))
+    })
+    .await;
+}
+
+/// Notes whether the session counted its turn as running when the receipt
+/// arrived.
+#[derive(Default)]
+struct Probe {
+    session: std::sync::OnceLock<std::sync::Weak<CodexSession>>,
+    busy_at_receipt: parking_lot::Mutex<Option<bool>>,
+}
+
+impl LiveStatusSink for Probe {
+    fn status(&self, _: &str, _: &str, _: u64, _: TaskStatus, _: Option<String>) {}
+
+    fn session(&self, _: &str, _: &str, _: ProtocolFamily, _: &str, _: &str, _: Option<&str>) {}
+
+    fn update(&self, update: &SessionUpdate) {
+        if matches!(update.kind, SessionUpdateKind::DeliveryReceipt { .. }) {
+            let busy = self
+                .session
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+                .map(|s| s.snapshot().turn_active);
+            *self.busy_at_receipt.lock() = busy;
+        }
+    }
+}
+
+/// CU 2026-11-03 (C13): a message that starts a turn is receipted only once
+/// that turn counts as running, so the queue holds the next one back.
+#[tokio::test]
+async fn a_receipt_comes_after_the_turn_it_started() {
+    let (launcher, mut peers) = launcher();
+    let probe = Arc::new(Probe::default());
+    let session = CodexSession::start(
+        spec(),
+        CodexServer::new(launcher),
+        Arc::clone(&probe) as Arc<dyn LiveStatusSink>,
+        SharedLog::new("t1"),
+        &tokio::runtime::Handle::current(),
+    );
+    probe.session.set(Arc::downgrade(&session)).ok();
+    session.deliver("dv-1".into(), "委派的结果".into()).unwrap();
+    let mut peer = launched(&mut peers).await;
+    peer.handshake().await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th1", "path": "/s/th1.jsonl"}}),
+    );
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    let seen = Arc::clone(&probe);
+    until("receipt", move || seen.busy_at_receipt.lock().is_some()).await;
+    assert_eq!(*probe.busy_at_receipt.lock(), Some(true));
+}
+
+/// R1-2: Codex's answer to the steer is the receipt.
+#[tokio::test]
+async fn a_delivered_message_is_receipted_by_codexs_answer() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    assert!(h.session.receipts());
+    h.session
+        .deliver("dv-1".into(), "委派的结果".into())
+        .unwrap();
+    let steer = peer.expect("turn/steer").await;
+    assert_eq!(steer["params"]["input"][0]["text"], "委派的结果");
+    peer.reply(&steer, json!({}));
+    receipt(&h.sink, ReceiptOutcome::Delivered).await;
+    h.session.prompt("plain".into()).unwrap();
+    let plain = peer.expect("turn/steer").await;
+    peer.reply(&plain, json!({}));
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert_eq!(receipts(&h.sink).len(), 1, "a plain prompt has no receipt");
 }

@@ -82,6 +82,10 @@ public enum LiveUpdateKind: Equatable, Sendable {
     case review(LiveReviewCard)
     /// B4-2: a step of a delegation; the latest of a `delegationId` replaces the card.
     case delegation(LiveDelegationCard)
+    /// R1-2: a queued message for this session; the latest of an `id` replaces it.
+    case delivery(LiveDelivery)
+    /// R1-2: a driver's receipt for the host's queue; nothing to show.
+    case deliveryReceipt(id: String, outcome: String)
     /// Kept with its source `type` (or the agent's own kind for host-side unknowns).
     case unknown(kind: String, payload: JSONValue)
 }
@@ -391,6 +395,11 @@ extension LiveUpdateKind {
             return f["review"].flatMap(LiveReviewCard.decode).map { .review($0) }
         case "delegation":
             return f["delegation"].flatMap(LiveDelegationCard.decode).map { .delegation($0) }
+        case "delivery":
+            return LiveDelivery.decode(f["delivery"]).map { .delivery($0) }
+        case "deliveryReceipt":
+            guard let id = string(f, "id"), let outcome = string(f, "outcome") else { return nil }
+            return .deliveryReceipt(id: id, outcome: outcome)
         case "unknown":
             guard let kind = string(f, "kind") else { return nil }
             return .unknown(kind: kind, payload: f["payload"] ?? .null)

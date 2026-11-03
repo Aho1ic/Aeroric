@@ -10,6 +10,7 @@ pub mod claude;
 pub mod codex;
 pub mod context_server;
 pub mod delegation;
+pub mod delivery;
 pub mod executor;
 pub mod omp;
 pub mod remote;
@@ -88,6 +89,15 @@ pub trait SessionDriver: Send + Sync {
     fn suspend(&self);
     /// A resume gave the task a new generation; later statuses carry it.
     fn rebind(&self, generation: u64);
+    /// R1-2: send a queued message. A driver that answers with
+    /// `DeliveryReceipt` for `id` says so in [`Self::receipts`]; the default
+    /// is a plain prompt.
+    fn deliver(&self, _id: String, text: String) -> Result<(), DriverError> {
+        self.prompt(text)
+    }
+    fn receipts(&self) -> bool {
+        false
+    }
     /// Answer a question card (only agents that ask questions support it).
     fn answer(&self, question_id: &str, _answer: Answer) -> Result<(), DriverError> {
         Err(DriverError::UnknownRequest(question_id.to_string()))

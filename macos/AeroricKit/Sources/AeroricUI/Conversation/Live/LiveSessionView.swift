@@ -425,6 +425,11 @@ public struct LiveSessionView: View {
             // that has ended keeps its figures.
             VStack(spacing: AeroricSpace.xs) {
                 if let item = store.remembered { RememberedCard(item: item, store: store) }
+                if let notice = store.deliveryNotice {
+                    DeliveryBar(notice: notice) { action in
+                        Task { await store.actOnDeliveries(action, ids: notice.ids) }
+                    }
+                }
                 if let writer = store.sharedWriter {
                     HStack(spacing: AeroricSpace.s) {
                         Image(systemName: "person.2")

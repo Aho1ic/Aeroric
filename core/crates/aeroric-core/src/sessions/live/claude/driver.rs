@@ -23,6 +23,7 @@ use crate::sessions::live::{
     SessionState, SharedLog, SlashCommand,
 };
 use crate::tasks::{ProtocolFamily, TaskStatus};
+use aeroric_protocol::delivery::ReceiptOutcome;
 
 /// What one `claude` process is started with.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -85,7 +86,8 @@ pub struct ClaudeSessionSpec {
 #[derive(Debug)]
 enum Command {
     Attach,
-    Prompt(String),
+    /// The text, and the delivery id to answer for (R1-2).
+    Prompt(String, Option<String>),
     Interrupt,
     Respond(String, Decision),
     Configure(ConfigChange),
@@ -179,6 +181,7 @@ impl ClaudeSession {
             mapper: ClaudeMapper::default(),
             crashes: VecDeque::new(),
             outstanding: 0,
+            echoes: VecDeque::new(),
             turns: 0,
             interrupted: false,
         };
@@ -229,7 +232,18 @@ impl SessionDriver for ClaudeSession {
         if text.trim().is_empty() {
             return Err(DriverError::Unsupported("消息为空".into()));
         }
-        self.send(Command::Prompt(text))
+        self.send(Command::Prompt(text, None))
+    }
+
+    fn deliver(&self, id: String, text: String) -> Result<(), DriverError> {
+        if text.trim().is_empty() {
+            return Err(DriverError::Unsupported("消息为空".into()));
+        }
+        self.send(Command::Prompt(text, Some(id)))
+    }
+
+    fn receipts(&self) -> bool {
+        true
     }
 
     fn interrupt(&self) -> Result<(), DriverError> {
@@ -279,7 +293,7 @@ impl SessionDriver for ClaudeSession {
 
     fn command(&self, command: SlashCommand) -> Result<(), DriverError> {
         match command {
-            SlashCommand::Compact => self.send(Command::Prompt("/compact".into())),
+            SlashCommand::Compact => self.send(Command::Prompt("/compact".into(), None)),
             SlashCommand::Review => Err(DriverError::Unsupported("/review 仅 Codex 支持".into())),
         }
     }
@@ -352,6 +366,9 @@ struct Actor {
     crashes: VecDeque<u64>,
     /// Messages written whose `result` has not arrived yet.
     outstanding: u32,
+    /// R1-2: queued messages written, waiting for Claude's echo
+    /// (`--replay-user-messages`): `(delivery id, text)`.
+    echoes: VecDeque<(String, String)>,
     turns: u64,
     interrupted: bool,
 }
@@ -379,6 +396,17 @@ impl Actor {
             }
         }
         self.close().await;
+    }
+
+    /// R1-2: tell the delivery queue what the agent answered.
+    fn receipt(&self, id: &Option<String>, outcome: ReceiptOutcome, reason: Option<String>) {
+        if let Some(id) = id {
+            self.push(SessionUpdateKind::DeliveryReceipt {
+                id: id.clone(),
+                outcome,
+                reason,
+            });
+        }
     }
 
     fn push(&self, kind: SessionUpdateKind) {
@@ -472,7 +500,7 @@ impl Actor {
                     self.status(TaskStatus::Done, None);
                 }
             }
-            Command::Prompt(text) => self.prompt(text).await,
+            Command::Prompt(text, receipt) => self.prompt(text, receipt).await,
             Command::Interrupt => {
                 if let Some(client) = self.client() {
                     self.interrupted = true;
@@ -533,18 +561,51 @@ impl Actor {
         self.status(TaskStatus::Running, None);
     }
 
-    async fn prompt(&mut self, text: String) {
+    async fn prompt(&mut self, text: String, receipt: Option<String>) {
         let client = match self.process().await {
             Ok(client) => client,
-            Err(message) => return self.fail(message),
+            Err(message) => {
+                self.receipt(&receipt, ReceiptOutcome::Rejected, Some(message.clone()));
+                return self.fail(message);
+            }
         };
         if self.state.lock().active_turn.is_none() {
             self.begin_turn();
         }
         let session = self.state.lock().session_id.clone();
         match client.send_user(&text, session.as_deref()) {
-            Ok(()) => self.outstanding += 1,
-            Err(error) => self.fail(format!("Claude 没有收到这条消息：{error}")),
+            Ok(()) => {
+                self.outstanding += 1;
+                // Written is not read: Claude's echo is the proof.
+                self.receipt(&receipt, ReceiptOutcome::Accepted, None);
+                if let Some(id) = receipt {
+                    self.echoes.push_back((id, text));
+                }
+            }
+            Err(error) => {
+                let message = format!("Claude 没有收到这条消息：{error}");
+                self.receipt(&receipt, ReceiptOutcome::Rejected, Some(message.clone()));
+                self.fail(message)
+            }
+        }
+    }
+
+    /// R1-2: Claude echoed a message it read; settle the queued one.
+    fn echoed(&mut self, message: &Value) {
+        let content = message.pointer("/message/content");
+        let text = match content {
+            Some(Value::String(text)) => text.clone(),
+            Some(Value::Array(blocks)) => blocks
+                .iter()
+                .filter_map(|b| b.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => return,
+        };
+        if let Some(index) = self.echoes.iter().position(|(_, sent)| *sent == text) {
+            if let Some((id, _)) = self.echoes.remove(index) {
+                self.receipt(&Some(id), ReceiptOutcome::Delivered, None);
+            }
         }
     }
 
@@ -629,6 +690,10 @@ impl Actor {
                         .unwrap_or_default()
                         .to_string();
                     self.drop_pending(|p| p.view.id == id, "cancelled");
+                    return;
+                }
+                if message.get("isReplay").and_then(Value::as_bool) == Some(true) {
+                    self.echoed(&message);
                     return;
                 }
                 let (updates, signal) = self.mapper.map(&message);

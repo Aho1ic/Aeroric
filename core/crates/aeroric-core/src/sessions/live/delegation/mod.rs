@@ -700,6 +700,9 @@ impl Delegations {
         entry.card.sent = false;
         entry.card.finished_ms = None;
         entry.card.error = None;
+        // CU 2026-11-02 (F3): the rework's answer replaces the first one; a
+        // kept text made the card and the result sent back say the old one.
+        entry.last_text.clear();
         entry.run_started_ms = now_ms();
         let audit = audit_of(&entry.card, AuditAction::Redo, actor, note);
         self.record(&mut state, audit);

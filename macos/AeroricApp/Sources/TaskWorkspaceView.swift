@@ -517,6 +517,12 @@ struct TaskWorkspaceView: View {
                     if let updated = task.updatedAtMs { detailRow("更新", Self.timestamp(updated)) }
                     detailRow("显示", services.liveStructured[task.id] == true ? "原生会话"
                               : services.structuredCapabilitiesVerified(task) ? "对话" : "终端")
+                    if services.liveStructured[task.id] == true {
+                        DeliveryTimeline(taskID: task.id) { id in
+                            (try? await services.sessionsClient?.deliveryList(taskId: id)) ?? []
+                        }
+                        .padding(.top, 4)
+                    }
                 } else if let scope = draftScope {
                     detailRow("草稿", scope.projectID == nil ? "全局（未选择项目）" : "项目草稿")
                     detailRow("项目", resourceProject?.name ?? "未选择")
@@ -769,6 +775,7 @@ struct TaskWorkspaceView: View {
                                                 boards: services.boardNeeds,
                                                 memories: services.memoryNeeds,
                                                 skills: services.skillNeeds,
+                                                deliveries: services.deliveryNeeds,
                                                 nowMs: UInt64(Date().timeIntervalSince1970 * 1000)),
                     projectName: { id in services.taskStore.projects.first { $0.id == id }?.name },
                     onOpen: { selection = SessionNavigation.task($0) },

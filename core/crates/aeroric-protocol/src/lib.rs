@@ -11,6 +11,7 @@ pub mod board;
 pub mod capability;
 pub mod checkpoint;
 pub mod delegation;
+pub mod delivery;
 pub mod envelope;
 pub mod error;
 pub mod event;

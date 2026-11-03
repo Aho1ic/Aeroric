@@ -1515,6 +1515,34 @@ async fn a_delegation_runs_in_a_child_and_its_result_comes_back() {
         .to_string();
     assert!(text.starts_with("[Aeroric 委派结果]"), "{text}");
     assert!(text.contains("connect_timeout"));
+    // R1-2: it went through the delivery queue; Codex's answer is the proof.
+    peer.reply(&back, json!({"turn": {"id": "u2"}}));
+    let deadline = std::time::Instant::now() + WAIT;
+    let delivered = loop {
+        let got = host
+            .call("delivery.list", json!({"taskId": "task-1"}))
+            .await
+            .unwrap();
+        if got["deliveries"][0]["state"] == "delivered" {
+            break got["deliveries"][0].clone();
+        }
+        assert!(std::time::Instant::now() < deadline, "{got}");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(delivered["kind"], "delegation");
+    assert_eq!(delivered["evidence"], "protocol");
+    assert!(
+        delivered["label"]
+            .as_str()
+            .unwrap()
+            .starts_with("委派 · [Aeroric 委派结果]"),
+        "{delivered}"
+    );
+    let gone = host
+        .call("delivery.resend", json!({"id": "nope"}))
+        .await
+        .unwrap_err();
+    assert_eq!(gone["code"], "NOT_FOUND", "{gone}");
 
     let audit = host
         .call("delegation.audit", json!({"taskId": "task-1"}))

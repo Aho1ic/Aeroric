@@ -88,7 +88,7 @@
     "turnActive": true
   },
   "updates": {
-    "latestSeq": 27,
+    "latestSeq": 29,
     "updates": [
       {
         "atMs": 1761350400000,
@@ -469,26 +469,54 @@
       },
       {
         "atMs": 1761350400024,
+        "delivery": {
+          "attempts": 1,
+          "createdMs": 1761350400000,
+          "evidence": "protocol",
+          "id": "dv-1",
+          "kind": "delegation",
+          "label": "委派结果 · 调研重试",
+          "mode": "afterTurn",
+          "sourceRef": "dg-1",
+          "state": "delivered",
+          "taskId": "task-1",
+          "text": "委派的结果回来了",
+          "updatedMs": 1761350401000
+        },
+        "seq": 25,
+        "taskId": "task-1",
+        "type": "delivery"
+      },
+      {
+        "atMs": 1761350400025,
+        "id": "dv-1",
+        "outcome": "delivered",
+        "seq": 26,
+        "taskId": "task-1",
+        "type": "deliveryReceipt"
+      },
+      {
+        "atMs": 1761350400026,
         "kind": "item/futureThing",
         "payload": {
           "x": 1
         },
-        "seq": 25,
+        "seq": 27,
         "taskId": "task-1",
         "type": "unknown"
       },
       {
-        "atMs": 1761350400025,
+        "atMs": 1761350400027,
         "messageId": "m1",
-        "seq": 26,
+        "seq": 28,
         "taskId": "task-1",
         "text": "我来看看",
         "type": "messageCompleted"
       },
       {
-        "atMs": 1761350400026,
+        "atMs": 1761350400028,
         "reason": "completed",
-        "seq": 27,
+        "seq": 29,
         "taskId": "task-1",
         "turnId": "u1",
         "type": "turnEnded"

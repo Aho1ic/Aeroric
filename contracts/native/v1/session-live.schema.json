@@ -1230,6 +1230,124 @@
             },
             {
               "properties": {
+                "delivery": {
+                  "properties": {
+                    "attempts": {
+                      "type": "integer"
+                    },
+                    "blocked": {
+                      "type": "boolean"
+                    },
+                    "createdMs": {
+                      "type": "integer"
+                    },
+                    "evidence": {
+                      "enum": [
+                        "protocol",
+                        "echo",
+                        "turnStarted",
+                        "transcript"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "delegation",
+                        "review",
+                        "handoff",
+                        "user"
+                      ]
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "now",
+                        "afterTurn"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "sourceRef": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "enum": [
+                        "waiting",
+                        "sending",
+                        "accepted",
+                        "delivered",
+                        "failed",
+                        "unknown",
+                        "paused",
+                        "withdrawn"
+                      ]
+                    },
+                    "taskId": {
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string"
+                    },
+                    "updatedMs": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "taskId",
+                    "kind",
+                    "mode",
+                    "label",
+                    "text",
+                    "state",
+                    "createdMs",
+                    "updatedMs"
+                  ],
+                  "type": "object"
+                },
+                "type": {
+                  "const": "delivery"
+                }
+              },
+              "required": [
+                "type",
+                "delivery"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "outcome": {
+                  "enum": [
+                    "accepted",
+                    "delivered",
+                    "rejected"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "deliveryReceipt"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "outcome"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "message": {
                   "type": "string"
                 },

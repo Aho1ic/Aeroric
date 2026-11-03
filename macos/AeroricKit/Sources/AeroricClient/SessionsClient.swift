@@ -350,6 +350,23 @@ extension SessionsClient {
         _ = try await connection.request(method, params: .object(params))
     }
 
+    /// R1-2: a session's delivery queue, oldest first.
+    public func deliveryList(taskId: String) async throws -> [LiveDelivery] {
+        let frame = try await connection.request("delivery.list", params: .object(["taskId": .string(taskId)]))
+        return (frame.result["deliveries"]?.arrayValue ?? []).compactMap { LiveDelivery.decode($0) }
+    }
+
+    /// R1-2: `delivery.resume` / `delivery.discard` / `delivery.resend`.
+    public func deliveryAction(_ method: String, id: String) async throws {
+        _ = try await connection.request(method, params: .object(["id": .string(id)]))
+    }
+
+    /// R1-2: unknown deliveries whose record could not be read (需要我处理).
+    public func deliveryAttention() async throws -> [LiveDelivery] {
+        let frame = try await connection.request("delivery.attention", params: .object([:]))
+        return (frame.result["deliveries"]?.arrayValue ?? []).compactMap { LiveDelivery.decode($0) }
+    }
+
     public func delegationRoles() async throws -> [LiveDelegationRole] {
         let frame = try await connection.request("delegation.roles", params: .object([:]))
         return (frame.result["roles"]?.arrayValue ?? []).compactMap(LiveDelegationRole.decode)

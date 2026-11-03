@@ -210,6 +210,14 @@ async fn cancelling_a_structured_run_closes_its_session_and_others_are_delegated
         .launch(&launch("t1", ProtocolFamily::Codex))
         .unwrap();
     let mut peer = running(&mut s).await;
+    let queued = s.executor.deliveries().enqueue(
+        "t1",
+        aeroric_protocol::delivery::DeliveryKind::Delegation,
+        aeroric_protocol::delivery::DeliveryMode::AfterTurn,
+        "委派",
+        "结果",
+        None,
+    );
     s.executor
         .cancel(
             "t1",
@@ -218,6 +226,11 @@ async fn cancelling_a_structured_run_closes_its_session_and_others_are_delegated
             },
         )
         .unwrap();
+    assert_eq!(
+        s.executor.deliveries().get(&queued.id).unwrap().state,
+        aeroric_protocol::delivery::DeliveryState::Paused,
+        "the toolbar's stop pauses what has not gone out"
+    );
     let interrupt = peer.expect("turn/interrupt").await;
     peer.reply(&interrupt, json!({}));
     peer.expect("thread/unsubscribe").await;

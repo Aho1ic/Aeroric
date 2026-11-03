@@ -25,6 +25,7 @@ use crate::sessions::live::{
     SessionState, SharedLog, SlashCommand,
 };
 use crate::tasks::{ProtocolFamily, TaskStatus};
+use aeroric_protocol::delivery::ReceiptOutcome;
 
 /// What a session starts from: a launch (no thread yet) or a resume.
 #[derive(Clone, Debug, Default)]
@@ -46,7 +47,8 @@ pub struct CodexSessionSpec {
 enum Command {
     /// Open (or resume) the thread without starting a turn.
     Attach,
-    Prompt(String),
+    /// The text, and the delivery id to answer for (R1-2).
+    Prompt(String, Option<String>),
     Interrupt,
     Respond(String, Decision),
     Slash(SlashCommand),
@@ -200,7 +202,18 @@ impl SessionDriver for CodexSession {
         if text.trim().is_empty() {
             return Err(DriverError::Unsupported("消息为空".into()));
         }
-        self.send(Command::Prompt(text))
+        self.send(Command::Prompt(text, None))
+    }
+
+    fn deliver(&self, id: String, text: String) -> Result<(), DriverError> {
+        if text.trim().is_empty() {
+            return Err(DriverError::Unsupported("消息为空".into()));
+        }
+        self.send(Command::Prompt(text, Some(id)))
+    }
+
+    fn receipts(&self) -> bool {
+        true
     }
 
     fn interrupt(&self) -> Result<(), DriverError> {
@@ -329,6 +342,17 @@ impl Actor {
         self.close().await;
     }
 
+    /// R1-2: tell the delivery queue what the agent answered.
+    fn receipt(&self, id: &Option<String>, outcome: ReceiptOutcome, reason: Option<String>) {
+        if let Some(id) = id {
+            self.push(SessionUpdateKind::DeliveryReceipt {
+                id: id.clone(),
+                outcome,
+                reason,
+            });
+        }
+    }
+
     fn push(&self, kind: SessionUpdateKind) {
         let update = self.log.push(kind, now_ms());
         self.sink.update(&update);
@@ -362,7 +386,7 @@ impl Actor {
                 }
                 Err(message) => self.fail(message),
             },
-            Command::Prompt(text) => self.prompt(text).await,
+            Command::Prompt(text, receipt) => self.prompt(text, receipt).await,
             Command::Interrupt => {
                 let (thread, turn) = {
                     let state = self.state.lock();
@@ -515,10 +539,13 @@ impl Actor {
         Ok((client, thread))
     }
 
-    async fn prompt(&mut self, text: String) {
+    async fn prompt(&mut self, text: String, receipt: Option<String>) {
         let (client, thread) = match self.thread().await {
             Ok(pair) => pair,
-            Err(message) => return self.fail(message),
+            Err(message) => {
+                self.receipt(&receipt, ReceiptOutcome::Rejected, Some(message.clone()));
+                return self.fail(message);
+            }
         };
         let input = json!([{"type": "text", "text": text, "text_elements": []}]);
         let (active, params) = {
@@ -560,8 +587,16 @@ impl Actor {
                         .active_turn
                         .get_or_insert_with(|| turn.to_string());
                 }
+                // CU 2026-11-03 (C13): the queue pumps on this receipt, so the
+                // turn must already count as running, or the next message
+                // went straight into this turn.
+                self.receipt(&receipt, ReceiptOutcome::Delivered, None);
             }
-            Err(error) => self.fail(format!("Codex 拒绝了这条消息：{error}")),
+            Err(error) => {
+                let message = format!("Codex 拒绝了这条消息：{error}");
+                self.receipt(&receipt, ReceiptOutcome::Rejected, Some(message.clone()));
+                self.fail(message)
+            }
         }
     }
 

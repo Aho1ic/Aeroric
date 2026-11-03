@@ -904,6 +904,8 @@ pub fn claude_args(start: &ClaudeStart, passes_model: bool) -> Vec<String> {
         "--input-format",
         "stream-json",
         "--include-partial-messages",
+        // R1-2: Claude echoes each message it reads; the delivery queue's proof.
+        "--replay-user-messages",
         "--permission-prompt-tool",
         "stdio",
         "--permission-mode",

@@ -531,6 +531,25 @@ fn stop_and_redo() {
     assert_eq!(rig.d.stats()[0].reworks, 1);
 }
 
+/// CU 2026-11-02 (F3): after a rework the card carries the new answer.
+#[test]
+fn a_rework_replaces_the_result() {
+    let rig = rig("ask");
+    let (id, child) = rig.running(contract("查"), Origin::User);
+    rig.answer(&child, "t1", "结论 A", None, false);
+    wait("reported", || {
+        rig.card(&id).state == DelegationState::Reported
+    });
+    assert_eq!(rig.card(&id).result.as_deref(), Some("结论 A"));
+    rig.d.redo("p", &id, "再查一次", "user").unwrap();
+    wait("redo sent", || !rig.sent_to(&child).is_empty());
+    rig.answer(&child, "t2", "结论 A2", None, false);
+    wait("reported again", || {
+        rig.card(&id).state == DelegationState::Reported && rig.card(&id).reworks == 1
+    });
+    assert_eq!(rig.card(&id).result.as_deref(), Some("结论 A2"));
+}
+
 #[test]
 fn a_child_that_cannot_start_fails_and_the_agent_hears_it() {
     let rig = rig("ask");

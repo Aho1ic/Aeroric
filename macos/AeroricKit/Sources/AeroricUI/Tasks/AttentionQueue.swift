@@ -22,6 +22,8 @@ public enum AttentionQueue {
         case memoryNeedsYou
         /// B5-3b: an experience was proposed as a skill.
         case skillProposalNeedsYou
+        /// R1-2: a message may or may not have reached the session.
+        case deliveryNeedsYou
 
         public var text: String {
             switch self {
@@ -34,6 +36,7 @@ public enum AttentionQueue {
             case .boardNeedsYou: "黑板要你定"
             case .memoryNeedsYou: "记忆待确认"
             case .skillProposalNeedsYou: "技能提案待审"
+            case .deliveryNeedsYou: "投递待确认"
             }
         }
     }
@@ -61,6 +64,7 @@ public enum AttentionQueue {
             switch reason {
             case .memoryNeedsYou: "\(task.id)#memory"
             case .skillProposalNeedsYou: "\(task.id)#skill"
+            case .deliveryNeedsYou: "\(task.id)#delivery"
             default: task.id
             }
         }
@@ -76,7 +80,8 @@ public enum AttentionQueue {
     public static func items(_ tasks: [TaskStore.TaskEntry], checkFailures: [String: CheckFailure] = [:],
                              reviews: [String: CheckFailure] = [:], delegations: [String: CheckFailure] = [:],
                              boards: [String: CheckFailure] = [:], memories: [String: CheckFailure] = [:],
-                             skills: [String: CheckFailure] = [:], nowMs: UInt64) -> [Item] {
+                             skills: [String: CheckFailure] = [:], deliveries: [String: CheckFailure] = [:],
+                             nowMs: UInt64) -> [Item] {
         tasks.flatMap { task -> [Item] in
             guard !task.archived else { return [] }
             var rows: [Item] = []
@@ -89,6 +94,9 @@ public enum AttentionQueue {
             }
             if let skill = skills[task.id] {
                 rows.append(Item(task: task, reason: .skillProposalNeedsYou, detail: skill.summary, atMs: skill.atMs))
+            }
+            if let delivery = deliveries[task.id] {
+                rows.append(Item(task: task, reason: .deliveryNeedsYou, detail: delivery.summary, atMs: delivery.atMs))
             }
             return rows
         }

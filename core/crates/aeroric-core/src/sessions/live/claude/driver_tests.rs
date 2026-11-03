@@ -403,3 +403,45 @@ async fn resuming_without_a_prompt_settles_done_and_the_first_prompt_resumes() {
     let peer = launched(&mut h).await;
     assert_eq!(peer.start.resume.as_deref(), Some("old"));
 }
+
+/// R1-2: the delivery receipts the driver pushed.
+fn receipts(sink: &Sink) -> Vec<(String, ReceiptOutcome)> {
+    sink.updates
+        .lock()
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::DeliveryReceipt { id, outcome, .. } => Some((id.clone(), *outcome)),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn receipt(sink: &Arc<Sink>, outcome: ReceiptOutcome) {
+    let sink = Arc::clone(sink);
+    until("receipt", move || {
+        receipts(&sink).contains(&("dv-1".to_string(), outcome))
+    })
+    .await;
+}
+
+/// R1-2: written is accepted; Claude's echo is the proof.
+#[tokio::test]
+async fn claudes_echo_settles_a_delivered_message() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    h.session.deliver("dv-1".into(), "审查意见".into()).unwrap();
+    assert_eq!(peer.expect_user().await, "审查意见");
+    receipt(&h.sink, ReceiptOutcome::Accepted).await;
+    assert!(!receipts(&h.sink).contains(&("dv-1".to_string(), ReceiptOutcome::Delivered)));
+    let before = h.sink.updates.lock().len();
+    peer.send(
+        json!({"type": "user", "isReplay": true, "session_id": "cs1",
+        "message": {"role": "user", "content": "审查意见"}}),
+    );
+    receipt(&h.sink, ReceiptOutcome::Delivered).await;
+    assert_eq!(
+        h.sink.updates.lock().len(),
+        before + 1,
+        "the echo adds only the receipt"
+    );
+}

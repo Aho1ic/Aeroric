@@ -18,10 +18,10 @@ final class LiveSessionContractTests: XCTestCase {
 
     func testEveryUpdateKindInTheFixtureDecodesAsKnown() throws {
         let batch = try LiveUpdatesBatch.decode(try fixture()["updates"] ?? .null)
-        XCTAssertEqual(batch.updates.count, 27)
-        XCTAssertEqual(batch.latestSeq, 27)
+        XCTAssertEqual(batch.updates.count, 29)
+        XCTAssertEqual(batch.latestSeq, 29)
         XCTAssertNil(batch.gapOldestAvailable)
-        XCTAssertEqual(batch.updates.map(\.seq), Array(1...27))
+        XCTAssertEqual(batch.updates.map(\.seq), Array(1...29))
         let handoff = batch.updates.compactMap { update -> (String, LiveCheckpoint)? in
             if case let .handoff(reason, checkpoint) = update.kind { return (reason, checkpoint) } else { return nil }
         }.first

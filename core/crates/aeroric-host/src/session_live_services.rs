@@ -35,6 +35,7 @@ pub use wire::CAPABILITY;
 
 mod board;
 mod delegation;
+mod delivery;
 mod memory;
 mod review;
 mod wiki;
@@ -156,6 +157,8 @@ pub fn register_session_live_services(
     board::install(set, &live);
     memory::install(set, &live);
     wiki::install(set, &live);
+    // R1-2: the delivery queue (after the services whose messages it carries).
+    delivery::install(set, &live);
 }
 
 // MARK: B4′ side branches (2026-10-30)
@@ -1033,7 +1036,16 @@ fn with_driver(
 
 fn interrupt(live: &Live, request: &Request) -> Frame {
     match params::<TaskParams>(request) {
-        Ok(p) => with_driver(live, request, &p.task_id, |d| d.interrupt()),
+        Ok(p) => {
+            // R1-2 stop barrier (Q-S6): what has not gone out stays, paused.
+            live.executor.deliveries().pause(&p.task_id);
+            // CU 2026-11-02: the toolbar's 停止 may have closed the session
+            // already; stopping it again is done, not an error.
+            if live.driver(&p.task_id).is_none() {
+                return ok(request, json!({}));
+            }
+            with_driver(live, request, &p.task_id, |d| d.interrupt())
+        }
         Err(frame) => *frame,
     }
 }
