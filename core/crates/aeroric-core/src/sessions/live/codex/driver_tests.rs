@@ -424,6 +424,33 @@ async fn a_resumed_session_opens_its_thread_and_settles_done() {
     assert!(h.session.prompt("x".into()).is_err(), "closed");
 }
 
+/// CU 2026-11-03: closing mid-turn (the toolbar's stop) ends the turn as
+/// interrupted; unsubscribed, Codex's own end of it never arrives.
+#[tokio::test]
+async fn closing_mid_turn_ends_the_turn_as_interrupted() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    h.session.close().unwrap();
+    let interrupt = peer.expect("turn/interrupt").await;
+    peer.reply(&interrupt, json!({}));
+    let unsubscribe = peer.expect("thread/unsubscribe").await;
+    peer.reply(&unsubscribe, json!({}));
+    let sink = Arc::clone(&h.sink);
+    until("interrupted", move || {
+        sink.updates.lock().iter().any(|u| {
+            matches!(
+                u.kind,
+                SessionUpdateKind::TurnEnded {
+                    reason: TurnEndReason::Interrupted,
+                    ..
+                }
+            )
+        })
+    })
+    .await;
+    assert!(!h.session.snapshot().turn_active);
+}
+
 /// B4′: the handoff brief goes out as `developerInstructions` on thread/start.
 #[tokio::test]
 async fn the_brief_is_sent_as_developer_instructions() {

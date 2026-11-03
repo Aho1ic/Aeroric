@@ -175,5 +175,7 @@ final class SessionPolishTests: XCTestCase {
         XCTAssertNil(timed[0].stat, "only the newest turn has a transcript entry here")
         XCTAssertEqual(TranscriptTurns.header(timed[1].stat), "已完成，用时 8 秒")
         XCTAssertEqual(TranscriptTurns.header(nil), "已完成")
+        let stopped = SessionTranscriptStats.TurnStat(startedAt: 1_000, endedAt: 37_000, tokens: 0, interrupted: true)
+        XCTAssertEqual(TranscriptTurns.header(stopped), "已中断，用时 36 秒")
     }
 }

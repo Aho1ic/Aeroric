@@ -266,6 +266,22 @@ async fn interrupt_settles_interrupted_and_configure_reaches_the_live_process() 
     assert!(h.session.interrupt().is_err());
 }
 
+/// CU 2026-11-03: closing mid-turn (the toolbar's stop) ends the turn.
+#[tokio::test]
+async fn closing_mid_turn_ends_the_turn() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    h.session.close().unwrap();
+    let (id, _) = peer.expect_control("interrupt").await;
+    peer.ok(&id, json!({}));
+    let sink = Arc::clone(&h.sink);
+    until("turn ended", move || {
+        sink.update_types().iter().any(|t| t == "turnEnded")
+    })
+    .await;
+    assert!(!h.session.snapshot().turn_active);
+}
+
 #[tokio::test]
 async fn a_message_during_a_turn_is_claude_s_next_turn() {
     let mut h = start(spec());

@@ -45,6 +45,10 @@ pub struct TurnStat {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<u64>,
     pub tokens: u64,
+    /// CU 2026-11-03: the person stopped this turn; its tools still read as
+    /// finished, so only this tells a stopped turn from a completed one.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub interrupted: bool,
 }
 
 impl TranscriptStats {
@@ -70,6 +74,7 @@ impl Clock {
             started_at: at,
             ended_at: None,
             tokens: 0,
+            interrupted: false,
         });
         self.turn_start = Some(at);
         self.turn_tool_ms = 0;
@@ -149,7 +154,13 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
         match value["type"].as_str().unwrap_or_default() {
             "event_msg" => match kind {
                 "task_started" => clock.start_turn(&mut stats, at),
-                "task_complete" | "turn_aborted" => clock.end_turn(&mut stats, at),
+                "task_complete" => clock.end_turn(&mut stats, at),
+                "turn_aborted" => {
+                    clock.end_turn(&mut stats, at);
+                    if let Some(turn) = stats.turns.last_mut() {
+                        turn.interrupted = true;
+                    }
+                }
                 "token_count" => {
                     let info = &payload["info"];
                     if info.is_object() {
@@ -472,6 +483,28 @@ mod tests {
         assert_eq!(
             (stats.first_token_ms_total, stats.first_token_samples),
             (2000, 1)
+        );
+    }
+
+    #[test]
+    fn a_stopped_codex_turn_is_marked_interrupted() {
+        let t = |s: &str| format!("2026-11-03T09:45:{s}Z");
+        let event = |at: &str, kind: &str| {
+            serde_json::json!({"timestamp": t(at), "type": "event_msg", "payload": {"type": kind, "reason": "interrupted"}})
+                .to_string()
+        };
+        let lines = vec![
+            event("00.000", "task_started"),
+            event("05.000", "task_complete"),
+            event("10.000", "task_started"),
+            event("40.000", "turn_aborted"),
+        ];
+        let stats = codex(&lines).unwrap();
+        assert!(!stats.turns[0].interrupted);
+        assert!(stats.turns[1].interrupted);
+        assert_eq!(
+            stats.turns[1].ended_at,
+            Some(stats.turns[1].started_at + 30_000)
         );
     }
 

@@ -866,10 +866,22 @@ impl Actor {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(2), interrupt).await;
         }
         self.end_process();
-        let mut state = self.state.lock();
-        state.closed = true;
-        state.active_turn = None;
-        state.pending.clear();
+        let turn = {
+            let mut state = self.state.lock();
+            state.closed = true;
+            state.pending.clear();
+            state.active_turn.take()
+        };
+        // CU 2026-11-03: the stop closes the driver mid-turn and nothing
+        // else will end that turn, so the session kept showing it and its
+        // running tool. End it here.
+        if let Some(turn_id) = turn {
+            self.push(SessionUpdateKind::TurnEnded {
+                turn_id,
+                reason: TurnEndReason::Interrupted,
+                error: None,
+            });
+        }
     }
 }
 
