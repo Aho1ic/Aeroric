@@ -36,8 +36,8 @@ impl Transport {
         )
     }
 
-    /// Spawn a child process speaking line JSON on stdin/stdout. The child is
-    /// killed when the returned guard drops.
+    /// Spawn a child process speaking line JSON on stdin/stdout, in a process
+    /// group of its own. The group is stopped when the returned guard drops.
     pub fn spawn(mut command: tokio::process::Command) -> std::io::Result<(Transport, ChildGuard)> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         command
@@ -45,6 +45,7 @@ impl Transport {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
+        crate::runtime::subprocess::configure_terminable_tokio_process_tree(&mut command);
         let mut child = command.spawn()?;
         let mut stdin = child
             .stdin
@@ -101,12 +102,41 @@ impl ChildGuard {
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            let _ = child.start_kill();
+            stop_tree(&mut child);
         }
         if let Some(cleanup) = self.cleanup.take() {
             cleanup();
         }
     }
+}
+
+/// How long the group gets to exit on SIGTERM before it is killed.
+#[cfg(unix)]
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Codex starts as `codex.js` (node) or a shell wrapper that spawns the real
+/// binary without `exec`. Killing only that direct child left the binary
+/// running, still holding the thread's writer lock, so the next resume failed
+/// with "already has an active writer". Ask the whole group to stop (the agent
+/// flushes and releases its lock), then kill whatever is left.
+#[cfg(unix)]
+fn stop_tree(child: &mut tokio::process::Child) {
+    let Some(pid) = child.id() else {
+        return;
+    };
+    crate::runtime::subprocess::signal_process_group(pid, libc::SIGTERM);
+    std::thread::spawn(move || {
+        std::thread::sleep(STOP_GRACE);
+        // Only the group: by now the leader may be reaped and its pid reused.
+        // SAFETY: kill reads the kernel's process table and touches no memory
+        // here; the group was made by the spawn above and excludes this process.
+        unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+    });
+}
+
+#[cfg(not(unix))]
+fn stop_tree(child: &mut tokio::process::Child) {
+    let _ = child.start_kill();
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -321,5 +351,62 @@ mod tests {
         drop(guard);
         assert_eq!(rx.try_recv(), Ok("revoked"));
         assert!(rx.try_recv().is_err(), "once");
+    }
+
+    /// CU 2026-11-03: a wrapper that starts the agent without `exec` (like
+    /// `codex.js`) must not leave the agent behind; it gets SIGTERM first.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_guard_stops_a_wrapped_agent_gently() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("aeroric-rpc-tree-{suffix}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (pid_file, mark) = (dir.join("pid"), dir.join("mark"));
+        std::fs::write(
+            dir.join("agent.sh"),
+            "trap 'echo term > \"$1\"; exit 0' TERM\nwhile :; do sleep 0.05; done\n",
+        )
+        .unwrap();
+        let mut command = tokio::process::Command::new("sh");
+        command.arg("-c").arg(format!(
+            "sh '{}' '{}' & echo $! > '{}'; wait",
+            dir.join("agent.sh").display(),
+            mark.display(),
+            pid_file.display()
+        ));
+        let (_transport, guard) = Transport::spawn(command).unwrap();
+        let pid_path = pid_file.clone();
+        until(move || {
+            std::fs::read_to_string(&pid_path).is_ok_and(|s| s.trim().parse::<i32>().is_ok())
+        })
+        .await;
+        let agent: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        drop(guard);
+        until(move || !alive(agent)).await;
+        let signal = std::fs::read_to_string(&mark).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!alive(agent));
+        assert_eq!(signal.trim(), "term");
+    }
+
+    #[cfg(unix)]
+    fn alive(pid: i32) -> bool {
+        // SAFETY: signal 0 only checks that the process exists.
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    #[cfg(unix)]
+    async fn until(condition: impl Fn() -> bool) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !condition() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 }

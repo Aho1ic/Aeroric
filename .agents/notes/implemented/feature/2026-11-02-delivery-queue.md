@@ -54,7 +54,10 @@ Status: implemented
 - **F1**：Codex 先推 `turnEnded`，之后才清空自己的运行状态。回合结束那一刻的 pump 仍读到忙，于是什么都没发。现在会话状态结算为非运行时再 pump 一次。测试按真实顺序：回合结束时仍是忙，结算之后才发送，两条逐条发出。
 - **F2**：工具栏的“停止”走 `task.cancel` 到 `StructuredExecutor::cancel`，绕过了屏障。现在 `cancel` 先暂停队列。之后在输入框再按停止，会话已关闭时直接算成功，不再报“没有打开的原生会话”。
 - **F3**：退回重做后，卡片和发回的正文仍是旧结论，因为 `redo` 没有清空上一轮的回复。现在 `redo` 时会清空。
-- **未解决**：工具栏停止后再续接 Codex 会话，报 `thread … already has an active writer`。这个错误来自 Codex 跨进程的写者锁（`rollout/src/writer_lock.rs`）。用户自己续接走的也是同一条路径，所以不是队列引入的问题，另立任务排查。
+- **已于 2026-11-03 修复**：工具栏停止后再续接 Codex 会话，报 `thread … already has an active writer`。这个错误来自 Codex 跨进程的写者锁（`rollout/src/writer_lock.rs`）。根因不在队列：空闲的 app-server 被停掉时，`ChildGuard` 只 SIGKILL 了直接子进程 `codex.js`（node 包装）。node 用 `spawn` 起原生二进制，不是 `exec`，SIGKILL 又无法转发，原生 app-server 成了孤儿，继续持有写锁。之后续接起了新进程，就撞上了这把锁。现在 `Transport::spawn` 让子进程自成进程组（复用 `runtime::subprocess`）。停止时先对整组发 SIGTERM，让 Codex 刷盘并释放锁；2 秒后再对整组发 SIGKILL 兜底。兜底只发给整组，不退回单个 pid，因为那时组长可能已被回收，pid 可能已被别的进程复用。Claude、omp 和 bash 包装脚本共用这条路径，一并覆盖。测试用一个不 `exec` 的包装脚本模拟 `codex.js`，断言孙进程收到 SIGTERM 并退出；换回旧实现时这条测试失败。
+
+  - 没采纳的做法：停服时只关 stdin。挂起的会话仍持有旧连接，写端关不掉；而且包装进程未必转发 EOF。
+  - 没采纳的做法：撞锁后自动杀进程。会误杀用户自己在终端里开的 Codex。
 
 ## CU 复测后修复（2026-11-03 10:34 报告）
 
