@@ -24,6 +24,8 @@ public struct LiveSessionView: View {
     @State private var pendingMove: PendingMove?
     @State private var moveNotice: String?
     @State private var permissionPickerRequest = 0
+    /// R1-3a: the "去登录" sheet.
+    @State private var loginHelp: ExpiredLogin?
     @State private var atBottom = true
     /// Finished turns whose work the person unfolded.
     @State private var expandedTurns: Set<String> = []
@@ -121,6 +123,7 @@ public struct LiveSessionView: View {
         }
         .onChange(of: infoCollapsed) { _, value in UserDefaults.standard.set(value, forKey: Self.infoCollapsedKey) }
         .task(id: store.taskID) { await store.run() }
+        .sheet(item: $loginHelp) { LoginHelpSheet(login: $0) }
         .modifier(SessionDialogs(store: store, confirmEnd: $confirmEnd, confirmFullAccess: $confirmFullAccess,
                                  configure: { configure(permission: $0) }))
         .accessibilityIdentifier("session.live.view")
@@ -358,7 +361,9 @@ public struct LiveSessionView: View {
 
     // MARK: - Footer
 
-    private var suggestions: [SlashCommand.Suggestion] { SlashCommand.suggestions(for: draft, family: store.family) }
+    private var suggestions: [SlashCommand.Suggestion] {
+        SlashCommand.suggestions(for: draft, family: store.family, capabilities: store.capabilities)
+    }
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
@@ -430,6 +435,9 @@ public struct LiveSessionView: View {
             // that has ended keeps its figures.
             VStack(spacing: AeroricSpace.xs) {
                 if let item = store.remembered { RememberedCard(item: item, store: store) }
+                if let login = store.expiredLogin {
+                    LoginBar(login: login) { loginHelp = login }
+                }
                 if let notice = store.deliveryNotice {
                     DeliveryBar(notice: notice) { action in
                         Task {
@@ -523,7 +531,8 @@ public struct LiveSessionView: View {
             text: $draft, placeholder: store.turnActive ? "补充说明会发给正在进行的这一轮…" : "继续对话，或输入 / 使用命令",
             isEditable: store.state != nil, sendState: sendState, identifierPrefix: "session.live",
             onSend: { send() }, onStop: { Task { await store.interrupt() } },
-            onSendAfterTurn: store.turnActive ? { send(afterTurn: true) } : nil
+            onSendAfterTurn: store.turnActive ? { send(afterTurn: true) } : nil,
+            steerNote: store.capabilities.entry("steer").flatMap { $0.state == "degraded" ? $0.note : nil }
         ) {
             HStack(spacing: AeroricSpace.xs) {
                 modelPicker
@@ -617,7 +626,7 @@ public struct LiveSessionView: View {
 
     private func unlockedPermissionPicker(_ current: String?) -> some View {
         ComposerPicker(title: current.map(ComposerPickerOptions.permissionTitle) ?? "权限",
-                              systemImage: "lock.shield", menu: LivePickerOptions.permissions(current: current),
+                              systemImage: "lock.shield", menu: LivePickerOptions.permissions(current: current, capabilities: store.capabilities),
                               identifier: "session.live.permission") { id in
             guard let permission = LivePermission(rawValue: id), id != current else { return }
             if permission == .fullAccess { confirmFullAccess = true } else { configure(permission: permission) }

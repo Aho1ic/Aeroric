@@ -145,6 +145,14 @@ struct HostLiveSessionActions: LiveSessionActions {
         try await client().deliveryAction(method, id: id)
     }
 
+    func capabilities(family: String) async throws -> LiveCapabilities {
+        try await client().capabilities(family: family)
+    }
+
+    func expiredLogin(taskID: String) async throws -> ExpiredLogin? {
+        try await client().loginState(taskId: taskID).first
+    }
+
     func delegationRoles() async throws -> [LiveDelegationRole] {
         try await client().delegationRoles()
     }
@@ -309,6 +317,15 @@ extension AppServices {
                     summary: "\(item.label.isEmpty ? "一条消息" : item.label) 不确定是否送达", atMs: item.updatedMs)
             }
             if next != deliveryNeeds { deliveryNeeds = next }
+        }
+        // R1-3a: logins the agents refused, and (once) each family's table.
+        if let expired = try? await client.loginState(), expired != expiredLogins { expiredLogins = expired }
+        if capabilityTables.isEmpty {
+            var tables: [String: LiveCapabilities] = [:]
+            for family in ["codex", "claude", "omp"] {
+                if let table = try? await client.capabilities(family: family), !table.isEmpty { tables[family] = table }
+            }
+            if !tables.isEmpty { capabilityTables = tables }
         }
         // B4-3: board decisions waiting for the user and stale claims, under the board's owner.
         if let items = try? await client.boardAttention() {

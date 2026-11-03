@@ -1,3 +1,4 @@
+import AeroricProtocol
 import SwiftUI
 import AppKit
 
@@ -19,6 +20,10 @@ public struct NewSessionHome: View {
     private let onSwitchBranch: (String) -> Void
     /// Settings → Agents → 新会话默认 Harness.
     private let preferredHarness: String
+    /// R1-3a: each family's capability table and the logins agents refused.
+    private let capabilities: [String: LiveCapabilities]
+    private let expiredLogins: [ExpiredLogin]
+    @State private var loginHelp: ExpiredLogin?
 
     public struct BranchList: Equatable, Sendable {
         public var current: String?
@@ -41,7 +46,8 @@ public struct NewSessionHome: View {
                 onOpenProjectDraft: @escaping (String) -> Void,
                 onSubmit: @escaping () -> Void, onCheckSubmission: @escaping () -> Void,
                 branches: BranchList? = nil, onSwitchBranch: @escaping (String) -> Void = { _ in },
-                preferredHarness: String = "codex") {
+                preferredHarness: String = "codex",
+                capabilities: [String: LiveCapabilities] = [:], expiredLogins: [ExpiredLogin] = []) {
         _draft = draft
         self.projectID = projectID
         self.projects = projects
@@ -53,6 +59,13 @@ public struct NewSessionHome: View {
         self.branches = branches
         self.onSwitchBranch = onSwitchBranch
         self.preferredHarness = preferredHarness
+        self.capabilities = capabilities
+        self.expiredLogins = expiredLogins
+    }
+
+    /// R1-3a: the selected harness's own login on this Mac, when refused.
+    private var expiredLogin: ExpiredLogin? {
+        expiredLogins.first { $0.family == harness && $0.connectionId == nil }
     }
 
     private var availability: [String: Bool] { NewSessionLayout.availability(configurations) }
@@ -122,6 +135,7 @@ public struct NewSessionHome: View {
             }
         }
         .onAppear(perform: adoptDefaults)
+        .sheet(item: $loginHelp) { LoginHelpSheet(login: $0) }
         .onChange(of: configurations) { _, _ in adoptDefaults() }
         .background(AeroricColor.canvas)
         .foregroundStyle(AeroricColor.text)
@@ -144,7 +158,8 @@ public struct NewSessionHome: View {
     // MARK: - Composer
 
     private var slashSuggestions: [SlashCommand.Suggestion] {
-        draft.isEditable ? SlashCommand.newSessionSuggestions(for: draft.task.prompt, harness: harness) : []
+        draft.isEditable ? SlashCommand.newSessionSuggestions(for: draft.task.prompt, harness: harness,
+                                                              capabilities: capabilities[harness] ?? LiveCapabilities()) : []
     }
 
     private func pick(_ suggestion: SlashCommand.Suggestion) {
@@ -161,6 +176,10 @@ public struct NewSessionHome: View {
     @ViewBuilder private var composer: some View {
         if !slashSuggestions.isEmpty {
             SlashSuggestionPopup(suggestions: slashSuggestions, identifier: "new-session.slash", onPick: pick)
+                .padding(.bottom, AeroricSpace.s)
+        }
+        if let login = expiredLogin {
+            LoginBar(login: login) { loginHelp = login }
                 .padding(.bottom, AeroricSpace.s)
         }
         ComposerCard(
@@ -263,7 +282,8 @@ public struct NewSessionHome: View {
         ComposerPicker(title: draft.task.permissionMode.isEmpty ? "权限"
                            : ComposerPickerOptions.permissionTitle(draft.task.permissionMode),
                        systemImage: "lock.shield",
-                       menu: ComposerPickerOptions.permissions(selected, draft: draft),
+                       menu: ComposerPickerOptions.permissions(selected, draft: draft,
+                                                               capabilities: capabilities[harness] ?? LiveCapabilities()),
                        identifier: "new-session.permission") { draft.selectPermission($0) }
     }
 

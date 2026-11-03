@@ -64,6 +64,11 @@ struct PickerMenuList: View {
         menu.sections.flatMap(\.options).filter(\.isEnabled).map(\.id)
     }
 
+    /// Wider when rows carry a right-hand note, so the description keeps its full line.
+    private var width: CGFloat {
+        menu.sections.flatMap(\.options).contains { $0.trailing != nil } ? 380 : 280
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -88,7 +93,7 @@ struct PickerMenuList: View {
             }
             .padding(AeroricSpace.xs)
         }
-        .frame(width: 280)
+        .frame(width: width)
         .frame(maxHeight: 360)
         .fixedSize(horizontal: false, vertical: true)
         .focusable()

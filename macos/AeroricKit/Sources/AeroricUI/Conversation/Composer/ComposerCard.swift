@@ -24,6 +24,8 @@ public struct ComposerCard<Footer: View>: View {
     let onStop: () -> Void
     /// R1-2b: during a turn, "这轮结束后再发" beside send (⌥↩); nil hides it.
     let onSendAfterTurn: (() -> Void)?
+    /// R1-3a: how a steer differs for this family ("Claude 会作为下一轮发出").
+    let steerNote: String?
     let footer: () -> Footer
     @FocusState private var focused: Bool
     @Environment(\.colorSchemeContrast) private var contrast
@@ -34,7 +36,7 @@ public struct ComposerCard<Footer: View>: View {
                 minLines: Int = 1, isEditable: Bool = true, acceptsAttachments: Bool = false,
                 sendState: ComposerSendState, identifierPrefix: String, focusRequest: Int = 0,
                 onSend: @escaping () -> Void, onStop: @escaping () -> Void = {},
-                onSendAfterTurn: (() -> Void)? = nil,
+                onSendAfterTurn: (() -> Void)? = nil, steerNote: String? = nil,
                 @ViewBuilder footer: @escaping () -> Footer) {
         _text = text
         _attachments = attachments
@@ -48,6 +50,7 @@ public struct ComposerCard<Footer: View>: View {
         self.onSend = onSend
         self.onStop = onStop
         self.onSendAfterTurn = onSendAfterTurn
+        self.steerNote = steerNote
         self.footer = footer
     }
 
@@ -189,7 +192,7 @@ public struct ComposerCard<Footer: View>: View {
     /// R1-2b: steer now (the send button) or wait for this turn to end.
     private func sendMode(_ afterTurn: @escaping () -> Void) -> some View {
         Menu {
-            Button("立即插话  ⌘↩", action: onSend)
+            Button(steerNote.map { "立即插话（\($0)）  ⌘↩" } ?? "立即插话  ⌘↩", action: onSend)
             Button("这轮结束后再发  ⌥↩", action: afterTurn)
         } label: {
             Image(systemName: "chevron.down")

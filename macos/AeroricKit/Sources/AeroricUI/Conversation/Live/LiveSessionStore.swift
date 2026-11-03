@@ -60,6 +60,10 @@ public protocol LiveSessionActions {
     /// R1-2: this session's delivery queue, and acting on one item
     /// (`delivery.resume` / `.discard` / `.resend`).
     func deliveries(taskID: String) async throws -> [LiveDelivery]
+    /// R1-3a: the capability table of `family`.
+    func capabilities(family: String) async throws -> LiveCapabilities
+    /// R1-3a: this task's login, when the agent refused it.
+    func expiredLogin(taskID: String) async throws -> ExpiredLogin?
     func deliveryAction(_ method: String, id: String) async throws
     /// B5-1: `/记住 …` in this task's project; the item as kept.
     func remember(taskID: String, text: String, kind: String) async throws -> LiveMemoryItem
@@ -124,6 +128,8 @@ extension LiveSessionActions {
     public func delegationRoles() async throws -> [LiveDelegationRole] { [] }
     public func delegationCards(taskID: String) async throws -> [LiveDelegationCard] { [] }
     public func deliveries(taskID: String) async throws -> [LiveDelivery] { [] }
+    public func capabilities(family: String) async throws -> LiveCapabilities { LiveCapabilities() }
+    public func expiredLogin(taskID: String) async throws -> ExpiredLogin? { nil }
     public func deliveryAction(_ method: String, id: String) async throws {}
     public func ackDelegationProbes(taskID: String, delegationID: String) async throws {
         throw LiveSessionError.unsupported("这个宿主不支持委派")
@@ -179,6 +185,10 @@ public final class LiveSessionStore {
     public private(set) var connectionProblem: String?
     @ObservationIgnored private var pollFailures = 0
     public var errorText: String?
+    /// R1-3a: what this session's family can do; empty until loaded.
+    public var capabilities = LiveCapabilities()
+    /// R1-3a: this session's login, when the agent refused it.
+    public var expiredLogin: ExpiredLogin?
     /// A05: nil until read, or when the host does not offer auto checks.
     public private(set) var autoCheck: LiveAutoCheckSelection?
     /// B4-1: findings wait for the user before going to the writer.
@@ -277,7 +287,10 @@ public final class LiveSessionStore {
                 if !wasActive && current.turnActive { baseline = LiveHistoryMerge.assistantCount(history) }
                 model = current
                 approvals.retain(pending: current.pending)
-                if turnEnded { await settleTurn() }
+                if turnEnded {
+                    await settleTurn()
+                    await refreshLogin()
+                }
                 return batch.latestSeq > current.cursor
             }
         } catch {
@@ -317,8 +330,18 @@ public final class LiveSessionStore {
     /// R1-2: the host's queue for this session (it survives restarts; the
     /// update log does not).
     private func restoreDeliveries() async {
+        await refreshLogin()
         guard let list = try? await actions.deliveries(taskID: taskID) else { return }
         model?.restoreDeliveries(list)
+    }
+
+    /// R1-3a: the capability table (once) and whether the login still holds.
+    func refreshLogin() async {
+        if capabilities.isEmpty, let family,
+           let table = try? await actions.capabilities(family: family) {
+            capabilities = table
+        }
+        expiredLogin = (try? await actions.expiredLogin(taskID: taskID)) ?? nil
     }
 
     /// R1-2: the bar above the composer, when something did not simply arrive.
@@ -373,7 +396,10 @@ public final class LiveSessionStore {
                 try await actions.command(taskID: taskID, command: .compact)
                 return .ranCommand
             case .review:
-                guard family == "codex" else { throw LiveSessionError.unsupported("/review 仅 Codex 支持") }
+                let review = capabilities.entry("review")
+                guard review.map({ $0.state != "no" }) ?? (family == "codex") else {
+                    throw LiveSessionError.unsupported(review?.note ?? "/review 仅 Codex 支持")
+                }
                 try await actions.command(taskID: taskID, command: .review)
                 return .ranCommand
             case let .model(name?):

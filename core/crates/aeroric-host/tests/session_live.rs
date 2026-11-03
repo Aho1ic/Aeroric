@@ -706,6 +706,70 @@ async fn a_users_message_steers_now_or_waits_for_the_turn() {
     assert_eq!(kinds, ["user", "user"], "{queue}");
 }
 
+/// R1-3a: a turn the agent refused for its login marks that login; the
+/// next completed turn clears it. The capability table answers per family.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_login_is_marked_until_a_turn_completes() {
+    let mut host = Host::start(true).await;
+    let table = host
+        .call("session.capabilities", json!({"family": "claude"}))
+        .await
+        .unwrap();
+    let review = table["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["feature"] == "review")
+        .unwrap()
+        .clone();
+    assert_eq!(review["state"], "no", "{table}");
+
+    host.start_task("hi");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th-1", "path": "/tmp/th-1.jsonl"}}),
+    );
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": "u1", "status": "failed",
+            "error": {"message": "unexpected status 401 Unauthorized"}}}),
+    );
+    host.until("failed", |h| h.record()["status"] == "failed")
+        .await;
+    let expired = host
+        .call("login.state", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(expired["expired"][0]["label"], "Codex（本机）", "{expired}");
+    assert_eq!(expired["expired"][0]["command"], "codex login");
+
+    host.call(
+        "session.prompt",
+        json!({"taskId": "task-1", "text": "again"}),
+    )
+    .await
+    .unwrap();
+    let again = peer.expect("turn/start").await;
+    peer.reply(&again, json!({"turn": {"id": "u2"}}));
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": "u2", "status": "completed"}}),
+    );
+    host.until("done", |h| h.record()["status"] == "done").await;
+    let cleared = host.call("login.state", json!({})).await.unwrap();
+    assert_eq!(cleared["expired"], json!([]), "{cleared}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_task_without_a_session_answers_not_found() {
     let host = Host::start(true).await;

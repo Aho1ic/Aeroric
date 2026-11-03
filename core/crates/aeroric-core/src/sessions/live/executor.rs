@@ -132,6 +132,7 @@ pub struct StructuredExecutor {
     delegations: Arc<super::delegation::Delegations>,
     /// R1-2: the delivery queue, right above the host's sink.
     deliveries: Arc<super::delivery::Deliveries>,
+    logins: Arc<super::login::Logins>,
     /// B4-3: the shared boards.
     boards: Arc<super::board::Boards>,
     /// B5-1: long-term memory (the profile a starting session is handed).
@@ -162,7 +163,11 @@ impl StructuredExecutor {
         let registry: Arc<DriverRegistry> = Arc::default();
         // Beneath the turn-change tracker, so it also sees the updates that
         // tracker appends after a turn (turnChanges, autoCheck).
-        let deliveries = super::delivery::Deliveries::new(sink);
+        // R1-3a: below the queue, so it sees the queue's failures too.
+        let logins = super::login::Logins::new(sink);
+        let deliveries =
+            super::delivery::Deliveries::new(Arc::clone(&logins) as Arc<dyn LiveStatusSink>);
+        logins.set_deliveries(Arc::downgrade(&deliveries));
         deliveries.set_registry(Arc::clone(&registry));
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&deliveries) as Arc<dyn LiveStatusSink>;
         let delegations = super::delegation::Delegations::new(sink);
@@ -204,6 +209,7 @@ impl StructuredExecutor {
             reviews,
             delegations,
             deliveries,
+            logins,
             boards: Arc::default(),
             memory: Arc::default(),
             wikis: Arc::default(),
@@ -338,6 +344,10 @@ impl StructuredExecutor {
 
     pub fn deliveries(&self) -> &Arc<super::delivery::Deliveries> {
         &self.deliveries
+    }
+
+    pub fn logins(&self) -> &Arc<super::login::Logins> {
+        &self.logins
     }
 
     pub fn delegations(&self) -> &Arc<super::delegation::Delegations> {

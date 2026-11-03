@@ -1,3 +1,4 @@
+import AeroricProtocol
 import Foundation
 
 /// Facts the session page shows but the host's `session.state` does not carry:
@@ -108,11 +109,9 @@ public enum LivePickerOptions {
                           note: options.isEmpty ? "此 Agent 没有已存模型目录；可用 /model 名称 直接指定。" : "下一轮生效")
     }
 
-    public static func permissions(current: String?) -> PickerMenu {
+    public static func permissions(current: String?, capabilities: LiveCapabilities = LiveCapabilities()) -> PickerMenu {
         let options = permissionModes.map {
-            PickerOption(id: $0, title: ComposerPickerOptions.permissionTitle($0),
-                         detail: ComposerPickerOptions.permissionDetail($0),
-                         systemImage: ComposerPickerOptions.permissionSymbol($0), selected: $0 == current)
+            ComposerPickerOptions.permissionOption($0, selected: $0 == current, capabilities: capabilities)
         }
         return PickerMenu(sections: [PickerSection(id: "permissions", title: nil, options: options)], note: "下一轮生效")
     }

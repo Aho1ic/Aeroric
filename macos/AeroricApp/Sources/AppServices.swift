@@ -114,6 +114,9 @@ final class AppServices {
     var delegationNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// R1-2 → A19: task → a delivery not known to have arrived.
     var deliveryNeeds: [String: AttentionQueue.CheckFailure] = [:]
+    /// R1-3a: each family's capability table (this Mac) and refused logins.
+    var capabilityTables: [String: LiveCapabilities] = [:]
+    var expiredLogins: [ExpiredLogin] = []
     /// B4-3 → A19: board owner → a decision waiting or a stale claim.
     var boardNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// Group names the 移动到分组 menu offers (host `project.group_names`).

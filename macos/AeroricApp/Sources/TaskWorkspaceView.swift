@@ -1173,7 +1173,9 @@ struct TaskWorkspaceView: View {
                 Task { await services.switchBranch(projectID: projectID, to: branch) }
             },
             // S5: the project's 默认 Harness, else the global default.
-            preferredHarness: projectHarness(scope.projectID) ?? defaultHarness
+            preferredHarness: projectHarness(scope.projectID) ?? defaultHarness,
+            capabilities: services.capabilityTables,
+            expiredLogins: services.expiredLogins
         )
         .task(id: [catalogProjectID ?? "", services.configurationEpoch.uuidString,
                    services.agentCatalogEpoch.uuidString]) {

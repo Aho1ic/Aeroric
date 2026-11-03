@@ -121,6 +121,15 @@ pub fn step(d: &mut Delivery, event: Event<'_>, now_ms: u64) -> bool {
 /// A failure only the user can fix: tried again only when they say so.
 pub fn user_fixable(reason: &str) -> bool {
     let lower = reason.to_lowercase();
+    auth_failure(reason)
+        || ["未安装", "找不到", "not found", "no such file"]
+            .iter()
+            .any(|needle| lower.contains(needle))
+}
+
+/// R1-3a: the agent refused the login (signed out, a key it rejects).
+pub fn auth_failure(reason: &str) -> bool {
+    let lower = reason.to_lowercase();
     [
         "登录",
         "login",
@@ -128,12 +137,12 @@ pub fn user_fixable(reason: &str) -> bool {
         "auth",
         "401",
         "403",
-        "未安装",
-        "找不到",
-        "not found",
-        "no such file",
         "api key",
         "密钥",
+        "token expired",
+        "expired token",
+        "认证",
+        "鉴权",
     ]
     .iter()
     .any(|needle| lower.contains(needle))

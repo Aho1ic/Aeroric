@@ -28,6 +28,38 @@ final class DeliveryTests: XCTestCase {
         XCTAssertEqual(DeliveryText.method(.resume), "delivery.resume")
     }
 
+    /// R1-3a: the slash menu and the permission picker read the table.
+    @MainActor func testTheCapabilityTableGreysWhatIsNotSupported() {
+        let claude = LiveCapabilities([
+            LiveCapabilityEntry(feature: "review", state: "no", note: "Claude 没有内置审查"),
+            LiveCapabilityEntry(feature: "compact", state: "yes"),
+            LiveCapabilityEntry(feature: "permAsk", state: "yes", note: "由 Claude 把关 · 无沙盒"),
+        ])
+        let review = SlashCommand.suggestions(for: "/re", family: "claude", capabilities: claude).first
+        XCTAssertEqual(review?.enabled, false)
+        XCTAssertEqual(review?.detail, "Claude 没有内置审查")
+        let codexReview = SlashCommand.suggestions(for: "/re", family: "codex").first
+        XCTAssertEqual(codexReview?.enabled, true, "no table: the old answer")
+        let ask = LivePickerOptions.permissions(current: "ask", capabilities: claude).sections.first?.options.first
+        XCTAssertEqual(ask?.trailing, "由 Claude 把关 · 无沙盒")
+        XCTAssertTrue(ask?.isEnabled ?? false)
+        let plan = SlashCommand.newSessionSuggestions(
+            for: "/pl", harness: "omp",
+            capabilities: LiveCapabilities([LiveCapabilityEntry(feature: "planMode", state: "unknown")])).first
+        XCTAssertEqual(plan?.detail, "以只读规划开始：先出方案再动手 · 未确认")
+    }
+
+    /// R1-3a: the login list decodes what the host sends.
+    func testExpiredLoginsDecode() {
+        let list = ExpiredLogin.decodeList(.array([.object([
+            "id": .string("claude|local|own"), "family": .string("claude"), "label": .string("Claude（本机）"),
+            "reason": .string("401"), "atMs": .number("5"), "command": .string("claude"),
+        ])]))
+        XCTAssertEqual(list.first?.label, "Claude（本机）")
+        XCTAssertEqual(list.first?.command, "claude")
+        XCTAssertNil(list.first?.configId)
+    }
+
     /// R1-2b Q3: what waits for the turn shows on its own bubble, not the bar.
     func testAUserMessageWaitingForTheTurnIsOnItsBubble() {
         var waiting = item("w", "waiting", kind: "user")

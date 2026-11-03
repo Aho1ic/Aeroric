@@ -1,3 +1,4 @@
+import AeroricProtocol
 import Foundation
 import SwiftUI
 
@@ -33,14 +34,33 @@ public enum SlashCommand: Equatable, Sendable {
         }
     }
 
+    /// R1-3a: a command as the capability table has it — greyed with the
+    /// reason when not supported, marked when degraded or unconfirmed; the
+    /// old fixed answer when the host has no table.
+    static func suggestion(_ command: String, _ detail: String, _ entry: LiveCapabilityEntry?,
+                           fallback: Bool, fallbackReason: String? = nil) -> Suggestion {
+        guard let entry else {
+            return Suggestion(command: command, detail: fallback ? detail : (fallbackReason ?? detail),
+                              enabled: fallback)
+        }
+        switch entry.state {
+        case "no": return Suggestion(command: command, detail: entry.note ?? "不支持", enabled: false)
+        case "degraded": return Suggestion(command: command, detail: "\(detail) · \(entry.note ?? "有差异")", enabled: true)
+        case "unknown": return Suggestion(command: command, detail: "\(detail) · 未确认", enabled: true)
+        default: return Suggestion(command: command, detail: detail, enabled: true)
+        }
+    }
+
     /// Suggestions while the input is a bare `/prefix` (no space yet).
-    public static func suggestions(for text: String, family: String?) -> [Suggestion] {
+    public static func suggestions(for text: String, family: String?,
+                                   capabilities: LiveCapabilities = LiveCapabilities()) -> [Suggestion] {
         guard text.hasPrefix("/"), !text.contains(" "), !text.contains("\n") else { return [] }
         let prefix = text.dropFirst().lowercased()
         let codex = family == "codex"
         let all = [
-            Suggestion(command: "/compact", detail: "压缩上下文", enabled: true),
-            Suggestion(command: "/review", detail: codex ? "审查未提交的改动" : "仅 Codex 支持", enabled: codex),
+            suggestion("/compact", "压缩上下文", capabilities.entry("compact"), fallback: true),
+            suggestion("/review", "审查未提交的改动", capabilities.entry("review"), fallback: codex,
+                       fallbackReason: "仅 Codex 支持"),
             Suggestion(command: "/model", detail: "切换模型（下一轮生效）", enabled: true),
             Suggestion(command: "/permissions", detail: "切换权限（下一轮生效）", enabled: true),
             Suggestion(command: "/clear", detail: "以同样配置开新会话", enabled: true),
@@ -50,13 +70,15 @@ public enum SlashCommand: Equatable, Sendable {
 
     /// 2026-11-02: what `/` offers before a session exists — only what can
     /// take effect without one.
-    public static func newSessionSuggestions(for text: String, harness: String) -> [Suggestion] {
+    public static func newSessionSuggestions(for text: String, harness: String,
+                                             capabilities: LiveCapabilities = LiveCapabilities()) -> [Suggestion] {
         guard text.hasPrefix("/"), !text.contains(" "), !text.contains("\n") else { return [] }
         let prefix = text.dropFirst().lowercased()
         let all = [
             Suggestion(command: "/记住", detail: "记进这个项目的记忆，不开会话", enabled: true),
-            Suggestion(command: "/plan", detail: "以只读规划开始：先出方案再动手", enabled: true),
-            Suggestion(command: "/goal", detail: harness == "codex" ? "目标模式还没接通" : "仅 Codex 支持", enabled: false),
+            suggestion("/plan", "以只读规划开始：先出方案再动手", capabilities.entry("planMode"), fallback: true),
+            suggestion("/goal", "目标模式", capabilities.entry("goal"), fallback: false,
+                       fallbackReason: harness == "codex" ? "目标模式还没接通" : "仅 Codex 支持"),
         ]
         return all.filter { $0.command.dropFirst().lowercased().hasPrefix(prefix) || prefix.isEmpty }
     }

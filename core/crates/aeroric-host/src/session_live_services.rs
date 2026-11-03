@@ -35,6 +35,7 @@ use crate::services::{find_project_of_task, ok};
 pub use wire::CAPABILITY;
 
 mod board;
+mod capability;
 mod delegation;
 mod delivery;
 mod memory;
@@ -160,6 +161,7 @@ pub fn register_session_live_services(
     wiki::install(set, &live);
     // R1-2: the delivery queue (after the services whose messages it carries).
     delivery::install(set, &live);
+    capability::install(set, &live);
 }
 
 // MARK: B4′ side branches (2026-10-30)

@@ -364,6 +364,21 @@ extension SessionsClient {
     }
 
     /// R1-2: unknown deliveries whose record could not be read (需要我处理).
+    /// R1-3a: what `family` can do where it runs (local unless `remote`).
+    public func capabilities(family: String, remote: Bool = false) async throws -> LiveCapabilities {
+        var params: [String: JSONValue] = ["family": .string(family)]
+        if remote { params["place"] = .string("remote") }
+        let frame = try await connection.request("session.capabilities", params: .object(params))
+        return LiveCapabilities.decode(frame.result["capabilities"])
+    }
+
+    /// R1-3a: logins the agents refused; with a task, only its own.
+    public func loginState(taskId: String? = nil) async throws -> [ExpiredLogin] {
+        let params: [String: JSONValue] = taskId.map { ["taskId": .string($0)] } ?? [:]
+        let frame = try await connection.request("login.state", params: .object(params))
+        return ExpiredLogin.decodeList(frame.result["expired"])
+    }
+
     public func deliveryAttention() async throws -> [LiveDelivery] {
         let frame = try await connection.request("delivery.attention", params: .object([:]))
         return (frame.result["deliveries"]?.arrayValue ?? []).compactMap { LiveDelivery.decode($0) }

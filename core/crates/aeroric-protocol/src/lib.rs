@@ -16,6 +16,7 @@ pub mod envelope;
 pub mod error;
 pub mod event;
 pub mod legacy_cleanup;
+pub mod live_capability;
 pub mod memory;
 pub mod project;
 pub mod review;

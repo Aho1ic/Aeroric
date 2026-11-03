@@ -5,6 +5,7 @@
 
 pub mod auto_check;
 pub mod board;
+pub mod capabilities;
 pub mod checkpoint;
 pub mod claude;
 pub mod codex;
@@ -12,6 +13,7 @@ pub mod context_server;
 pub mod delegation;
 pub mod delivery;
 pub mod executor;
+pub mod login;
 pub mod omp;
 pub mod remote;
 pub mod review;

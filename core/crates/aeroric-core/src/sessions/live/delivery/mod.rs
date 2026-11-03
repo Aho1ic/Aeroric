@@ -207,6 +207,21 @@ impl Deliveries {
             .collect()
     }
 
+    /// R1-3a: the user fixed what blocked these (they signed in again): one
+    /// more try for the failed items of the sessions `which` picks.
+    pub fn retry_blocked(&self, which: impl Fn(&str) -> bool) {
+        let blocked: Vec<Delivery> = self
+            .store
+            .lock()
+            .in_state(DeliveryState::Failed)
+            .into_iter()
+            .filter(|d| d.blocked && which(&d.task_id))
+            .collect();
+        for item in blocked {
+            let _ = self.act(&item.id, Action::Resend);
+        }
+    }
+
     /// The stop barrier (Q-S6): what has not gone out stays, paused.
     pub fn pause(&self, task_id: &str) {
         let now = now_ms();

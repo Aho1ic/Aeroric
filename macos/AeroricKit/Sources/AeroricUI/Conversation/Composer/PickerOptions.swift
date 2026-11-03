@@ -1,3 +1,4 @@
+import AeroricProtocol
 import Foundation
 
 /// One row in a composer picker popover: icon + name + grey description,
@@ -121,12 +122,12 @@ public enum ComposerPickerOptions {
                           note: configurations.isEmpty ? "宿主尚未提供 Agent 配置目录。" : nil)
     }
 
-    public static func permissions(_ configuration: SessionConfiguration?, draft: NewSessionDraft) -> PickerMenu {
+    public static func permissions(_ configuration: SessionConfiguration?, draft: NewSessionDraft,
+                                   capabilities: LiveCapabilities = LiveCapabilities()) -> PickerMenu {
         guard let configuration else { return PickerMenu(sections: [], note: "先选择 Agent 配置。") }
         let options = configuration.options.permissionModes.map {
-            PickerOption(id: $0, title: permissionTitle($0), detail: permissionDetail($0),
-                         systemImage: permissionSymbol($0),
-                         selected: $0 == draft.task.permissionMode && draft.permissionAgent == draft.task.agent)
+            permissionOption($0, selected: $0 == draft.task.permissionMode && draft.permissionAgent == draft.task.agent,
+                             capabilities: capabilities)
         }
         return PickerMenu(sections: [PickerSection(id: "permissions", title: nil, options: options)],
                           note: options.isEmpty ? "此配置没有声明权限档位。" : nil)
@@ -172,6 +173,25 @@ public enum ComposerPickerOptions {
                          systemImage: "brain", selected: $0 == draft.task.effort)
         }
         return PickerMenu(sections: [PickerSection(id: "efforts", title: nil, options: options)], note: nil)
+    }
+
+    /// R1-3a: a permission tier with who holds it to its word on the right
+    /// ("沙盒强制", "由 Claude 把关 · 无沙盒"), greyed when the family has none.
+    static func permissionOption(_ mode: String, selected: Bool, capabilities: LiveCapabilities) -> PickerOption {
+        let entry = capabilities.entry(permissionFeature(mode))
+        var option = PickerOption(id: mode, title: permissionTitle(mode), detail: permissionDetail(mode),
+                                  systemImage: permissionSymbol(mode), selected: selected,
+                                  disabledReason: entry?.state == "no" ? (entry?.note ?? "不支持") : nil)
+        option.trailing = entry?.state == "unknown" ? "未确认" : entry?.note
+        return option
+    }
+
+    static func permissionFeature(_ mode: String) -> String {
+        switch mode {
+        case "auto_edit": "permAutoEdit"
+        case "full_access": "permFullAccess"
+        default: "permAsk"
+        }
     }
 
     // MARK: - Labels
