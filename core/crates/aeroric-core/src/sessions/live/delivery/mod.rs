@@ -23,7 +23,7 @@ use aeroric_protocol::delivery::{
 use aeroric_protocol::session_live::{SessionUpdate, SessionUpdateKind};
 use parking_lot::Mutex;
 
-use self::state::{step, user_fixable, Event};
+use self::state::{step, user_fixable, Event, NO_ANSWER, SESSION_DIED};
 use self::store::Store;
 use super::{now_ms, DriverRegistry, LiveStatusSink};
 use crate::tasks::{ProtocolFamily, TaskStatus};
@@ -62,8 +62,17 @@ pub struct Deliveries {
     store: Mutex<Store>,
     /// Items whose driver gives no receipts: a turn starting is the proof.
     no_receipt: Mutex<HashSet<String>>,
+    /// Items inside `DeliveryHost::send` right now: its own answer settles them.
+    in_hand: Mutex<HashSet<String>>,
+    /// In hand when their session failed: lost unless the send itself fails.
+    died_in_hand: Mutex<HashSet<String>>,
+    /// R1-4: how long a hand-over may wait for any answer before it is unknown.
+    send_timeout: Mutex<std::time::Duration>,
     me: Mutex<Weak<Self>>,
 }
+
+/// Default for [`Deliveries::set_send_timeout`].
+pub const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 impl Deliveries {
     pub fn new(inner: Arc<dyn LiveStatusSink>) -> Arc<Self> {
@@ -73,10 +82,17 @@ impl Deliveries {
             host: Mutex::new(None),
             store: Mutex::new(Store::default()),
             no_receipt: Mutex::default(),
+            in_hand: Mutex::default(),
+            died_in_hand: Mutex::default(),
+            send_timeout: Mutex::new(SEND_TIMEOUT),
             me: Mutex::new(Weak::new()),
         });
         *this.me.lock() = Arc::downgrade(&this);
         this
+    }
+
+    pub fn set_send_timeout(&self, timeout: std::time::Duration) {
+        *self.send_timeout.lock() = timeout;
     }
 
     pub fn set_registry(&self, registry: Arc<DriverRegistry>) {
@@ -96,7 +112,7 @@ impl Deliveries {
             .cloned()
             .collect();
         for mut item in lost {
-            step(&mut item, Event::Lost, now);
+            step(&mut item, Event::Lost(None), now);
             store.save(&item);
         }
         let unsent: Vec<Delivery> = store
@@ -300,12 +316,17 @@ impl Deliveries {
             return;
         };
         let me = self.me.lock().clone();
+        self.watch(&item);
+        self.in_hand.lock().insert(item.id.clone());
         std::thread::spawn(move || {
             let result = host.send(&item.task_id, &item.id, &item.text);
             let Some(this) = me.upgrade() else {
                 return;
             };
+            this.in_hand.lock().remove(&item.id);
+            let died = this.died_in_hand.lock().remove(&item.id);
             match result {
+                Ok(_) if died => this.lose(&item.id, SESSION_DIED),
                 Ok(true) => {}
                 Ok(false) => {
                     this.no_receipt.lock().insert(item.id.clone());
@@ -325,6 +346,55 @@ impl Deliveries {
                 }
             }
         });
+    }
+
+    /// R1-4: an item still sending when its timeout runs out never got an
+    /// answer; it becomes unknown rather than holding the session's queue.
+    fn watch(&self, item: &Delivery) {
+        let me = self.me.lock().clone();
+        let timeout = *self.send_timeout.lock();
+        let (id, attempts) = (item.id.clone(), item.attempts);
+        std::thread::spawn(move || {
+            std::thread::sleep(timeout);
+            let Some(this) = me.upgrade() else {
+                return;
+            };
+            let stale = this
+                .get(&id)
+                .is_some_and(|d| d.state == DeliveryState::Sending && d.attempts == attempts);
+            if stale {
+                this.lose(&id, NO_ANSWER);
+            }
+        });
+    }
+
+    /// The answer for `id` will not come: unknown, then looked for in the
+    /// agent's record, and the queue moves on.
+    fn lose(&self, id: &str, reason: &str) {
+        if let Some(item) = self.change(id, Event::Lost(Some(reason))) {
+            self.check_record(id);
+            self.pump(&item.task_id);
+        }
+    }
+
+    /// R1-4: the session failed while items were out with no receipt back.
+    fn session_failed(&self, task_id: &str) {
+        let out: Vec<String> = {
+            let in_hand = self.in_hand.lock();
+            let mut died = self.died_in_hand.lock();
+            self.store
+                .lock()
+                .of_task(task_id)
+                .into_iter()
+                .filter(|d| matches!(d.state, DeliveryState::Sending | DeliveryState::Accepted))
+                .filter(|d| !in_hand.contains(&d.id) || !died.insert(d.id.clone()))
+                .map(|d| d.id)
+                .collect()
+        };
+        for id in out {
+            self.no_receipt.lock().remove(&id);
+            self.lose(&id, SESSION_DIED);
+        }
     }
 
     /// Q-S4: an unknown item is looked for in the agent's own record.
@@ -403,6 +473,9 @@ impl LiveStatusSink for Deliveries {
     ) {
         self.inner
             .status(project_id, task_id, generation, status, reason);
+        if status == TaskStatus::Failed {
+            self.session_failed(task_id);
+        }
         // CU 2026-11-02 (F1): Codex pushes `turnEnded` before it clears its
         // running turn, so the pump at the turn's end still saw it busy and
         // nothing went out. A settled status comes after that.

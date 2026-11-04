@@ -245,16 +245,19 @@ public struct SessionTranscriptStats: Equatable, Sendable {
         public var tokens: UInt64
         /// The person stopped this turn (CU 2026-11-03).
         public var interrupted: Bool
+        /// The agent's API call failed and the turn gave up (R1-4 目检).
+        public var failed: Bool
         /// The person's messages this turn took: more than one when they
         /// steered it (CU 2026-11-03).
         public var messages: Int
 
         public init(startedAt: UInt64, endedAt: UInt64?, tokens: UInt64, interrupted: Bool = false,
-                    messages: Int = 1) {
+                    failed: Bool = false, messages: Int = 1) {
             self.startedAt = startedAt
             self.endedAt = endedAt
             self.tokens = tokens
             self.interrupted = interrupted
+            self.failed = failed
             self.messages = messages
         }
     }
@@ -288,6 +291,7 @@ public struct SessionTranscriptStats: Equatable, Sendable {
             guard let started = n("startedAt") else { return nil }
             return TurnStat(startedAt: started, endedAt: n("endedAt"), tokens: n("tokens") ?? 0,
                             interrupted: row["interrupted"]?.boolValue ?? false,
+                            failed: row["failed"]?.boolValue ?? false,
                             messages: Int(n("messages") ?? 1))
         }
         return stats

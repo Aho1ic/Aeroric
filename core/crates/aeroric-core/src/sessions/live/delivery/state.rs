@@ -16,8 +16,9 @@ pub enum Event<'a> {
         reason: &'a str,
         blocked: bool,
     },
-    /// The host restarted while it was out: the answer is lost.
-    Lost,
+    /// The answer is lost: the host restarted while it was out (`None`), or
+    /// the session died / never answered (R1-4, why).
+    Lost(Option<&'a str>),
     /// Looked for in the agent's own session record.
     Recorded(bool),
     Unreadable,
@@ -36,6 +37,11 @@ pub enum Event<'a> {
 
 /// Why an unknown item could not be settled: it goes to 需要我处理.
 pub const UNREADABLE: &str = "读不到会话记录";
+
+/// R1-4: the session failed with the item handed over and no receipt back.
+pub const SESSION_DIED: &str = "会话中断了，没收到回执";
+/// R1-4: handed over, and nothing came back in time.
+pub const NO_ANSWER: &str = "Agent 没有回应";
 
 /// Why the user's message waits for them after a restart.
 pub const RESTARTED: &str = "Aeroric 重启了";
@@ -75,8 +81,8 @@ pub fn step(d: &mut Delivery, event: Event<'_>, now_ms: u64) -> bool {
             d.blocked = blocked;
             S::Failed
         }
-        (S::Sending | S::Accepted, Event::Lost) => {
-            d.reason = None;
+        (S::Sending | S::Accepted, Event::Lost(reason)) => {
+            d.reason = reason.map(str::to_string);
             S::Unknown
         }
         (S::Unknown, Event::Recorded(true)) => {

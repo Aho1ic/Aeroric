@@ -1108,6 +1108,7 @@ public struct SessionStatusDot: View {
         case "done": "已完成"
         case "failed": "失败"
         case "cancelled": "已取消"
+        case "interrupted": "已中断"
         default: status ?? "未知状态"
         }
     }

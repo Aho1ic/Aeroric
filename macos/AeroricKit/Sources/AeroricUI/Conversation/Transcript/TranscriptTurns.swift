@@ -84,7 +84,7 @@ public enum TranscriptTurns {
     /// `已完成，用时 13 秒`; `已完成` without timing; `已中断…` for a turn
     /// the person stopped.
     public static func header(_ stat: SessionTranscriptStats.TurnStat?) -> String {
-        let state = stat?.interrupted == true ? "已中断" : "已完成"
+        let state = stat?.interrupted == true ? "已中断" : stat?.failed == true ? "失败" : "已完成"
         guard let stat, let ended = stat.endedAt, ended >= stat.startedAt else { return state }
         return "\(state)，用时 \(SessionStatsText.duration(ended - stat.startedAt))"
     }

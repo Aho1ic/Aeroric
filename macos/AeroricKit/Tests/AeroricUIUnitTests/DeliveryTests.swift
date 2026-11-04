@@ -50,6 +50,18 @@ final class DeliveryTests: XCTestCase {
     }
 
     /// R1-3a: the login list decodes what the host sends.
+    func testAnExpiredLoginMatchesOnlyItsOwnConfiguration() {
+        let gateway = ExpiredLogin(id: "claude|local|cfg-x", family: "claude", label: "x", reason: "401", atMs: 1,
+                                   configId: "cfg-x")
+        let own = ExpiredLogin(id: "claude|local|own", family: "claude", label: "Claude（本机）", reason: "401",
+                               atMs: 1, command: "claude")
+        XCTAssertNil(NewSessionLayout.expiredLogin([gateway], harness: "claude", configID: "claude"))
+        XCTAssertEqual(NewSessionLayout.expiredLogin([gateway], harness: "claude", configID: "agent-config:cfg-x")?.id,
+                       gateway.id)
+        XCTAssertEqual(NewSessionLayout.expiredLogin([gateway, own], harness: "claude", configID: nil)?.id, own.id)
+        XCTAssertNil(NewSessionLayout.expiredLogin([own], harness: "codex", configID: nil))
+    }
+
     func testExpiredLoginsDecode() {
         let list = ExpiredLogin.decodeList(.array([.object([
             "id": .string("claude|local|own"), "family": .string("claude"), "label": .string("Claude（本机）"),

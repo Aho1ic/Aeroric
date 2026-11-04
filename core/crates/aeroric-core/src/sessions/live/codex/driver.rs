@@ -17,7 +17,7 @@ use super::map::{
     approval_response, codex_policy, map_approval_request, map_notification, TurnSignal,
     WARNING_METHODS,
 };
-use super::rpc::{Inbound, RpcClient};
+use super::rpc::{Inbound, RpcClient, RpcError};
 use super::server::{CodexServer, Connection, SERVER_EXITED};
 use crate::sessions::live::update::{PlanEntry, SessionUpdateKind, TurnEndReason};
 use crate::sessions::live::{
@@ -592,6 +592,10 @@ impl Actor {
                 // went straight into this turn.
                 self.receipt(&receipt, ReceiptOutcome::Delivered, None);
             }
+            // R1-4: the process went away before answering — it may or may
+            // not have taken the message, so no receipt; the queue calls it
+            // unknown when the session fails.
+            Err(RpcError::Closed) => self.fail("Codex 在回应这条消息前退出了".into()),
             Err(error) => {
                 let message = format!("Codex 拒绝了这条消息：{error}");
                 self.receipt(&receipt, ReceiptOutcome::Rejected, Some(message.clone()));

@@ -381,6 +381,9 @@ impl Host {
     }
 }
 
+#[path = "session_live_faults/mod.rs"]
+mod faults;
+
 fn request(method: &str, params: Value) -> Request {
     serde_json::from_value(
         json!({"v": 1, "id": format!("r-{method}"), "method": method, "params": params}),

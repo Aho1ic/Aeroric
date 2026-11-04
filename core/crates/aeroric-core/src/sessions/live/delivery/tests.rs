@@ -128,6 +128,103 @@ fn a_result_waits_for_the_turn_then_goes_one_at_a_time() {
     assert_eq!(host.sent.lock()[1].2, "二");
 }
 
+fn failed(queue: &Deliveries, task: &str) {
+    queue.status(
+        "project-1",
+        task,
+        1,
+        TaskStatus::Failed,
+        Some("进程退出".into()),
+    );
+}
+
+fn handed_over(queue: &Deliveries, host: &FakeHost, n: usize) {
+    wait("handed over", || {
+        host.sent.lock().len() == n && queue.in_hand.lock().is_empty()
+    });
+}
+
+/// R1-4 fault: the session dies with an item out and no receipt — it is
+/// unknown (never delivered), looked up in the record, and the queue moves on.
+#[test]
+fn a_session_dying_mid_send_makes_it_unknown_and_frees_the_queue() {
+    let (queue, host, _) = rig();
+    host.records.lock().insert("p".into(), Some(false));
+    let first = result(&queue, "p", "一");
+    let second = result(&queue, "p", "二");
+    handed_over(&queue, &host, 1);
+    failed(&queue, "p");
+    let lost = queue.get(&first.id).unwrap();
+    assert_eq!(lost.state, DeliveryState::Unknown);
+    assert_eq!(lost.reason.as_deref(), Some("会话记录里没找到"));
+    wait("second sent", || host.sent.lock().len() == 2);
+    assert_eq!(state(&queue, &second.id), DeliveryState::Sending);
+}
+
+/// R1-4 fault: an echo that never comes (Claude) is not taken as delivered.
+#[test]
+fn an_accepted_item_whose_session_dies_is_unknown_not_delivered() {
+    let (queue, host, _) = rig();
+    let item = result(&queue, "p", "回显");
+    handed_over(&queue, &host, 1);
+    receipt(&queue, "p", &item.id, ReceiptOutcome::Accepted);
+    failed(&queue, "p");
+    let lost = queue.get(&item.id).unwrap();
+    assert_eq!(lost.state, DeliveryState::Unknown);
+    assert_eq!(lost.reason.as_deref(), Some(state::UNREADABLE));
+}
+
+/// R1-4 fault: no answer at all in time — unknown, with the reason.
+#[test]
+fn a_hand_over_without_any_answer_times_out_to_unknown() {
+    let (queue, host, _) = rig();
+    queue.set_send_timeout(Duration::from_millis(40));
+    host.records.lock().insert("p".into(), Some(false));
+    let first = result(&queue, "p", "一");
+    let second = result(&queue, "p", "二");
+    handed_over(&queue, &host, 1);
+    wait("timed out", || {
+        state(&queue, &first.id) == DeliveryState::Unknown
+    });
+    wait("second sent", || host.sent.lock().len() == 2);
+    assert_eq!(state(&queue, &second.id), DeliveryState::Sending);
+}
+
+/// R1-4 fault: settled answers stand — a later failure, a repeated or
+/// out-of-order receipt does not take a delivery back.
+#[test]
+fn receipts_never_go_backwards() {
+    let (queue, host, _) = rig();
+    queue.set_send_timeout(Duration::from_millis(40));
+    let item = result(&queue, "p", "一");
+    handed_over(&queue, &host, 1);
+    receipt(&queue, "p", &item.id, ReceiptOutcome::Delivered);
+    receipt(&queue, "p", &item.id, ReceiptOutcome::Delivered);
+    receipt(&queue, "p", &item.id, ReceiptOutcome::Accepted);
+    receipt(&queue, "p", &item.id, ReceiptOutcome::Rejected);
+    failed(&queue, "p");
+    std::thread::sleep(Duration::from_millis(80));
+    let done = queue.get(&item.id).unwrap();
+    assert_eq!(done.state, DeliveryState::Delivered);
+    assert_eq!(done.attempts, 1);
+}
+
+/// R1-4 fault: a hand-over that fails is failed with its reason, even when
+/// the session reports the failure while the send is still in hand.
+#[test]
+fn a_failed_hand_over_keeps_its_own_reason() {
+    let (queue, host, _) = rig();
+    *host.fail.lock() = Some("401 invalid api key".into());
+    let item = result(&queue, "p", "一");
+    failed(&queue, "p");
+    wait("failed", || {
+        state(&queue, &item.id) == DeliveryState::Failed
+    });
+    let item = queue.get(&item.id).unwrap();
+    assert_eq!(item.reason.as_deref(), Some("401 invalid api key"));
+    assert!(item.blocked, "a login problem waits for the user");
+}
+
 /// Claude: the transport takes it, the echo proves it.
 #[test]
 fn an_echo_after_acceptance_is_the_evidence() {
@@ -340,7 +437,7 @@ fn the_state_machine_refuses_what_does_not_apply() {
         Event::Stop,
         Event::Discard,
         Event::Resend,
-        Event::Lost,
+        Event::Lost(None),
     ] {
         assert!(!step(&mut d, event, 5), "{event:?}");
     }

@@ -1,8 +1,18 @@
+import AeroricProtocol
 import Foundation
 
 /// Pure decisions behind the new-session page (2026-10-26 D), kept apart so
 /// they can be tested without a view.
 public enum NewSessionLayout {
+    /// R1-3a: the refused login for this harness and configuration on this
+    /// Mac. An Agent config (`agent-config:<id>`) matches only its own entry;
+    /// the agent's own login matches only an own-login entry (R1-4 目检).
+    public static func expiredLogin(_ list: [ExpiredLogin], harness: String, configID: String?) -> ExpiredLogin? {
+        let prefix = "agent-config:"
+        let config = configID.flatMap { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : nil }
+        return list.first { $0.family == harness && $0.connectionId == nil && $0.configId == config }
+    }
+
     /// The harness slider, left to right.
     public static let harnessOrder = ["codex", "claude", "dsh", "omp"]
     /// `@AppStorage` key for Settings → Agents → 新会话默认 Harness.

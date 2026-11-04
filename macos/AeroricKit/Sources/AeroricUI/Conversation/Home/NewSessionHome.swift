@@ -63,9 +63,10 @@ public struct NewSessionHome: View {
         self.expiredLogins = expiredLogins
     }
 
-    /// R1-3a: the selected harness's own login on this Mac, when refused.
+    /// R1-3a: the selected harness and Agent config on this Mac, when its
+    /// login was refused (an own login matches only an own login).
     private var expiredLogin: ExpiredLogin? {
-        expiredLogins.first { $0.family == harness && $0.connectionId == nil }
+        NewSessionLayout.expiredLogin(expiredLogins, harness: harness, configID: draft.configurationID)
     }
 
     private var availability: [String: Bool] { NewSessionLayout.availability(configurations) }

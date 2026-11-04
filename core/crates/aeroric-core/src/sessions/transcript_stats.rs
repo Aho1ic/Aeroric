@@ -49,6 +49,10 @@ pub struct TurnStat {
     /// finished, so only this tells a stopped turn from a completed one.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub interrupted: bool,
+    /// R1-4 目检: the agent's API call failed and the turn gave up (Claude's
+    /// `isApiErrorMessage` line) — not a completed turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub failed: bool,
     /// CU 2026-11-03 (R1-2b): the person's messages this turn took — more
     /// than one when they steered it. History shows each as its own turn,
     /// so without this the timings of older turns slid by one.
@@ -84,6 +88,7 @@ impl Clock {
             ended_at: None,
             tokens: 0,
             interrupted: false,
+            failed: false,
             messages: 1,
         });
         self.turn_start = Some(at);
@@ -174,7 +179,14 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
         match value["type"].as_str().unwrap_or_default() {
             "event_msg" => match kind {
                 "task_started" => {
+                    // R1-4 C17: a turn the rollout never closed (the process
+                    // was killed) did not complete.
+                    let unfinished = clock.turn_start.is_some();
                     clock.start_turn(&mut stats, at);
+                    if unfinished {
+                        let n = stats.turns.len();
+                        stats.turns[n - 2].interrupted = true;
+                    }
                     typed = 0;
                 }
                 "task_complete" => clock.end_turn(&mut stats, at),
@@ -267,6 +279,11 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
             }
             "assistant" => {
                 clock.output(&mut stats, at);
+                if value["isApiErrorMessage"] == true {
+                    if let Some(turn) = stats.turns.last_mut() {
+                        turn.failed = true;
+                    }
+                }
                 for block in blocks.into_iter().flatten() {
                     if block["type"] == "tool_use" {
                         if let Some(id) = block["id"].as_str() {
@@ -517,6 +534,19 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_turn_ending_on_an_api_error_failed() {
+        let t = |s: &str| format!("2026-10-29T01:00:{s}Z");
+        let raw = [
+            serde_json::json!({"timestamp": t("00.000"), "type": "user", "message": {"role": "user", "content": "hi"}}),
+            serde_json::json!({"timestamp": t("09.000"), "type": "assistant", "isApiErrorMessage": true,
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "API Error: Connection refused"}]}}),
+        ];
+        let stats = claude(&lines(&raw)).unwrap();
+        assert!(stats.turns[0].failed);
+        assert!(!stats.turns[0].interrupted);
+    }
+
+    #[test]
     fn claudes_interrupt_note_is_not_a_turn_or_a_message() {
         let t = |s: &str| format!("2026-10-29T01:00:{s}Z");
         let raw = [
@@ -531,6 +561,21 @@ mod tests {
             crate::sessions::claude::parse_claude_session_line(&line, &mut messages);
         }
         assert_eq!(messages.len(), 2);
+    }
+
+    #[test]
+    fn a_codex_turn_left_open_by_a_killed_process_is_not_completed() {
+        let t = |s: &str| format!("2026-10-29T01:00:{s}Z");
+        let rollout = lines(&[
+            serde_json::json!({"timestamp": t("00.000"), "type": "event_msg", "payload": {"type": "task_started"}}),
+            serde_json::json!({"timestamp": t("02.000"), "type": "response_item", "payload": {"type": "reasoning"}}),
+            serde_json::json!({"timestamp": t("30.000"), "type": "event_msg", "payload": {"type": "task_started"}}),
+            serde_json::json!({"timestamp": t("35.000"), "type": "event_msg", "payload": {"type": "task_complete"}}),
+        ]);
+        let stats = codex(&rollout).unwrap();
+        assert_eq!(stats.turns.len(), 2);
+        assert!(stats.turns[0].interrupted);
+        assert!(!stats.turns[1].interrupted);
     }
 
     #[test]
