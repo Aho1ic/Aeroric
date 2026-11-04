@@ -64,6 +64,10 @@ public protocol LiveSessionActions {
     func capabilities(family: String) async throws -> LiveCapabilities
     /// R1-3a: this task's login, when the agent refused it.
     func expiredLogin(taskID: String) async throws -> ExpiredLogin?
+    /// R2-1: the turns that changed files; plan or apply an undo; accept one.
+    func turns(taskID: String) async throws -> [LiveTurnRecord]
+    func turnPlan(taskID: String, turnID: String, action: String, apply: Bool) async throws -> LiveTurnPlan
+    func acceptTurn(taskID: String, turnID: String) async throws
     func deliveryAction(_ method: String, id: String) async throws
     /// B5-1: `/记住 …` in this task's project; the item as kept.
     func remember(taskID: String, text: String, kind: String) async throws -> LiveMemoryItem
@@ -130,6 +134,13 @@ extension LiveSessionActions {
     public func deliveries(taskID: String) async throws -> [LiveDelivery] { [] }
     public func capabilities(family: String) async throws -> LiveCapabilities { LiveCapabilities() }
     public func expiredLogin(taskID: String) async throws -> ExpiredLogin? { nil }
+    public func turns(taskID: String) async throws -> [LiveTurnRecord] { [] }
+    public func turnPlan(taskID: String, turnID: String, action: String, apply: Bool) async throws -> LiveTurnPlan {
+        throw LiveSessionError.unsupported("这个宿主不支持撤销")
+    }
+    public func acceptTurn(taskID: String, turnID: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持撤销")
+    }
     public func deliveryAction(_ method: String, id: String) async throws {}
     public func ackDelegationProbes(taskID: String, delegationID: String) async throws {
         throw LiveSessionError.unsupported("这个宿主不支持委派")
@@ -189,6 +200,8 @@ public final class LiveSessionStore {
     public var capabilities = LiveCapabilities()
     /// R1-3a: this session's login, when the agent refused it.
     public var expiredLogin: ExpiredLogin?
+    /// R2-1: this session's turns that changed files.
+    public private(set) var turnRecords: [LiveTurnRecord] = []
     /// A05: nil until read, or when the host does not offer auto checks.
     public private(set) var autoCheck: LiveAutoCheckSelection?
     /// B4-1: findings wait for the user before going to the writer.
@@ -342,6 +355,45 @@ public final class LiveSessionStore {
             capabilities = table
         }
         expiredLogin = (try? await actions.expiredLogin(taskID: taskID)) ?? nil
+        await refreshTurns()
+    }
+
+    /// R2-1: the host records a turn once its snapshot is done, a moment
+    /// after the turn ends — so a second look follows shortly.
+    public func refreshTurns(again: Bool = true) async {
+        if let list = try? await actions.turns(taskID: taskID) { turnRecords = list }
+        guard again else { return }
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        if let list = try? await actions.turns(taskID: taskID) { turnRecords = list }
+    }
+
+    public func planTurn(_ turnID: String, action: String) async -> LiveTurnPlan {
+        do {
+            return try await actions.turnPlan(taskID: taskID, turnID: turnID, action: action, apply: false)
+        } catch {
+            return LiveTurnPlan(blocked: error.localizedDescription)
+        }
+    }
+
+    /// Undo (or take back); true when it went through.
+    public func applyTurn(_ turnID: String, action: String) async -> Bool {
+        defer { Task { await refreshTurns(again: false) } }
+        do {
+            _ = try await actions.turnPlan(taskID: taskID, turnID: turnID, action: action, apply: true)
+            return true
+        } catch {
+            errorText = error.localizedDescription
+            return false
+        }
+    }
+
+    public func acceptTurn(_ turnID: String) async {
+        do {
+            try await actions.acceptTurn(taskID: taskID, turnID: turnID)
+        } catch {
+            errorText = error.localizedDescription
+        }
+        await refreshTurns(again: false)
     }
 
     /// R1-2: the bar above the composer, when something did not simply arrive.

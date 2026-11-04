@@ -60,6 +60,8 @@ pub type TurnHook = Arc<dyn Fn(TurnSettled) + Send + Sync>;
 struct Tree {
     top: PathBuf,
     id: String,
+    /// R2-1: HEAD when the snapshot was taken (`None` before the first commit).
+    head: Option<String>,
 }
 
 /// Wraps the host's sink: every call passes through unchanged; turn
@@ -69,7 +71,9 @@ pub struct TurnChangeTracker {
     registry: Arc<DriverRegistry>,
     /// task → (project, working directory).
     cwds: Mutex<HashMap<String, (String, PathBuf)>>,
-    started: Mutex<HashMap<String, Snapshot>>,
+    started: Mutex<HashMap<String, (Snapshot, u64)>>,
+    /// R2-1: every turn that changed files, for accepting and undoing.
+    pub ledger: Arc<super::turn_ledger::TurnLedger>,
     /// Runs the project's checks after a completed turn that changed files.
     pub checks: Arc<AutoChecker>,
     /// B4-1: told when each watched turn's snapshot is done.
@@ -90,6 +94,7 @@ impl TurnChangeTracker {
             cwds: Mutex::default(),
             started: Mutex::default(),
             checks,
+            ledger: Arc::default(),
             hook: Mutex::new(None),
         })
     }
@@ -112,14 +117,16 @@ impl TurnChangeTracker {
             return;
         };
         let (tx, rx) = mpsc::channel();
-        self.started.lock().insert(task_id.to_string(), rx);
+        self.started
+            .lock()
+            .insert(task_id.to_string(), (rx, now_ms()));
         std::thread::spawn(move || {
             let _ = tx.send(snapshot(&cwd));
         });
     }
 
     fn turn_ended(self: &Arc<Self>, task_id: &str, turn_id: &str, reason: TurnEndReason) {
-        let Some(before) = self.started.lock().remove(task_id) else {
+        let Some((before, started_ms)) = self.started.lock().remove(task_id) else {
             return;
         };
         let watched = self.cwds.lock().get(task_id).cloned();
@@ -151,6 +158,24 @@ impl TurnChangeTracker {
                         additions: *additions,
                         deletions: *deletions,
                     });
+                    this.ledger.record(
+                        &task_id,
+                        aeroric_protocol::turn_ledger::TurnRecord {
+                            turn_id: turn_id.clone(),
+                            started_ms,
+                            ended_ms: now_ms(),
+                            top: before.top.to_string_lossy().to_string(),
+                            before: before.id.clone(),
+                            after: after.id.clone(),
+                            head_before: before.head.clone(),
+                            head_after: after.head.clone(),
+                            files: files.clone(),
+                            additions: *additions,
+                            deletions: *deletions,
+                            state: Default::default(),
+                            undone_ms: None,
+                        },
+                    );
                 }
                 if let Some(log) = this.registry.log(&task_id) {
                     let update = log.push(kind, now_ms());
@@ -233,10 +258,19 @@ fn snapshot(cwd: &Path) -> Option<Tree> {
         git(&top, &["write-tree"], Some(&index))
     })();
     let _ = std::fs::remove_dir_all(&scratch);
+    let head =
+        git(&top, &["rev-parse", "--verify", "-q", "HEAD"], None).map(|h| h.trim().to_string());
     Some(Tree {
         top,
         id: result?.trim().to_string(),
+        head,
     })
+}
+
+/// R2-1: `(top, tree id)` of the working tree as `git add -A` would see it.
+#[cfg(test)]
+pub(super) fn snapshot_tree(cwd: &Path) -> Option<(PathBuf, String)> {
+    snapshot(cwd).map(|t| (t.top, t.id))
 }
 
 fn changes(before: &Tree, after: &Tree, turn_id: &str) -> Option<SessionUpdateKind> {
@@ -300,8 +334,23 @@ fn tempfile_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
+/// R2-1: a blob's raw bytes (`git cat-file blob`), binary-safe.
+pub(super) fn git_bytes(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status.success().then_some(out.stdout)
+}
+
 /// Run git with a deadline; stdout on success.
-fn git(cwd: &Path, args: &[&str], index: Option<&Path>) -> Option<String> {
+pub(super) fn git(cwd: &Path, args: &[&str], index: Option<&Path>) -> Option<String> {
     let mut command = Command::new("git");
     command
         .arg("-C")

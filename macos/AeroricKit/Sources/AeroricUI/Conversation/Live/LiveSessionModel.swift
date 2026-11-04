@@ -476,7 +476,15 @@ public struct LiveSessionModel: Equatable, Sendable {
         case let .configChanged(model, permission, effort):
             setConfig(LiveConfig(model: model, permission: permission, effort: effort))
         case let .error(message, recoverable):
-            items.append(.notice(id: "seq\(update.seq)", message: message, recoverable: recoverable))
+            // R2-1 目检: Codex reports one failure as an error and again as the
+            // turn's end; the same words right after each other show once.
+            let repeated = items.suffix(3).contains {
+                if case let .notice(_, earlier, _) = $0 { return earlier == message }
+                return false
+            }
+            if !repeated {
+                items.append(.notice(id: "seq\(update.seq)", message: message, recoverable: recoverable))
+            }
         case let .turnChanges(turnId, files, additions, deletions, truncated):
             lastTurnChanges = LiveTurnChanges(turnId: turnId, files: files, additions: additions,
                                               deletions: deletions, truncated: truncated)

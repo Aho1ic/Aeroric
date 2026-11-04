@@ -25,6 +25,7 @@ pub mod session_live;
 pub mod submission;
 pub mod task;
 pub mod terminal;
+pub mod turn_ledger;
 pub mod wiki;
 
 pub use capability::{AgentCapabilities, Capability, HostCapabilities};

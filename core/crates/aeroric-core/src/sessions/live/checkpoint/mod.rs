@@ -41,6 +41,8 @@ pub struct CheckpointSink {
     registry: Mutex<Option<Arc<super::DriverRegistry>>>,
     /// Tasks whose next message gets a status reminder (same session, new model or compacted).
     reminders: Mutex<HashMap<String, aeroric_protocol::checkpoint::HandoffReason>>,
+    /// R2-1: lines for the next message's reminder (an undone turn).
+    notes: Mutex<HashMap<String, Vec<String>>>,
 }
 
 impl CheckpointSink {
@@ -53,6 +55,7 @@ impl CheckpointSink {
             armed: Mutex::default(),
             registry: Mutex::new(None),
             reminders: Mutex::default(),
+            notes: Mutex::default(),
         })
     }
 
@@ -120,8 +123,35 @@ impl CheckpointSink {
     /// The reminder to put in front of the message, once; `None` when none
     /// was armed or nothing is open (design §2.2).
     pub fn take_reminder(&self, task_id: &str) -> Option<String> {
-        self.reminders.lock().remove(task_id)?;
-        self.get(task_id).and_then(|cp| brief::status_reminder(&cp))
+        let notes = self.notes.lock().remove(task_id).unwrap_or_default();
+        let status = self
+            .reminders
+            .lock()
+            .remove(task_id)
+            .and_then(|_| self.get(task_id))
+            .and_then(|cp| brief::status_reminder(&cp));
+        if notes.is_empty() {
+            return status;
+        }
+        // One reminder block: its lines, then a blank line before the message.
+        let mut out = match status {
+            Some(status) => format!("{}\n", status.trim_end()),
+            None => "[Aeroric 状态提醒]\n".to_string(),
+        };
+        for note in notes {
+            out.push_str(&format!("- {note}\n"));
+        }
+        out.push('\n');
+        Some(out)
+    }
+
+    /// R2-1: a line the agent gets in front of its next message.
+    pub fn arm_note(&self, task_id: &str, note: String) {
+        self.notes
+            .lock()
+            .entry(task_id.to_string())
+            .or_default()
+            .push(note);
     }
 
     /// Something is still open and no turn has ended for `quiet_ms`.

@@ -92,7 +92,11 @@ fn login_key(live: &Live, task_id: &str) -> Option<LoginKey> {
     let place = connection
         .as_deref()
         .map_or_else(|| "本机".to_string(), |c| format!("远程 {c}"));
+    // R2-1 目检: `via-<agent>-login` is the agent's own login through the
+    // gateway — named and fixed like the own login.
+    let own_via_gateway = config.as_deref() == Some(&format!("via-{}-login", name.to_lowercase()));
     let label = match config.as_deref() {
+        Some(_) if own_via_gateway => format!("{name}（{place} · 本机登录经网关）"),
         Some(id) => format!(
             "{}（{place} · Agent 配置）",
             config_label(live, id).unwrap_or_else(|| name.to_string())
@@ -101,7 +105,7 @@ fn login_key(live: &Live, task_id: &str) -> Option<LoginKey> {
     };
     // The agent's own login: what to run to sign in again (it opens a
     // browser or asks in its own screen; Aeroric never sees the credentials).
-    let command = config.is_none().then(|| {
+    let command = (config.is_none() || own_via_gateway).then(|| {
         match family {
             ProtocolFamily::Codex => "codex login",
             ProtocolFamily::Claude => "claude",

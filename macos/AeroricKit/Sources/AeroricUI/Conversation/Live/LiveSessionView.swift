@@ -26,6 +26,9 @@ public struct LiveSessionView: View {
     @State private var permissionPickerRequest = 0
     /// R1-3a: the "去登录" sheet.
     @State private var loginHelp: ExpiredLogin?
+    /// R2-1: an undo waiting for the user's yes; where the pending capsule scrolls to.
+    @State private var turnRequest: TurnUndoRequest?
+    @State private var turnScroll: String?
     @State private var atBottom = true
     /// Finished turns whose work the person unfolded.
     @State private var expandedTurns: Set<String> = []
@@ -87,6 +90,40 @@ public struct LiveSessionView: View {
     }
     private var codex: Bool { store.family == "codex" }
 
+    /// R2-1 目检: the latest finished turn of a failed task failed.
+    private func markingFailure(_ turn: TranscriptTurn, last: Bool) -> TranscriptTurn {
+        guard last, facts.lastTurnFailed, liveItems.isEmpty, !store.turnActive, var stat = turn.stat,
+              !stat.interrupted else { return turn }
+        stat.failed = true
+        var marked = turn
+        marked.stat = stat
+        return marked
+    }
+
+    /// R2-1: the transcript turn holding the earliest pending record.
+    private var earliestPendingTurn: String? {
+        historyTurns.first { TurnLedgerText.record(for: $0.stat, in: store.turnRecords)?.state == "pending" }?.id
+    }
+
+    /// R2-1: a finished turn's header controls, when its changes were recorded.
+    private func ledgerControls(for turn: TranscriptTurn) -> TurnLedgerControls? {
+        guard let record = TurnLedgerText.record(for: turn.stat, in: store.turnRecords) else { return nil }
+        let words = turn.user.map(TranscriptTurns.text(of:))
+        func ask(_ action: String, redo: Bool) {
+            Task {
+                let plan = await store.planTurn(record.turnId, action: action)
+                turnRequest = TurnUndoRequest(turnId: record.turnId, action: action, plan: plan,
+                                              redoText: redo ? words : nil)
+            }
+        }
+        return TurnLedgerControls(
+            record: record, running: store.turnActive,
+            onAccept: { Task { await store.acceptTurn(record.turnId) } },
+            onUndo: { ask("undo", redo: false) },
+            onRedo: { ask("undo", redo: true) },
+            onRestore: { ask("restore", redo: false) })
+    }
+
     public var body: some View {
         GeometryReader { outer in
             let showsColumn = SessionInfoLayout.showsColumn(
@@ -95,7 +132,14 @@ public struct LiveSessionView: View {
             HStack(spacing: 0) {
                 conversation
                     .overlay(alignment: .top) {
-                        if let upgrades { AgentUpdateCapsule(book: upgrades, family: store.family) }
+                        VStack(spacing: AeroricSpace.xs) {
+                            if let upgrades { AgentUpdateCapsule(book: upgrades, family: store.family) }
+                            let pending = TurnLedgerText.pending(store.turnRecords)
+                            if pending > 0 {
+                                TurnPendingCapsule(count: pending) { turnScroll = earliestPendingTurn }
+                                    .padding(.top, AeroricSpace.s)
+                            }
+                        }
                     }
                 if showsColumn {
                     infoResizeHandle
@@ -124,6 +168,15 @@ public struct LiveSessionView: View {
         .onChange(of: infoCollapsed) { _, value in UserDefaults.standard.set(value, forKey: Self.infoCollapsedKey) }
         .task(id: store.taskID) { await store.run() }
         .sheet(item: $loginHelp) { LoginHelpSheet(login: $0) }
+        .sheet(item: $turnRequest) { request in
+            TurnUndoSheet(request: request) {
+                Task {
+                    if await store.applyTurn(request.turnId, action: request.action), let text = request.redoText {
+                        draft = text
+                    }
+                }
+            }
+        }
         .modifier(SessionDialogs(store: store, confirmEnd: $confirmEnd, confirmFullAccess: $confirmFullAccess,
                                  configure: { configure(permission: $0) }))
         .accessibilityIdentifier("session.live.view")
@@ -212,11 +265,13 @@ public struct LiveSessionView: View {
                         let turns = historyTurns
                         ForEach(turns) { turn in
                             TranscriptTurnView(
-                                turn: turn, column: column,
+                                turn: markingFailure(turn, last: turn.id == turns.last?.id), column: column,
                                 isLatest: turn.id == turns.last?.id && liveItems.isEmpty,
                                 expanded: Binding(get: { expandedTurns.contains(turn.id) },
                                                   set: { if $0 { expandedTurns.insert(turn.id) } else { expandedTurns.remove(turn.id) } }),
-                                row: { item in historyRow(item, offset: 0, column: column) })
+                                row: { item in historyRow(item, offset: 0, column: column) },
+                                ledger: ledgerControls(for: turn))
+                            .id(turn.id)
                         }
                         VStack(alignment: .leading, spacing: AeroricSpace.l) {
                         if let opening = openingPrompt {
@@ -265,6 +320,10 @@ public struct LiveSessionView: View {
                 }
                 .onChange(of: store.pending.count) { _, count in if count > 0 { scroll(scroller, to: Self.bottomID) } }
                 .onChange(of: focusApproval) { _, id in if let id { scroll(scroller, to: "approval.\(id)") } }
+                .onChange(of: turnScroll) { _, id in
+                    if let id { scroll(scroller, to: id) }
+                    turnScroll = nil
+                }
                 .onAppear { scroller.scrollTo(Self.bottomID, anchor: .bottom) }
             }
         }

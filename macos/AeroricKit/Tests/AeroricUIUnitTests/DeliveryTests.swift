@@ -62,6 +62,29 @@ final class DeliveryTests: XCTestCase {
         XCTAssertNil(NewSessionLayout.expiredLogin([own], harness: "codex", configID: nil))
     }
 
+    func testATurnRecordMatchesTheTranscriptTurnItStartedIn() {
+        let records = [LiveTurnRecord(turnId: "u1", startedMs: 10_000, endedMs: 40_000, files: ["a"]),
+                       LiveTurnRecord(turnId: "u2", startedMs: 100_000, endedMs: 120_000, files: ["b"], state: "undone")]
+        let first = SessionTranscriptStats.TurnStat(startedAt: 11_000, endedAt: 39_000, tokens: 0)
+        let far = SessionTranscriptStats.TurnStat(startedAt: 60_000, endedAt: 70_000, tokens: 0)
+        XCTAssertEqual(TurnLedgerText.record(for: first, in: records)?.turnId, "u1")
+        XCTAssertNil(TurnLedgerText.record(for: far, in: records), "no guess when nothing fits")
+        XCTAssertEqual(TurnLedgerText.pending(records), 1)
+        XCTAssertEqual(TurnLedgerText.badge("undone"), "已撤销")
+        XCTAssertEqual(TurnLedgerText.summary(LiveTurnRecord(turnId: "x", startedMs: 0, endedMs: 0, files: ["a", "b"],
+                                                             additions: 18, deletions: 4)), "2 个文件 +18 −4")
+    }
+
+    func testATurnPlanDecodes() {
+        let plan = LiveTurnPlan.decode(.object([
+            "files": .array([.object(["path": .string("a.rs")]), .object(["path": .string("b.rs"), "delete": .bool(true)])]),
+            "skipped": .array([.object(["path": .string("c.rs"), "reason": .string("这一轮之后又改过")])]),
+        ]))
+        XCTAssertEqual(plan.files, [.init(path: "a.rs"), .init(path: "b.rs", delete: true)])
+        XCTAssertEqual(plan.skipped.first?.reason, "这一轮之后又改过")
+        XCTAssertNil(plan.blocked)
+    }
+
     func testExpiredLoginsDecode() {
         let list = ExpiredLogin.decodeList(.array([.object([
             "id": .string("claude|local|own"), "family": .string("claude"), "label": .string("Claude（本机）"),

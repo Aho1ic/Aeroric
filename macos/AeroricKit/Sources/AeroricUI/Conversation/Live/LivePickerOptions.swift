@@ -31,6 +31,9 @@ public struct LiveSessionFacts: Equatable, Sendable {
     /// 2026-10-30: on the login through the gateway (`via-<agent>-login`):
     /// every model it routes switches in place.
     public var loginOnGateway = false
+    /// R2-1 目检: the task failed, so its latest finished turn did not complete
+    /// (Codex leaves no error in its rollout to tell from).
+    public var lastTurnFailed = false
 
     public init(agent: String?, configurationTitle: String? = nil, presetTitle: String? = nil,
                 workingDirectory: String? = nil,

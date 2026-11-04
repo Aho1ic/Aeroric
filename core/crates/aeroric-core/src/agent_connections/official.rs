@@ -90,13 +90,37 @@ fn claude(home: &Path, installed: bool, keychain_item: impl Fn() -> bool) -> Off
                 .map(str::to_string)
         });
     let credentials_file = home.join(".claude").join(".credentials.json");
-    let signed_in = keychain_item() || credentials_file.is_file();
+    let subscription = keychain_item() || credentials_file.is_file();
+    // 2026-11-04: an API key in Claude Code's own settings wins over the
+    // subscription login (as `claude auth status` reports it); only the
+    // key's presence is read.
+    let settings_path = home.join(".claude").join("settings.json");
+    let api_key = std::fs::read_to_string(&settings_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .is_some_and(|v| {
+            ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
+                .iter()
+                .any(|key| {
+                    v.pointer(&format!("/env/{key}"))
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.is_empty())
+                })
+        });
+    let mode = if api_key {
+        "apikey"
+    } else if subscription {
+        "subscription"
+    } else {
+        "none"
+    };
     OfficialLogin {
         installed,
-        signed_in,
-        mode: if signed_in { "subscription" } else { "none" }.into(),
-        account,
+        signed_in: api_key || subscription,
+        mode: mode.into(),
+        account: if api_key { None } else { account },
         sources: vec![
+            settings_path.display().to_string(),
             config_path.display().to_string(),
             credentials_file.display().to_string(),
             "钥匙串条目“Claude Code-credentials”（只看是否存在）".into(),
@@ -147,6 +171,16 @@ mod tests {
         assert_eq!(status.claude.account.as_deref(), Some("c@example.com"));
         let wire = serde_json::to_string(&status).unwrap();
         assert!(!wire.contains("SECRET"));
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::write(
+            home.join(".claude/settings.json"),
+            r#"{"env":{"ANTHROPIC_API_KEY":"KEY","ANTHROPIC_BASE_URL":"http://127.0.0.1:8765"}}"#,
+        )
+        .unwrap();
+        let keyed = detect(&home, |_| true, || false);
+        assert!(keyed.claude.signed_in);
+        assert_eq!(keyed.claude.mode, "apikey");
+        assert!(!serde_json::to_string(&keyed).unwrap().contains("KEY\""));
         let empty = detect(&home.join("nobody"), |_| false, || false);
         assert_eq!(empty.codex.mode, "none");
         assert!(!empty.claude.signed_in);

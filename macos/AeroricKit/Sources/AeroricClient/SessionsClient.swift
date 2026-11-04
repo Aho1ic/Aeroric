@@ -379,6 +379,26 @@ extension SessionsClient {
         return ExpiredLogin.decodeList(frame.result["expired"])
     }
 
+    /// R2-1: this task's turns that changed files.
+    public func turns(taskId: String) async throws -> [LiveTurnRecord] {
+        let frame = try await connection.request("turns.list", params: .object(["taskId": .string(taskId)]))
+        return LiveTurnRecord.decodeList(frame.result["turns"])
+    }
+
+    /// R2-1: what `action` (`undo` / `restore`) would do, or do it.
+    public func turnPlan(taskId: String, turnId: String, action: String, apply: Bool) async throws -> LiveTurnPlan {
+        let frame = try await connection.request(apply ? "turns.apply" : "turns.plan", params: .object([
+            "taskId": .string(taskId), "turnId": .string(turnId), "action": .string(action),
+        ]))
+        return LiveTurnPlan.decode(frame.result["plan"])
+    }
+
+    public func acceptTurn(taskId: String, turnId: String) async throws {
+        _ = try await connection.request("turns.accept", params: .object([
+            "taskId": .string(taskId), "turnId": .string(turnId),
+        ]))
+    }
+
     public func deliveryAttention() async throws -> [LiveDelivery] {
         let frame = try await connection.request("delivery.attention", params: .object([:]))
         return (frame.result["deliveries"]?.arrayValue ?? []).compactMap { LiveDelivery.decode($0) }

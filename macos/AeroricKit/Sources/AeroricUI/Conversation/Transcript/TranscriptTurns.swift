@@ -119,6 +119,22 @@ public enum TranscriptTurns {
     }
 }
 
+/// R2-1: the header button with the turn's ledger beside it, on one line.
+private struct TurnLedgerLine: ViewModifier {
+    let ledger: TurnLedgerControls?
+
+    func body(content: Content) -> some View {
+        if let ledger {
+            HStack(spacing: AeroricSpace.s) {
+                content
+                TurnLedgerAccessory(controls: ledger)
+            }
+        } else {
+            content
+        }
+    }
+}
+
 /// A finished turn, drawn like the reference the owner chose (2026-10-29):
 /// the person's bubble with time and copy (on hover, always on the latest),
 /// "已完成，用时 N 秒 ⌄" over a hairline with the work folded inside, the
@@ -129,6 +145,8 @@ struct TranscriptTurnView<Row: View>: View {
     let isLatest: Bool
     @Binding var expanded: Bool
     let row: (TranscriptItem) -> Row
+    /// R2-1: this turn's recorded changes, when it made any.
+    var ledger: TurnLedgerControls? = nil
     @State private var userHovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -150,7 +168,7 @@ struct TranscriptTurnView<Row: View>: View {
                 .contentShape(Rectangle())
                 .onHover { userHovered = $0 }
             }
-            if !turn.process.isEmpty || turn.stat?.endedAt != nil {
+            if !turn.process.isEmpty || turn.stat?.endedAt != nil || ledger != nil {
                 header
             }
             if expanded {
@@ -193,6 +211,7 @@ struct TranscriptTurnView<Row: View>: View {
             .buttonStyle(.plain)
             .disabled(turn.process.isEmpty)
             .accessibilityIdentifier("session.turn.header")
+            .modifier(TurnLedgerLine(ledger: ledger))
             HairlineDivider()
         }
     }

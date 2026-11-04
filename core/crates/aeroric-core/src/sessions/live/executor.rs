@@ -350,6 +350,11 @@ impl StructuredExecutor {
         &self.logins
     }
 
+    /// R2-1: the turns that changed files.
+    pub fn turn_ledger(&self) -> &Arc<super::turn_ledger::TurnLedger> {
+        &self.turn_changes.ledger
+    }
+
     pub fn delegations(&self) -> &Arc<super::delegation::Delegations> {
         &self.delegations
     }

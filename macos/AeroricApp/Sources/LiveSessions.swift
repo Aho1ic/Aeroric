@@ -153,6 +153,18 @@ struct HostLiveSessionActions: LiveSessionActions {
         try await client().loginState(taskId: taskID).first
     }
 
+    func turns(taskID: String) async throws -> [LiveTurnRecord] {
+        try await client().turns(taskId: taskID)
+    }
+
+    func turnPlan(taskID: String, turnID: String, action: String, apply: Bool) async throws -> LiveTurnPlan {
+        try await client().turnPlan(taskId: taskID, turnId: turnID, action: action, apply: apply)
+    }
+
+    func acceptTurn(taskID: String, turnID: String) async throws {
+        try await client().acceptTurn(taskId: taskID, turnId: turnID)
+    }
+
     func delegationRoles() async throws -> [LiveDelegationRole] {
         try await client().delegationRoles()
     }
@@ -261,6 +273,7 @@ extension AppServices {
         let allThirdParty = configurations.first { $0.id == AgentConfigCatalog.catalogID("via-\(task.agent ?? "")-all") }
         facts.onLogin = pinned == nil
         facts.loginOnGateway = task.agentConfigID == "via-\(task.agent ?? "")-login"
+        facts.lastTurnFailed = task.status == "failed"
         if let allThirdParty, pinned?.id != allThirdParty.id {
             facts.modelSources.append(LiveModelSource(
                 configID: String(allThirdParty.id.dropFirst(AgentConfigCatalog.prefix.count)),

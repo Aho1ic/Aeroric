@@ -40,6 +40,7 @@ mod delegation;
 mod delivery;
 mod memory;
 mod review;
+mod turns;
 mod wiki;
 
 struct Live {
@@ -162,6 +163,7 @@ pub fn register_session_live_services(
     // R1-2: the delivery queue (after the services whose messages it carries).
     delivery::install(set, &live);
     capability::install(set, &live);
+    turns::install(set, &live);
 }
 
 // MARK: B4′ side branches (2026-10-30)
