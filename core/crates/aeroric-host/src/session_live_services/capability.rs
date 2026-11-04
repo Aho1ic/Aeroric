@@ -60,6 +60,17 @@ fn login_state(live: &Live, request: &Request) -> Frame {
 }
 
 /// A task's login: family, where it runs, and whose credentials.
+/// The Agent config's own name, so the bar says which one to fix.
+fn config_label(live: &Live, id: &str) -> Option<String> {
+    use aeroric_core::agent_connections::store;
+    let doc = store::load(&store::document_path(live.context.paths.data_dir())).ok()?;
+    doc.configs
+        .into_iter()
+        .find(|c| c.id == id)
+        .map(|c| c.label)
+        .filter(|label| !label.trim().is_empty())
+}
+
 fn login_key(live: &Live, task_id: &str) -> Option<LoginKey> {
     let (project, record) = live.record(task_id)?;
     let family = launch_family_of(&record, live.families.as_ref());
@@ -81,8 +92,11 @@ fn login_key(live: &Live, task_id: &str) -> Option<LoginKey> {
     let place = connection
         .as_deref()
         .map_or_else(|| "本机".to_string(), |c| format!("远程 {c}"));
-    let label = match config {
-        Some(_) => format!("{name}（{place} · Agent 配置）"),
+    let label = match config.as_deref() {
+        Some(id) => format!(
+            "{}（{place} · Agent 配置）",
+            config_label(live, id).unwrap_or_else(|| name.to_string())
+        ),
         None => format!("{name}（{place}）"),
     };
     // The agent's own login: what to run to sign in again (it opens a

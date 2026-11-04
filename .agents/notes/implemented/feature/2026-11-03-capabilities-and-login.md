@@ -37,6 +37,11 @@ Status: implemented
   - Agent 配置：提示去设置里检查密钥，并可直接打开设置。
   - Aeroric 不接触凭据。
 
+- 目检补充（2026-11-04）：
+  - Claude 遇到 401/403 会自己重试约 3 分钟。现在映射 `system/api_retry`：登录被拒时立刻中断这一轮，并按“登录被拒”记为失败；其他原因的重试只提示一次。
+  - 提示条显示 Agent 配置自己的名字，不再只显示 Claude、Codex、omp 这样的族名。
+  - 中断一轮后，Claude 会在会话记录里写一行 user 消息 `[Request interrupted by user]`。读历史和统计轮数时都跳过这一行，不再显示成用户气泡，也不再多算一轮。
+
 ## Alternatives considered
 
 - **扩充旧的 `AgentCapabilities`**：它是布尔值，表达不了降级和未知，也没有"位置"这个维度。旧表留给 adapter 用。

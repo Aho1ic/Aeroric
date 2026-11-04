@@ -20,6 +20,9 @@ pub enum ClaudeSignal {
     },
     /// `result`: one turn is over.
     TurnResult { failed: bool, error: Option<String> },
+    /// `system/api_retry` on a refused login: retrying will not help, so
+    /// the turn is stopped and reported as this failure (R1-3a 目检).
+    AuthRefused { reason: String },
 }
 
 #[derive(Default)]
@@ -40,6 +43,37 @@ pub struct ClaudeMapper {
 
 fn s<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
+}
+
+/// Claude retries a failed API call on its own; say so once, and stop at
+/// once when the call was refused for the login.
+fn api_retry(message: &Value) -> (Vec<SessionUpdateKind>, Option<ClaudeSignal>) {
+    let status = message.get("error_status").and_then(Value::as_u64);
+    let error = s(message, "error").unwrap_or("");
+    let reason = match status {
+        Some(code) => format!("{code} {error}").trim().to_string(),
+        None => error.to_string(),
+    };
+    if matches!(status, Some(401 | 403)) || error.contains("auth") {
+        let reason = format!("登录被拒（{reason}），已停止重试");
+        return (vec![], Some(ClaudeSignal::AuthRefused { reason }));
+    }
+    let attempt = message.get("attempt").and_then(Value::as_u64).unwrap_or(0);
+    if attempt > 1 {
+        return (vec![], None);
+    }
+    let detail = if reason.is_empty() {
+        String::new()
+    } else {
+        format!("：{reason}")
+    };
+    (
+        vec![SessionUpdateKind::Error {
+            message: format!("接口调用出错，Claude 正在自动重试{detail}"),
+            recoverable: true,
+        }],
+        None,
+    )
 }
 
 fn unknown(kind: &str, payload: &Value) -> SessionUpdateKind {
@@ -182,6 +216,7 @@ impl ClaudeMapper {
                     None => (vec![], None),
                 }
             }
+            Some("api_retry") => api_retry(message),
             Some("compact_boundary") => (
                 vec![K::Error {
                     message: "上下文已压缩".into(),

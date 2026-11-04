@@ -184,6 +184,7 @@ impl ClaudeSession {
             echoes: VecDeque::new(),
             turns: 0,
             interrupted: false,
+            refused: None,
         };
         runtime.spawn(actor.run(command_rx, inbox_rx));
         Arc::new(Self {
@@ -371,6 +372,8 @@ struct Actor {
     echoes: VecDeque<(String, String)>,
     turns: u64,
     interrupted: bool,
+    /// The login was refused mid-turn; the turn is being stopped and ends as this failure.
+    refused: Option<String>,
 }
 
 impl Actor {
@@ -556,6 +559,7 @@ impl Actor {
         self.turns += 1;
         let turn = format!("t{}", self.turns);
         self.interrupted = false;
+        self.refused = None;
         self.state.lock().active_turn = Some(turn.clone());
         self.push(SessionUpdateKind::TurnStarted { turn_id: turn });
         self.status(TaskStatus::Running, None);
@@ -727,6 +731,16 @@ impl Actor {
                     Some(ClaudeSignal::TurnResult { failed, error }) => {
                         self.turn_result(failed, error).await
                     }
+                    Some(ClaudeSignal::AuthRefused { reason }) => {
+                        if self.refused.is_none() {
+                            self.refused = Some(reason);
+                            if let Some(client) = self.client() {
+                                tokio::spawn(async move {
+                                    let _ = client.request(json!({"subtype": "interrupt"})).await;
+                                });
+                            }
+                        }
+                    }
                     None => {}
                 }
             }
@@ -741,6 +755,11 @@ impl Actor {
             state.active_turn.take()
         };
         self.drop_pending(|_| true, "cancelled");
+        let refused = self.refused.take();
+        let (failed, error) = match refused {
+            Some(reason) => (true, Some(reason)),
+            None => (failed, error),
+        };
         let reason = if self.interrupted {
             TurnEndReason::Interrupted
         } else if failed {

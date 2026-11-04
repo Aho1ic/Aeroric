@@ -259,6 +259,26 @@ fn unknown_messages_are_kept() {
 }
 
 #[test]
+fn api_retries_are_said_once_and_a_refused_login_stops_the_turn() {
+    let mut m = ClaudeMapper::default();
+    let retry = |attempt: u64, status: Option<u64>, error: &str| {
+        json!({"type": "system", "subtype": "api_retry", "attempt": attempt, "max_retries": 10,
+               "retry_delay_ms": 500, "error_status": status, "error": error})
+    };
+    let (first, signal) = m.map(&retry(1, Some(529), "overloaded"));
+    assert!(signal.is_none());
+    assert!(
+        matches!(&first[0], SessionUpdateKind::Error { message, recoverable: true } if message.contains("529 overloaded"))
+    );
+    assert!(m.map(&retry(2, Some(529), "overloaded")).0.is_empty());
+    let (updates, signal) = m.map(&retry(1, Some(401), "authentication_failed"));
+    assert!(updates.is_empty());
+    assert!(
+        matches!(signal, Some(ClaudeSignal::AuthRefused { reason }) if reason.contains("401 authentication_failed"))
+    );
+}
+
+#[test]
 fn approvals_map_both_ways() {
     let request = json!({"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "rm -rf build"}, "tool_use_id": "t9",
         "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "rm:*"}], "behavior": "allow", "destination": "localSettings"}]});

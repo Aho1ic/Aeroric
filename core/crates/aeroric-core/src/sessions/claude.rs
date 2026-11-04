@@ -15,6 +15,19 @@ pub fn parse_claude_session(lines: &[&str]) -> Vec<SessionMessage> {
     messages
 }
 
+/// Claude's own note after a stop (`[Request interrupted by user]`, also
+/// `… for tool use]`), written as a "user" line: not something the person typed.
+pub fn is_interrupt_marker(message: &serde_json::Value) -> bool {
+    let text = match message.get("content") {
+        Some(serde_json::Value::String(s)) => Some(s.as_str()),
+        Some(serde_json::Value::Array(blocks)) => blocks
+            .iter()
+            .find_map(|b| b.get("text").and_then(|t| t.as_str())),
+        _ => None,
+    };
+    text.is_some_and(|t| t.trim_start().starts_with("[Request interrupted by user"))
+}
+
 pub fn parse_claude_session_line(line: &str, messages: &mut Vec<SessionMessage>) {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
         return;
@@ -39,6 +52,7 @@ pub fn parse_claude_session_line(line: &str, messages: &mut Vec<SessionMessage>)
     };
 
     match msg_type {
+        "user" if is_interrupt_marker(message) => {}
         "user" => {
             let parts = claude_user_content(message.get("content"));
             if !parts.is_empty() {

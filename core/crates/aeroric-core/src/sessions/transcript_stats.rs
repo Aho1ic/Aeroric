@@ -256,7 +256,7 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
                     .filter_map(|b| b["tool_use_id"].as_str())
                     .collect();
                 if results.is_empty() {
-                    if value["isMeta"] != true {
+                    if value["isMeta"] != true && !super::claude::is_interrupt_marker(message) {
                         clock.start_turn(&mut stats, at);
                     }
                 } else {
@@ -514,6 +514,23 @@ mod tests {
             (stats.first_token_ms_total, stats.first_token_samples),
             (2000, 1)
         );
+    }
+
+    #[test]
+    fn claudes_interrupt_note_is_not_a_turn_or_a_message() {
+        let t = |s: &str| format!("2026-10-29T01:00:{s}Z");
+        let raw = [
+            serde_json::json!({"timestamp": t("00.000"), "type": "user", "message": {"role": "user", "content": "你好"}}),
+            serde_json::json!({"timestamp": t("02.000"), "type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "嗨"}], "usage": {"input_tokens": 10, "output_tokens": 2}}}),
+            serde_json::json!({"timestamp": t("05.000"), "type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}}),
+        ];
+        let stats = claude(&lines(&raw)).unwrap();
+        assert_eq!(stats.turns.len(), 1);
+        let mut messages = Vec::new();
+        for line in lines(&raw) {
+            crate::sessions::claude::parse_claude_session_line(&line, &mut messages);
+        }
+        assert_eq!(messages.len(), 2);
     }
 
     #[test]
