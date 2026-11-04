@@ -78,6 +78,9 @@ public struct CheckpointPanel: View {
                             .buttonStyle(.plain)
                         }
                     }
+                    if !checkpoint.consents.isEmpty {
+                        ConsentSection(consents: checkpoint.consents)
+                    }
                 } else if checkpoint != nil {
                     Text("这个会话还没有可记录的进展。回合结束后这里会列出目标、改动和未完成的事。")
                         .font(.system(size: AeroricType.secondary))
@@ -171,6 +174,6 @@ extension LiveCheckpoint {
     /// Nothing worth showing yet.
     var isBlank: Bool {
         goal == nil && decisions.isEmpty && effects.isEmpty && unknown.isEmpty && intents.isEmpty
-            && obligations.isEmpty && constraints.isEmpty && branches.isEmpty
+            && obligations.isEmpty && constraints.isEmpty && branches.isEmpty && consents.isEmpty
     }
 }

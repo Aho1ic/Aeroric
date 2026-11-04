@@ -173,6 +173,9 @@ pub struct Checkpoint {
     pub constraints: Vec<Entry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub branches: Vec<BranchResult>,
+    /// R1-3b: the user's own words on committing, pushing, releasing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consents: Vec<Consent>,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -211,6 +214,58 @@ impl Checkpoint {
                 .iter()
                 .any(|i| i.state == IntentState::OutcomeUnknown)
     }
+}
+
+/// R1-3b: what a consent record is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConsentKind {
+    Commit,
+    Push,
+    Release,
+}
+
+impl ConsentKind {
+    pub const ALL: [ConsentKind; 3] = [Self::Commit, Self::Push, Self::Release];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Commit => "提交",
+            Self::Push => "推送",
+            Self::Release => "发布",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Stance {
+    Yes,
+    No,
+}
+
+impl Stance {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Yes => "同意",
+            Self::No => "否定",
+        }
+    }
+}
+
+/// What the user said about committing, pushing or releasing, in their own
+/// words. Reference for a successor only; it authorizes nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Consent {
+    pub kind: ConsentKind,
+    pub stance: Stance,
+    pub quote: String,
+    /// The turn the message started.
+    pub turn: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
+    pub at_ms: u64,
 }
 
 /// Why a brief was handed to a session.

@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use aeroric_protocol::checkpoint::{
-    Checkpoint, Effect, Entry, Epistemic, EvidenceKind, EvidenceRef, Intent, IntentState,
+    Checkpoint, Consent, Effect, Entry, Epistemic, EvidenceKind, EvidenceRef, Intent, IntentState,
     Obligation, ObligationSource, ObligationState, MAX_ENTRIES, MAX_TEXT_CHARS,
 };
 use aeroric_protocol::session_live::{SessionUpdate, SessionUpdateKind, ToolKind, ToolStatus};
@@ -79,8 +79,9 @@ impl Building {
         self.checkpoint.turn + 1
     }
 
-    /// The user's first message is the goal (later ones do not replace it).
-    pub fn note_prompt(&mut self, text: &str, seq: Option<u64>) -> Change {
+    /// The user's first message is the goal (later ones do not replace it);
+    /// every message may also say something about committing or pushing.
+    pub fn note_prompt(&mut self, text: &str, seq: Option<u64>, at_ms: u64) -> Change {
         let text = match super::clarify::unwrap(text) {
             Some(request) => {
                 self.clarifying = true;
@@ -88,9 +89,10 @@ impl Building {
             }
             None => text,
         };
+        let consents = self.note_consents(text, seq, at_ms);
         let text = text.trim();
         if self.checkpoint.goal.is_some() || text.is_empty() {
-            return Change::None;
+            return consents;
         }
         self.checkpoint.goal = Some(Entry {
             text: cut(text),
@@ -105,12 +107,35 @@ impl Building {
         Change::Changed
     }
 
+    fn note_consents(&mut self, text: &str, seq: Option<u64>, at_ms: u64) -> Change {
+        use super::consent;
+        let Some(typed) = consent::typed_text(text) else {
+            return Change::None;
+        };
+        let turn = self.turn();
+        let mut change = Change::None;
+        for (kind, stance) in consent::scan(typed) {
+            let new = Consent {
+                kind,
+                stance,
+                quote: consent::quote(typed),
+                turn,
+                seq,
+                at_ms,
+            };
+            if consent::record(&mut self.checkpoint.consents, new) {
+                change = Change::Changed;
+            }
+        }
+        change
+    }
+
     pub fn apply(&mut self, update: &SessionUpdate) -> Change {
         use SessionUpdateKind as K;
         let seq = update.seq;
         match &update.kind {
             K::MessageChunk { role, text, .. } if role == "user" => {
-                self.note_prompt(text, Some(seq))
+                self.note_prompt(text, Some(seq), update.at_ms)
             }
             K::MessageChunk { text, .. } => {
                 if self.clarifying {

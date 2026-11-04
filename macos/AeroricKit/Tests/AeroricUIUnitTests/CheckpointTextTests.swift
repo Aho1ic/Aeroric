@@ -40,6 +40,27 @@ final class CheckpointTextTests: XCTestCase {
         XCTAssertFalse(header.contains("\n"))
     }
 
+    func testConsentsDecodeAndReadLikeTheBrief() {
+        let json: JSONValue = .object([
+            "taskId": .string("t1"),
+            "consents": .array([
+                .object(["kind": .string("push"), "stance": .string("no"), "quote": .string("先别推送"),
+                         "turn": .number("5"), "atMs": .number("0")]),
+                .object(["kind": .string("commit"), "stance": .string("yes"), "quote": .string("目检通过，提交"),
+                         "turn": .number("3"), "seq": .number("9"), "atMs": .number("0")]),
+                .object(["kind": .string("commit")]),
+            ]),
+        ])
+        let checkpoint = LiveCheckpoint.decode(json)!
+        XCTAssertEqual(checkpoint.consents.count, 2)
+        XCTAssertFalse(checkpoint.isBlank)
+        let ordered = ConsentText.ordered(checkpoint.consents)
+        XCTAssertEqual(ordered.map(ConsentText.badge), ["提交 · 同意", "推送 · 否定"])
+        XCTAssertEqual(ConsentText.when(ordered[0]), "第 3 轮")
+        let dated = LiveConsent(kind: "push", stance: "yes", quote: "推送", turn: 9, atMs: 1_762_187_100_000)
+        XCTAssertTrue(ConsentText.when(dated).hasPrefix("第 9 轮 · "))
+    }
+
     func testABlankCheckpointShowsTheHintNotEmptySections() {
         XCTAssertTrue(LiveCheckpoint(taskId: "t1", revision: 4, turn: 1, updatedMs: 1).isBlank)
         XCTAssertFalse(checkpoint().isBlank)

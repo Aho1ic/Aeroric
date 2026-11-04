@@ -133,6 +133,27 @@ public struct LiveClarification: Equatable, Sendable {
     }
 }
 
+/// R1-3b: the user's own words on committing, pushing or releasing (reference only).
+public struct LiveConsent: Equatable, Sendable {
+    /// `commit` / `push` / `release`.
+    public var kind: String
+    /// `yes` / `no`.
+    public var stance: String
+    public var quote: String
+    public var turn: UInt64
+    public var seq: UInt64?
+    public var atMs: UInt64
+
+    public init(kind: String, stance: String, quote: String, turn: UInt64, seq: UInt64? = nil, atMs: UInt64 = 0) {
+        self.kind = kind
+        self.stance = stance
+        self.quote = quote
+        self.turn = turn
+        self.seq = seq
+        self.atMs = atMs
+    }
+}
+
 public struct LiveCheckpoint: Equatable, Sendable {
     public var taskId: String
     public var revision: UInt64
@@ -147,12 +168,13 @@ public struct LiveCheckpoint: Equatable, Sendable {
     public var obligations: [LiveObligation]
     public var constraints: [LiveCheckpointEntry]
     public var branches: [LiveBranchResult]
+    public var consents: [LiveConsent]
 
     public init(taskId: String, revision: UInt64 = 0, turn: UInt64 = 0, updatedMs: UInt64 = 0,
                 goal: LiveCheckpointEntry? = nil, decisions: [LiveCheckpointEntry] = [], effects: [LiveEffect] = [],
                 effectsFolded: UInt64 = 0, unknown: [LiveEffect] = [], intents: [LiveIntent] = [],
                 obligations: [LiveObligation] = [], constraints: [LiveCheckpointEntry] = [],
-                branches: [LiveBranchResult] = []) {
+                branches: [LiveBranchResult] = [], consents: [LiveConsent] = []) {
         self.taskId = taskId
         self.revision = revision
         self.turn = turn
@@ -166,6 +188,7 @@ public struct LiveCheckpoint: Equatable, Sendable {
         self.obligations = obligations
         self.constraints = constraints
         self.branches = branches
+        self.consents = consents
     }
 
     /// Something a successor must check before going on.
@@ -195,8 +218,19 @@ extension LiveCheckpoint {
             intents: cpList(f["intents"], LiveIntent.decode),
             obligations: cpList(f["obligations"], LiveObligation.decode),
             constraints: cpList(f["constraints"], LiveCheckpointEntry.decode),
-            branches: cpList(f["branches"], LiveBranchResult.decode)
+            branches: cpList(f["branches"], LiveBranchResult.decode),
+            consents: cpList(f["consents"], LiveConsent.decode)
         )
+    }
+}
+
+extension LiveConsent {
+    static func decode(_ value: JSONValue) -> LiveConsent? {
+        let f = value.fields
+        guard let kind = f["kind"]?.stringValue, let stance = f["stance"]?.stringValue,
+              let quote = f["quote"]?.stringValue else { return nil }
+        return LiveConsent(kind: kind, stance: stance, quote: quote, turn: cpUInt(f["turn"]) ?? 0,
+                           seq: cpUInt(f["seq"]), atMs: cpUInt(f["atMs"]) ?? 0)
     }
 }
 

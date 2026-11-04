@@ -9,6 +9,7 @@
 
 pub mod brief;
 pub mod clarify;
+pub mod consent;
 pub mod derive;
 pub mod store;
 
@@ -134,7 +135,7 @@ impl CheckpointSink {
 
     /// A message the user sent: the first one is the task's goal.
     pub fn note_prompt(&self, task_id: &str, text: &str) {
-        self.edit(task_id, |b| b.note_prompt(text, None));
+        self.edit(task_id, |b| b.note_prompt(text, None, now_ms()));
     }
 
     /// Add a constraint the user stated (clarification card, progress page).

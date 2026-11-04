@@ -3,7 +3,7 @@
 //! calls a model, so the brief never claims more than the session showed.
 
 use aeroric_protocol::checkpoint::{
-    Checkpoint, Epistemic, HandoffReason, IntentState, ObligationState,
+    Checkpoint, ConsentKind, Epistemic, HandoffReason, IntentState, ObligationState,
 };
 
 fn tag(status: Epistemic) -> &'static str {
@@ -111,6 +111,24 @@ pub fn handoff_brief(cp: &Checkpoint, reason: HandoffReason) -> String {
             out.push_str(&format!("- {}\n", c.text));
         }
     }
+    if !cp.consents.is_empty() {
+        out.push_str("\n## 用户明确同意过（仅供参考，不代表本次授权）\n");
+        for kind in ConsentKind::ALL {
+            for c in cp.consents.iter().filter(|c| c.kind == kind) {
+                let when = match stamp(c.at_ms) {
+                    at if at.is_empty() => format!("第 {} 轮", c.turn),
+                    at => format!("第 {} 轮 · {at}", c.turn),
+                };
+                out.push_str(&format!(
+                    "- {}：{}「{}」（{when}）\n",
+                    kind.label(),
+                    c.stance.label(),
+                    c.quote
+                ));
+            }
+        }
+        out.push_str("新会话执行这些操作前，仍要按自己的规则向用户确认。\n");
+    }
     if !cp.branches.is_empty() {
         out.push_str("\n## 侧支结论\n");
         for b in &cp.branches {
@@ -119,6 +137,15 @@ pub fn handoff_brief(cp: &Checkpoint, reason: HandoffReason) -> String {
     }
     out.push_str("\n已有证据的改动不要重做；宣告完成前，逐条核销「未完成义务」，并说明每条是怎么核对的。完整对话可用 Aeroric 上下文工具 read_session 查看。\n");
     out
+}
+
+/// `11-04 00:32` in local time; empty when unknown.
+fn stamp(at_ms: u64) -> String {
+    use chrono::TimeZone;
+    match chrono::Local.timestamp_millis_opt(at_ms as i64) {
+        chrono::LocalResult::Single(t) if at_ms > 0 => t.format("%m-%d %H:%M").to_string(),
+        _ => String::new(),
+    }
 }
 
 /// A short reminder put in front of the next message when the session itself
@@ -163,6 +190,33 @@ mod tests {
         let brief = handoff_brief(&fixture_checkpoint(), HandoffReason::SourceMove);
         let expected = "# 交接清单（Aeroric · 换来源 · 已结束 2 个回合）\n\n这是你接手的任务此前的进展，由 Aeroric 根据会话记录整理，不是模型总结。每条后面的标签说明它是怎么知道的。\n\n## 目标\n- 修复搜索客户端超时（已验证）\n\n## 已发生改动（不要重做）\n- 回合 2：src/search.rs +18 −4（已验证）\n\n## 结果未知（先核对，再决定是否重做）\n- 回合 2：cargo test search_timeout\n\n## 未完成义务\n- [待做] 回归测试覆盖 30s 边界\n\n已有证据的改动不要重做；宣告完成前，逐条核销「未完成义务」，并说明每条是怎么核对的。完整对话可用 Aeroric 上下文工具 read_session 查看。\n";
         assert_eq!(brief, expected);
+    }
+
+    #[test]
+    fn consents_follow_the_constraints_as_reference_only() {
+        use aeroric_protocol::checkpoint::{Consent, Stance};
+        let mut cp = fixture_checkpoint();
+        cp.consents = vec![
+            Consent {
+                kind: ConsentKind::Push,
+                stance: Stance::No,
+                quote: "先别推送".into(),
+                turn: 3,
+                seq: None,
+                at_ms: 0,
+            },
+            Consent {
+                kind: ConsentKind::Commit,
+                stance: Stance::Yes,
+                quote: "目检通过，提交".into(),
+                turn: 2,
+                seq: Some(9),
+                at_ms: 0,
+            },
+        ];
+        let brief = handoff_brief(&cp, HandoffReason::SourceMove);
+        assert!(brief.contains("## 用户明确同意过（仅供参考，不代表本次授权）\n- 提交：同意「目检通过，提交」（第 2 轮）\n- 推送：否定「先别推送」（第 3 轮）\n新会话执行这些操作前，仍要按自己的规则向用户确认。\n"));
+        assert!(status_reminder(&cp).is_none_or(|r| !r.contains("同意")));
     }
 
     #[test]

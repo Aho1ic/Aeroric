@@ -179,8 +179,8 @@ fn an_allowed_approval_with_no_result_is_outcome_unknown() {
 #[test]
 fn the_first_user_message_is_the_goal() {
     let mut b = Building::new(Checkpoint::new("t1"));
-    assert_eq!(b.note_prompt("修复搜索超时", None), Change::Changed);
-    assert_eq!(b.note_prompt("再加个测试", None), Change::None);
+    assert_eq!(b.note_prompt("修复搜索超时", None, 0), Change::Changed);
+    assert_eq!(b.note_prompt("再加个测试", None, 0), Change::None);
     let goal = b.checkpoint.goal.unwrap();
     assert_eq!(goal.text, "修复搜索超时");
     assert_eq!(goal.status, Epistemic::Verified);
@@ -342,6 +342,7 @@ fn a_clarification_turn_becomes_a_card_and_its_goal_is_the_request() {
     b.note_prompt(
         &crate::sessions::live::checkpoint::clarify::wrap("修复超时"),
         None,
+        0,
     );
     assert_eq!(b.checkpoint.goal.as_ref().unwrap().text, "修复超时");
     for (seq, kind) in [
