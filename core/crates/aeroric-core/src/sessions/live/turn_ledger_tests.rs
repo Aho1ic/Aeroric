@@ -60,6 +60,8 @@ fn a_turn(ledger: &TurnLedger, dir: &Path, turn: &str, ended_ms: u64) -> TurnRec
         deletions: 1,
         state: TurnState::Pending,
         undone_ms: None,
+        undo_group: None,
+        state_before_undo: None,
     };
     ledger.record("task-1", record.clone());
     record
@@ -213,4 +215,147 @@ fn the_note_names_the_files() {
         ..TurnPlan::default()
     };
     assert!(note(TurnAction::Undo, &plan).contains("a.rs"));
+}
+
+/// R2-3a: a turn writing `writes`, spanning [at, at + 10].
+fn turn_writing(ledger: &TurnLedger, dir: &Path, id: &str, at: u64, writes: &[(&str, &str)]) {
+    let (top, before) = snapshot_tree(dir).unwrap();
+    let head_before = head(dir);
+    for (path, text) in writes {
+        std::fs::write(dir.join(path), text).unwrap();
+    }
+    let (_, after) = snapshot_tree(dir).unwrap();
+    ledger.record(
+        "task-1",
+        TurnRecord {
+            turn_id: id.into(),
+            started_ms: at,
+            ended_ms: at + 10,
+            top: top.to_string_lossy().into(),
+            before,
+            after,
+            head_before,
+            head_after: head(dir),
+            files: vec![],
+            additions: 1,
+            deletions: 1,
+            state: TurnState::Pending,
+            undone_ms: None,
+            undo_group: None,
+            state_before_undo: None,
+        },
+    );
+}
+
+fn read(dir: &Path, path: &str) -> Option<String> {
+    std::fs::read_to_string(dir.join(path)).ok()
+}
+
+#[test]
+fn undo_from_takes_back_every_later_turn_and_restore_brings_the_batch_back() {
+    let dir = repo();
+    let ledger = ledger();
+    let now = now_ms();
+    turn_writing(&ledger, &dir, "u1", now, &[("src/a.rs", "1\n")]);
+    turn_writing(
+        &ledger,
+        &dir,
+        "u2",
+        now + 100,
+        &[("src/a.rs", "2\n"), ("src/n.rs", "n\n")],
+    );
+    turn_writing(&ledger, &dir, "u3", now + 200, &[("keep.txt", "3\n")]);
+    ledger.accept("task-1", "u2").unwrap();
+
+    let plan = ledger.plan("task-1", "u2", TurnAction::UndoFrom, false);
+    assert_eq!(plan.blocked, None);
+    assert_eq!(plan.turns, vec!["u2", "u3"]);
+    let mut paths: Vec<_> = plan.files.iter().map(|f| f.path.as_str()).collect();
+    paths.sort();
+    assert_eq!(paths, vec!["keep.txt", "src/a.rs", "src/n.rs"]);
+    assert!(plan.files.iter().any(|f| f.path == "src/n.rs" && f.delete));
+
+    ledger
+        .apply("task-1", "u2", TurnAction::UndoFrom, false)
+        .unwrap();
+    assert_eq!(read(&dir, "src/a.rs").as_deref(), Some("1\n"));
+    assert_eq!(read(&dir, "src/n.rs"), None);
+    assert_eq!(read(&dir, "keep.txt").as_deref(), Some("keep\n"));
+    let list = ledger.list("task-1");
+    let state = |id: &str| list.iter().find(|r| r.turn_id == id).unwrap().clone();
+    assert_eq!(state("u1").state, TurnState::Pending);
+    assert_eq!(state("u2").state, TurnState::Undone);
+    assert_eq!(state("u3").undo_group.as_deref(), Some("u2"));
+
+    // Taking back either member takes back both; u2 was accepted before.
+    let back = ledger.plan("task-1", "u3", TurnAction::Restore, false);
+    assert_eq!(back.turns, vec!["u2", "u3"]);
+    ledger
+        .apply("task-1", "u3", TurnAction::Restore, false)
+        .unwrap();
+    assert_eq!(read(&dir, "src/a.rs").as_deref(), Some("2\n"));
+    assert_eq!(read(&dir, "src/n.rs").as_deref(), Some("n\n"));
+    assert_eq!(read(&dir, "keep.txt").as_deref(), Some("3\n"));
+    let list = ledger.list("task-1");
+    let record = |id: &str| list.iter().find(|r| r.turn_id == id).unwrap().clone();
+    assert_eq!(record("u2").state, TurnState::Accepted);
+    assert_eq!(record("u3").state, TurnState::Pending);
+    assert_eq!(record("u3").undo_group, None);
+}
+
+#[test]
+fn undo_from_skips_turns_already_undone_and_files_changed_since() {
+    let dir = repo();
+    let ledger = ledger();
+    let now = now_ms();
+    turn_writing(&ledger, &dir, "u1", now, &[("src/a.rs", "1\n")]);
+    turn_writing(&ledger, &dir, "u2", now + 100, &[("keep.txt", "2\n")]);
+    turn_writing(&ledger, &dir, "u3", now + 200, &[("src/b.rs", "3\n")]);
+    ledger
+        .apply("task-1", "u2", TurnAction::Undo, false)
+        .unwrap();
+    std::fs::write(dir.join("src/b.rs"), "by hand\n").unwrap();
+
+    let plan = ledger.plan("task-1", "u1", TurnAction::UndoFrom, false);
+    assert_eq!(plan.turns, vec!["u1", "u3"]);
+    assert_eq!(plan.files.len(), 1);
+    assert_eq!(plan.files[0].path, "src/a.rs");
+    assert_eq!(plan.skipped.len(), 1);
+    assert_eq!(plan.skipped[0].path, "src/b.rs");
+}
+
+#[test]
+fn a_commit_anywhere_in_the_batch_blocks_it() {
+    let dir = repo();
+    let ledger = ledger();
+    let now = now_ms();
+    turn_writing(&ledger, &dir, "u1", now, &[("src/a.rs", "1\n")]);
+    let (top, before) = snapshot_tree(&dir).unwrap();
+    let head_before = head(&dir);
+    std::fs::write(dir.join("keep.txt"), "2\n").unwrap();
+    run(&dir, &["commit", "-qam", "agent"]);
+    let (_, after) = snapshot_tree(&dir).unwrap();
+    ledger.record(
+        "task-1",
+        TurnRecord {
+            turn_id: "u2".into(),
+            started_ms: now + 100,
+            ended_ms: now + 110,
+            top: top.to_string_lossy().into(),
+            before,
+            after,
+            head_before,
+            head_after: head(&dir),
+            files: vec![],
+            additions: 1,
+            deletions: 1,
+            state: TurnState::Pending,
+            undone_ms: None,
+            undo_group: None,
+            state_before_undo: None,
+        },
+    );
+    let plan = ledger.plan("task-1", "u1", TurnAction::UndoFrom, false);
+    let reason = plan.blocked.unwrap();
+    assert!(reason.starts_with("其中一轮提交了"), "{reason}");
 }

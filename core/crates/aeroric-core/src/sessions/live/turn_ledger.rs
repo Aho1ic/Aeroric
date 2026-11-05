@@ -81,60 +81,132 @@ impl TurnLedger {
         action: TurnAction,
         running: bool,
     ) -> TurnPlan {
+        self.planned(task_id, turn_id, action, running).plan
+    }
+
+    /// R2-3a: the turns `action` on `turn_id` covers, oldest first — the
+    /// turn alone, every later one not undone yet (`UndoFrom`), or the batch
+    /// it was undone with (`Restore`).
+    fn members(
+        &self,
+        task_id: &str,
+        record: &TurnRecord,
+        action: TurnAction,
+    ) -> Result<Vec<TurnRecord>, String> {
+        let undone = record.state == TurnState::Undone;
+        match action {
+            TurnAction::Undo | TurnAction::UndoFrom if undone => {
+                return Err("这一轮已经撤销了".into())
+            }
+            TurnAction::Restore if !undone => return Err("这一轮没有撤销过".into()),
+            _ => {}
+        }
+        let mut list = self.load(task_id);
+        list.sort_by_key(|r| r.started_ms);
+        let members: Vec<TurnRecord> = match action {
+            TurnAction::Undo => vec![record.clone()],
+            TurnAction::UndoFrom => list
+                .into_iter()
+                .filter(|r| r.started_ms >= record.started_ms && r.state != TurnState::Undone)
+                .collect(),
+            TurnAction::Restore => match &record.undo_group {
+                Some(group) => list
+                    .into_iter()
+                    .filter(|r| r.undo_group.as_deref() == Some(group))
+                    .collect(),
+                None => vec![record.clone()],
+            },
+        };
+        Ok(members)
+    }
+
+    fn planned(&self, task_id: &str, turn_id: &str, action: TurnAction, running: bool) -> Planned {
         let Some(record) = self.get(task_id, turn_id) else {
-            return blocked("没有这一轮的快照");
+            return Planned::blocked("没有这一轮的快照");
         };
         if running {
-            return blocked("这一轮结束后可撤销");
+            return Planned::blocked("这一轮结束后可撤销");
         }
-        match (action, record.state) {
-            (TurnAction::Undo, TurnState::Pending | TurnState::Accepted) => {}
-            (TurnAction::Restore, TurnState::Undone) => {}
-            (TurnAction::Undo, _) => return blocked("这一轮已经撤销了"),
-            (TurnAction::Restore, _) => return blocked("这一轮没有撤销过"),
-        }
-        if record.head_before != record.head_after {
-            let commit = record
-                .head_after
-                .as_deref()
-                .unwrap_or("")
-                .chars()
-                .take(7)
-                .collect::<String>();
-            return blocked(&format!(
-                "这一轮提交了 {commit}，撤销会改写历史，请自己处理"
-            ));
-        }
-        let top = PathBuf::from(&record.top);
-        let (from, to) = sides(&record, action);
-        for tree in [from, to] {
-            if git(&top, &["cat-file", "-e", &format!("{tree}^{{tree}}")], None).is_none() {
-                return blocked("快照已经被清理，无法撤销");
+        let members = match self.members(task_id, &record, action) {
+            Ok(members) => members,
+            Err(reason) => return Planned::blocked(&reason),
+        };
+        let batch = members.len() > 1;
+        for member in &members {
+            if member.head_before != member.head_after {
+                let commit = member
+                    .head_after
+                    .as_deref()
+                    .unwrap_or("")
+                    .chars()
+                    .take(7)
+                    .collect::<String>();
+                let which = if batch { "其中一轮" } else { "这一轮" };
+                return Planned::blocked(&format!(
+                    "{which}提交了 {commit}，撤销会改写历史，请自己处理"
+                ));
             }
         }
-        let Some(raw) = git(
-            &top,
-            &["diff", "--name-only", "-z", "--no-renames", from, to],
-            None,
-        ) else {
-            return blocked("读不到这一轮的快照");
+        let top = PathBuf::from(&record.top);
+        // Each path: the first and the last member that changed it.
+        let mut touched: Vec<(String, usize, usize)> = Vec::new();
+        for (i, member) in members.iter().enumerate() {
+            for tree in [&member.before, &member.after] {
+                if git(&top, &["cat-file", "-e", &format!("{tree}^{{tree}}")], None).is_none() {
+                    return Planned::blocked("快照已经被清理，无法撤销");
+                }
+            }
+            let Some(raw) = git(
+                &top,
+                &[
+                    "diff",
+                    "--name-only",
+                    "-z",
+                    "--no-renames",
+                    &member.before,
+                    &member.after,
+                ],
+                None,
+            ) else {
+                return Planned::blocked("读不到这一轮的快照");
+            };
+            for path in raw.split('\0').filter(|p| !p.is_empty()) {
+                match touched.iter_mut().find(|(p, _, _)| p == path) {
+                    Some(entry) => entry.2 = i,
+                    None => touched.push((path.to_string(), i, i)),
+                }
+            }
+        }
+        let mut out = Planned {
+            plan: TurnPlan {
+                turns: members.iter().map(|m| m.turn_id.clone()).collect(),
+                ..TurnPlan::default()
+            },
+            writes: Vec::new(),
+            top: top.clone(),
+            members: members.iter().map(|m| m.turn_id.clone()).collect(),
         };
-        let mut plan = TurnPlan::default();
-        for path in raw.split('\0').filter(|p| !p.is_empty()) {
-            let expected = blob(&top, from, path);
-            if current(&top, path) == expected {
-                plan.files.push(PlannedFile {
-                    path: path.to_string(),
-                    delete: blob(&top, to, path).is_none(),
+        for (path, first, last) in touched {
+            // Undo: from the last turn's result back to how the first found it.
+            let (expected, target) = match action {
+                TurnAction::Restore => (&members[first].before, &members[last].after),
+                _ => (&members[last].after, &members[first].before),
+            };
+            if current(&top, &path) == blob(&top, expected, &path) {
+                let delete = blob(&top, target, &path).is_none();
+                out.plan.files.push(PlannedFile {
+                    path: path.clone(),
+                    delete,
                 });
+                out.writes.push((path, target.clone(), delete));
             } else {
-                plan.skipped.push(SkippedFile {
-                    path: path.to_string(),
+                out.plan.skipped.push(SkippedFile {
+                    path,
                     reason: SKIP_CHANGED.into(),
                 });
             }
         }
-        plan
+        out
     }
 
     /// Carry out `action`: write each planned file from the other snapshot.
@@ -146,31 +218,36 @@ impl TurnLedger {
         action: TurnAction,
         running: bool,
     ) -> Result<TurnPlan, String> {
-        let plan = self.plan(task_id, turn_id, action, running);
-        if let Some(reason) = &plan.blocked {
+        let planned = self.planned(task_id, turn_id, action, running);
+        if let Some(reason) = &planned.plan.blocked {
             return Err(reason.clone());
         }
-        let record = self.get(task_id, turn_id).ok_or("没有这一轮的快照")?;
-        let top = PathBuf::from(&record.top);
-        let (_, to) = sides(&record, action);
-        for file in &plan.files {
-            write_back(&top, to, &file.path, file.delete)
-                .map_err(|e| format!("{}：{e}", file.path))?;
+        for (path, tree, delete) in &planned.writes {
+            write_back(&planned.top, tree, path, *delete).map_err(|e| format!("{path}：{e}"))?;
         }
-        self.update(task_id, turn_id, |r| {
+        let group = (planned.members.len() > 1).then(|| planned.members[0].clone());
+        let now = now_ms();
+        let mut list = self.load(task_id);
+        for r in list
+            .iter_mut()
+            .filter(|r| planned.members.contains(&r.turn_id))
+        {
             match action {
-                TurnAction::Undo => {
+                TurnAction::Undo | TurnAction::UndoFrom => {
+                    r.state_before_undo = Some(r.state);
                     r.state = TurnState::Undone;
-                    r.undone_ms = Some(now_ms());
+                    r.undone_ms = Some(now);
+                    r.undo_group = group.clone();
                 }
                 TurnAction::Restore => {
-                    r.state = TurnState::Pending;
+                    r.state = r.state_before_undo.take().unwrap_or(TurnState::Pending);
                     r.undone_ms = None;
+                    r.undo_group = None;
                 }
             }
-            Ok(())
-        })?;
-        Ok(plan)
+        }
+        self.store(task_id, list);
+        Ok(planned.plan)
     }
 
     fn update(
@@ -280,26 +357,40 @@ pub fn note(action: TurnAction, plan: &TurnPlan) -> String {
     } else {
         files.join("、")
     };
+    let turns = plan.turns.len().max(1);
     match action {
-        TurnAction::Undo => format!(
+        TurnAction::Undo | TurnAction::UndoFrom if turns > 1 => format!(
+            "用户撤销了最近 {turns} 轮改动，这些文件已恢复到那几轮之前：{list}。不要假设那些改动还在。"
+        ),
+        TurnAction::Undo | TurnAction::UndoFrom => format!(
             "用户撤销了一轮改动，这些文件已恢复到那一轮之前：{list}。不要假设那些改动还在。"
         ),
+        TurnAction::Restore if turns > 1 => {
+            format!("用户撤回了 {turns} 轮的撤销，这些文件回到了那几轮的结果：{list}。")
+        }
         TurnAction::Restore => format!("用户撤回了撤销，这些文件回到了那一轮的结果：{list}。"),
     }
 }
 
-fn blocked(reason: &str) -> TurnPlan {
-    TurnPlan {
-        blocked: Some(reason.to_string()),
-        ..TurnPlan::default()
-    }
+/// A plan and what carrying it out writes: (path, tree to take it from, delete).
+struct Planned {
+    plan: TurnPlan,
+    writes: Vec<(String, String, bool)>,
+    top: PathBuf,
+    members: Vec<String>,
 }
 
-/// (what the files should be now, what they become).
-fn sides(record: &TurnRecord, action: TurnAction) -> (&str, &str) {
-    match action {
-        TurnAction::Undo => (&record.after, &record.before),
-        TurnAction::Restore => (&record.before, &record.after),
+impl Planned {
+    fn blocked(reason: &str) -> Self {
+        Planned {
+            plan: TurnPlan {
+                blocked: Some(reason.to_string()),
+                ..TurnPlan::default()
+            },
+            writes: Vec::new(),
+            top: PathBuf::new(),
+            members: Vec::new(),
+        }
     }
 }
 

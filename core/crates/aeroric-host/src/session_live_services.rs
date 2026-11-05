@@ -9,6 +9,7 @@ use std::sync::Arc;
 use aeroric_core::context::CoreContext;
 use aeroric_core::sessions::live::auto_check::{AutoCheckPolicy, AutoCheckSelection};
 use aeroric_core::sessions::live::executor::StructuredExecutor;
+use aeroric_core::sessions::live::staleness;
 use aeroric_core::sessions::live::update::Replay;
 use aeroric_core::sessions::live::{
     Answer, ConfigChange, Decision, DriverError, SessionDriver, SlashCommand,
@@ -273,6 +274,16 @@ fn branch_return(live: &Live, request: &Request) -> Frame {
     };
     let title = context_title(&record);
     let title = title.trim_end_matches("（侧支）").to_string();
+    // R2-3a: the parent's files now, which the branch's conclusion rests on.
+    let basis =
+        live.record(&parent).and_then(|(parent_record, project)| {
+            match working_directory(&parent_record, &project)? {
+                aeroric_core::tasks::executor::WorkingDirectory::Local { path } => {
+                    staleness::snapshot(std::path::Path::new(&path), &p.task_id)
+                }
+                _ => None,
+            }
+        });
     let result = cp_wire::BranchResult {
         task_id: p.task_id.clone(),
         title,
@@ -281,6 +292,7 @@ fn branch_return(live: &Live, request: &Request) -> Frame {
         additions: 0,
         deletions: 0,
         returned_ms: now_ms(),
+        basis,
     };
     live.executor
         .checkpoints()
@@ -580,6 +592,7 @@ fn clarify_accept(live: &Live, request: &Request) -> Frame {
                 check: a.check.clone(),
                 state: cp_wire::ObligationState::Open,
                 source: cp_wire::ObligationSource::Acceptance,
+                passed_ms: None,
             })
             .collect(),
     );
@@ -649,9 +662,11 @@ fn checkpoint_get(live: &Live, request: &Request) -> Frame {
         .checkpoints()
         .get(&p.task_id)
         .unwrap_or_else(|| cp_wire::Checkpoint::new(&p.task_id));
+    // R2-3a: conclusions whose files changed since, worked out now.
+    let stale = staleness::stale(&p.task_id, &checkpoint, live.executor.turn_ledger());
     ok(
         request,
-        json!({ "checkpoint": checkpoint, "branchOf": record.get(BRANCH_OF_FIELD) }),
+        json!({ "checkpoint": checkpoint, "branchOf": record.get(BRANCH_OF_FIELD), "stale": stale }),
     )
 }
 

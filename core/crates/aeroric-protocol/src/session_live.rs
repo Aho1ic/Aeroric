@@ -687,6 +687,7 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
                 additions: 0,
                 deletions: 0,
                 returned_ms: 1_761_350_400_500,
+                basis: None,
             },
         },
         K::Review {
@@ -850,6 +851,7 @@ pub fn fixture_checkpoint() -> crate::checkpoint::Checkpoint {
             check: None,
             state: ObligationState::Open,
             source: ObligationSource::Acceptance,
+            passed_ms: None,
         }],
         ..Checkpoint::default()
     }

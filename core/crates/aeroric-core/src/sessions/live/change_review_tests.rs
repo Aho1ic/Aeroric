@@ -61,6 +61,8 @@ fn rig() -> (PathBuf, ChangeReview, Arc<TurnLedger>) {
             deletions: 2,
             state: TurnState::Pending,
             undone_ms: None,
+            undo_group: None,
+            state_before_undo: None,
         },
     );
     let review = ChangeReview::new(Arc::clone(&ledger));

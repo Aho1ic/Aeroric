@@ -14,6 +14,8 @@ public struct LiveTurnRecord: Equatable, Sendable, Identifiable {
     public var state: String
     /// R2-2: hunks of this turn the user rejected.
     public var rejected: Int = 0
+    /// R2-3a: turns undone together share this; taking back takes back all.
+    public var undoGroup: String?
 
     public init(turnId: String, startedMs: UInt64, endedMs: UInt64, files: [String] = [], additions: UInt64 = 0,
                 deletions: UInt64 = 0, state: String = "pending") {
@@ -39,6 +41,7 @@ public struct LiveTurnRecord: Equatable, Sendable, Identifiable {
                                     additions: n("additions"), deletions: n("deletions"),
                                     state: f["state"]?.stringValue ?? "pending")
         record.rejected = Int(n("rejected"))
+        record.undoGroup = f["undoGroup"]?.stringValue
         return record
     }
 }
@@ -58,11 +61,14 @@ public struct LiveTurnPlan: Equatable, Sendable {
     public var files: [File]
     public var skipped: [Skipped]
     public var blocked: String?
+    /// R2-3a: the turns it covers, oldest first.
+    public var turns: [String]
 
-    public init(files: [File] = [], skipped: [Skipped] = [], blocked: String? = nil) {
+    public init(files: [File] = [], skipped: [Skipped] = [], blocked: String? = nil, turns: [String] = []) {
         self.files = files
         self.skipped = skipped
         self.blocked = blocked
+        self.turns = turns
     }
 
     public static func decode(_ value: JSONValue?) -> LiveTurnPlan {
@@ -75,6 +81,7 @@ public struct LiveTurnPlan: Equatable, Sendable {
             guard let path = item.fields["path"]?.stringValue else { return nil }
             return Skipped(path: path, reason: item.fields["reason"]?.stringValue ?? "")
         }
-        return LiveTurnPlan(files: files, skipped: skipped, blocked: f["blocked"]?.stringValue)
+        let turns = (f["turns"]?.arrayValue ?? []).compactMap(\.stringValue)
+        return LiveTurnPlan(files: files, skipped: skipped, blocked: f["blocked"]?.stringValue, turns: turns)
     }
 }

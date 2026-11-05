@@ -109,13 +109,21 @@ public struct LiveSessionView: View {
     private func ledgerControls(for turn: TranscriptTurn) -> TurnLedgerControls? {
         guard let record = TurnLedgerText.record(for: turn.stat, in: store.turnRecords) else { return nil }
         let words = turn.user.map(TranscriptTurns.text(of:))
+        let turns = historyTurns
         func ask(_ action: String, redo: Bool) {
             Task {
                 let plan = await store.planTurn(record.turnId, action: action)
+                // R2-3a: the transcript's turn numbers of the turns it covers.
+                let numbers = plan.turns.compactMap { id in
+                    turns.firstIndex { TurnLedgerText.record(for: $0.stat, in: store.turnRecords)?.turnId == id }
+                        .map { $0 + 1 }
+                }
                 turnRequest = TurnUndoRequest(turnId: record.turnId, action: action, plan: plan,
-                                              redoText: redo ? words : nil)
+                                              redoText: redo ? words : nil,
+                                              span: plan.turns.count > 1 ? TurnLedgerText.span(numbers) : nil)
             }
         }
+        let later = store.turnRecords.filter { $0.startedMs > record.startedMs && $0.state != "undone" }.count
         return TurnLedgerControls(
             record: record, running: store.turnActive,
             onAccept: { Task { await store.acceptTurn(record.turnId) } },
@@ -125,7 +133,9 @@ public struct LiveSessionView: View {
             onView: {
                 NotificationCenter.default.post(name: .aeroricShowChanges, object: nil,
                                                 userInfo: ["taskID": store.taskID, "turnID": record.turnId])
-            })
+            },
+            onUndoFrom: later > 0 ? { ask("undoFrom", redo: false) } : nil,
+            later: later)
     }
 
     public var body: some View {
@@ -160,7 +170,10 @@ public struct LiveSessionView: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                if !showsColumn { foldedInfo }
+                if !showsColumn {
+                    foldedInfo(fits: SessionInfoLayout.showsColumn(
+                        collapsed: false, centreWidth: outer.size.width, columnWidth: infoWidth))
+                }
             }
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -217,10 +230,13 @@ public struct LiveSessionView: View {
     }
 
     /// Info folded into a button (by the user, or because the window is narrow).
-    private var foldedInfo: some View {
+    /// `fits`: the column has room — folded by the user, a click unfolds it;
+    /// otherwise the click opens the popover (2026-11-05: it used to only
+    /// unfold, which shows nothing in a narrow window).
+    private func foldedInfo(fits: Bool) -> some View {
         HStack(alignment: .top, spacing: AeroricSpace.s) {
             Button {
-                if infoCollapsed { infoCollapsed = false } else { infoPopover = true }
+                if infoCollapsed && fits { infoCollapsed = false } else { infoPopover = true }
             } label: {
                 Label("会话信息", systemImage: "info.circle").font(.system(size: AeroricType.secondary, weight: .medium))
             }
@@ -231,6 +247,11 @@ public struct LiveSessionView: View {
             .accessibilityIdentifier("session.info.open")
             moreMenu
         }
+        // They float over the conversation: an opaque capsule keeps the text
+        // scrolling under them out of sight (2026-11-05).
+        .padding(.horizontal, AeroricSpace.xs)
+        .background(Capsule(style: .continuous).fill(AeroricColor.canvas)
+            .shadow(color: AeroricColor.shadow, radius: 4, y: 1))
         .padding(AeroricSpace.m)
     }
 

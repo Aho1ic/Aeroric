@@ -124,6 +124,17 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                 WorkspaceDetail(state: state, selection: navigationSelection, readyContent: readyContent)
                     .modifier(NoTopScrollEdge())
                     .frame(width: max(0, budget.contentWidth))
+                    // 2026-11-05: with the system band gone, a canvas strip
+                    // under the title keeps scrolled content out of the
+                    // title bar (it never changes on hover).
+                    .overlay(alignment: .topLeading) {
+                        let bar = geometry.safeAreaInsets.top
+                        AeroricColor.canvas
+                            .frame(height: bar > 0 ? bar : 38)
+                            .offset(y: -(bar > 0 ? bar : 38))
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                     // 2026-11-02 (owner): the page title sits in the title bar
                     // over the content column, from its leading edge — not
                     // after the toggle, over the sidebar. Drawn, not a toolbar

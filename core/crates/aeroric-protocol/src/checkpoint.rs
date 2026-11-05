@@ -129,6 +129,10 @@ pub struct Obligation {
     pub check: Option<String>,
     pub state: ObligationState,
     pub source: ObligationSource,
+    /// R2-3a: when it was last settled as passed; the files changed up to
+    /// then are what the pass relied on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passed_ms: Option<u64>,
 }
 
 /// What a side branch brought back to its parent.
@@ -145,6 +149,38 @@ pub struct BranchResult {
     #[serde(default)]
     pub deletions: u64,
     pub returned_ms: u64,
+    /// R2-3a: the parent's files when the branch came back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basis: Option<SnapshotRef>,
+}
+
+/// A snapshot tree in a repository (pinned under `refs/aeroric/…`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotRef {
+    pub top: String,
+    pub tree: String,
+}
+
+/// R2-3a: a conclusion whose files changed since it was drawn. `kind` is
+/// `effect` (key: the turn id), `obligation` (key: its id) or `branch`
+/// (key: the branch's task id). Returned beside the checkpoint by
+/// `checkpoint.get`, computed when asked, never stored.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaleConclusion {
+    pub kind: String,
+    pub key: String,
+    pub files: Vec<StaleFile>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaleFile {
+    pub path: String,
+    /// The first later turn that changed it; none when changed by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_turn: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -325,6 +361,7 @@ mod tests {
             check: Some("cargo test".into()),
             state: ObligationState::Passed,
             source: ObligationSource::Acceptance,
+            passed_ms: None,
         });
         assert!(!cp.needs_attention());
         cp.obligations[0].state = ObligationState::Open;

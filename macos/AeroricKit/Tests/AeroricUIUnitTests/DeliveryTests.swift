@@ -176,4 +176,43 @@ final class DeliveryTests: XCTestCase {
         ]))
         guard case .deliveryReceipt = receipt.kind else { return XCTFail("\(receipt.kind)") }
     }
+
+    // R2-3a
+    func testABatchUndoNamesItsTurnsAndAStaleConclusionSaysWhy() {
+        XCTAssertEqual(TurnLedgerText.span([2, 4, 3]), "第 2–4 轮")
+        XCTAssertEqual(TurnLedgerText.span([3]), "第 3 轮")
+        XCTAssertNil(TurnLedgerText.span([]))
+        let plan = LiveTurnPlan.decode(.object([
+            "files": .array([]), "skipped": .array([]), "turns": .array([.string("u2"), .string("u3")]),
+        ]))
+        XCTAssertEqual(plan.turns, ["u2", "u3"])
+        let record = LiveTurnRecord.decode(.object([
+            "turnId": .string("u3"), "startedMs": .number("1"), "endedMs": .number("2"),
+            "state": .string("undone"), "undoGroup": .string("u2"),
+        ]))
+        XCTAssertEqual(record?.undoGroup, "u2")
+
+        let stale = LiveStaleConclusion.decodeList(.array([.object([
+            "kind": .string("effect"), "key": .string("u1"),
+            "files": .array([
+                .object(["path": .string("a.txt"), "sinceTurn": .string("u2")]),
+                .object(["path": .string("b.txt")]),
+                .object(["path": .string("c.txt"), "sinceTurn": .string("u1")]),
+            ]),
+        ])]))
+        XCTAssertEqual(stale.count, 1)
+        var cp = LiveCheckpoint(taskId: "t")
+        cp.effects = [
+            LiveEffect(summary: "a.txt", kind: "changes", turn: 1, status: "verified",
+                       evidence: [LiveEvidenceRef(kind: "turnChanges", detail: "u1")]),
+            LiveEffect(summary: "a.txt", kind: "changes", turn: 5, status: "verified",
+                       evidence: [LiveEvidenceRef(kind: "turnChanges", detail: "u2")]),
+        ]
+        XCTAssertEqual(StaleText.turnID(of: cp.effects[0]), "u1")
+        XCTAssertEqual(StaleText.find(stale, kind: "effect", key: "u1")?.files.count, 3)
+        XCTAssertNil(StaleText.find(stale, kind: "obligation", key: "u1"))
+        XCTAssertEqual(StaleText.help(stale[0], checkpoint: cp),
+                       "依据的文件变了：\na.txt · 第 5 轮起变了\nb.txt · 手动修改或已撤销\nc.txt · 这一轮已撤销")
+        XCTAssertEqual(StaleText.header(2), "2 条结论可能已过时")
+    }
 }

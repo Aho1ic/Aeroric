@@ -229,6 +229,7 @@ fn the_plan_replaces_plan_obligations_only() {
         check: Some("cargo test".into()),
         state: ObligationState::Open,
         source: ObligationSource::Acceptance,
+        passed_ms: None,
     });
     let plan = |done: &str| SessionUpdateKind::Plan {
         entries: vec![
@@ -269,6 +270,7 @@ fn an_acceptance_check_result_settles_its_obligation() {
         check: Some("cargo test".into()),
         state: ObligationState::Open,
         source: ObligationSource::Acceptance,
+        passed_ms: None,
     });
     let change = b.apply(&SessionUpdate {
         task_id: "t1".into(),

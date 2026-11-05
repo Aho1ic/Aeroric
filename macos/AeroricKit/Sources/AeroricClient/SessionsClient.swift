@@ -242,13 +242,15 @@ extension SessionsClient {
     }
 
     /// B4′: the task's checkpoint (`checkpoint.get`), and the parent task when
-    /// it is a side branch.
-    public func checkpoint(taskId: String) async throws -> (checkpoint: LiveCheckpoint, branchOf: String?) {
+    /// it is a side branch; R2-3a: with the conclusions whose files changed since.
+    public func checkpoint(taskId: String) async throws
+        -> (checkpoint: LiveCheckpoint, branchOf: String?, stale: [LiveStaleConclusion]) {
         let frame = try await connection.request("checkpoint.get", params: .object(["taskId": .string(taskId)]))
         guard let checkpoint = frame.result["checkpoint"].flatMap(LiveCheckpoint.decode) else {
             throw MalformedReply.malformedReply("checkpoint.get needs a checkpoint")
         }
-        return (checkpoint, frame.result["branchOf"]?.stringValue)
+        return (checkpoint, frame.result["branchOf"]?.stringValue,
+                LiveStaleConclusion.decodeList(frame.result["stale"]))
     }
 
     /// B4′: a side branch of `taskId` (a marked fork); the branch's task id.

@@ -174,6 +174,8 @@ impl TurnChangeTracker {
                             deletions: *deletions,
                             state: Default::default(),
                             undone_ms: None,
+                            undo_group: None,
+                            state_before_undo: None,
                         },
                     );
                 }

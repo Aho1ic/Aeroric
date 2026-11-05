@@ -234,6 +234,7 @@ impl Building {
                             ObligationState::Open
                         },
                         source: ObligationSource::Plan,
+                        passed_ms: None,
                     })
                     .collect();
                 let obligations = &mut self.checkpoint.obligations;
@@ -272,6 +273,7 @@ impl Building {
                 Change::Save
             }
             K::TurnChanges {
+                turn_id,
                 files,
                 additions,
                 deletions,
@@ -294,7 +296,12 @@ impl Building {
                     kind: "changes".into(),
                     turn,
                     status: Epistemic::Verified,
-                    evidence: vec![evidence(EvidenceKind::TurnChanges, seq, turn)],
+                    // R2-3a: the ledger's turn id, which ties the effect
+                    // to the turn's snapshot.
+                    evidence: vec![EvidenceRef {
+                        detail: turn_id.clone(),
+                        ..evidence(EvidenceKind::TurnChanges, seq, turn)
+                    }],
                 });
                 Change::Save
             }
@@ -311,6 +318,7 @@ impl Building {
                     };
                     if let Some(o) = self.checkpoint.obligations.iter_mut().find(|o| o.id == id) {
                         o.state = next;
+                        o.passed_ms = (next == ObligationState::Passed).then_some(update.at_ms);
                         change = Change::Save;
                     }
                 }

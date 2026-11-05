@@ -38,6 +38,12 @@ public enum TurnLedgerText {
         records.filter { $0.state == "pending" }.count
     }
 
+    /// R2-3a: `第 3 轮` / `第 2–4 轮` from 1-based turn numbers.
+    public static func span(_ numbers: [Int]) -> String? {
+        guard let low = numbers.min(), let high = numbers.max() else { return nil }
+        return low == high ? "第 \(low) 轮" : "第 \(low)–\(high) 轮"
+    }
+
     public static let footnote = "只恢复 git 能看到的文件；被忽略的文件和工作目录以外的改动不会回退。"
     public static let running = "这一轮结束后可撤销"
 }
@@ -52,6 +58,10 @@ struct TurnLedgerControls {
     let onRestore: () -> Void
     /// R2-2: 查看改动 — the changes page on this turn.
     var onView: () -> Void = {}
+    /// R2-3a: 撤销到这一轮之前; nil when no later turn is left to take along.
+    var onUndoFrom: (() -> Void)?
+    /// How many later turns go with it.
+    var later = 0
 }
 
 /// The badge, the summary and the buttons on a finished turn's header line.
@@ -83,9 +93,13 @@ struct TurnLedgerAccessory: View {
             case "accepted":
                 button("撤销", id: "undo", action: controls.onUndo)
             case "undone":
-                button("撤回撤销", id: "restore", action: controls.onRestore)
+                button(controls.record.undoGroup == nil ? "撤回撤销" : "撤回整批撤销", id: "restore",
+                       action: controls.onRestore)
             default:
                 EmptyView()
+            }
+            if let undoFrom = controls.onUndoFrom, controls.record.state != "undone" {
+                TurnMoreButton(later: controls.later, locked: controls.running, onUndoFrom: undoFrom)
             }
         }
     }
@@ -109,15 +123,58 @@ struct TurnLedgerAccessory: View {
     }
 }
 
+/// R2-3a: "⋯" on a turn header — a capsule popover with 撤销到这一轮之前.
+struct TurnMoreButton: View {
+    let later: Int
+    let locked: Bool
+    let onUndoFrom: () -> Void
+    @State private var open = false
+
+    var body: some View {
+        Button { open = true } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: AeroricType.caption, weight: .semibold))
+        }
+        .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+        .fixedSize()
+        .help("更多")
+        .accessibilityLabel("更多")
+        .accessibilityIdentifier("session.turn.more")
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: AeroricSpace.xs) {
+                Button {
+                    open = false
+                    onUndoFrom()
+                } label: {
+                    Label("撤销到这一轮之前", systemImage: "arrow.uturn.backward")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                .disabled(locked)
+                .help(locked ? TurnLedgerText.running : "撤销这一轮和之后的轮次，一次确认")
+                .accessibilityIdentifier("session.turn.undoFrom")
+                Text("撤销这一轮和之后 \(later) 轮")
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .padding(.horizontal, AeroricSpace.l)
+            }
+            .padding(AeroricSpace.m)
+            .frame(width: 220)
+        }
+    }
+}
+
 /// An undo (or redo, or taking an undo back) waiting for the user's yes.
 struct TurnUndoRequest: Identifiable {
     var id: String { "\(turnId).\(action)" }
     let turnId: String
-    /// `undo` / `restore`.
+    /// `undo` / `undoFrom` / `restore`.
     let action: String
     let plan: LiveTurnPlan
     /// Redo: the turn's own words go back into the composer afterwards.
     let redoText: String?
+    /// R2-3a: `第 2–4 轮` when it covers more than one turn.
+    var span: String?
 }
 
 /// The confirmation: what goes back, what is skipped and why.
@@ -144,7 +201,7 @@ struct TurnUndoSheet: View {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: AeroricSpace.xs) {
                         if !request.plan.files.isEmpty {
-                            CheckpointSectionLabel(title: request.action == "undo" ? "恢复到这一轮之前" : "回到这一轮的结果")
+                            CheckpointSectionLabel(title: sectionTitle)
                             ForEach(request.plan.files, id: \.self) { file in
                                 row(symbol: file.delete ? "trash" : "arrow.uturn.backward", path: file.path,
                                     note: file.delete ? "（会删除）" : nil, warning: false)
@@ -186,11 +243,20 @@ struct TurnUndoSheet: View {
     }
 
     private var title: String {
-        switch (request.action, request.redoText != nil) {
-        case ("restore", _): "撤回这一轮的撤销？"
-        case (_, true): "撤销这一轮，再重做？"
+        switch (request.action, request.redoText != nil, request.span) {
+        case ("restore", _, let span?): "撤回\(span)的撤销？"
+        case ("restore", _, nil): "撤回这一轮的撤销？"
+        case ("undoFrom", _, let span?): "撤销\(span)的改动？"
+        case (_, true, _): "撤销这一轮，再重做？"
         default: "撤销这一轮的改动？"
         }
+    }
+
+    private var sectionTitle: String {
+        let batch = request.span != nil
+        return request.action == "restore"
+            ? (batch ? "回到这几轮的结果" : "回到这一轮的结果")
+            : (batch ? "恢复到这几轮之前" : "恢复到这一轮之前")
     }
 
     private var confirmTitle: String {
@@ -235,7 +301,11 @@ struct TurnPendingCapsule: View {
                 .lineLimit(1)
                 .padding(.horizontal, AeroricSpace.l)
                 .frame(height: 24)
+                // It floats over the conversation: an opaque base keeps the
+                // text scrolling under it out of sight (2026-11-05).
                 .background(Capsule(style: .continuous).fill(AeroricColor.warning.opacity(0.14)))
+                .background(Capsule(style: .continuous).fill(AeroricColor.canvas))
+                .shadow(color: AeroricColor.shadow, radius: 4, y: 1)
         }
         .buttonStyle(.plain)
         .fixedSize()

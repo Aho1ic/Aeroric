@@ -588,6 +588,7 @@ impl Delegations {
                                     check: a.check.clone(),
                                     state: ObligationState::Open,
                                     source: ObligationSource::Acceptance,
+                                    passed_ms: None,
                                 })
                                 .collect(),
                         );

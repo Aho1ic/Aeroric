@@ -46,6 +46,13 @@ pub struct TurnRecord {
     pub state: TurnState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undone_ms: Option<u64>,
+    /// R2-3a: turns undone together share this id (the earliest one's
+    /// turnId); taking the undo back takes back the whole batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_group: Option<String>,
+    /// R2-3a: the state an undo is taken back to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_before_undo: Option<TurnState>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,8 +60,11 @@ pub struct TurnRecord {
 pub enum TurnAction {
     /// Back to how the turn found the files.
     Undo,
-    /// Take an undo back: the turn's own result again.
+    /// Take an undo back: the turn's own result again (the whole batch when
+    /// it was undone with others).
     Restore,
+    /// R2-3a: this turn and every later one not undone yet, in one go.
+    UndoFrom,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +91,9 @@ pub struct TurnPlan {
     pub skipped: Vec<SkippedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked: Option<String>,
+    /// R2-3a: the turns this covers, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

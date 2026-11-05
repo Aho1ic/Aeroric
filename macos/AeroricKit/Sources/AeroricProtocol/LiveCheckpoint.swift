@@ -104,6 +104,39 @@ public struct LiveBranchResult: Equatable, Sendable {
     }
 }
 
+/// R2-3a: a conclusion whose files changed since it was drawn. `kind` is
+/// `effect` (key: the turn id), `obligation` (key: its id) or `branch`
+/// (key: the branch's task id). Sent beside the checkpoint, never in it.
+public struct LiveStaleConclusion: Equatable, Sendable {
+    public struct File: Equatable, Sendable, Hashable {
+        public var path: String
+        /// The first later turn that changed it; nil when changed by hand.
+        public var sinceTurn: String?
+        public init(path: String, sinceTurn: String? = nil) { self.path = path; self.sinceTurn = sinceTurn }
+    }
+    public var kind: String
+    public var key: String
+    public var files: [File]
+
+    public init(kind: String, key: String, files: [File]) {
+        self.kind = kind
+        self.key = key
+        self.files = files
+    }
+
+    public static func decodeList(_ value: JSONValue?) -> [LiveStaleConclusion] {
+        (value?.arrayValue ?? []).compactMap { item in
+            let f = item.fields
+            guard let kind = f["kind"]?.stringValue, let key = f["key"]?.stringValue else { return nil }
+            let files = (f["files"]?.arrayValue ?? []).compactMap { file -> File? in
+                guard let path = file.fields["path"]?.stringValue else { return nil }
+                return File(path: path, sinceTurn: file.fields["sinceTurn"]?.stringValue)
+            }
+            return LiveStaleConclusion(kind: kind, key: key, files: files)
+        }
+    }
+}
+
 public struct LiveAcceptance: Equatable, Sendable {
     public var text: String
     public var check: String?

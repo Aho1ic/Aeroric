@@ -184,6 +184,7 @@ struct TaskWorkspaceView: View {
     /// B4′: the selected task's checkpoint (进度), re-read while that tab shows.
     @State private var checkpoint: LiveCheckpoint?
     @State private var checkpointBranchOf: String?
+    @State private var checkpointStale: [LiveStaleConclusion] = []
     @State private var checkpointError: String?
     /// B4-1: the selected task's review loop, read with its checkpoint.
     @State private var reviewPanel: ReviewPanelModel?
@@ -716,7 +717,8 @@ struct TaskWorkspaceView: View {
                         }
                         await loadBoard(taskID)
                     }
-                }
+                },
+                stale: checkpoint?.taskId == taskID ? checkpointStale : []
             )
             .task(id: progressRefreshKey) {
                 guard auxiliaryTab == .progress, showsAuxiliary || showsAuxiliaryOverlay else { return }
@@ -741,6 +743,7 @@ struct TaskWorkspaceView: View {
             let read = try await client.checkpoint(taskId: taskID)
             checkpoint = read.checkpoint
             checkpointBranchOf = read.branchOf
+            checkpointStale = read.stale
             checkpointError = nil
         } catch {
             checkpointError = "读取检查点失败：\(error)"

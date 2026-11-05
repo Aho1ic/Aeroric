@@ -23,6 +23,8 @@ public struct CheckpointPanel: View {
     /// B4-3: the board the task works on; nil while it is read.
     let board: BoardPanelModel?
     let onBoard: (BoardPanelAction) -> Void
+    /// R2-3a: conclusions whose files changed since they were drawn.
+    let stale: [LiveStaleConclusion]
     @State private var constraint = ""
 
     public init(checkpoint: LiveCheckpoint?, errorText: String?, isBranch: Bool,
@@ -33,7 +35,9 @@ public struct CheckpointPanel: View {
                 review: ReviewPanelModel? = nil, onReview: @escaping (ReviewPanelAction) -> Void = { _ in },
                 delegation: DelegationPanelModel? = nil,
                 onDelegation: @escaping (DelegationPanelAction) -> Void = { _ in },
-                board: BoardPanelModel? = nil, onBoard: @escaping (BoardPanelAction) -> Void = { _ in }) {
+                board: BoardPanelModel? = nil, onBoard: @escaping (BoardPanelAction) -> Void = { _ in },
+                stale: [LiveStaleConclusion] = []) {
+        self.stale = stale
         self.board = board
         self.onBoard = onBoard
         self.review = review
@@ -62,14 +66,28 @@ public struct CheckpointPanel: View {
                         EmptyView()
                     }
                 }
+                if !stale.isEmpty {
+                    Label(StaleText.header(stale.count), systemImage: "exclamationmark.triangle")
+                        .font(.system(size: AeroricType.caption, weight: .medium))
+                        .foregroundStyle(AeroricColor.warning)
+                        .lineLimit(1)
+                        .padding(.horizontal, AeroricSpace.l)
+                        .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+                        .background(Capsule(style: .continuous).fill(AeroricColor.warning.opacity(0.12)))
+                        .help("这些结论依据的文件之后又变了，可以让 Agent 重新确认。")
+                        .accessibilityIdentifier("progress.stale.count")
+                }
                 if let checkpoint, !checkpoint.isBlank {
-                    CheckpointFacts(checkpoint: checkpoint)
+                    CheckpointFacts(checkpoint: checkpoint, stale: stale)
                     obligationControls(checkpoint)
                     if !checkpoint.branches.isEmpty {
                         CheckpointSectionLabel(title: "侧支")
                         ForEach(checkpoint.branches, id: \.taskId) { branch in
                             Button { onOpenTask(branch.taskId) } label: {
                                 CheckpointRow(symbol: "arrow.triangle.branch", text: "\(branch.title) · \(branch.summary)") {
+                                    if let found = StaleText.find(stale, kind: "branch", key: branch.taskId) {
+                                        StaleBadge(conclusion: found, checkpoint: checkpoint)
+                                    }
                                     Image(systemName: "chevron.right")
                                         .font(.system(size: AeroricType.caption))
                                         .foregroundStyle(AeroricColor.textTertiary)

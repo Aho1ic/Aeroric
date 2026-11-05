@@ -134,11 +134,63 @@ enum CheckpointText {
     }
 }
 
+/// R2-3a: the words for a conclusion whose files changed since.
+public enum StaleText {
+    public static let badge = "可能已过时"
+
+    public static func header(_ count: Int) -> String { "\(count) 条结论可能已过时" }
+
+    static func find(_ stale: [LiveStaleConclusion], kind: String, key: String?) -> LiveStaleConclusion? {
+        guard let key else { return nil }
+        return stale.first { $0.kind == kind && $0.key == key }
+    }
+
+    /// The ledger turn a turn-changes effect stands for.
+    static func turnID(of effect: LiveEffect) -> String? {
+        effect.evidence.first { $0.kind == "turnChanges" && !$0.detail.isEmpty }?.detail
+    }
+
+    /// One line per changed file: since which turn, or by hand.
+    public static func help(_ conclusion: LiveStaleConclusion, checkpoint: LiveCheckpoint?) -> String {
+        let lines = conclusion.files.prefix(8).map { file -> String in
+            let since: String
+            if let turn = file.sinceTurn {
+                if conclusion.kind == "effect", turn == conclusion.key {
+                    since = "这一轮已撤销"
+                } else if let effect = checkpoint?.effects.first(where: { turnID(of: $0) == turn }) {
+                    since = "第 \(effect.turn) 轮起变了"
+                } else {
+                    since = "之后的一轮改了它"
+                }
+            } else {
+                since = "手动修改或已撤销"
+            }
+            return "\(file.path) · \(since)"
+        }
+        let more = conclusion.files.count > 8 ? "\n另有 \(conclusion.files.count - 8) 个文件" : ""
+        return "依据的文件变了：\n" + lines.joined(separator: "\n") + more
+    }
+}
+
+/// "可能已过时", its hover listing the files that changed.
+struct StaleBadge: View {
+    let conclusion: LiveStaleConclusion
+    let checkpoint: LiveCheckpoint?
+
+    var body: some View {
+        CheckpointBadge(text: StaleText.badge, tint: AeroricColor.warning)
+            .help(StaleText.help(conclusion, checkpoint: checkpoint))
+            .accessibilityIdentifier("progress.stale")
+    }
+}
+
 /// The facts of a checkpoint, grouped; shared by the handoff card and the
 /// progress page.
 struct CheckpointFacts: View {
     let checkpoint: LiveCheckpoint
     var showsIntents = true
+    /// R2-3a: conclusions whose files changed since.
+    var stale: [LiveStaleConclusion] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
@@ -158,8 +210,12 @@ struct CheckpointFacts: View {
                 ForEach(Array(checkpoint.effects.enumerated()), id: \.offset) { _, effect in
                     CheckpointRow(symbol: CheckpointText.effectSymbol(effect.kind),
                                   text: "\(effect.summary) · 回合 \(effect.turn)") {
-                        CheckpointBadge(text: effect.evidence.isEmpty ? "无证据" : "有证据",
-                                        tint: effect.evidence.isEmpty ? AeroricColor.textSecondary : AeroricColor.success)
+                        if let found = StaleText.find(stale, kind: "effect", key: StaleText.turnID(of: effect)) {
+                            StaleBadge(conclusion: found, checkpoint: checkpoint)
+                        } else {
+                            CheckpointBadge(text: effect.evidence.isEmpty ? "无证据" : "有证据",
+                                            tint: effect.evidence.isEmpty ? AeroricColor.textSecondary : AeroricColor.success)
+                        }
                     }
                 }
             }
@@ -183,7 +239,14 @@ struct CheckpointFacts: View {
                 CheckpointSectionLabel(title: "未完成义务 \(done)/\(checkpoint.obligations.count)")
                 ForEach(checkpoint.obligations, id: \.id) { obligation in
                     let (symbol, label, tint) = CheckpointText.obligation(obligation.state)
-                    CheckpointRow(symbol: symbol, text: obligation.text) { CheckpointBadge(text: label, tint: tint) }
+                    CheckpointRow(symbol: symbol, text: obligation.text) {
+                        if obligation.state == "passed",
+                           let found = StaleText.find(stale, kind: "obligation", key: obligation.id) {
+                            StaleBadge(conclusion: found, checkpoint: checkpoint)
+                        } else {
+                            CheckpointBadge(text: label, tint: tint)
+                        }
+                    }
                 }
             }
             if !checkpoint.constraints.isEmpty {

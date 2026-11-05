@@ -172,3 +172,141 @@ async fn an_undone_turn_restores_its_files_and_tells_the_agent() {
     let text = comments["params"]["input"][0]["text"].as_str().unwrap();
     assert!(text.contains("a.txt:1 — 保留旧值"), "{text}");
 }
+
+/// R2-3a: one Codex turn `id` that writes `writes` in `workspace`.
+async fn a_writing_turn(
+    host: &mut Host,
+    peer: &mut Peer,
+    workspace: &Path,
+    id: &str,
+    writes: &[(&str, &str)],
+) {
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-1", "turn": {"id": id}}),
+    );
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    for (path, text) in writes {
+        std::fs::write(workspace.join(path), text).unwrap();
+    }
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": id, "status": "completed"}}),
+    );
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let got = host
+            .call("turns.list", json!({"taskId": "task-1"}))
+            .await
+            .unwrap();
+        if got["turns"]
+            .as_array()
+            .is_some_and(|t| t.iter().any(|r| r["turnId"] == id))
+        {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{id} not recorded");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    host.until_state("turn over", |s| s["turnActive"] == false)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turns_undone_together_come_back_together_and_stale_conclusions_show() {
+    let mut host = Host::start(true).await;
+    let workspace = host._root.join("workspace");
+    std::fs::write(workspace.join("a.txt"), "0\n").unwrap();
+    git(&workspace, &["init", "-q"]);
+    git(&workspace, &["add", "-A"]);
+    git(&workspace, &["commit", "-q", "-m", "base"]);
+
+    host.start_task("hi");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th-1", "path": "/tmp/aeroric-no-rollout.jsonl"}}),
+    );
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    a_writing_turn(&mut host, &mut peer, &workspace, "u1", &[("a.txt", "1\n")]).await;
+
+    host.call(
+        "session.prompt",
+        json!({"taskId": "task-1", "text": "again"}),
+    )
+    .await
+    .unwrap();
+    let next = peer.expect("turn/start").await;
+    peer.reply(&next, json!({"turn": {"id": "u2"}}));
+    a_writing_turn(
+        &mut host,
+        &mut peer,
+        &workspace,
+        "u2",
+        &[("a.txt", "2\n"), ("b.txt", "new\n")],
+    )
+    .await;
+
+    // u2 rewrote what u1's changes rest on.
+    let read = host
+        .call("checkpoint.get", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    let stale = read["stale"].as_array().unwrap();
+    let u1 = stale
+        .iter()
+        .find(|s| s["kind"] == "effect" && s["key"] == "u1")
+        .unwrap_or_else(|| panic!("{read}"));
+    assert_eq!(u1["files"][0]["sinceTurn"], "u2", "{read}");
+
+    let plan = host
+        .call(
+            "turns.plan",
+            json!({"taskId": "task-1", "turnId": "u1", "action": "undoFrom"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(plan["plan"]["turns"], json!(["u1", "u2"]), "{plan}");
+    host.call(
+        "turns.apply",
+        json!({"taskId": "task-1", "turnId": "u1", "action": "undoFrom"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        "0\n"
+    );
+    assert!(!workspace.join("b.txt").exists());
+
+    host.call(
+        "turns.apply",
+        json!({"taskId": "task-1", "turnId": "u2", "action": "restore"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        "2\n"
+    );
+    let turns = host
+        .call("turns.list", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert!(
+        turns["turns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["state"] == "pending"),
+        "{turns}"
+    );
+}

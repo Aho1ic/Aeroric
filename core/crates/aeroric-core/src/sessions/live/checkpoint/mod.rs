@@ -207,6 +207,7 @@ impl CheckpointSink {
                 Some(o) => {
                     found = true;
                     o.state = state;
+                    o.passed_ms = (state == ObligationState::Passed).then(super::now_ms);
                     Change::Save
                 }
                 None => Change::None,
