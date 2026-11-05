@@ -52,6 +52,8 @@ public struct SlidingCapsulePicker<Option: Hashable>: View {
     private let titleMode: TitleMode
     private let size: Size
     private let identifier: String?
+    private let fill: Bool
+    private let recessed: Bool
     @Namespace private var thumb
     /// What the pill shows. Changed inside `withAnimation` before the binding
     /// is written, so it slides whatever stores the value: a write through
@@ -66,13 +68,16 @@ public struct SlidingCapsulePicker<Option: Hashable>: View {
     static var slide: Animation { .spring(response: 0.34, dampingFraction: 0.82) }
 
     public init(selection: Binding<Option>, groupTitle: String, titleMode: TitleMode = .always,
-                size: Size = .regular, identifier: String? = nil, segments: [Segment]) {
+                size: Size = .regular, identifier: String? = nil, fill: Bool = false,
+                recessed: Bool = false, segments: [Segment]) {
         _selection = selection
         self.segments = segments
         self.groupTitle = groupTitle
         self.titleMode = titleMode
         self.size = size
         self.identifier = identifier
+        self.fill = fill
+        self.recessed = recessed
     }
 
     // Regular is the approved harness slider (2026-10-27); large is a touch bigger.
@@ -105,8 +110,14 @@ public struct SlidingCapsulePicker<Option: Hashable>: View {
             }
         }
         .padding(3)
-        .background(AeroricColor.layer2.opacity(0.7), in: Capsule(style: .continuous))
-        .overlay { Capsule(style: .continuous).strokeBorder(AeroricColor.separator1, lineWidth: 1) }
+        // `recessed` (the aux tab strip, 2026-11-05): a track sunk below a
+        // deeper panel ground and a raised pill, instead of a bright track.
+        .background(recessed ? AeroricColor.canvas.opacity(0.7) : AeroricColor.layer2.opacity(0.7),
+                    in: Capsule(style: .continuous))
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(AeroricColor.separator1.opacity(recessed ? 0.5 : 1), lineWidth: 1)
+        }
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
@@ -161,11 +172,13 @@ public struct SlidingCapsulePicker<Option: Hashable>: View {
             }
             .foregroundStyle(selected ? AeroricColor.text : AeroricColor.textSecondary)
             .padding(.horizontal, titled ? AeroricSpace.l : AeroricSpace.m + 1)
+            // `fill`: the segments share the offered width (the aux tab strip).
+            .frame(maxWidth: fill ? .infinity : nil)
             .frame(height: height)
             .background {
                 if selected {
                     Capsule(style: .continuous)
-                        .fill(AeroricColor.canvas)
+                        .fill(recessed ? AeroricColor.layer2 : AeroricColor.canvas)
                         .overlay { Capsule(style: .continuous).strokeBorder(AeroricColor.separator2, lineWidth: 1) }
                         .shadow(color: AeroricColor.shadow, radius: 3, y: 1)
                         .matchedGeometryEffect(id: "thumb", in: thumb)

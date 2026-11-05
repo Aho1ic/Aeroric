@@ -121,7 +121,11 @@ public struct LiveSessionView: View {
             onAccept: { Task { await store.acceptTurn(record.turnId) } },
             onUndo: { ask("undo", redo: false) },
             onRedo: { ask("undo", redo: true) },
-            onRestore: { ask("restore", redo: false) })
+            onRestore: { ask("restore", redo: false) },
+            onView: {
+                NotificationCenter.default.post(name: .aeroricShowChanges, object: nil,
+                                                userInfo: ["taskID": store.taskID, "turnID": record.turnId])
+            })
     }
 
     public var body: some View {
@@ -320,6 +324,10 @@ public struct LiveSessionView: View {
                 }
                 .onChange(of: store.pending.count) { _, count in if count > 0 { scroll(scroller, to: Self.bottomID) } }
                 .onChange(of: focusApproval) { _, id in if let id { scroll(scroller, to: "approval.\(id)") } }
+                .onReceive(NotificationCenter.default.publisher(for: .aeroricTurnsChanged)) { note in
+                    guard note.userInfo?["taskID"] as? String == store.taskID else { return }
+                    Task { await store.refreshTurns(again: false) }
+                }
                 .onChange(of: turnScroll) { _, id in
                     if let id { scroll(scroller, to: id) }
                     turnScroll = nil

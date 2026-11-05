@@ -92,6 +92,48 @@ async fn an_undone_turn_restores_its_files_and_tells_the_agent() {
     );
     assert!(!workspace.join("b.txt").exists());
 
+    // R2-2: the restored turn is reviewed hunk by hunk.
+    host.call(
+        "turns.apply",
+        json!({"taskId": "task-1", "turnId": "u1", "action": "restore"}),
+    )
+    .await
+    .unwrap();
+    let diff = host
+        .call(
+            "changes.diff",
+            json!({"taskId": "task-1", "scope": "turn", "turnId": "u1"}),
+        )
+        .await
+        .unwrap();
+    let files = diff["diff"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2, "{diff}");
+    let a = files.iter().find(|f| f["path"] == "a.txt").unwrap();
+    let hunk = a["hunks"][0]["id"].as_str().unwrap().to_string();
+    host.call(
+        "changes.comment",
+        json!({"taskId": "task-1", "scope": "turn", "turnId": "u1", "hunkId": hunk, "text": "保留旧值"}),
+    )
+    .await
+    .unwrap();
+    let rejected = host
+        .call(
+            "changes.reject",
+            json!({"taskId": "task-1", "scope": "turn", "turnId": "u1", "hunkId": hunk}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected["state"], "rejected", "{rejected}");
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        "old\n"
+    );
+    let turns = host
+        .call("turns.list", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(turns["turns"][0]["rejected"], 1, "{turns}");
+
     host.call(
         "session.prompt",
         json!({"taskId": "task-1", "text": "继续"}),
@@ -109,4 +151,24 @@ async fn an_undone_turn_restores_its_files_and_tells_the_agent() {
         "{text}"
     );
     assert!(text.ends_with("继续"), "{text}");
+    assert!(text.contains("用户拒绝了 a.txt"), "{text}");
+    peer.reply(&next, json!({"turn": {"id": "u2"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-1", "turn": {"id": "u2"}}),
+    );
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": "u2", "status": "completed"}}),
+    );
+    host.until_state("turn over", |s| s["turnActive"] == false)
+        .await;
+    let sent = host
+        .call("changes.sendComments", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert!(sent["deliveryId"].is_string(), "{sent}");
+    let comments = peer.expect("turn/start").await;
+    let text = comments["params"]["input"][0]["text"].as_str().unwrap();
+    assert!(text.contains("a.txt:1 — 保留旧值"), "{text}");
 }

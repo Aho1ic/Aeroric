@@ -393,6 +393,32 @@ extension SessionsClient {
         return LiveTurnPlan.decode(frame.result["plan"])
     }
 
+    /// R2-2: the hunks of `scope` (`turn` / `seen` / `session`).
+    public func changesDiff(taskId: String, scope: String, turnId: String?) async throws -> LiveReviewDiff {
+        var params: [String: JSONValue] = ["taskId": .string(taskId), "scope": .string(scope)]
+        if let turnId { params["turnId"] = .string(turnId) }
+        let frame = try await connection.request("changes.diff", params: .object(params))
+        return LiveReviewDiff.decode(frame.result["diff"])
+    }
+
+    public func changeAction(_ method: String, taskId: String, scope: String, turnId: String?, hunkId: String,
+                             text: String?) async throws {
+        var params: [String: JSONValue] = [
+            "taskId": .string(taskId), "scope": .string(scope), "hunkId": .string(hunkId),
+        ]
+        if let turnId { params["turnId"] = .string(turnId) }
+        if let text { params["text"] = .string(text) }
+        _ = try await connection.request(method, params: .object(params))
+    }
+
+    public func sendComments(taskId: String) async throws {
+        _ = try await connection.request("changes.sendComments", params: .object(["taskId": .string(taskId)]))
+    }
+
+    public func markSeen(taskId: String) async throws {
+        _ = try await connection.request("changes.markSeen", params: .object(["taskId": .string(taskId)]))
+    }
+
     public func acceptTurn(taskId: String, turnId: String) async throws {
         _ = try await connection.request("turns.accept", params: .object([
             "taskId": .string(taskId), "turnId": .string(turnId),

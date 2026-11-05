@@ -75,6 +75,29 @@ final class DeliveryTests: XCTestCase {
                                                              additions: 18, deletions: 4)), "2 个文件 +18 −4")
     }
 
+    func testAReviewDiffDecodesAndBigFilesFold() {
+        let diff = LiveReviewDiff.decode(.object([
+            "files": .array([.object([
+                "path": .string("a.rs"), "additions": .number("401"), "deletions": .number("0"),
+                "hunks": .array([.object([
+                    "id": .string("h1"), "header": .string("@@ -1 +1 @@"), "state": .string("stale"),
+                    "comment": .string("改名"),
+                    "lines": .array([.object(["kind": .string("+"), "text": .string("x"), "new": .number("1")])]),
+                ])]),
+            ])]),
+            "unsent": .number("1"),
+        ]))
+        let file = diff.files[0]
+        XCTAssertEqual(file.hunks[0].lines[0], .init(kind: "+", text: "x", new: 1))
+        XCTAssertEqual(diff.unsent, 1)
+        XCTAssertTrue(ChangesText.folds(file))
+        XCTAssertEqual(ChangesText.state("stale"), "已过期，无法单独拒绝")
+        XCTAssertNil(ChangesText.state("pending"))
+        XCTAssertEqual(ChangesText.range("@@ -22,7 +22,7 @@ fn client() {"), "@@ -22,7 +22,7 @@")
+        XCTAssertEqual(ChangesText.range("no header"), "no header")
+        XCTAssertEqual(LiveTurnRecord.decode(.object(["turnId": .string("u"), "rejected": .number("2")]))?.rejected, 2)
+    }
+
     func testATurnPlanDecodes() {
         let plan = LiveTurnPlan.decode(.object([
             "files": .array([.object(["path": .string("a.rs")]), .object(["path": .string("b.rs"), "delete": .bool(true)])]),

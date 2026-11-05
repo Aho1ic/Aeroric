@@ -36,6 +36,7 @@ pub use wire::CAPABILITY;
 
 mod board;
 mod capability;
+mod changes;
 mod delegation;
 mod delivery;
 mod memory;
@@ -164,6 +165,7 @@ pub fn register_session_live_services(
     delivery::install(set, &live);
     capability::install(set, &live);
     turns::install(set, &live);
+    changes::install(set, &live);
 }
 
 // MARK: B4′ side branches (2026-10-30)

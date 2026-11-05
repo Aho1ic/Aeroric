@@ -12,6 +12,8 @@ public struct LiveTurnRecord: Equatable, Sendable, Identifiable {
     public var deletions: UInt64
     /// `pending` / `accepted` / `undone`.
     public var state: String
+    /// R2-2: hunks of this turn the user rejected.
+    public var rejected: Int = 0
 
     public init(turnId: String, startedMs: UInt64, endedMs: UInt64, files: [String] = [], additions: UInt64 = 0,
                 deletions: UInt64 = 0, state: String = "pending") {
@@ -33,9 +35,11 @@ public struct LiveTurnRecord: Equatable, Sendable, Identifiable {
         guard let turnId = f["turnId"]?.stringValue else { return nil }
         func n(_ key: String) -> UInt64 { f[key]?.numberText.flatMap { UInt64($0) } ?? 0 }
         let files = (f["files"]?.arrayValue ?? []).compactMap { $0.fields["path"]?.stringValue }
-        return LiveTurnRecord(turnId: turnId, startedMs: n("startedMs"), endedMs: n("endedMs"), files: files,
-                              additions: n("additions"), deletions: n("deletions"),
-                              state: f["state"]?.stringValue ?? "pending")
+        var record = LiveTurnRecord(turnId: turnId, startedMs: n("startedMs"), endedMs: n("endedMs"), files: files,
+                                    additions: n("additions"), deletions: n("deletions"),
+                                    state: f["state"]?.stringValue ?? "pending")
+        record.rejected = Int(n("rejected"))
+        return record
     }
 }
 

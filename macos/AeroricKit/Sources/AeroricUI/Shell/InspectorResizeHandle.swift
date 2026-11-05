@@ -43,9 +43,9 @@ public struct InspectorResizeHandle: View {
     }
 
     public var body: some View {
-        // The column hairline, centred in a wider invisible drag strip.
+        // An invisible drag strip; the panel beside it draws its own
+        // rounded edge (2026-11-05).
         Color.clear
-            .overlay(alignment: .trailing) { HairlineDivider(.vertical) }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
             .onHover { inside in

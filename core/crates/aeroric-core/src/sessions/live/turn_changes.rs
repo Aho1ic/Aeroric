@@ -268,7 +268,6 @@ fn snapshot(cwd: &Path) -> Option<Tree> {
 }
 
 /// R2-1: `(top, tree id)` of the working tree as `git add -A` would see it.
-#[cfg(test)]
 pub(super) fn snapshot_tree(cwd: &Path) -> Option<(PathBuf, String)> {
     snapshot(cwd).map(|t| (t.top, t.id))
 }

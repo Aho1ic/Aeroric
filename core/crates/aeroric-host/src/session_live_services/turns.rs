@@ -32,7 +32,22 @@ fn list(live: &Live, request: &Request) -> Frame {
         Ok(p) => p,
         Err(frame) => return *frame,
     };
-    let turns = live.executor.turn_ledger().list(&p.task_id);
+    let review = live.executor.change_review();
+    // R2-2: each turn says how many of its hunks the user rejected.
+    let turns: Vec<serde_json::Value> = live
+        .executor
+        .turn_ledger()
+        .list(&p.task_id)
+        .into_iter()
+        .map(|record| {
+            let rejected = review.rejected(&p.task_id, &record.turn_id);
+            let mut value = serde_json::to_value(&record).unwrap_or_default();
+            if let Some(object) = value.as_object_mut() {
+                object.insert("rejected".into(), json!(rejected));
+            }
+            value
+        })
+        .collect();
     ok(request, json!({ "turns": turns }))
 }
 

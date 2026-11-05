@@ -6,6 +6,7 @@
 pub mod auto_check;
 pub mod board;
 pub mod capabilities;
+pub mod change_review;
 pub mod checkpoint;
 pub mod claude;
 pub mod codex;

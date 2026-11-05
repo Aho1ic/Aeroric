@@ -50,6 +50,8 @@ struct TurnLedgerControls {
     let onUndo: () -> Void
     let onRedo: () -> Void
     let onRestore: () -> Void
+    /// R2-2: 查看改动 — the changes page on this turn.
+    var onView: () -> Void = {}
 }
 
 /// The badge, the summary and the buttons on a finished turn's header line.
@@ -64,7 +66,15 @@ struct TurnLedgerAccessory: View {
                 .foregroundStyle(AeroricColor.textTertiary)
                 .lineLimit(1)
                 .fixedSize()
+            if controls.record.rejected > 0 {
+                Text("已拒绝 \(controls.record.rejected) 处")
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
             Spacer(minLength: AeroricSpace.s)
+            button("查看改动", id: "view", action: controls.onView)
             switch controls.record.state {
             case "pending":
                 button("接受", id: "accept", action: controls.onAccept)
@@ -89,7 +99,7 @@ struct TurnLedgerAccessory: View {
     }
 
     private func button(_ title: String, id: String, action: @escaping () -> Void) -> some View {
-        let locked = controls.running && id != "accept"
+        let locked = controls.running && id != "accept" && id != "view"
         return Button(title, action: action)
             .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
             .fixedSize()

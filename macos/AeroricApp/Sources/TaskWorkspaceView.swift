@@ -176,9 +176,11 @@ struct TaskWorkspaceView: View {
         Double(NativePanelGeometry.mainShell.terminalInitialFraction)
     /// Q17: codeg auxiliary panel tabs.
     @State private var auxiliaryTab: AuxiliaryTab = .details
+    /// R2-2: the 改动 tab's state, for the selected task.
+    @State private var changesStore: ChangesStore?
     @AppStorage(NewSessionLayout.defaultHarnessKey) private var defaultHarness = "codex"
     /// 2026-10-30: 改动 and Git 日志 became one Git tab (the Git page moved here).
-    enum AuxiliaryTab: Hashable { case details, progress, files, git }
+    enum AuxiliaryTab: Hashable { case details, progress, changes, files, git }
     /// B4′: the selected task's checkpoint (进度), re-read while that tab shows.
     @State private var checkpoint: LiveCheckpoint?
     @State private var checkpointBranchOf: String?
@@ -263,7 +265,7 @@ struct TaskWorkspaceView: View {
                 auxiliaryPanel
                     .frame(width: panelWidth)
                     .frame(maxHeight: .infinity)
-                    .background(AeroricColor.layer1)
+                    .modifier(AuxiliaryCard())
                     .frame(width: showsAuxiliary ? panelWidth : 0)
                 .clipped()
                 .opacity(showsAuxiliary ? 1 : 0)
@@ -272,6 +274,8 @@ struct TaskWorkspaceView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Behind the drag strip and the panel's rounded corners.
+        .background(AeroricColor.canvas)
         .overlay(alignment: .trailing) {
             if showsAuxiliaryOverlay { auxiliaryOverlay }
         }
@@ -286,8 +290,7 @@ struct TaskWorkspaceView: View {
             auxiliaryPanel
                 .frame(width: NativePanelGeometry.mainShell.defaultInspectorWidth)
                 .frame(maxHeight: .infinity)
-                .background(AeroricColor.layer1)
-                .overlay(alignment: .leading) { HairlineDivider(.vertical) }
+                .modifier(AuxiliaryCard())
                 .shadow(color: .black.opacity(0.28), radius: 18, x: -4)
             Button("") { inspectorOverlay?.wrappedValue = false }
                 .keyboardShortcut(.cancelAction)
@@ -401,6 +404,14 @@ struct TaskWorkspaceView: View {
             taskInputGate.leave()
             services.suspendTerminalInput(presentationOwner: terminalPresentationOwner)
         }
+        .onChange(of: selectedTaskID, initial: true) { _, id in changesStore = changesStore(for: id) }
+        .onReceive(NotificationCenter.default.publisher(for: .aeroricShowChanges)) { note in
+            guard let taskID = note.userInfo?["taskID"] as? String, taskID == selectedTaskID,
+                  let store = changesStore(for: taskID) else { return }
+            changesStore = store
+            auxiliaryTab = .changes
+            Task { await store.show(turn: note.userInfo?["turnID"] as? String) }
+        }
         .onChange(of: selectedTaskID.flatMap { services.liveStructured[$0] }) { _, structured in
             // A native session has no PTY: never keep a terminal poll for it.
             if structured == true { services.detachTerminal(presentationOwner: terminalPresentationOwner) }
@@ -464,25 +475,38 @@ struct TaskWorkspaceView: View {
     private var auxiliaryPanel: some View {
         VStack(spacing: 0) {
             // v3: icon tabs across the top (codeg aux panel header).
-            HStack(spacing: 0) {
-                CapsuleSlider(selection: $auxiliaryTab, groupTitle: "辅助面板",
-                              identifier: "auxiliary.tab-slider", segments: [
-                    .init(value: .details, title: "详情", systemImage: "info.circle"),
-                    .init(value: .progress, title: "进度", systemImage: "checklist"),
-                    .init(value: .files, title: "文件", systemImage: "folder"),
-                    .init(value: .git, title: GitPageText.tabTitle("Git", count: services.gitStore.changes.count),
-                          systemImage: "arrow.triangle.branch"),
-                ])
-                .fixedSize()
-                Spacer(minLength: 0)
+            // 2026-11-04: five tabs no longer fit a narrow panel — then only
+            // the selected one keeps its title (help names the rest). Either
+            // way the slider spans the strip (2026-11-05).
+            ViewThatFits(in: .horizontal) {
+                auxiliaryTabs(.iconAndTitle)
+                auxiliaryTabs(.iconsWithSelectedTitle)
             }
             .padding(.horizontal, 8)
             .frame(height: 40)
-            .glassSurface(.tabStrip)
+            // 2026-11-05 (owner): no glass here — the strip sits on the
+            // panel's own deeper ground; glass read too bright.
             .accessibilityElement(children: .contain)
             .accessibilityLabel("辅助面板")
             .accessibilityIdentifier("auxiliary.tabs")
             HairlineDivider()
+            auxiliaryPanes
+        }
+    }
+
+    private func auxiliaryTabs(_ mode: CapsuleSlider<AuxiliaryTab>.LabelMode) -> some View {
+        CapsuleSlider(selection: $auxiliaryTab, groupTitle: "辅助面板", mode: mode,
+                      identifier: "auxiliary.tab-slider", fill: true, recessed: true, segments: [
+            .init(value: .details, title: "详情", systemImage: "info.circle"),
+            .init(value: .progress, title: "进度", systemImage: "checklist"),
+            .init(value: .changes, title: "改动", systemImage: "plusminus"),
+            .init(value: .files, title: "文件", systemImage: "folder"),
+            .init(value: .git, title: GitPageText.tabTitle("Git", count: services.gitStore.changes.count),
+                  systemImage: "arrow.triangle.branch"),
+        ])
+    }
+
+    private var auxiliaryPanes: some View {
             ZStack {
                 auxiliaryDetails
                     .opacity(auxiliaryTab == .details ? 1 : 0)
@@ -496,13 +520,16 @@ struct TaskWorkspaceView: View {
                     .opacity(auxiliaryTab == .progress ? 1 : 0)
                     .allowsHitTesting(auxiliaryTab == .progress)
                     .accessibilityHidden(auxiliaryTab != .progress)
+                auxiliaryChanges
+                    .opacity(auxiliaryTab == .changes ? 1 : 0)
+                    .allowsHitTesting(auxiliaryTab == .changes)
+                    .accessibilityHidden(auxiliaryTab != .changes)
                 auxiliaryGit
                     .opacity(auxiliaryTab == .git ? 1 : 0)
                     .allowsHitTesting(auxiliaryTab == .git)
                     .accessibilityHidden(auxiliaryTab != .git)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
     }
 
     private var auxiliaryDetails: some View {
@@ -588,6 +615,24 @@ struct TaskWorkspaceView: View {
 
     /// B4′: the selected task's checkpoint, with a constraint, a settled
     /// obligation or a side branch added from here.
+    /// R2-2: the 改动 tab for the selected task.
+    @ViewBuilder private var auxiliaryChanges: some View {
+        if let store = changesStore, store.taskID == selectedTaskID {
+            ChangesPanel(store: store)
+        } else {
+            Text("选择一个会话查看它的改动。")
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func changesStore(for taskID: String?) -> ChangesStore? {
+        guard let taskID, let client = services.sessionsClient else { return nil }
+        if let store = changesStore, store.taskID == taskID { return store }
+        return ChangesStore(taskID: taskID, actions: client)
+    }
+
     @ViewBuilder private var auxiliaryProgress: some View {
         if let taskID = selectedTaskID {
             CheckpointPanel(
@@ -1576,5 +1621,21 @@ struct HostSessionRouteActions: SessionRouteActions {
         case let array as [Any]: .array(array.map(jsonValue))
         default: .null
         }
+    }
+}
+
+/// The auxiliary panel's card (2026-11-05, user request): the sidebar's
+/// deeper ground, the leading corners rounded against the canvas.
+private struct AuxiliaryCard: ViewModifier {
+    private var shape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(topLeadingRadius: AeroricRadius.m, bottomLeadingRadius: AeroricRadius.m,
+                               style: .continuous)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .background(AeroricColor.sidebar)
+            .clipShape(shape)
+            .overlay { shape.strokeBorder(AeroricColor.separator1, lineWidth: 1) }
     }
 }

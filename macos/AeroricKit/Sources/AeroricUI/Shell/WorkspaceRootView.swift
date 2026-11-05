@@ -122,6 +122,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                 }
                 .frame(width: handle)
                 WorkspaceDetail(state: state, selection: navigationSelection, readyContent: readyContent)
+                    .modifier(NoTopScrollEdge())
                     .frame(width: max(0, budget.contentWidth))
                     // 2026-11-02 (owner): the page title sits in the title bar
                     // over the content column, from its leading edge — not
@@ -186,6 +187,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
         }
         .background(alignment: .topLeading) { selectionProbe }
         .modifier(HiddenWindowTitle())
+        .modifier(NoTopScrollEdge())
         // 2026-10-27: no status bar (Ready / 运行中 / 待回应). The connection
         // state stays in the sidebar footer and the counts in the menu bar.
         .background(AeroricColor.canvas.ignoresSafeArea())
@@ -462,6 +464,21 @@ private extension ToolbarContent {
             sharedBackgroundVisibility(.hidden)
         } else {
             self
+        }
+    }
+}
+
+/// 2026-11-05 (owner): macOS 26+ draws a scroll-edge band under the title bar
+/// over the content column — lighter than the canvas, changing on hover and
+/// stopping short of the sidebar handle (a dark seam). The title bar here is
+/// plain canvas.
+private struct NoTopScrollEdge: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            content.scrollEdgeEffectHidden(true, for: .top)
+                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        } else {
+            content
         }
     }
 }

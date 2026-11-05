@@ -1,6 +1,9 @@
 import AeroricClient
 import AeroricProtocol
 import AeroricUI
+
+/// R2-2: the changes page talks to the host through the sessions client.
+extension SessionsClient: ChangesActions {}
 import AppKit
 import Foundation
 import UserNotifications

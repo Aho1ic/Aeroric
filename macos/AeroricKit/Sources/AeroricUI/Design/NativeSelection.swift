@@ -203,15 +203,22 @@ public struct CapsuleSlider<Option: Hashable>: View {
     private let mode: LabelMode
     private let size: Size
     private let identifier: String?
+    private let fill: Bool
+    private let recessed: Bool
 
+    /// `fill` stretches the slider across the offered width, the segments
+    /// sharing it; `recessed` sinks the track for a deeper ground.
     public init(selection: Binding<Option>, groupTitle: String, mode: LabelMode = .iconAndTitle,
-                size: Size = .regular, identifier: String? = nil, segments: [Segment]) {
+                size: Size = .regular, identifier: String? = nil, fill: Bool = false,
+                recessed: Bool = false, segments: [Segment]) {
         _selection = selection
         self.segments = segments
         self.groupTitle = groupTitle
         self.mode = mode
         self.size = size
         self.identifier = identifier
+        self.fill = fill
+        self.recessed = recessed
     }
 
     /// Pure: each segment's face for `selection` under `mode`. A segment
@@ -237,6 +244,8 @@ public struct CapsuleSlider<Option: Hashable>: View {
             titleMode: mode == .iconsWithSelectedTitle ? .selectedOnly : .always,
             size: size == .large ? .large : .regular,
             identifier: identifier,
+            fill: fill,
+            recessed: recessed,
             segments: segments.map { segment in
                 let images = mode != .titleOnly
                 return .init(value: segment.value, title: segment.title,

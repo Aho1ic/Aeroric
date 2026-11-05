@@ -9,6 +9,7 @@
 
 pub mod board;
 pub mod capability;
+pub mod change_review;
 pub mod checkpoint;
 pub mod delegation;
 pub mod delivery;

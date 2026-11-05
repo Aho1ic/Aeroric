@@ -133,6 +133,7 @@ pub struct StructuredExecutor {
     /// R1-2: the delivery queue, right above the host's sink.
     deliveries: Arc<super::delivery::Deliveries>,
     logins: Arc<super::login::Logins>,
+    change_review: Arc<super::change_review::ChangeReview>,
     /// B4-3: the shared boards.
     boards: Arc<super::board::Boards>,
     /// B5-1: long-term memory (the profile a starting session is handed).
@@ -198,6 +199,9 @@ impl StructuredExecutor {
                 reviews.turn_settled(settled);
             }
         }));
+        let change_review = Arc::new(super::change_review::ChangeReview::new(Arc::clone(
+            &turn_changes.ledger,
+        )));
         let sink: Arc<dyn LiveStatusSink> =
             Arc::new(super::turn_changes::TrackingSink(Arc::clone(&turn_changes)));
         let executor = Arc::new(Self {
@@ -210,6 +214,7 @@ impl StructuredExecutor {
             delegations,
             deliveries,
             logins,
+            change_review,
             boards: Arc::default(),
             memory: Arc::default(),
             wikis: Arc::default(),
@@ -353,6 +358,11 @@ impl StructuredExecutor {
     /// R2-1: the turns that changed files.
     pub fn turn_ledger(&self) -> &Arc<super::turn_ledger::TurnLedger> {
         &self.turn_changes.ledger
+    }
+
+    /// R2-2: hunk-by-hunk review of those changes.
+    pub fn change_review(&self) -> &Arc<super::change_review::ChangeReview> {
+        &self.change_review
     }
 
     pub fn delegations(&self) -> &Arc<super::delegation::Delegations> {
