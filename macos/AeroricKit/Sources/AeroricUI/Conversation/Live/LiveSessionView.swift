@@ -177,6 +177,7 @@ public struct LiveSessionView: View {
             }
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 0) {
+                    copyBadge
                     gatewayBadge
                     downgradeBadge
                 }
@@ -197,6 +198,22 @@ public struct LiveSessionView: View {
         .modifier(SessionDialogs(store: store, confirmEnd: $confirmEnd, confirmFullAccess: $confirmFullAccess,
                                  configure: { configure(permission: $0) }))
         .accessibilityIdentifier("session.live.view")
+    }
+
+    /// R2-3b: the session runs in an isolated copy of its project's directory.
+    @ViewBuilder private var copyBadge: some View {
+        if let path = facts.copyPath {
+            Label("独立副本", systemImage: "square.on.square")
+                .font(.system(size: AeroricType.caption, weight: .semibold))
+                .foregroundStyle(AeroricColor.accent)
+                .padding(.horizontal, AeroricSpace.m)
+                .padding(.vertical, 3)
+                .background(Capsule(style: .continuous).fill(AeroricColor.accent.opacity(0.12)))
+                .background(Capsule(style: .continuous).fill(AeroricColor.canvas))
+                .help("这个会话在独立副本里运行：\(path)\n改动在右侧“改动 · 相对原目录”里带回原目录")
+                .padding([.horizontal, .top], AeroricSpace.m)
+                .accessibilityIdentifier("session.copy")
+        }
     }
 
     /// G4: a remote session talking to an Agent preset through this Mac's gateway.
@@ -348,6 +365,12 @@ public struct LiveSessionView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .aeroricTurnsChanged)) { note in
                     guard note.userInfo?["taskID"] as? String == store.taskID else { return }
                     Task { await store.refreshTurns(again: false) }
+                }
+                // R2-3b: 交给 Agent 处理 fills the composer; the user sends it.
+                .onReceive(NotificationCenter.default.publisher(for: .aeroricPrefillComposer)) { note in
+                    guard note.userInfo?["taskID"] as? String == store.taskID,
+                          let text = note.userInfo?["text"] as? String, !text.isEmpty else { return }
+                    draft = text
                 }
                 .onChange(of: turnScroll) { _, id in
                     if let id { scroll(scroller, to: id) }

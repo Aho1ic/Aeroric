@@ -49,6 +49,9 @@ pub enum Workspace {
     ReadOnly,
     /// The parent's directory, writable; one such child at a time.
     Shared,
+    /// R2-3b: an isolated copy of the parent's directory; its changes are
+    /// brought back by the user.
+    Copy,
 }
 
 /// Permission modes from least to most (permission decay compares these).

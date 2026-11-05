@@ -141,6 +141,8 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
     /// B4-1: a reviewer (`review`) or side branch (`branch`) shown indented
     /// under its parent session; nil for a top-level row.
     public var childKind: String?
+    /// R2-3b: the session runs in an isolated copy.
+    public var copy = false
     /// Agent configuration id and group (更多 menu, 2026-10-28).
     public var color: String?
     public var defaultAgent: String?

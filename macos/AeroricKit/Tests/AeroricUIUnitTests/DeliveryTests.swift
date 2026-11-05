@@ -215,4 +215,43 @@ final class DeliveryTests: XCTestCase {
                        "依据的文件变了：\na.txt · 第 5 轮起变了\nb.txt · 手动修改或已撤销\nc.txt · 这一轮已撤销")
         XCTAssertEqual(StaleText.header(2), "2 条结论可能已过时")
     }
+
+    // R2-3b
+    func testACopyDecodesAndOriginWordsRead() {
+        let copy = LiveCopyInfo.decode(.object([
+            "copy": .object(["path": .string("/r/.aeroric/worktrees/t"), "origin": .string("/r"),
+                             "createdMs": .number("0")]),
+            "pending": .number("3"),
+        ]))
+        XCTAssertEqual(copy?.pending, 3)
+        XCTAssertEqual(copy?.origin, "/r")
+        XCTAssertNil(LiveCopyInfo.decode(.object(["copy": .null])))
+        XCTAssertEqual(ChangesText.state("applied", origin: true), "已带回")
+        XCTAssertEqual(ChangesText.state("conflict", origin: true), "冲突")
+        XCTAssertEqual(ChangesText.state("rejected", origin: true), "已丢弃")
+        XCTAssertEqual(ChangesText.state("rejected"), "已拒绝")
+        let diff = LiveReviewDiff(files: [LiveReviewDiff.File(path: "a", hunks: [
+            .init(id: "1", header: "", lines: [], state: "pending"),
+            .init(id: "2", header: "", lines: [], state: "conflict"),
+            .init(id: "3", header: "", lines: [], state: "applied"),
+        ])])
+        XCTAssertEqual(ChangesText.pending(diff), 2)
+        XCTAssertEqual(ChangeScopeChoice.origin.title, "相对原目录")
+        XCTAssertEqual(DelegationText.workspace("copy", permission: "auto_edit").hasPrefix("独立副本"), true)
+    }
+
+    func testAnIsolatedSubmissionHashesDifferentlyAndReportsItsOption() {
+        let plain = NativeTaskSubmission(submissionId: "s", projectId: "p", configurationId: "c",
+                                         configurationVersion: "1", agent: "codex", prompt: "hi",
+                                         permissionMode: "ask", permissionAgent: "codex", selectedModel: nil)
+        let copy = NativeTaskSubmission(submissionId: "s", projectId: "p", configurationId: "c",
+                                        configurationVersion: "1", agent: "codex", prompt: "hi",
+                                        permissionMode: "ask", permissionAgent: "codex", selectedModel: nil,
+                                        isolated: true)
+        XCTAssertNotEqual(plain.fingerprint, copy.fingerprint)
+        XCTAssertEqual(copy.fingerprintMaterial.last, 2)
+        XCTAssertEqual(plain.fingerprintMaterial.last, 0, "evolution=false is the last byte without options")
+        XCTAssertEqual(copy.json.fields["isolated"]?.boolValue, true)
+        XCTAssertNil(plain.json.fields["isolated"])
+    }
 }

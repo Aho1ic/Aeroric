@@ -178,6 +178,8 @@ struct TaskWorkspaceView: View {
     @State private var auxiliaryTab: AuxiliaryTab = .details
     /// R2-2: the 改动 tab's state, for the selected task.
     @State private var changesStore: ChangesStore?
+    /// R2-3b: a delegated child to show on 改动 · 相对原目录 once selected.
+    @State private var originFor: String?
     @AppStorage(NewSessionLayout.defaultHarnessKey) private var defaultHarness = "codex"
     /// 2026-10-30: 改动 and Git 日志 became one Git tab (the Git page moved here).
     enum AuxiliaryTab: Hashable { case details, progress, changes, files, git }
@@ -405,7 +407,14 @@ struct TaskWorkspaceView: View {
             taskInputGate.leave()
             services.suspendTerminalInput(presentationOwner: terminalPresentationOwner)
         }
-        .onChange(of: selectedTaskID, initial: true) { _, id in changesStore = changesStore(for: id) }
+        .onChange(of: selectedTaskID, initial: true) { _, id in
+            changesStore = changesStore(for: id)
+            if let id, id == originFor, let store = changesStore {
+                originFor = nil
+                auxiliaryTab = .changes
+                Task { await store.showOrigin() }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .aeroricShowChanges)) { note in
             guard let taskID = note.userInfo?["taskID"] as? String, taskID == selectedTaskID,
                   let store = changesStore(for: taskID) else { return }
@@ -682,6 +691,9 @@ struct TaskWorkspaceView: View {
                     switch action {
                     case let .open(id):
                         services.requestedSelection = SessionNavigation.task(id)
+                    case let .bringBack(id):
+                        originFor = id
+                        services.requestedSelection = SessionNavigation.task(id)
                     case let .start(contract):
                         Task {
                             await checkpointAction { client in
@@ -776,6 +788,12 @@ struct TaskWorkspaceView: View {
         guard let client = services.sessionsClient,
               let read = try? await client.delegations(taskId: taskID) else { return }
         var next = DelegationPanelModel(delegations: read.cards, delegateOf: read.delegateOf)
+        // R2-3b: what each copy-working child has left to bring back.
+        for card in read.cards where card.contract.workspace == "copy" {
+            if let child = card.childTaskId, let copy = try? await client.copyInfo(taskId: child) {
+                next.copyPending[child] = copy.pending
+            }
+        }
         if read.delegateOf == nil {
             next.roles = (try? await client.delegationRoles()) ?? []
             next.stats = (try? await client.delegationStats()) ?? []

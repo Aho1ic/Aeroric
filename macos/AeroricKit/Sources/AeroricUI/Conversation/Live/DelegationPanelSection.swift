@@ -9,6 +9,8 @@ public struct DelegationPanelModel: Equatable, Sendable {
     public var roles: [LiveDelegationRole]
     public var stats: [LiveReputationRow]
     public var audit: [LiveDelegationAudit]
+    /// R2-3b: child task → hunks of its copy not brought back yet.
+    public var copyPending: [String: Int] = [:]
 
     public init(delegations: [LiveDelegationCard] = [], delegateOf: String? = nil, roles: [LiveDelegationRole] = [],
                 stats: [LiveReputationRow] = [], audit: [LiveDelegationAudit] = []) {
@@ -31,6 +33,8 @@ public struct DelegationPanelModel: Equatable, Sendable {
 public enum DelegationPanelAction: Equatable, Sendable {
     case start(LiveDelegationContract)
     case open(String)
+    /// R2-3b: open the child on 改动 · 相对原目录.
+    case bringBack(String)
     case saveRole(LiveDelegationRole)
     case deleteRole(String)
 }
@@ -107,6 +111,16 @@ struct DelegationPanelSection: View {
                     } label: {
                         CheckpointRow(symbol: "person.2", text: "\(DelegationText.summary(card)) · \(card.contract.instruction)",
                                       highlight: card.needsUser ? AeroricColor.warning : nil) {
+                            if let child = card.childTaskId, card.contract.workspace == "copy" {
+                                let left = model.copyPending[child] ?? 0
+                                Button(left > 0 ? "\(left) 处在副本里 · 去带回" : "副本 · 去带回") {
+                                    onAction(.bringBack(child))
+                                }
+                                .buttonStyle(AeroricCapsuleButtonStyle(left > 0 ? .tinted : .ghost, compact: true))
+                                .fixedSize()
+                                .help("打开子会话的“改动 · 相对原目录”，由你决定带回哪些")
+                                .accessibilityIdentifier("progress.delegation.bringBack")
+                            }
                             if card.childTaskId != nil {
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: AeroricType.caption))
@@ -209,10 +223,12 @@ struct DelegationPanelSection: View {
                 Button("隔离（只给指令和文件）") { draft.contextMode = "isolated" }
                 Button("续做（带上本会话的对话）") { draft.contextMode = "fork" }
             }
-            CapsulePicker(title: draft.workspace.map { $0 == "shared" ? "共享可写" : "只读" } ?? "工作区按角色",
+            CapsulePicker(title: draft.workspace.map { $0 == "shared" ? "共享可写" : $0 == "copy" ? "独立副本" : "只读" }
+                              ?? "工作区按角色",
                           systemImage: "folder") {
                 Button("按角色默认") { draft.workspace = nil }
                 Button("只读") { draft.workspace = "readOnly" }
+                Button("独立副本（改动由你带回）") { draft.workspace = "copy" }
                 Button("共享可写（同一时刻只能一个）") { draft.workspace = "shared" }
             }
             Spacer(minLength: 0)
@@ -359,7 +375,13 @@ private struct RoleEditor: View {
                         role.permission = "plan"
                     }
                     ForEach(["ask", "auto_edit", "full_access"], id: \.self) { mode in
-                        Button("可写 · \(DelegationText.permission(mode))") {
+                        Button("独立副本 · \(DelegationText.permission(mode))") {
+                            role.workspace = "copy"
+                            role.permission = mode
+                        }
+                    }
+                    ForEach(["ask", "auto_edit", "full_access"], id: \.self) { mode in
+                        Button("共享可写 · \(DelegationText.permission(mode))") {
                             role.workspace = "shared"
                             role.permission = mode
                         }

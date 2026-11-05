@@ -72,6 +72,9 @@ pub struct SubmissionRequest {
     /// Optional on the wire; old requests keep their fingerprints.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clarify: bool,
+    /// R2-3b: run in an isolated copy of the project's directory.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub isolated: bool,
 }
 
 impl SubmissionRequest {
@@ -119,6 +122,9 @@ impl SubmissionRequest {
         // Only when set, so a request without it hashes as it always did.
         if self.clarify {
             out.push(1);
+        }
+        if self.isolated {
+            out.push(2);
         }
         out
     }
@@ -193,6 +199,7 @@ pub fn fixture_request() -> SubmissionRequest {
         review: false,
         evolution: false,
         clarify: false,
+        isolated: false,
     }
 }
 

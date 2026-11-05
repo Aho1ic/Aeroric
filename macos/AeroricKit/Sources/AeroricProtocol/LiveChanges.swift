@@ -74,3 +74,26 @@ public struct LiveReviewDiff: Equatable, Sendable {
                               emptyReason: f["emptyReason"]?.stringValue)
     }
 }
+
+/// R2-3b: a session's isolated copy (`copies.get`).
+public struct LiveCopyInfo: Equatable, Sendable {
+    public var path: String
+    public var origin: String
+    public var createdMs: UInt64
+    /// Hunks not brought back yet (pending or in conflict).
+    public var pending: Int
+
+    public init(path: String, origin: String, createdMs: UInt64 = 0, pending: Int = 0) {
+        self.path = path; self.origin = origin; self.createdMs = createdMs; self.pending = pending
+    }
+
+    /// `{copy, pending}`; nil when the task runs in the original directory.
+    public static func decode(_ value: JSONValue?) -> LiveCopyInfo? {
+        guard let f = value?.fields, let copy = f["copy"]?.fields, let path = copy["path"]?.stringValue else {
+            return nil
+        }
+        return LiveCopyInfo(path: path, origin: copy["origin"]?.stringValue ?? "",
+                            createdMs: copy["createdMs"]?.numberText.flatMap { UInt64($0) } ?? 0,
+                            pending: f["pending"]?.numberText.flatMap { Int($0) } ?? 0)
+    }
+}

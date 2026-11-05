@@ -9,6 +9,7 @@ use std::sync::{Arc, Weak};
 use aeroric_core::sessions::live::delegation::{
     Child, DelegationError, DelegationHost, ParentInfo, WriterRef,
 };
+use aeroric_core::sessions::live::isolated_copy;
 use aeroric_core::sessions::live::SessionDriver;
 use aeroric_core::storage::Record;
 use aeroric_core::tasks::launch_plan::working_directory;
@@ -187,6 +188,46 @@ impl HostDelegations {
         }
     }
 
+    /// R2-3b: a `Copy` child works in an isolated copy of the parent's
+    /// directory (the parent's own copy included).
+    fn isolate(
+        live: &Live,
+        project: &Record,
+        parent: &Record,
+        project_id: &str,
+        child: &str,
+        card: &DelegationCard,
+    ) -> Result<(), String> {
+        if card.contract.workspace != Workspace::Copy {
+            return Ok(());
+        }
+        let cwd = match aeroric_core::tasks::launch_plan::working_directory(parent, project) {
+            Some(aeroric_core::tasks::executor::WorkingDirectory::Local { path }) => path,
+            _ => return Err("远程会话不支持独立副本".into()),
+        };
+        let copies = live.context.paths.data_dir().join("copies");
+        let (_, inside) = isolated_copy::create(&copies, std::path::Path::new(&cwd), child)?;
+        let inside = inside.to_string_lossy().to_string();
+        let child = child.to_string();
+        live.service
+            .mutate(project_id, |records, _now| {
+                let next = records
+                    .iter()
+                    .map(|r| {
+                        let mut r = r.clone();
+                        if r.get("id").and_then(Value::as_str) == Some(child.as_str()) {
+                            r.0.retain(|key, _| !key.starts_with("worktree"));
+                            r.0.insert("worktreePath".into(), Value::String(inside.clone()));
+                        }
+                        r
+                    })
+                    .collect();
+                (next, true)
+            })
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     fn mark(
         live: &Live,
         project_id: &str,
@@ -270,6 +311,7 @@ impl DelegationHost for HostDelegations {
                 crate::workspace_meta_services::ForkError::Invalid(m) => m,
             })?;
             Self::mark(&live, &project_id, &id, &record, &card.contract.permission)?;
+            Self::isolate(&live, &project, &record, &project_id, &id, card)?;
             let driver: Arc<dyn SessionDriver> = live.reopen_quiet(&id)?;
             driver.prompt(prompt).map_err(|e| e.to_string())?;
         } else {
@@ -294,6 +336,7 @@ impl DelegationHost for HostDelegations {
                 )
                 .map_err(|e| e.to_string())?;
             Self::mark(&live, &project_id, &id, &record, &card.contract.permission)?;
+            Self::isolate(&live, &project, &record, &project_id, &id, card)?;
             live.service
                 .rename(
                     &project_id,
@@ -696,6 +739,7 @@ fn context_delegate(live: &Live, request: &Request) -> Frame {
                 match card.contract.workspace {
                     Workspace::ReadOnly => "只读",
                     Workspace::Shared => "共享可写",
+                    Workspace::Copy => "独立副本",
                 },
                 match card.contract.context_mode {
                     ContextMode::Fork => "续做（带你的对话）",

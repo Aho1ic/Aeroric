@@ -310,3 +310,75 @@ async fn turns_undone_together_come_back_together_and_stale_conclusions_show() {
         "{turns}"
     );
 }
+
+/// R2-3b: a copy's changes are brought back over the RPC, a moved original
+/// is a conflict, resolving merges it in and hands back the agent's message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_copy_is_brought_back_and_a_conflict_is_merged_for_the_agent() {
+    let host = Host::start(true).await;
+    let workspace = host._root.join("workspace");
+    std::fs::write(workspace.join("a.txt"), "one\ntwo\n").unwrap();
+    std::fs::write(workspace.join("b.txt"), "b\n").unwrap();
+    git(&workspace, &["init", "-q"]);
+    git(&workspace, &["add", "-A"]);
+    git(&workspace, &["commit", "-q", "-m", "base"]);
+    let copies = host.context.paths.data_dir().join("copies");
+    let (record, _) =
+        aeroric_core::sessions::live::isolated_copy::create(&copies, &workspace, "task-copy")
+            .unwrap();
+    let copy = PathBuf::from(&record.path);
+
+    let got = host
+        .call("copies.get", json!({"taskId": "task-copy"}))
+        .await
+        .unwrap();
+    assert_eq!(got["pending"], 0, "{got}");
+    assert!(host
+        .call("copies.get", json!({"taskId": "task-1"}))
+        .await
+        .unwrap()["copy"]
+        .is_null());
+
+    std::fs::write(copy.join("a.txt"), "one\nTWO\n").unwrap();
+    std::fs::write(copy.join("b.txt"), "agent b\n").unwrap();
+    std::fs::write(workspace.join("b.txt"), "user b\n").unwrap();
+    let diff = host
+        .call(
+            "changes.diff",
+            json!({"taskId": "task-copy", "scope": "origin"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(diff["diff"]["files"].as_array().unwrap().len(), 2, "{diff}");
+    let brought = host
+        .call("changes.bringAll", json!({"taskId": "task-copy"}))
+        .await
+        .unwrap();
+    assert_eq!(brought["applied"], 1, "{brought}");
+    assert_eq!(brought["conflicts"], 1, "{brought}");
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        "one\nTWO\n"
+    );
+
+    let resolved = host
+        .call("changes.resolveConflicts", json!({"taskId": "task-copy"}))
+        .await
+        .unwrap();
+    assert_eq!(resolved["conflicted"], json!(["b.txt"]), "{resolved}");
+    let prompt = resolved["prompt"].as_str().unwrap();
+    assert!(
+        prompt.contains("b.txt") && prompt.contains("冲突标记"),
+        "{prompt}"
+    );
+    let merged = std::fs::read_to_string(copy.join("b.txt")).unwrap();
+    assert!(
+        merged.contains("agent b") && merged.contains("user b"),
+        "{merged}"
+    );
+
+    host.call("copies.remove", json!({"taskId": "task-copy"}))
+        .await
+        .unwrap();
+    assert!(!copy.exists());
+}

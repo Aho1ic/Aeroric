@@ -277,6 +277,7 @@ extension AppServices {
         facts.onLogin = pinned == nil
         facts.loginOnGateway = task.agentConfigID == "via-\(task.agent ?? "")-login"
         facts.lastTurnFailed = task.status == "failed"
+        facts.copyPath = task.isCopy ? task.worktreePath : nil
         if let allThirdParty, pinned?.id != allThirdParty.id {
             facts.modelSources.append(LiveModelSource(
                 configID: String(allThirdParty.id.dropFirst(AgentConfigCatalog.prefix.count)),

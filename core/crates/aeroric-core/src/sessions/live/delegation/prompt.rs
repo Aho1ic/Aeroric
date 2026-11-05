@@ -52,6 +52,7 @@ pub fn child(
     out.push_str(match contract.workspace {
         Workspace::ReadOnly => "- 只读：不要修改任何文件。\n",
         Workspace::Shared => "- 你和主会话共用工作目录；只改任务需要的文件。\n",
+        Workspace::Copy => "- 你在主会话目录的一份独立副本里工作；改动由用户决定是否带回主目录，只改任务需要的文件。\n",
     });
     out.push_str(&format!("- 权限档：{}\n", contract.permission));
     out.push_str("- 共享黑板：用 board_read 看主会话和其他子会话记下的目标、假设、决定和问题，用 board_write 记下你的发现和证据；你写的决定只是提议。\n");

@@ -203,6 +203,7 @@ public struct NewSessionHome: View {
     private var aboveComposer: some View {
         HStack(spacing: AeroricSpace.xs) {
             workspacePicker
+            copyToggle
             if let branches {
                 BranchPicker(current: branches.current, branches: branches.names, onSelect: onSwitchBranch)
                     .disabled(!draft.isEditable)
@@ -258,6 +259,31 @@ public struct NewSessionHome: View {
         Toggle(title, isOn: Binding(get: { draft.capabilities[keyPath: key] },
                                     set: { draft.capabilities[keyPath: key] = $0 }))
             .disabled(!draft.capabilities[keyPath: key])
+    }
+
+    /// R2-3b: run the session in an isolated copy; off by default.
+    private var copyToggle: some View {
+        let remote = project?.path.hasPrefix("ssh://") == true
+        let on = draft.task.isolated && !remote
+        return Button {
+            draft.task.isolated.toggle()
+        } label: {
+            Label("独立副本", systemImage: "square.on.square")
+                .font(.system(size: AeroricType.caption, weight: .medium))
+                .foregroundStyle(on ? AeroricColor.accent : AeroricColor.textSecondary)
+                .padding(.horizontal, AeroricSpace.m)
+                .frame(height: 24)
+                .background(Capsule(style: .continuous).fill(on ? AeroricColor.accent.opacity(0.14) : .clear))
+                .overlay(Capsule(style: .continuous)
+                    .strokeBorder(on ? AeroricColor.accent.opacity(0.4) : AeroricColor.separator1, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .disabled(remote || !draft.isEditable)
+        .help(remote ? "远程项目不支持独立副本"
+              : "在项目目录的一份独立副本里运行；改动由你决定是否带回原目录")
+        .accessibilityAddTraits(on ? .isSelected : [])
+        .accessibilityIdentifier("new-session.copy")
     }
 
     private var workspacePicker: some View {

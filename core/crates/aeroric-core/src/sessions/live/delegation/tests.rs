@@ -251,7 +251,8 @@ fn permissions_decay_and_read_only_means_plan() {
         .unwrap();
     assert_eq!(role.unwrap().id, "implementer");
     assert_eq!(resolved.permission, "ask");
-    assert_eq!(resolved.workspace, Workspace::Shared);
+    // R2-3b: writable roles work in an isolated copy by default.
+    assert_eq!(resolved.workspace, Workspace::Copy);
     assert_eq!(resolved.context_mode, ContextMode::Brief);
     let (resolved, _) = rig
         .d

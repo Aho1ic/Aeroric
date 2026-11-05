@@ -574,6 +574,27 @@ impl TaskService {
                 ),
                 Err(reason) => (None, vec![reason]),
             };
+        // R2-3b: an isolated copy needs a local git repository with a commit;
+        // anything else is refused before any side effect.
+        let mut reasons = reasons;
+        let copy_root = match (&project, request.isolated) {
+            (Some(project), true) => match crate::projects::mutations::resolve_location(project) {
+                aeroric_protocol::ProjectTarget::Local { path } => {
+                    match crate::sessions::live::isolated_copy::check(std::path::Path::new(&path)) {
+                        Ok(_) => Some(path),
+                        Err(reason) => {
+                            reasons.push(reason);
+                            None
+                        }
+                    }
+                }
+                _ => {
+                    reasons.push("远程项目不支持独立副本。".into());
+                    None
+                }
+            },
+            _ => None,
+        };
         super::submissions::submit(&self.context, &self.submissions, request, reasons, || {
             let project = project
                 .as_ref()
@@ -613,6 +634,32 @@ impl TaskService {
                     texts: vec![],
                 },
             )?;
+            if let Some(root) = &copy_root {
+                let copies = self.context.paths.data_dir().join("copies");
+                let (_, cwd) = crate::sessions::live::isolated_copy::create(
+                    &copies,
+                    std::path::Path::new(root),
+                    &request.submission_id,
+                )
+                .map_err(TaskError::Launch)?;
+                let id = request.submission_id.clone();
+                let cwd = cwd.to_string_lossy().to_string();
+                self.mutate(&request.project_id, |records, _now| {
+                    let next = records
+                        .iter()
+                        .map(|record| {
+                            let mut record = record.clone();
+                            if record.get("id").and_then(Value::as_str) == Some(id.as_str()) {
+                                record
+                                    .0
+                                    .insert("worktreePath".to_string(), Value::String(cwd.clone()));
+                            }
+                            record
+                        })
+                        .collect();
+                    (next, true)
+                })?;
+            }
             if request.clarify {
                 let id = request.submission_id.clone();
                 let restore = request.permission_mode.clone();

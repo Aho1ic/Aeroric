@@ -43,7 +43,7 @@ impl Transport {
         command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
         crate::runtime::subprocess::configure_terminable_tokio_process_tree(&mut command);
         let mut child = command.spawn()?;
@@ -55,6 +55,29 @@ impl Transport {
             .stdout
             .take()
             .ok_or_else(|| std::io::Error::other("no stdout"))?;
+        // 2026-11-05: an agent that dies says why on stderr; the first lines
+        // go to the host log (redacted there) instead of nowhere.
+        if let Some(stderr) = child.stderr.take() {
+            let name = command
+                .as_std()
+                .get_program()
+                .to_string_lossy()
+                .rsplit('/')
+                .next()
+                .unwrap_or("agent")
+                .to_string();
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                let mut said = 0;
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if said < 40 && !line.trim().is_empty() {
+                        said += 1;
+                        let line: String = line.chars().take(300).collect();
+                        eprintln!("[{name} stderr] {line}");
+                    }
+                }
+            });
+        }
         let (outgoing, mut to_write) = mpsc::unbounded_channel::<String>();
         let (to_read, incoming) = mpsc::unbounded_channel::<String>();
         tokio::spawn(async move {

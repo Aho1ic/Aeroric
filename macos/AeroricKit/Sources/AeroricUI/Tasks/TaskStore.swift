@@ -217,3 +217,8 @@ public final class TaskStore {
         }
     }
 }
+
+public extension TaskStore.TaskEntry {
+    /// R2-3b: the session runs in an isolated copy (`.aeroric/worktrees/…`).
+    var isCopy: Bool { worktreePath?.contains("/.aeroric/worktrees/") == true }
+}

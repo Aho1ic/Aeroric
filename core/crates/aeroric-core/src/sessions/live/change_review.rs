@@ -18,6 +18,7 @@ use aeroric_protocol::turn_ledger::TurnRecord;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use super::isolated_copy;
 use super::now_ms;
 use super::turn_changes::{git, snapshot_tree};
 use super::turn_ledger::TurnLedger;
@@ -69,6 +70,8 @@ pub struct ChangeReview {
     ledger: std::sync::Arc<TurnLedger>,
     dir: Mutex<Option<PathBuf>>,
     notes: Mutex<HashMap<String, TaskNotes>>,
+    /// R2-3b: where isolated copies are recorded (`<data>/copies`).
+    copies: Mutex<Option<PathBuf>>,
 }
 
 /// What a reject or an accept did, for the agent's next message.
@@ -84,12 +87,58 @@ impl ChangeReview {
             ledger,
             dir: Mutex::new(None),
             notes: Mutex::default(),
+            copies: Mutex::new(None),
         }
     }
 
     pub fn set_dir(&self, dir: PathBuf) {
         *self.dir.lock() = Some(dir);
         self.notes.lock().clear();
+    }
+
+    pub fn set_copies_dir(&self, dir: PathBuf) {
+        *self.copies.lock() = Some(dir);
+    }
+
+    pub fn copies_dir(&self) -> Option<PathBuf> {
+        self.copies.lock().clone()
+    }
+
+    /// R2-3b: hunks of the copy not brought back (pending or in conflict);
+    /// `None` when the task is not in a copy.
+    pub fn origin_pending(&self, task_id: &str) -> Option<u32> {
+        let dir = self.copies_dir()?;
+        isolated_copy::load(&dir, task_id)?;
+        let diff = self.diff(task_id, ChangeScope::Origin, None);
+        Some(
+            diff.files
+                .iter()
+                .flat_map(|f| &f.hunks)
+                .filter(|h| matches!(h.state, HunkState::Pending | HunkState::Conflict))
+                .count() as u32,
+        )
+    }
+
+    /// R2-3b: bring every pending hunk back; (brought back, in conflict).
+    pub fn bring_all(&self, task_id: &str) -> Result<(u32, u32), String> {
+        let diff = self.diff(task_id, ChangeScope::Origin, None);
+        if let Some(reason) = diff.empty_reason.filter(|_| diff.files.is_empty()) {
+            return Err(reason);
+        }
+        let (mut applied, mut conflicts) = (0, 0);
+        for hunk in diff.files.iter().flat_map(|f| &f.hunks) {
+            if hunk.state != HunkState::Pending {
+                continue;
+            }
+            match self
+                .accept(task_id, ChangeScope::Origin, None, &hunk.id)?
+                .state
+            {
+                HunkState::Applied => applied += 1,
+                _ => conflicts += 1,
+            }
+        }
+        Ok((applied, conflicts))
     }
 
     /// The hunks of `scope` with their verdicts.
@@ -153,6 +202,16 @@ impl ChangeReview {
                 }
             })
             .collect();
+        if scope == ChangeScope::Origin {
+            if let Some(dir) = self.copies_dir() {
+                let left = out
+                    .files
+                    .iter()
+                    .flat_map(|f| &f.hunks)
+                    .any(|h| matches!(h.state, HunkState::Pending | HunkState::Conflict));
+                isolated_copy::set_cleared(&dir, task_id, !left);
+            }
+        }
         out
     }
 
@@ -165,6 +224,25 @@ impl ChangeReview {
         hunk: &str,
     ) -> Result<Verdict, String> {
         let (_, file, parsed) = self.find(task_id, scope, turn_id, hunk)?;
+        if scope == ChangeScope::Origin {
+            // R2-3b: accepting here is bringing it back.
+            if file.binary {
+                return Err("二进制文件暂不能按段带回".into());
+            }
+            let dir = self.copies_dir().ok_or("没有副本记录")?;
+            let record = isolated_copy::load(&dir, task_id).ok_or("这个会话不在独立副本里")?;
+            let patch = format!("{}{}\n{}", file.header, parsed.header, parsed.body);
+            let brought = isolated_copy::apply(Path::new(&record.origin), patch.as_bytes(), false);
+            return Ok(
+                self.set(task_id, hunk, &file, &parsed, turn_id, scope, |n| {
+                    n.state = if brought {
+                        HunkState::Applied
+                    } else {
+                        HunkState::Conflict
+                    };
+                }),
+            );
+        }
         let verdict = self.set(task_id, hunk, &file, &parsed, turn_id, scope, |n| {
             n.state = HunkState::Accepted;
         });
@@ -330,6 +408,13 @@ impl ChangeReview {
         scope: ChangeScope,
         turn_id: Option<&str>,
     ) -> Result<(PathBuf, String, String), String> {
+        if scope == ChangeScope::Origin {
+            let dir = self.copies_dir().ok_or("没有副本记录")?;
+            let record = isolated_copy::load(&dir, task_id).ok_or("这个会话不在独立副本里")?;
+            let top = PathBuf::from(&record.path);
+            let (_, now) = snapshot_tree(&top).ok_or("读不到副本")?;
+            return Ok((top, record.base, now));
+        }
         let turns = self.ledger.list(task_id);
         if turns.is_empty() {
             return Err("这个会话还没有改动".into());

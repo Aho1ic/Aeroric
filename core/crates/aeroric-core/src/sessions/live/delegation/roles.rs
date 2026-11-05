@@ -61,7 +61,8 @@ pub fn builtin() -> Vec<Role> {
             AgentChoice::Same,
             ContextMode::Brief,
             "auto_edit",
-            Workspace::Shared,
+            // R2-3b: writable roles work in an isolated copy by default.
+            Workspace::Copy,
         ),
         role(
             "tester",
@@ -71,7 +72,8 @@ pub fn builtin() -> Vec<Role> {
             AgentChoice::Same,
             ContextMode::Brief,
             "auto_edit",
-            Workspace::Shared,
+            // R2-3b: writable roles work in an isolated copy by default.
+            Workspace::Copy,
         ),
     ]
 }

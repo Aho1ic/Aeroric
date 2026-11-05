@@ -188,7 +188,9 @@ public enum DelegationText {
 
     public static func workspace(_ workspace: String, permission: String) -> String {
         if workspace == "readOnly" || permission == "plan" { return "只读" }
-        return "可写 · \(DelegationText.permission(permission))"
+        // R2-3b: writable in an isolated copy, or in the parent's directory.
+        if workspace == "copy" { return "独立副本 · \(DelegationText.permission(permission))" }
+        return "共享可写 · \(DelegationText.permission(permission))"
     }
 
     public static func state(_ card: LiveDelegationCard) -> (String, Color) {

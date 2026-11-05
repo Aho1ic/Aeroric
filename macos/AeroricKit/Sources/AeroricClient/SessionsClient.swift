@@ -421,6 +421,28 @@ extension SessionsClient {
         _ = try await connection.request("changes.markSeen", params: .object(["taskId": .string(taskId)]))
     }
 
+    /// R2-3b: the task's isolated copy (`copies.get`); nil when it has none.
+    public func copyInfo(taskId: String) async throws -> LiveCopyInfo? {
+        let frame = try await connection.request("copies.get", params: .object(["taskId": .string(taskId)]))
+        return LiveCopyInfo.decode(frame.result)
+    }
+
+    public func removeCopy(taskId: String) async throws {
+        _ = try await connection.request("copies.remove", params: .object(["taskId": .string(taskId)]))
+    }
+
+    public func bringAll(taskId: String) async throws -> (applied: Int, conflicts: Int) {
+        let frame = try await connection.request("changes.bringAll", params: .object(["taskId": .string(taskId)]))
+        func n(_ key: String) -> Int { frame.result[key]?.numberText.flatMap { Int($0) } ?? 0 }
+        return (n("applied"), n("conflicts"))
+    }
+
+    public func resolveConflicts(taskId: String) async throws -> String {
+        let frame = try await connection.request("changes.resolveConflicts",
+                                                 params: .object(["taskId": .string(taskId)]))
+        return frame.result["prompt"]?.stringValue ?? ""
+    }
+
     public func acceptTurn(taskId: String, turnId: String) async throws {
         _ = try await connection.request("turns.accept", params: .object([
             "taskId": .string(taskId), "turnId": .string(turnId),

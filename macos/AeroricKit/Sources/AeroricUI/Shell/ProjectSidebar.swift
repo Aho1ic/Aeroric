@@ -835,6 +835,19 @@ private struct SessionRow: View {
                     .accessibilityLabel(kind == "review" ? "审查会话" : (kind == "delegate" ? "委派子会话" : "侧支"))
             }
             HarnessLogo(harness: item.harness, agent: item.agent, size: 14)
+                .overlay(alignment: .bottomTrailing) {
+                    // R2-3b: a session in an isolated copy.
+                    if item.copy {
+                        Image(systemName: "square.on.square")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(AeroricColor.accent)
+                            .padding(1)
+                            .background(Circle().fill(AeroricColor.canvas))
+                            .offset(x: 4, y: 4)
+                            .help("在独立副本里运行")
+                            .accessibilityLabel("独立副本")
+                    }
+                }
             Text(item.title)
                 .font(.system(size: AeroricType.body))
                 .lineLimit(1)

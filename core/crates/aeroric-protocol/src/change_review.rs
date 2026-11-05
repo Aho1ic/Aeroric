@@ -14,6 +14,11 @@ pub const REJECT_METHOD: &str = "changes.reject";
 pub const COMMENT_METHOD: &str = "changes.comment";
 pub const SEND_COMMENTS_METHOD: &str = "changes.sendComments";
 pub const MARK_SEEN_METHOD: &str = "changes.markSeen";
+/// R2-3b: bring every pending hunk of the copy back to the original directory.
+pub const BRING_ALL_METHOD: &str = "changes.bringAll";
+/// R2-3b: merge the original directory's newer content into the copy and
+/// return the message to prefill for the agent.
+pub const RESOLVE_METHOD: &str = "changes.resolveConflicts";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +27,9 @@ pub enum ChangeScope {
     Turn,
     Seen,
     Session,
+    /// R2-3b: an isolated copy against its starting point — what bringing
+    /// back would carry to the original directory.
+    Origin,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +41,10 @@ pub enum HunkState {
     Rejected,
     /// It no longer applies to the working tree: it cannot be rejected alone.
     Stale,
+    /// R2-3b: brought back to the original directory.
+    Applied,
+    /// R2-3b: the original directory changed there; it cannot be brought back as is.
+    Conflict,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

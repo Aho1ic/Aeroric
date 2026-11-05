@@ -534,7 +534,8 @@ final class AppServices {
             attachments: draft.task.attachmentPaths, worktree: draft.task.worktree,
             recipeId: draft.recipeID, team: draft.capabilities.team,
             review: draft.capabilities.review, evolution: draft.capabilities.evolution,
-            clarify: draft.capabilities.clarify
+            clarify: draft.capabilities.clarify,
+            isolated: draft.task.isolated
         )
     }
 
@@ -614,7 +615,14 @@ final class AppServices {
             let entry = taskStore.tasks.first { $0.id == taskID }
             switch action {
             case .archive, .unarchive:
-                if (action == .archive) != (entry?.archived ?? false) { toggleArchived(taskId: taskID) }
+                guard (action == .archive) != (entry?.archived ?? false) else { return }
+                if action == .archive, entry?.isCopy == true {
+                    Task { @MainActor in
+                        if await confirmCopy(taskID, removing: false) { toggleArchived(taskId: taskID) }
+                    }
+                } else {
+                    toggleArchived(taskId: taskID)
+                }
             default:
                 guard let client = workspaceClient else { return }
                 Task { @MainActor in
@@ -625,6 +633,7 @@ final class AppServices {
                         case let .rename(name):
                             try await client.renameTask(taskId: taskID, name: name)
                         case .remove:
+                            if entry?.isCopy == true, !(await confirmCopy(taskID, removing: true)) { return }
                             let kept = try await client.deleteTasks(taskIds: [taskID])
                             if !kept.isEmpty { showActionError("已置顶的会话不能移除：请先取消置顶") }
                         case .fork:
@@ -739,6 +748,43 @@ final class AppServices {
         return store
     }
     @ObservationIgnored private var agentConfigStoreStorage: AgentConfigStore?
+
+    /// R2-3b: before archiving or deleting a session in an isolated copy.
+    /// Archiving can keep the copy (unarchive and bring back later) or drop
+    /// it; deleting drops it. Nothing left to bring back: archiving asks nothing.
+    func confirmCopy(_ taskID: String, removing: Bool) async -> Bool {
+        guard let client = sessionsClient else { return true }
+        let pending = (try? await client.copyInfo(taskId: taskID))?.pending ?? 0
+        if !removing && pending == 0 { return true }
+        let alert = NSAlert()
+        alert.messageText = pending > 0 ? "副本里还有 \(pending) 处改动没带回" : "会话的独立副本会一起删掉"
+        if removing {
+            alert.informativeText = "删掉会话会一起删掉它的独立副本，副本里没带回的改动就没了。"
+            alert.addButton(withTitle: "删掉会话和副本")
+            alert.addButton(withTitle: "取消")
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+            try? await client.removeCopy(taskId: taskID)
+            return true
+        }
+        alert.informativeText = "保留副本的话，取消归档后仍可在“改动 · 相对原目录”里带回。"
+        alert.addButton(withTitle: "保留副本并归档")
+        alert.addButton(withTitle: "删掉副本并归档")
+        alert.addButton(withTitle: "取消")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return true
+        case .alertSecondButtonReturn:
+            do {
+                try await client.removeCopy(taskId: taskID)
+            } catch {
+                showActionError("删副本失败：\(error)")
+                return false
+            }
+            return true
+        default:
+            return false
+        }
+    }
 
     var sessionsClient: SessionsClient? {
         guard let connection = attachedConnection else { return nil }
@@ -1213,6 +1259,7 @@ extension AppServices: WorkspaceStateProviding {
                                updatedAt: task.updatedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) },
                                harness: task.harness, sessionID: task.sessionID)
         item.childKind = task.parentTaskID == nil ? nil : task.childKind
+        item.copy = task.isCopy
         return item
     }
 

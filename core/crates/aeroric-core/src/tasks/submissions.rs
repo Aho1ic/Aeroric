@@ -208,6 +208,8 @@ pub(crate) fn submit(
                 ("clarify", request.clarify),
             ]
             .into_iter()
+            // R2-3b: reported only when asked, so older receipts still match.
+            .chain(request.isolated.then_some(("isolated", true)))
             .map(|(option, applied)| OptionConsumption {
                 option: option.into(),
                 applied,

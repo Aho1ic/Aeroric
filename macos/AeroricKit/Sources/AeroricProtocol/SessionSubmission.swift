@@ -52,13 +52,16 @@ public struct NativeTaskSubmission: Equatable, Sendable {
     public let evolution: Bool
     /// B4′ 开工前澄清: the first turn only proposes acceptance criteria.
     public let clarify: Bool
+    /// R2-3b: run in an isolated copy of the project's directory.
+    public let isolated: Bool
 
     public init(submissionId: String, projectId: String, configurationId: String,
                 configurationVersion: String, agent: String, prompt: String,
                 permissionMode: String, permissionAgent: String,
                 selectedModel: String?, reasoningEffort: String? = nil,
                 attachments: [String] = [], worktree: String? = nil, recipeId: String? = nil,
-                team: Bool = false, review: Bool = false, evolution: Bool = false, clarify: Bool = false) {
+                team: Bool = false, review: Bool = false, evolution: Bool = false, clarify: Bool = false,
+                isolated: Bool = false) {
         self.submissionId = submissionId
         self.projectId = projectId
         self.configurationId = configurationId
@@ -76,6 +79,7 @@ public struct NativeTaskSubmission: Equatable, Sendable {
         self.review = review
         self.evolution = evolution
         self.clarify = clarify
+        self.isolated = isolated
     }
 
     public var fingerprintMaterial: Data {
@@ -104,6 +108,7 @@ public struct NativeTaskSubmission: Equatable, Sendable {
         bytes.append(contentsOf: [team, review, evolution].map { $0 ? 1 : 0 })
         // Only when set, so a request without it hashes as it always did.
         if clarify { bytes.append(1) }
+        if isolated { bytes.append(2) }
         return bytes
     }
 
@@ -124,7 +129,8 @@ public struct NativeTaskSubmission: Equatable, Sendable {
             "worktree": worktree.map(JSONValue.string) ?? .null,
             "recipeId": recipeId.map(JSONValue.string) ?? .null,
             "team": .bool(team), "review": .bool(review), "evolution": .bool(evolution),
-        ].merging(clarify ? ["clarify": .bool(true)] : [:]) { a, _ in a })
+        ].merging(clarify ? ["clarify": .bool(true)] : [:]) { a, _ in a }
+         .merging(isolated ? ["isolated": .bool(true)] : [:]) { a, _ in a })
     }
 }
 
@@ -161,7 +167,7 @@ public struct NativeSubmissionReceipt: Decodable, Equatable, Sendable {
               ["accepted", "pending", "unknown", "rejected_before_side_effect"].contains(state)
         else { return false }
         if state == "accepted" {
-            let expected = [
+            var expected = [
                 "configuration": true, "model": request.selectedModel != nil,
                 "effort": request.reasoningEffort != nil, "permission": true,
                 "attachments": false, "worktree": false, "recipe": false,
@@ -169,6 +175,8 @@ public struct NativeSubmissionReceipt: Decodable, Equatable, Sendable {
                 // B4-CU-01: core reports clarify on every accepted receipt.
                 "clarify": request.clarify,
             ]
+            // R2-3b: reported only when asked.
+            if request.isolated { expected["isolated"] = true }
             guard taskId == request.submissionId, reasons.isEmpty,
                   request.attachments.isEmpty, request.worktree == nil, request.recipeId == nil,
                   !request.team, !request.review, !request.evolution,

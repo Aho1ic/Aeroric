@@ -12,6 +12,8 @@ public struct TaskDraft: Equatable, Sendable {
     public var prompt: String
     public var attachmentPaths: [String]
     public var worktree: String?
+    /// R2-3b: run in an isolated copy of the project's directory.
+    public var isolated = false
 
     /// 宿主 capability 决定的选项集（注入）。
     public struct Options: Equatable, Sendable {
