@@ -165,6 +165,23 @@ struct GeneralSettingsPane: View {
     }
 }
 
+/// 2026-11-06: what the sidebar shows (imported sessions' 已导入 tag, off by default).
+struct SidebarSettingsCard: View {
+    @AppStorage(SidebarPreferences.showImportedKey) private var showImported = false
+
+    var body: some View {
+        SettingsCard("侧栏") {
+            SettingsRow("导入的会话显示“已导入”",
+                        detail: "从 Claude Code、Codex 等导入的会话在侧栏标出来源；关闭时和普通会话一样显示时间。") {
+                Toggle("", isOn: $showImported)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .accessibilityIdentifier("settings.sidebar.show-imported")
+            }
+        }
+    }
+}
+
 /// A16: the menu bar extra (on by default; the App owns the scene, this only
 /// flips the shared preference).
 struct MenuBarSettingsCard: View {

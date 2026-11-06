@@ -1030,8 +1030,11 @@ extension AppServices: WorkspaceStateProviding {
                 group: section.group
             )
         }
+        // 2026-11-06: SSH connection id → its name, for remote projects' label.
+        let sshNames: [String: String] = Dictionary(
+            sshConnectionStore.connections.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         let projects = projectStore.projects.map { project in
-            SidebarItem(
+            var item = SidebarItem(
                 id: project.id,
                 title: project.name ?? URL(fileURLWithPath: project.path).lastPathComponent,
                 systemImage: "folder",
@@ -1043,8 +1046,11 @@ extension AppServices: WorkspaceStateProviding {
                     .sorted { ($0.starred ? 0 : 1, $1.updatedAtMs ?? 0) < ($1.starred ? 0 : 1, $0.updatedAtMs ?? 0) })
                     .map { task in Self.taskItem(task, group: .projects) }
                     + importBook.sessions(inProject: project.id).map(Self.importedItem),
+                path: project.path,
                 color: project.color, defaultAgent: project.defaultAgent, projectGroup: project.group
             )
+            item.remote = SidebarPreferences.remoteLabel(project.path, names: sshNames)
+            return item
         }
         let unassigned = importBook.unassigned.map(Self.importedItem).map { item -> SidebarItem in
             var item = item

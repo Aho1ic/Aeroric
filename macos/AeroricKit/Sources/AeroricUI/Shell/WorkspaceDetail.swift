@@ -143,6 +143,8 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
     public var childKind: String?
     /// R2-3b: the session runs in an isolated copy.
     public var copy = false
+    /// 2026-11-06: a project on an SSH host — its label (远程项目 · 名称 · 路径).
+    public var remote: String?
     /// Agent configuration id and group (更多 menu, 2026-10-28).
     public var color: String?
     public var defaultAgent: String?

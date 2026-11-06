@@ -727,6 +727,8 @@ struct NavigationLabel<Trailing: View>: View {
 /// hover; the session count gives way to a "新建会话" button.
 private struct ProjectRow<MenuContent: View>: View {
     let item: SidebarItem
+    /// 2026-11-06: "远程项目 · host · path" for a project on an SSH host.
+    private var remote: String? { item.remote ?? SidebarPreferences.remoteLabel(item.path) }
     @Environment(TagBook.self) private var tagBook: TagBook?
     let sessionCount: Int
     let expanded: Bool
@@ -751,6 +753,18 @@ private struct ProjectRow<MenuContent: View>: View {
                         Image(systemName: expanded && item.color == nil ? "folder.fill" : "folder")
                             .font(.system(size: 13))
                             .foregroundStyle(ProjectColor.color(item.color) ?? AeroricColor.textSecondary)
+                            // 2026-11-06: a project on an SSH host carries a small globe.
+                            .overlay(alignment: .bottomTrailing) {
+                                if remote != nil {
+                                    Image(systemName: "globe")
+                                        .font(.system(size: 7, weight: .bold))
+                                        .foregroundStyle(AeroricColor.accent)
+                                        .padding(1)
+                                        .background(Circle().fill(AeroricColor.canvas))
+                                        .offset(x: 4, y: 3)
+                                        .accessibilityHidden(true)
+                                }
+                            }
                     }
                 }
                 .foregroundStyle(AeroricColor.textSecondary)
@@ -765,6 +779,16 @@ private struct ProjectRow<MenuContent: View>: View {
                         .font(.system(size: AeroricType.body, weight: .medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    if let remote {
+                        Text("远程")
+                            .font(.system(size: AeroricType.caption - 1, weight: .medium))
+                            .foregroundStyle(AeroricColor.accent)
+                            .padding(.horizontal, AeroricSpace.xs)
+                            .background(AeroricColor.accent.opacity(0.12), in: Capsule(style: .continuous))
+                            .fixedSize()
+                            .help(remote)
+                            .accessibilityLabel(remote)
+                    }
                     TagChips(tags: tagBook?.tags(on: item.id) ?? [])
                     Spacer(minLength: 2)
                     if sessionCount > 0 && !hovered {
@@ -821,6 +845,8 @@ private struct ProjectRow<MenuContent: View>: View {
 
 /// Session row: agent glyph (who), title, relative time, status dot (what).
 private struct SessionRow: View {
+    /// 2026-11-06: the 已导入 tag is optional (设置 → 通用 → 侧栏), off by default.
+    @AppStorage(SidebarPreferences.showImportedKey) private var showImported = false
     let item: SidebarItem
     var showsMore = false
     @Environment(TagBook.self) private var tagBook: TagBook?
@@ -855,7 +881,7 @@ private struct SessionRow: View {
             // T2: tags in full after the title; the title truncates first.
             TagChips(tags: tagBook?.tags(on: item.id) ?? [])
             Spacer(minLength: 2)
-            if item.imported {
+            if item.imported && showImported {
                 Text("已导入")
                     .font(.system(size: AeroricType.caption - 1, weight: .medium))
                     .foregroundStyle(AeroricColor.textTertiary)
@@ -872,8 +898,8 @@ private struct SessionRow: View {
             if showsMore {
                 // The ⋯ button is laid over this slot (SessionTreeRow).
                 Color.clear.frame(width: 20, height: 20)
-            } else if let updatedAt = item.updatedAt, !item.imported {
-                // An imported row leaves the date out (2026-10-28): that room is for its tags.
+            } else if let updatedAt = item.updatedAt, !(item.imported && showImported) {
+                // An imported row showing its tag leaves the date out (2026-10-28).
                 Text(RelativeTime.short(updatedAt))
                     .font(.system(size: AeroricType.caption).monospacedDigit())
                     .foregroundStyle(AeroricColor.textTertiary)
@@ -1220,5 +1246,23 @@ public struct PaneEmptyState: View {
 
     public var body: some View {
         AeroricEmptyState(systemImage: systemImage, title: title, message: hint)
+    }
+}
+
+/// 2026-11-06: sidebar display choices and the remote-project label.
+public enum SidebarPreferences {
+    /// Show the 已导入 tag on imported sessions (off by default).
+    public static let showImportedKey = "sidebar.showImported"
+
+    /// `ssh://<connection>/srv/app` → `远程项目 · <connection name> · /srv/app`;
+    /// nil for a local path. The connection part is an id, never shown raw:
+    /// without a known name it reads `远程项目（SSH）· /srv/app`.
+    public static func remoteLabel(_ path: String?, names: [String: String] = [:]) -> String? {
+        guard let path, path.hasPrefix("ssh://") else { return nil }
+        let url = URL(string: path)
+        let name = url?.host.flatMap { names[$0] ?? names[$0.uppercased()] ?? names[$0.lowercased()] }
+        let head = name.map { "远程项目 · \($0)" } ?? "远程项目（SSH）"
+        let rest = url?.path ?? ""
+        return rest.isEmpty ? head : head + (name == nil ? "· " : " · ") + rest
     }
 }

@@ -254,4 +254,15 @@ final class DeliveryTests: XCTestCase {
         XCTAssertEqual(copy.json.fields["isolated"]?.boolValue, true)
         XCTAssertNil(plain.json.fields["isolated"])
     }
+
+    /// 2026-11-06: a project on an SSH host is labelled with its host and path.
+    func testARemoteProjectIsLabelledWithItsHost() {
+        let id = "0A53E42C-EDEF-4B4F-B16A-89E3E8DA569A"
+        XCTAssertEqual(SidebarPreferences.remoteLabel("ssh://\(id)/home", names: [id: "gpu-box"]), "远程项目 · gpu-box · /home")
+        XCTAssertEqual(SidebarPreferences.remoteLabel("ssh://\(id)/home"), "远程项目（SSH）· /home", "the id is never shown")
+        XCTAssertEqual(SidebarPreferences.remoteLabel("ssh://\(id)"), "远程项目（SSH）")
+        XCTAssertNil(SidebarPreferences.remoteLabel("/Users/me/app"))
+        XCTAssertNil(SidebarPreferences.remoteLabel(nil))
+        XCTAssertEqual(SidebarPreferences.showImportedKey, "sidebar.showImported")
+    }
 }

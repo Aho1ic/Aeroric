@@ -76,6 +76,7 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
                 KeepAwakeSettingsCard(store: keepAwake)
             }
             MenuBarSettingsCard()
+            SidebarSettingsCard()
         case .appearance:
             AppearanceSettingsPane()
         case .agents:
