@@ -936,9 +936,78 @@ impl Live {
         self.product
     }
 
+    /// 2026-11-06: a Claude / Codex session bound to a transcript outside
+    /// its configuration's managed home (an imported session continued under
+    /// an Agent configuration) cannot be found by the CLI there ("no rollout
+    /// found"). Copy the transcript in and fork from the copy, as a source
+    /// move does; the original file is never touched. Returns the record as
+    /// it now stands.
+    fn adopt_transcript(&self, project: &Record, record: Record) -> Record {
+        let text = |key: &str| {
+            record
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        let family = launch_family_of(&record, self.families.as_ref());
+        let (Some(config), Some(task_id), Some(project_id), Some(agent)) = (
+            text("agentConfigId"),
+            text("id"),
+            project
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            text("agent"),
+        ) else {
+            return record;
+        };
+        if !matches!(family, ProtocolFamily::Claude | ProtocolFamily::Codex) {
+            return record;
+        }
+        let (session, path) = aeroric_core::tasks::session_owner::current_session(&record);
+        let (Some(session), Some(path)) = (session, path) else {
+            return record;
+        };
+        if aeroric_core::sessions::live::fork_source(&session).is_some() {
+            return record;
+        }
+        let data = self.context.paths.data_dir();
+        let Some(target) = home_of(data, Some(&config), family) else {
+            return record;
+        };
+        let path = std::path::PathBuf::from(path);
+        if path.starts_with(&target) || !path.exists() {
+            return record;
+        }
+        let from = home_of(data, None, family)
+            .or_else(|| path.parent().map(std::path::Path::to_path_buf))
+            .unwrap_or_default();
+        let Some(copied) = copy_transcript(&path, &from, &target, family) else {
+            return record;
+        };
+        let attached = self.service.attach_session(
+            &project_id,
+            &task_id,
+            family,
+            &agent,
+            Some(&format!(
+                "{}{session}",
+                aeroric_core::sessions::live::FORK_PREFIX
+            )),
+            Some(&copied.to_string_lossy()),
+        );
+        if let Err(error) = attached {
+            eprintln!("[aeroric-host] cannot adopt the transcript of {task_id}: {error}");
+            return record;
+        }
+        self.record(&task_id).map(|(_, r)| r).unwrap_or(record)
+    }
+
     /// B4-1: [`Live::reopen`] for a caller with no request to answer.
     fn reopen_quiet(&self, task_id: &str) -> Result<Arc<dyn SessionDriver>, String> {
         let (project, record) = self.record(task_id).ok_or("会话不存在")?;
+        let record = self.adopt_transcript(&project, record);
         let session_id = aeroric_core::tasks::session_owner::current_session(&record)
             .0
             .ok_or("这个会话还没有可续接的对话")?;
@@ -965,6 +1034,7 @@ impl Live {
                 "no task with that id in any known project",
             )));
         };
+        let record = self.adopt_transcript(&project, record);
         let Some(session_id) = aeroric_core::tasks::session_owner::current_session(&record).0
         else {
             return Err(Box::new(no_session(request)));
