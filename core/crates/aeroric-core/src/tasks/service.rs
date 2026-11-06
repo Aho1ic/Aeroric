@@ -540,8 +540,11 @@ impl TaskService {
     }
 
     /// 变更串行闸的唯一入口：包裹「load→决定→commit」整段的变更流。
-    /// 六个包裹点（`run_intent`/`create`/`begin`/`complete`/`cancel`/
-    /// `apply_observation`）互不嵌套，锁只在最外层持有一次。
+    /// 包裹点（`run_intent`/`create`/`begin`/`complete`/`cancel`/
+    /// `apply_observation`/`mutate`，以及 2026-11-05 起各个公开的元数据入口
+    /// `rename`/`toggle_star`/`archive`/…）互不嵌套，锁只在最外层持有一次。
+    /// 元数据入口原先不拿锁：与 `mutate` 交错时后提交的一方会盖掉另一方
+    /// （委派子会话的改名因此偶发丢失）。
     fn serial<T>(&self, f: impl FnOnce() -> Result<T, TaskError>) -> Result<T, TaskError> {
         let _guard = self
             .mutations
@@ -2092,14 +2095,16 @@ impl TaskService {
         task_id: &str,
         name: &str,
     ) -> Result<Applied, TaskError> {
-        self.run_rename(project_id, task_id, name, None, Persist::Commit)
+        self.serial(|| self.run_rename(project_id, task_id, name, None, Persist::Commit))
     }
 
     /// 收藏开关。它读的是当前值：取消收藏写的是 `starred: false`，不是"把键删掉回到原点"，
     /// 与旧客户端一致；两次调用因此都是真实的一格 revision。
     pub fn toggle_star(&self, project_id: &str, task_id: &str) -> Result<Applied, TaskError> {
-        self.metadata_edit(project_id, task_id, Persist::Commit, |records| {
-            reducer::toggle_star(records, task_id)
+        self.serial(|| {
+            self.metadata_edit(project_id, task_id, Persist::Commit, |records| {
+                reducer::toggle_star(records, task_id)
+            })
         })
     }
 
@@ -2128,14 +2133,18 @@ impl TaskService {
 
     pub fn archive(&self, project_id: &str, task_ids: &[String]) -> Result<Applied, TaskError> {
         let now_ms = self.clock().now_ms();
-        self.metadata_batch(project_id, task_ids, Persist::Commit, |records| {
-            reducer::archive(records, task_ids, now_ms)
+        self.serial(|| {
+            self.metadata_batch(project_id, task_ids, Persist::Commit, |records| {
+                reducer::archive(records, task_ids, now_ms)
+            })
         })
     }
 
     pub fn unarchive(&self, project_id: &str, task_ids: &[String]) -> Result<Applied, TaskError> {
-        self.metadata_batch(project_id, task_ids, Persist::Commit, |records| {
-            reducer::unarchive(records, task_ids)
+        self.serial(|| {
+            self.metadata_batch(project_id, task_ids, Persist::Commit, |records| {
+                reducer::unarchive(records, task_ids)
+            })
         })
     }
 
@@ -2162,22 +2171,26 @@ impl TaskService {
         session_id: Option<&str>,
         session_path: Option<&str>,
     ) -> Result<Applied, TaskError> {
-        self.metadata_one(project_id, task_id, Persist::Commit, |records| {
-            reducer::attach_session(
-                records,
-                task_id,
-                family,
-                session_agent,
-                session_id,
-                session_path,
-            )
+        self.serial(|| {
+            self.metadata_one(project_id, task_id, Persist::Commit, |records| {
+                reducer::attach_session(
+                    records,
+                    task_id,
+                    family,
+                    session_agent,
+                    session_id,
+                    session_path,
+                )
+            })
         })
     }
 
     /// 交接换来源：清掉任务记下的会话，下一条消息起新会话（[`reducer::detach_session`]）。
     pub fn detach_session(&self, project_id: &str, task_id: &str) -> Result<Applied, TaskError> {
-        self.metadata_one(project_id, task_id, Persist::Commit, |records| {
-            reducer::detach_session(records, task_id)
+        self.serial(|| {
+            self.metadata_one(project_id, task_id, Persist::Commit, |records| {
+                reducer::detach_session(records, task_id)
+            })
         })
     }
 
@@ -2189,14 +2202,18 @@ impl TaskService {
         branch: &str,
         base_branch: &str,
     ) -> Result<Applied, TaskError> {
-        self.metadata_one(project_id, task_id, Persist::Commit, |records| {
-            reducer::set_worktree(records, task_id, path, branch, base_branch)
+        self.serial(|| {
+            self.metadata_one(project_id, task_id, Persist::Commit, |records| {
+                reducer::set_worktree(records, task_id, path, branch, base_branch)
+            })
         })
     }
 
     pub fn discard_worktree(&self, project_id: &str, task_id: &str) -> Result<Applied, TaskError> {
-        self.metadata_one(project_id, task_id, Persist::Commit, |records| {
-            reducer::discard_worktree(records, task_id)
+        self.serial(|| {
+            self.metadata_one(project_id, task_id, Persist::Commit, |records| {
+                reducer::discard_worktree(records, task_id)
+            })
         })
     }
 
@@ -2207,8 +2224,10 @@ impl TaskService {
         additions: u64,
         deletions: u64,
     ) -> Result<Applied, TaskError> {
-        self.metadata_one(project_id, task_id, Persist::Commit, |records| {
-            reducer::record_diff_stats(records, task_id, additions, deletions)
+        self.serial(|| {
+            self.metadata_one(project_id, task_id, Persist::Commit, |records| {
+                reducer::record_diff_stats(records, task_id, additions, deletions)
+            })
         })
     }
 
