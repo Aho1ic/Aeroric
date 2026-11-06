@@ -156,7 +156,12 @@ pub fn catalog_with(
             ],
         });
     }
-    agent_config_entries(&sources.connections, &revision, &mut configurations);
+    agent_config_entries(
+        &sources.connections,
+        &revision,
+        &gateway_codex_efforts(sources),
+        &mut configurations,
+    );
     let mut ids = std::collections::HashSet::new();
     for profile in &settings.custom_agents {
         if profile.id.trim().is_empty()
@@ -263,9 +268,31 @@ pub fn catalog_with(
 /// connection can serve for the harness; credentials are not probed (a missing key
 /// surfaces at the gateway). For Claude/Codex every reach `routing::candidates`
 /// returns is a translation the gateway implements (4c/4d).
+/// 2026-11-06: the reasoning tiers a Codex run through the gateway can ask
+/// for. Codex sends `reasoning.effort` and the gateway forwards it (the chat
+/// bridge maps it to `reasoning_effort`), so the CLI's own tiers apply: those
+/// the built-in Codex reports, else Codex's standard four.
+fn gateway_codex_efforts(sources: &AgentSources) -> Vec<String> {
+    let mut efforts: Vec<String> = Vec::new();
+    if let Some(Ok(models)) = &sources.builtin_codex {
+        for effort in models.iter().flat_map(|m| m.efforts.iter()) {
+            if !efforts.contains(effort) {
+                efforts.push(effort.clone());
+            }
+        }
+    }
+    if efforts.is_empty() {
+        efforts = ["low", "medium", "high", "xhigh"]
+            .map(String::from)
+            .to_vec();
+    }
+    efforts
+}
+
 fn agent_config_entries(
     document: &ConnectionsDocument,
     revision: &str,
+    codex_efforts: &[String],
     out: &mut Vec<AgentConfiguration>,
 ) {
     let names: std::collections::BTreeSet<String> = document
@@ -307,8 +334,13 @@ fn agent_config_entries(
             agent: agent.into(),
             harness: agent.into(),
             models,
-            // D4: the gateway does not map reasoning tiers upstream yet.
-            efforts: vec![],
+            // Codex: the gateway forwards the CLI's tier (2026-11-06). Other
+            // harnesses still offer none until their tier reaches upstream.
+            efforts: if config.harness == crate::agent_connections::model::Harness::Codex {
+                codex_efforts.to_vec()
+            } else {
+                vec![]
+            },
             permission_modes: vec!["ask".into(), "auto_edit".into(), "full_access".into()],
             blocked_reasons: blocked,
             model_details,
@@ -688,6 +720,16 @@ mod tests {
         assert_eq!(codex.agent, "codex");
         assert_eq!(codex.models, ["model-a"]);
         assert!(codex.blocked_reasons.is_empty());
+        // 2026-11-06: the gateway forwards Codex's tier, so it can be chosen
+        // (Codex's standard four while the built-in list is unknown).
+        assert_eq!(codex.efforts, ["low", "medium", "high", "xhigh"]);
+        let mut request = aeroric_protocol::submission::fixture_request();
+        request.configuration_id = "agent-config:cfg-codex".into();
+        request.agent = "codex".into();
+        request.configuration_version = directory.revision.clone();
+        request.selected_model = Some("model-a".into());
+        request.reasoning_effort = Some("high".into());
+        assert!(validate(&directory, &request).is_empty());
         assert!(!entry(&directory, "agent-config:cfg-empty")
             .blocked_reasons
             .is_empty());
