@@ -140,6 +140,7 @@ enum MarkdownAttributed {
         var blocks: [(start: Int, shape: BlockShape)] = []
         var lastBlock: Int?
         var numbered = Set<Int>()
+        var tables = TableBuilder(size: size)
         for run in parsed.runs {
             let intent = run.presentationIntent
             let block = intent?.components.first?.identity
@@ -151,6 +152,9 @@ enum MarkdownAttributed {
                 var shape = BlockShape.paragraph
                 if isCode {
                     shape = .code
+                } else if let cell = tables.cell(intent) {
+                    // 2026-11-06: a table cell sits in its grid, not on a line of its own.
+                    shape = .tableCell(cell)
                 } else if let item = listItem(intent) {
                     let first = numbered.insert(item.identity).inserted
                     shape = .list(depth: item.depth, first: first)
@@ -167,15 +171,25 @@ enum MarkdownAttributed {
             lastBlock = block
             var text = String(parsed[run.range].characters)
             if isCode, text.hasSuffix("\n") { text.removeLast() }
-            out.append(NSAttributedString(string: text, attributes: attributes(for: run, intent: intent,
-                                                                                isCode: isCode, size: size, fonts: fonts)))
+            var attributes = attributes(for: run, intent: intent, isCode: isCode, size: size, fonts: fonts)
+            if case let .tableCell(cell)? = blocks.last?.shape, cell.header, attributes[.inlineCode] == nil {
+                attributes[.font] = fonts.text(size, .semibold)
+            }
+            out.append(NSAttributedString(string: text, attributes: attributes))
         }
         padInlineCode(out)
         for (index, block) in blocks.enumerated() where block.shape != .code {
             let end = index + 1 < blocks.count ? blocks[index + 1].start : out.length
             guard end > block.start else { continue }
             let next = index + 1 < blocks.count ? blocks[index + 1].shape : nil
-            out.addAttribute(.paragraphStyle, value: paragraphStyle(block.shape, next: next, size: size),
+            var style = paragraphStyle(block.shape, next: next, size: size)
+            // The first block after a table keeps a paragraph's gap from it.
+            if index > 0, case .tableCell = blocks[index - 1].shape, !block.shape.isTableCell {
+                let spaced = (style.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+                spaced.paragraphSpacingBefore = size * 0.7
+                style = spaced
+            }
+            out.addAttribute(.paragraphStyle, value: style,
                              range: NSRange(location: block.start, length: end - block.start))
         }
         return out
@@ -203,9 +217,12 @@ enum MarkdownAttributed {
         case code
         /// `first` is the item's own line, the one carrying its marker.
         case list(depth: Int, first: Bool)
+        /// One cell of a Markdown table, laid out by AppKit's text table.
+        case tableCell(TableCell)
 
         var isFirstListLine: Bool { if case .list(_, true) = self { return true }; return false }
         var isList: Bool { if case .list = self { return true }; return false }
+        var isTableCell: Bool { if case .tableCell = self { return true }; return false }
     }
 
     /// Line height about 1.75; half a line between paragraphs, less between
@@ -217,6 +234,9 @@ enum MarkdownAttributed {
         switch shape {
         case .paragraph, .code:
             break
+        case let .tableCell(cell):
+            style.textBlocks = [cell.block]
+            style.paragraphSpacing = 0
         case .header:
             style.paragraphSpacingBefore = size * 0.4
             style.paragraphSpacing = size * 0.35
@@ -231,6 +251,67 @@ enum MarkdownAttributed {
             style.paragraphSpacing = (next?.isList ?? false) ? size * 0.4 : size * 0.7
         }
         return style
+    }
+
+    struct TableCell: Equatable {
+        let block: NSTextTableBlock
+        let header: Bool
+    }
+
+    /// The text tables of one message: each Markdown table becomes an
+    /// `NSTextTable`, its rows numbered in order (the header row first).
+    struct TableBuilder {
+        let size: CGFloat
+        private var tables: [Int: NSTextTable] = [:]
+        private var rows: [Int: [Int: Int]] = [:]
+
+        init(size: CGFloat) { self.size = size }
+
+        mutating func cell(_ intent: PresentationIntent?) -> TableCell? {
+            guard let components = intent?.components else { return nil }
+            var column: Int?
+            var row: (identity: Int, header: Bool)?
+            var table: (identity: Int, columns: Int)?
+            for component in components {
+                switch component.kind {
+                case let .tableCell(index): column = index
+                case .tableHeaderRow: row = (component.identity, true)
+                case .tableRow: row = (component.identity, false)
+                case let .table(columns): table = (component.identity, columns.count)
+                default: break
+                }
+            }
+            guard let column, let row, let table else { return nil }
+            let text = tables[table.identity] ?? {
+                let made = NSTextTable()
+                made.numberOfColumns = max(1, table.columns)
+                made.layoutAlgorithm = .automaticLayoutAlgorithm
+                made.collapsesBorders = true
+                made.hidesEmptyCells = false
+                // The outer border sits on the text container's edge and was
+                // clipped on the right (目检 2026-11-06): keep it inside.
+                made.setWidth(1, type: .absoluteValueType, for: .margin, edge: .maxX)
+                made.setWidth(1, type: .absoluteValueType, for: .margin, edge: .minX)
+                return made
+            }()
+            tables[table.identity] = text
+            var numbers = rows[table.identity] ?? [:]
+            let number = numbers[row.identity] ?? numbers.count
+            numbers[row.identity] = number
+            rows[table.identity] = numbers
+            let block = NSTextTableBlock(table: text, startingRow: number, rowSpan: 1,
+                                         startingColumn: column, columnSpan: 1)
+            block.setWidth(0.5, type: .absoluteValueType, for: .border)
+            block.setBorderColor(NSColor(AeroricColor.separator2))
+            block.setWidth(size * 0.4, type: .absoluteValueType, for: .padding, edge: .minY)
+            block.setWidth(size * 0.4, type: .absoluteValueType, for: .padding, edge: .maxY)
+            block.setWidth(size * 0.7, type: .absoluteValueType, for: .padding, edge: .minX)
+            block.setWidth(size * 0.7, type: .absoluteValueType, for: .padding, edge: .maxX)
+            if row.header {
+                block.backgroundColor = NSColor(AeroricColor.layer2)
+            }
+            return TableCell(block: block, header: row.header)
+        }
     }
 
     static func bodyAttributes(_ size: CGFloat, _ fonts: Fonts = Fonts()) -> [NSAttributedString.Key: Any] {
