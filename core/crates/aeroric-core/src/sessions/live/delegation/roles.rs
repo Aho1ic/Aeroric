@@ -53,6 +53,17 @@ pub fn builtin() -> Vec<Role> {
             "plan",
             Workspace::ReadOnly,
         ),
+        // R2 收尾（Q-R7）: options before code, from the other family.
+        role(
+            "ideator",
+            "构想者",
+            "另一族只读构想：给出几种做法和取舍",
+            "只构想，不要修改任何文件，也不要写实现代码。给出 2–3 个可选方案，每个写清思路、代价、风险和适用条件；最后给出你的推荐和理由。",
+            AgentChoice::Other,
+            ContextMode::Isolated,
+            "plan",
+            Workspace::ReadOnly,
+        ),
         role(
             "implementer",
             "实现者",
@@ -197,7 +208,7 @@ mod tests {
         let tmp =
             std::env::temp_dir().join(format!("aeroric-roles-{}", uuid::Uuid::new_v4().simple()));
         let dir = tmp.as_path();
-        assert_eq!(list(Some(dir)).len(), 4);
+        assert_eq!(list(Some(dir)).len(), 5);
         let mut researcher = find(Some(dir), "调研员").unwrap();
         researcher.instruction = "只看 docs/".into();
         let saved = save(dir, researcher).unwrap();
@@ -217,7 +228,7 @@ mod tests {
         )
         .unwrap();
         assert!(mine.id.starts_with("role-") && !mine.builtin);
-        assert_eq!(list(Some(dir)).len(), 5);
+        assert_eq!(list(Some(dir)).len(), 6);
         assert!(save(
             dir,
             Role {
@@ -242,6 +253,6 @@ mod tests {
         assert!(!find(Some(dir), "researcher").unwrap().customized);
         assert!(delete(dir, "researcher").unwrap_err().contains("内置"));
         delete(dir, &mine.id).unwrap();
-        assert_eq!(list(Some(dir)).len(), 4);
+        assert_eq!(list(Some(dir)).len(), 5);
     }
 }

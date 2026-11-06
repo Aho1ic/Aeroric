@@ -1693,7 +1693,7 @@ async fn a_delegation_runs_in_a_child_and_its_result_comes_back() {
         .collect();
     assert_eq!(actions, ["refuse", "start", "report", "send"], "{audit}");
     let roles = host.call("delegation.roles", json!({})).await.unwrap();
-    assert_eq!(roles["roles"].as_array().unwrap().len(), 4);
+    assert_eq!(roles["roles"].as_array().unwrap().len(), 5);
     let stats = host.call("delegation.stats", json!({})).await.unwrap();
     assert_eq!(stats["rows"][0]["reported"], 1);
     let updates = host

@@ -194,6 +194,12 @@ struct DelegationPanelSection: View {
         return nil
     }
 
+    @ViewBuilder private var budgetFields: some View {
+        CapsuleField(placeholder: "时长上限（分钟，默认 30）", text: $draft.minutes, height: 26)
+        CapsuleField(placeholder: "token 上限（如 200k，默认不限）", text: $draft.tokens, height: 26)
+            .accessibilityIdentifier("progress.delegation.tokens")
+    }
+
     @ViewBuilder private var form: some View {
         CapsuleField(placeholder: "要子会话做什么", text: $draft.instruction)
             .accessibilityIdentifier("progress.delegation.instruction")
@@ -236,10 +242,12 @@ struct DelegationPanelSection: View {
         CapsuleField(placeholder: "验收条款（可选）", text: $draft.acceptance, height: 26)
         CapsuleField(placeholder: "核对命令（可选，如 cargo test）", text: $draft.check, height: 26)
         CapsuleField(placeholder: "先读的文件（可选，用逗号分隔）", text: $draft.files, height: 26)
-        HStack(spacing: AeroricSpace.m) {
-            CapsuleField(placeholder: "时长上限（分钟，默认 30）", text: $draft.minutes, height: 26)
-            CapsuleField(placeholder: "token 上限（如 200k，默认不限）", text: $draft.tokens, height: 26)
-                .accessibilityIdentifier("progress.delegation.tokens")
+        // 目检 2026-11-06: side by side only when both hints fit; a narrow
+        // panel stacks them so neither is cut short.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: AeroricSpace.m) { budgetFields }
+                .frame(minWidth: 420)
+            VStack(spacing: AeroricSpace.s) { budgetFields }
         }
         ForEach(Array(model.reputation(role: draft.role, agent: pickedAgent).prefix(2).enumerated()), id: \.offset) { _, row in
             Text(DelegationText.reputation(row, roles: model.roles))
