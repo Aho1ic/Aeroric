@@ -71,6 +71,18 @@ pub enum Route {
     RemoteOmp(RemoteKey),
 }
 
+impl Route {
+    /// Whether the agent runs on this Mac and can start the local
+    /// `aeroric-cli` context server. A remote `codex app-server` cannot.
+    pub fn runs_locally(&self) -> bool {
+        match self {
+            Route::Codex(ServerKey::Remote(_)) => false,
+            Route::Codex(_) | Route::Claude(_) => true,
+            Route::Omp(_) | Route::RemoteClaude(_) | Route::RemoteOmp(_) => false,
+        }
+    }
+}
+
 /// What the host decides per run: whether `(family, agent, agent configuration)`
 /// goes structured — and how — and how to start the agent.
 pub trait Routing: Send + Sync {
@@ -569,8 +581,7 @@ impl StructuredExecutor {
                 &self.runtime,
             ),
         };
-        // A remote machine has no local `aeroric-cli` to start.
-        if matches!(route, Route::Codex(_) | Route::Claude(_)) {
+        if route.runs_locally() {
             self.give_context(&spec.task_id, &spec.project_id, &session);
         }
         self.registry

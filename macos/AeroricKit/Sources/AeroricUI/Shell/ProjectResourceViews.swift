@@ -174,10 +174,12 @@ public struct ProjectResourceInspector: View {
                 }
                 .listRowSeparator(.hidden)
             }
-            .contextMenu(forSelectionType: String?.self, menu: { paths in
-                menu(for: paths.compactMap { $0 }.first)
+            // A single-selection List(selection: String?) tags rows with String;
+            // the item menu must name that same String type or it never fires.
+            .contextMenu(forSelectionType: String.self, menu: { paths in
+                menu(for: paths.first)
             }, primaryAction: { paths in
-                guard let path = paths.compactMap({ $0 }).first,
+                guard let path = paths.first,
                       rows.contains(where: { $0.id == path && !$0.node.isDir }) else { return }
                 onOpen(.init(projectID: projectID, path: path, kind: .file))
             })
@@ -236,7 +238,7 @@ public struct ProjectResourceInspector: View {
             }
         }
         .modifier(TreeIndent(depth: row.depth, indent: Self.indent))
-        .tag(Optional(row.id))
+        .tag(row.id)
         .listRowInsets(insets)
     }
 
@@ -254,7 +256,7 @@ public struct ProjectResourceInspector: View {
             }
         }
         .modifier(TreeIndent(depth: row.depth, indent: Self.indent))
-        .tag(Optional(row.id))
+        .tag(row.id)
         .listRowInsets(insets)
     }
 

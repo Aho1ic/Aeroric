@@ -609,3 +609,17 @@ async fn a_turn_that_changed_files_runs_the_projects_tests() {
     );
     std::fs::remove_dir_all(&repo).ok();
 }
+
+#[test]
+fn only_local_routes_get_the_local_context_server() {
+    let remote = RemoteKey {
+        connection_id: "ssh-1".into(),
+        agent: "codex".into(),
+        config: None,
+    };
+    assert!(Route::Codex(ServerKey::Agent("codex".into())).runs_locally());
+    assert!(Route::Codex(ServerKey::Config("cfg".into())).runs_locally());
+    assert!(!Route::Codex(ServerKey::Remote(remote.clone())).runs_locally());
+    assert!(!Route::RemoteClaude(remote.clone()).runs_locally());
+    assert!(!Route::RemoteOmp(remote).runs_locally());
+}

@@ -59,6 +59,24 @@ fn arg_validation_rejects_option_injection() {
 }
 
 #[test]
+fn output_larger_than_a_pipe_buffer_is_read_before_the_timeout() {
+    let repo = new_repo("git-big-output");
+    let line = "0123456789abcdef".repeat(8);
+    let big: String = (0..2000).map(|i| format!("{i:05} {line}\n")).collect();
+    assert!(big.len() > 200 * 1024);
+    commit_file(&repo, "big.txt", &big, "big");
+    let output = transport::run_git(
+        &repo.root,
+        &["show", "HEAD:big.txt"],
+        std::time::Duration::from_secs(5),
+        None,
+    )
+    .expect("a big output must not fill the pipe and hang git");
+    assert!(output.success);
+    assert_eq!(output.stdout, big);
+}
+
+#[test]
 fn status_lists_untracked_and_staged() {
     let repo = new_repo("aeroric-git-status");
     std::fs::write(repo.root.join("untracked.txt"), "x").unwrap();

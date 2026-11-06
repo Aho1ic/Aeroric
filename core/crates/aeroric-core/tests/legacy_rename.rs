@@ -283,13 +283,21 @@ fn rename_keeps_dangling_destination_entry_replacement_distinct_from_native_over
     {
         use std::os::unix::fs::{symlink, PermissionsExt};
         let native = project.join("native-source");
-        fs::write(&native, b"native overwrite is a different policy").unwrap();
+        fs::write(&native, b"native rename refuses an occupied name too").unwrap();
         let before = snapshot(root);
         assert_eq!(
             read_write::rename_path(&project, "native-source", "occupied"),
-            Ok(())
+            Err(read_write::RENAME_TARGET_EXISTS.into())
         );
-        assert_renamed_only(root, before, &native, &occupied, true);
+        assert_eq!(snapshot(root), before);
+        // A dangling link still occupies the name.
+        symlink(root.join("absent-referent"), project.join("dangling-name")).unwrap();
+        let before = snapshot(root);
+        assert_eq!(
+            read_write::rename_path(&project, "native-source", "dangling-name"),
+            Err(read_write::RENAME_TARGET_EXISTS.into())
+        );
+        assert_eq!(snapshot(root), before);
         for (index, looping) in [false, true].into_iter().enumerate() {
             let source = project.join(format!("raw\\source-{index}"));
             let name = format!("destination-{index}");

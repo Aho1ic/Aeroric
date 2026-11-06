@@ -131,6 +131,27 @@ fn rename_stays_within_root() {
 }
 
 #[test]
+fn rename_never_overwrites_but_allows_a_case_only_change() {
+    let (_tmp, root) = temp_project();
+    std::fs::write(root.join("keep.txt"), b"keep me").unwrap();
+    std::fs::write(root.join("mover.txt"), b"mover").unwrap();
+    assert_eq!(
+        read_write::rename_path(&root, "mover.txt", "keep.txt"),
+        Err(read_write::RENAME_TARGET_EXISTS.to_string())
+    );
+    assert_eq!(std::fs::read(root.join("keep.txt")).unwrap(), b"keep me");
+    assert_eq!(std::fs::read(root.join("mover.txt")).unwrap(), b"mover");
+    // On a case-insensitive volume "Mover.txt" resolves to the source itself.
+    read_write::rename_path(&root, "mover.txt", "Mover.txt").unwrap();
+    let names: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert!(names.contains(&"Mover.txt".to_string()), "{names:?}");
+    assert!(!names.contains(&"mover.txt".to_string()), "{names:?}");
+}
+
+#[test]
 fn rg_parse_and_replace_preview_and_stale_skip() {
     let (_tmp, root) = temp_project();
     read_write::write_file_content(&root, "code.txt", "alpha beta alpha\n").unwrap();

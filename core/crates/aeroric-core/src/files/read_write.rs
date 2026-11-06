@@ -106,6 +106,8 @@ pub fn create_directory(root: &std::path::Path, relative: &str) -> Result<(), St
 }
 
 /// 重命名（业务主体）：目标名经 validate_relative_path 组件校验；同目录内。
+/// 目标已存在（含悬空链接）拒绝，绝不覆盖；只有目标就是源本身（大小写
+/// 不敏感卷上只改大小写）时放行。检查与 rename 之间仍有 TOCTOU 窗口。
 pub fn rename_path(root: &std::path::Path, relative: &str, new_name: &str) -> Result<(), String> {
     super::path_policy::validate_relative_path(new_name)?;
     let canonical = super::path_policy::resolve_within(root, relative)?;
@@ -124,7 +126,32 @@ pub fn rename_path(root: &std::path::Path, relative: &str, new_name: &str) -> Re
     if !target.starts_with(&canonical_root) {
         return Err("path escapes the project root".to_string());
     }
+    // symlink_metadata：悬空链接也算占用（exists() 会跟随链接而误判为空闲）。
+    if let Ok(existing) = std::fs::symlink_metadata(&target) {
+        if !same_entry(&canonical, &existing) {
+            return Err(RENAME_TARGET_EXISTS.to_string());
+        }
+    }
     std::fs::rename(&canonical, &target).map_err(|error| format!("cannot rename: {error}"))
+}
+
+/// 重命名目标已被占用时的报错（界面原样显示）。
+pub const RENAME_TARGET_EXISTS: &str = "已有同名文件或文件夹";
+
+/// 目标条目与源是否同一个（同设备同 inode）。
+fn same_entry(source: &std::path::Path, target: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::symlink_metadata(source)
+            .map(|meta| meta.dev() == target.dev() && meta.ino() == target.ino())
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (source, target);
+        false
+    }
 }
 
 /// 删除（业务主体）：进废纸篓（trash crate；DELETE_USES_TRASH）——**不默认

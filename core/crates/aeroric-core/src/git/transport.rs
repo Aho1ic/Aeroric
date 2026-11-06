@@ -120,35 +120,27 @@ impl GitOutput {
 }
 
 /// 等待子进程并收集输出（run_git/run_git_network 共用；read timeout kill
-/// child——不留持锁进程）。
+/// child——不留持锁进程）。stdout/stderr 由两个线程边跑边读：管道缓冲约
+/// 64KB，等退出后再读会让大输出的 git 写满管道、永远不退出。
 fn collect_output(mut child: std::process::Child, timeout: Duration) -> Result<GitOutput, String> {
+    fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> std::thread::JoinHandle<String> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut buf);
+            }
+            String::from_utf8_lossy(&buf).into_owned()
+        })
+    }
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
     let deadline = std::time::Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stdout = child
-                    .stdout
-                    .take()
-                    .map(|mut s| {
-                        use std::io::Read;
-                        let mut buf = String::new();
-                        let _ = s.read_to_string(&mut buf);
-                        buf
-                    })
-                    .unwrap_or_default();
-                let stderr = child
-                    .stderr
-                    .take()
-                    .map(|mut s| {
-                        use std::io::Read;
-                        let mut buf = String::new();
-                        let _ = s.read_to_string(&mut buf);
-                        buf
-                    })
-                    .unwrap_or_default();
                 return Ok(GitOutput {
-                    stdout,
-                    stderr,
+                    stdout: stdout.join().unwrap_or_default(),
+                    stderr: stderr.join().unwrap_or_default(),
                     success: status.success(),
                 });
             }
@@ -156,6 +148,7 @@ fn collect_output(mut child: std::process::Child, timeout: Duration) -> Result<G
                 if std::time::Instant::now() > deadline {
                     let _ = child.kill();
                     let _ = child.wait();
+                    // 不 join：孙进程可能仍握着管道；读线程随管道关闭自行结束。
                     return Err("git command timed out".to_string());
                 }
                 std::thread::sleep(Duration::from_millis(10));
