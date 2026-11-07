@@ -253,9 +253,31 @@ fn rename_preserves_unfollowed_source_leaf_identity_including_outside_and_broken
         symlink(root.join("outside-referent"), project.join("outside-link")).unwrap();
         symlink(root.join("absent-referent"), project.join("dangling")).unwrap();
         symlink("loop", project.join("loop")).unwrap();
+        // Native rename moves the link itself, never its outside referent.
         let before = snapshot(root);
-        assert!(read_write::rename_path(&project, "outside-link", "native-unused").is_err());
-        assert_eq!(snapshot(root), before);
+        assert_eq!(
+            read_write::rename_path(&project, "outside-link", "native-renamed"),
+            Ok(())
+        );
+        assert_renamed_only(
+            root,
+            before,
+            &project.join("outside-link"),
+            &project.join("native-renamed"),
+            false,
+        );
+        let before = snapshot(root);
+        assert_eq!(
+            read_write::rename_path(&project, "native-renamed", "outside-link"),
+            Ok(())
+        );
+        assert_renamed_only(
+            root,
+            before,
+            &project.join("native-renamed"),
+            &project.join("outside-link"),
+            false,
+        );
         for name in ["inside-link", "outside-link", "dangling", "loop"] {
             let source = project.join(name);
             let new_name = format!("renamed-{name}");

@@ -1934,13 +1934,14 @@ pub fn unstage(repo_root: &Path, file_path: &str, locks: &RepoLocks) -> Result<(
     Ok(())
 }
 
-/// commit（mutating；串行化；message 带 `-m`——换行/空格安全，argv 传递）。
+/// commit（mutating；串行化；说明经标准输入 `-F -` 传入——多行说明原样保留）。
 pub fn commit(repo_root: &Path, message: &str, locks: &RepoLocks) -> Result<(), String> {
-    transport::validate_git_arg(message)?;
+    validate_commit_message(message)?;
     let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
-    let output = transport::run_git(
+    let output = transport::run_git_with_input(
         repo_root,
-        &["commit", "-m", message],
+        &["commit", "-F", "-"],
+        message,
         transport::READ_TIMEOUT,
         Some(&lock),
     )?;
@@ -1956,16 +1957,28 @@ pub fn commit_allow_empty(
     message: &str,
     locks: &RepoLocks,
 ) -> Result<(), String> {
-    transport::validate_git_arg(message)?;
+    validate_commit_message(message)?;
     let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
-    let output = transport::run_git(
+    let output = transport::run_git_with_input(
         repo_root,
-        &["commit", "--allow-empty", "-m", message],
+        &["commit", "--allow-empty", "-F", "-"],
+        message,
         transport::READ_TIMEOUT,
         Some(&lock),
     )?;
     if !output.success {
         return Err(transport::git_command_error(&output, "Failed to commit"));
+    }
+    Ok(())
+}
+
+/// 提交说明：可以多行，不能为空白、不能含 NUL。
+fn validate_commit_message(message: &str) -> Result<(), String> {
+    if message.trim().is_empty() {
+        return Err("commit message is empty".to_string());
+    }
+    if message.contains('\0') {
+        return Err("commit message contains NUL".to_string());
     }
     Ok(())
 }

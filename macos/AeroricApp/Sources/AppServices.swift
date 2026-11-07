@@ -1160,7 +1160,7 @@ extension AppServices: WorkspaceStateProviding {
         switch action {
         case .stage, .stageAll: "正在暂存…"
         case .unstage, .unstageAll: "正在取消暂存…"
-        case .commit: "正在提交…"
+        case .commit: GitPageText.committing
         case .checkout: "正在切换分支…"
         case .createBranch: "正在新建分支…"
         case .discardFile, .discard: "正在放弃改动…"

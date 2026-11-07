@@ -132,11 +132,56 @@ fn empty_commit_allowed_and_index_unchanged_after_cancel() {
     service::commit_allow_empty(&repo.root, "empty", &service::GitService::new().locks).unwrap();
     let log = service::log(&repo.root, 10, None, None).unwrap();
     assert!(log.iter().any(|c| c.message == "empty"), "空提交允许");
-    // 取消 commit（消息含换行被拒）后 index 不被额外改变。
+    // 取消 commit（空白说明被拒）后 index 不被额外改变。
     let before = service::status(&repo.root).unwrap();
-    assert!(service::commit(&repo.root, "multi\nline", &service::GitService::new().locks).is_err());
+    assert!(service::commit(&repo.root, "  \n ", &service::GitService::new().locks).is_err());
+    assert!(service::commit(&repo.root, "nul\0byte", &service::GitService::new().locks).is_err());
     let after = service::status(&repo.root).unwrap();
     assert_eq!(before, after, "取消 commit 后 index 不被额外改变");
+}
+
+#[test]
+fn a_wildcard_file_name_is_discarded_literally() {
+    let repo = new_repo("git-literal-pathspec");
+    commit_file(&repo, "a*", "star", "init star");
+    commit_file(&repo, "ab", "plain", "init ab");
+    std::fs::write(repo.root.join("a*"), "star changed").unwrap();
+    std::fs::write(repo.root.join("ab"), "plain changed").unwrap();
+    service::discard_file(&repo.root, "a*", false, &service::GitService::new().locks).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(repo.root.join("a*")).unwrap(),
+        "star"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.root.join("ab")).unwrap(),
+        "plain changed",
+        "discarding a* must not touch ab"
+    );
+    service::stage(&repo.root, "a*", &service::GitService::new().locks).unwrap();
+    std::fs::write(repo.root.join("a*"), "star again").unwrap();
+    service::stage(&repo.root, "a*", &service::GitService::new().locks).unwrap();
+    let staged = std::process::Command::new("git")
+        .args(["diff", "--cached", "--name-only"])
+        .current_dir(&repo.root)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&staged.stdout).trim(), "a*");
+}
+
+#[test]
+fn a_multi_line_commit_message_is_kept_verbatim() {
+    let repo = new_repo("git-multiline-commit");
+    commit_file(&repo, "a.txt", "x", "init");
+    std::fs::write(repo.root.join("a.txt"), "y").unwrap();
+    service::stage(&repo.root, "a.txt", &service::GitService::new().locks).unwrap();
+    let message = "Subject line\n\nBody with -m and --amend text\n# not a comment to strip";
+    service::commit(&repo.root, message, &service::GitService::new().locks).unwrap();
+    let body = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(&repo.root)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&body.stdout).trim_end(), message);
 }
 
 #[test]

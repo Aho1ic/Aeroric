@@ -691,7 +691,9 @@ final class ChildHandle: @unchecked Sendable {
         cArgs.append(nil)
         defer { for p in cArgs where p != nil { free(p) } }
 
-        var envVariables: [String] = ["PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=" + (NSHomeDirectory())]
+        // USER: Claude Code keys its keychain login by it (the host renews that login).
+        var envVariables: [String] = ["PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=" + (NSHomeDirectory()),
+                                      "USER=" + NSUserName()]
         for (key, value) in environment { envVariables.append("\(key)=\(value)") }
         var cEnv: [UnsafeMutablePointer<CChar>?] = envVariables.map { $0.withCString { strdup($0) } }
         cEnv.append(nil)

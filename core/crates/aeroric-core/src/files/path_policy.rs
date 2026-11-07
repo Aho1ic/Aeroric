@@ -115,6 +115,31 @@ pub fn resolve_parent_within(
     Ok((parent_path, name))
 }
 
+/// 改名、移到废纸篓的对象：父目录 canonicalize 落根内，末段**不跟随**链接
+/// ——作用于链接本身，而不是它指向的文件（指向项目根的链接也只动链接）。
+/// 末段须已存在（悬空链接也算存在）。
+pub fn resolve_entry_within(
+    root: &std::path::Path,
+    relative: &str,
+) -> Result<std::path::PathBuf, String> {
+    let (parent, name) = resolve_parent_within(root, relative)?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve project root: {error}"))?;
+    let parent = parent
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve parent: {error}"))?;
+    if !parent.starts_with(&canonical_root) {
+        return Err("path escapes the project root".to_string());
+    }
+    let entry = parent.join(name);
+    if entry == canonical_root {
+        return Err("refusing to act on the project root".to_string());
+    }
+    std::fs::symlink_metadata(&entry).map_err(|error| format!("cannot resolve path: {error}"))?;
+    Ok(entry)
+}
+
 /// Parent containment does not authorize a leaf symlink. Existing leaves must
 /// resolve inside the project; unresolved links must not create their referent.
 /// An ordinary absent leaf is allowed under the already-checked parent.

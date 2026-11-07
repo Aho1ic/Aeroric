@@ -7,6 +7,16 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// 带路径的写命令按字面解释路径：`a*` 只指名叫 `a*` 的文件，放弃/暂存不会扩大
+/// 到 `ab`（与 diff 的 `--literal-pathspecs` 一致）。只给这几个子命令：`stash -u`
+/// 等内部依赖 pathspec 魔法，全局打开会让未跟踪文件留在工作区。
+fn literal_pathspecs(args: &[&str]) -> Option<(&'static str, &'static str)> {
+    const PATH_WRITES: [&str; 5] = ["add", "restore", "reset", "checkout", "rm"];
+    args.first()
+        .filter(|command| PATH_WRITES.contains(command))
+        .map(|_| ("GIT_LITERAL_PATHSPECS", "1"))
+}
+
 /// read timeout（不留下持锁进程：超时 kill child）。
 pub const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// 网络命令 timeout（fetch/pull/push——不会因为等凭据而挂住的策略由调用方
@@ -158,6 +168,52 @@ fn collect_output(mut child: std::process::Child, timeout: Duration) -> Result<G
     }
 }
 
+/// 运行 git 并把 `input` 写进它的标准输入（提交说明走 `-F -`：多行说明不经
+/// argv，也就不受 validate_git_arg 的换行限制）。其余同 [`run_git`]。
+pub fn run_git_with_input(
+    repo_root: &Path,
+    args: &[&str],
+    input: &str,
+    timeout: Duration,
+    serial: Option<&Arc<Mutex<()>>>,
+) -> Result<GitOutput, String> {
+    for arg in args {
+        validate_git_arg(arg)?;
+    }
+    if input.contains('\0') {
+        return Err("git input contains NUL".to_string());
+    }
+    let run = || -> Result<GitOutput, String> {
+        let mut child = Command::new("git")
+            .args(args)
+            .envs(literal_pathspecs(args))
+            .current_dir(repo_root)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to run git: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            let input = input.to_string();
+            // 写端在线程里：git 不读 stdin 时不会把这里卡住；写完 drop 即 EOF。
+            std::thread::spawn(move || {
+                use std::io::Write;
+                let _ = stdin.write_all(input.as_bytes());
+            });
+        }
+        collect_output(child, timeout)
+    };
+    match serial {
+        Some(lock) => {
+            let guard = lock.lock().map_err(|e| e.to_string())?;
+            let result = run();
+            drop(guard);
+            result
+        }
+        None => run(),
+    }
+}
+
 /// 运行 git（业务主体；read timeout kill child——不留持锁进程；mutating
 /// 操作传 `serial: Some(&lock)` 串行化）。
 pub fn run_git(
@@ -173,6 +229,7 @@ pub fn run_git(
     let run = || -> Result<GitOutput, String> {
         let child = Command::new("git")
             .args(args)
+            .envs(literal_pathspecs(args))
             .current_dir(repo_root)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
@@ -209,6 +266,7 @@ pub fn run_git_network(
     let mut command = Command::new("git");
     command
         .args(args)
+        .envs(literal_pathspecs(args))
         .current_dir(repo_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

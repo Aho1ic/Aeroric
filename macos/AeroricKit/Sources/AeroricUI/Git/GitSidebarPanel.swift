@@ -3,6 +3,9 @@ import SwiftUI
 /// The Git panel's words and status marks (2026-10-30), kept out of the view
 /// so they can be tested.
 public enum GitPageText {
+    /// `GitStore.working` while a commit runs; the panel keys its draft on it.
+    public static let committing = "正在提交…"
+
     public static func commitTitle(stagedCount: Int) -> String {
         stagedCount > 0 ? "提交 \(stagedCount) 个文件" : "提交"
     }
@@ -79,6 +82,9 @@ public struct GitSidebarPanel: View {
 
     @State private var selected: String?
     @State private var message = ""
+    /// The message handed to the commit in flight; the draft clears only
+    /// when that commit succeeds and the user has not typed since.
+    @State private var committing: String?
     @State private var generating = false
     @State private var newBranch = ""
     @State private var creatingBranch = false
@@ -118,6 +124,11 @@ public struct GitSidebarPanel: View {
             .scrollIndicators(.hidden)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onChange(of: store.working) { old, new in
+            guard old == GitPageText.committing, new == nil, let sent = committing else { return }
+            committing = nil
+            if store.actionError == nil, message == sent { message = "" }
+        }
         .alert("放弃这个文件的改动？", isPresented: Binding(get: { discarding != nil }, set: { if !$0 { discarding = nil } }),
                presenting: discarding) { change in
             Button("放弃改动", role: .destructive) {
@@ -321,8 +332,8 @@ public struct GitSidebarPanel: View {
                 .disabled(staged == 0 || generating || busy)
                 .help("让 Codex 根据已暂存的改动写提交说明")
                 Button(GitPageText.commitTitle(stagedCount: staged)) {
+                    committing = message
                     onAction(.commit(message: message.trimmingCharacters(in: .whitespacesAndNewlines)))
-                    message = ""
                 }
                 .buttonStyle(AeroricCapsuleButtonStyle(.primary, compact: true))
                 .disabled(!canCommit)

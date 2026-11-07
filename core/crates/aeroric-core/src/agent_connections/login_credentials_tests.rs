@@ -314,3 +314,30 @@ fn tokens_never_show_in_debug_output() {
     };
     assert!(!format!("{token:?}").contains("secret-value"));
 }
+
+#[test]
+fn the_keychain_write_goes_through_stdin_and_never_needs_escaping() {
+    let line = interactive_add_line("Claude Code-credentials", "me", "7b7d")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        line,
+        "add-generic-password -U -a \"me\" -s \"Claude Code-credentials\" -X \"7b7d\"\n"
+    );
+    // Too long for one `security -i` line: the caller falls back to argv.
+    assert_eq!(
+        interactive_add_line("svc", "me", &"ab".repeat(2100)).unwrap(),
+        None
+    );
+    for bad in ["a\"b", "a\\b", "a\nb"] {
+        assert!(interactive_add_line("svc", bad, "00").is_err());
+        assert!(interactive_add_line(bad, "me", "00").is_err());
+    }
+}
+
+#[test]
+fn the_account_falls_back_to_the_process_user_without_user() {
+    let name = login_name().expect("this process has a passwd entry");
+    assert!(!name.is_empty());
+    assert_ne!(name, "claude-code-user");
+}

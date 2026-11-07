@@ -130,6 +130,33 @@ fn rename_stays_within_root() {
     assert!(read_write::rename_path(&root, "a.txt", "../escape.txt").is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn rename_and_trash_act_on_a_link_never_on_its_target() {
+    use std::os::unix::fs::symlink;
+    let (_tmp, root) = temp_project();
+    std::fs::write(root.join("target.txt"), b"target").unwrap();
+    symlink("target.txt", root.join("alias")).unwrap();
+    symlink(&root, root.join("root-alias")).unwrap();
+    read_write::rename_path(&root, "alias", "alias2").unwrap();
+    assert_eq!(std::fs::read(root.join("target.txt")).unwrap(), b"target");
+    assert!(std::fs::symlink_metadata(root.join("alias2"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    for name in ["alias2", "root-alias"] {
+        let mut trashed = None;
+        read_write::delete_path_with_trash(&root, name, |path| {
+            trashed = Some(path.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        let trashed = trashed.unwrap();
+        assert_eq!(trashed.file_name().unwrap(), name);
+        assert_ne!(trashed, root.canonicalize().unwrap());
+    }
+}
+
 #[test]
 fn rename_never_overwrites_but_allows_a_case_only_change() {
     let (_tmp, root) = temp_project();

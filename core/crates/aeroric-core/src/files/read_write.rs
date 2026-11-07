@@ -105,12 +105,13 @@ pub fn create_directory(root: &std::path::Path, relative: &str) -> Result<(), St
     std::fs::create_dir(&target).map_err(|error| format!("cannot create directory: {error}"))
 }
 
-/// 重命名（业务主体）：目标名经 validate_relative_path 组件校验；同目录内。
+/// 重命名（业务主体）：目标名经 validate_relative_path 组件校验；同目录内；
+/// 末段是链接时只改链接本身的名字。
 /// 目标已存在（含悬空链接）拒绝，绝不覆盖；只有目标就是源本身（大小写
 /// 不敏感卷上只改大小写）时放行。检查与 rename 之间仍有 TOCTOU 窗口。
 pub fn rename_path(root: &std::path::Path, relative: &str, new_name: &str) -> Result<(), String> {
     super::path_policy::validate_relative_path(new_name)?;
-    let canonical = super::path_policy::resolve_within(root, relative)?;
+    let canonical = super::path_policy::resolve_entry_within(root, relative)?;
     let parent = canonical
         .parent()
         .ok_or_else(|| "cannot determine parent".to_string())?;
@@ -155,7 +156,7 @@ fn same_entry(source: &std::path::Path, target: &std::fs::Metadata) -> bool {
 }
 
 /// 删除（业务主体）：进废纸篓（trash crate；DELETE_USES_TRASH）——**不默认
-/// 永久删除**；trash 不可用时拒绝（不回退 rm）。
+/// 永久删除**；trash 不可用时拒绝（不回退 rm）。末段是链接时只移走链接。
 pub fn delete_path(root: &std::path::Path, relative: &str) -> Result<(), String> {
     delete_path_with_trash(root, relative, |path| {
         trash::delete(path).map_err(|error| format!("cannot trash path: {error}"))
@@ -169,8 +170,8 @@ pub fn delete_path_with_trash(
     relative: &str,
     trash: impl FnOnce(&std::path::Path) -> Result<(), String>,
 ) -> Result<(), String> {
-    let canonical = super::path_policy::resolve_within(root, relative)?;
-    trash(&canonical)
+    let entry = super::path_policy::resolve_entry_within(root, relative)?;
+    trash(&entry)
 }
 
 /// Existing hosted project-scoped copy, not legacy absolute/external-source

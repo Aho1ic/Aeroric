@@ -118,28 +118,106 @@ impl Keychain for SecurityCli {
     }
 
     fn write(&self, service: &str, account: &str, data: &str) -> Result<(), String> {
-        // `-X` takes hex, so the JSON never sits in argv as plain text.
+        let hex = hex::encode(data);
         let mut cmd = std::process::Command::new("/usr/bin/security");
         crate::runtime::subprocess::configure_background_command(&mut cmd);
-        let output = cmd
-            .args([
-                "add-generic-password",
-                "-U",
-                "-a",
-                account,
-                "-s",
-                service,
-                "-X",
-            ])
-            .arg(hex::encode(data))
-            .stdin(std::process::Stdio::null())
-            .output()
-            .map_err(|e| format!("cannot run security: {e}"))?;
+        // `security -i` reads the command from stdin, so the credential never
+        // shows in `ps`. Its line buffer is about 4 KiB; a longer item falls
+        // back to argv rather than lose a refresh token that already rotated.
+        let output = match interactive_add_line(service, account, &hex)? {
+            Some(line) => {
+                use std::io::Write;
+                let mut child = cmd
+                    .arg("-i")
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .map_err(|e| format!("cannot run security: {e}"))?;
+                if let Some(mut stdin) = child.stdin.take() {
+                    stdin
+                        .write_all(line.as_bytes())
+                        .map_err(|e| format!("cannot write to security: {e}"))?;
+                }
+                child
+                    .wait_with_output()
+                    .map_err(|e| format!("cannot run security: {e}"))?
+            }
+            None => cmd
+                .args([
+                    "add-generic-password",
+                    "-U",
+                    "-a",
+                    account,
+                    "-s",
+                    service,
+                    "-X",
+                ])
+                .arg(&hex)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .map_err(|e| format!("cannot run security: {e}"))?,
+        };
         if output.status.success() {
             Ok(())
         } else {
             Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
         }
+    }
+}
+
+/// `security -i`'s line limit (measured 2026-11-07: 3001 bytes pass, 4201 fail).
+const SECURITY_LINE_MAX: usize = 4000;
+
+/// The `security -i` command that stores `hex` under `service`/`account`;
+/// `None` when it would not fit one line. Quoted names must not need escaping.
+pub(crate) fn interactive_add_line(
+    service: &str,
+    account: &str,
+    hex: &str,
+) -> Result<Option<String>, String> {
+    for name in [service, account] {
+        if name.contains(['"', '\\', '\n', '\r', '\0']) {
+            return Err(
+                "keychain service or account has a character security -i cannot quote".into(),
+            );
+        }
+    }
+    let line = format!("add-generic-password -U -a \"{account}\" -s \"{service}\" -X \"{hex}\"\n");
+    Ok((line.len() <= SECURITY_LINE_MAX).then_some(line))
+}
+
+/// The account name of this process's user, for a host started without `USER`
+/// (Claude Code keys its keychain item by it).
+fn login_name() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let mut buf = vec![0u8; 4096];
+        let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        // SAFETY: buf outlives the call and result points into pwd/buf only.
+        let code = unsafe {
+            libc::getpwuid_r(
+                libc::getuid(),
+                &mut pwd,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                &mut result,
+            )
+        };
+        if code != 0 || result.is_null() || pwd.pw_name.is_null() {
+            return None;
+        }
+        // SAFETY: pw_name is a NUL-terminated string inside buf.
+        let name = unsafe { std::ffi::CStr::from_ptr(pwd.pw_name) };
+        name.to_str()
+            .ok()
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+    }
+    #[cfg(not(unix))]
+    {
+        None
     }
 }
 
@@ -163,6 +241,7 @@ impl LoginPaths {
         let user = std::env::var("USER")
             .ok()
             .filter(|u| !u.is_empty())
+            .or_else(login_name)
             .unwrap_or_else(|| "claude-code-user".into());
         Self {
             codex_home,

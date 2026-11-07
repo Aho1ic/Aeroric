@@ -484,6 +484,21 @@ pub(crate) fn managed_home_ops(harness: Harness, home: &str) -> Vec<EnvOp> {
     }
 }
 
+/// Insert options ahead of the `-- <prompt>` terminator: anything after `--`
+/// is positional, so a `--patch` appended there would be read as prompt text.
+fn option_before_prompt(
+    mut plan: aeroric_core::agents::launch::LaunchPlan,
+    options: [String; 2],
+) -> aeroric_core::agents::launch::LaunchPlan {
+    let at = plan
+        .args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(plan.args.len());
+    plan.args.splice(at..at, options);
+    plan
+}
+
 fn config_family(config: &ConfigLaunch) -> ProtocolFamily {
     match config.harness {
         Harness::Codex => ProtocolFamily::Codex,
@@ -682,9 +697,10 @@ impl CliPtyExecutor {
         if let Some(config) = config.filter(|c| c.harness == Harness::Dsh) {
             match self.dsh_gateway_patch(config, task_id, selected_model) {
                 Ok(patch) => {
-                    plan = plan
-                        .arg("--patch")
-                        .arg(patch.to_string_lossy().into_owned())
+                    plan = option_before_prompt(
+                        plan,
+                        ["--patch".to_string(), patch.to_string_lossy().into_owned()],
+                    )
                 }
                 Err(reason) => {
                     if let Some(token) = router_token.as_deref() {
@@ -1294,6 +1310,30 @@ impl LiveRuns for RegistryLiveRuns {
 #[cfg(test)]
 mod gateway_home_invariants {
     use super::*;
+
+    #[test]
+    fn the_dsh_patch_lands_before_the_prompt_terminator() {
+        let plan = aeroric_core::agents::launch::LaunchPlan::new("dsh")
+            .arg("--yolo")
+            .arg("--")
+            .arg("--patch is just prompt text here");
+        let plan = option_before_prompt(plan, ["--patch".into(), "/tmp/p.toml".into()]);
+        assert_eq!(
+            plan.args,
+            [
+                "--yolo",
+                "--patch",
+                "/tmp/p.toml",
+                "--",
+                "--patch is just prompt text here"
+            ]
+        );
+        let empty = option_before_prompt(
+            aeroric_core::agents::launch::LaunchPlan::new("dsh").arg("--yolo"),
+            ["--patch".into(), "/tmp/p.toml".into()],
+        );
+        assert_eq!(empty.args, ["--yolo", "--patch", "/tmp/p.toml"]);
+    }
 
     #[test]
     fn a_gateway_codex_home_keeps_no_chatgpt_login() {
