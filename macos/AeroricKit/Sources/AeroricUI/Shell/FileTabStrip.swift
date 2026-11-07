@@ -10,15 +10,17 @@ public struct FileTabStrip: View {
     /// The file tab in front; nil when the task is.
     let active: ResourcePreviewTarget?
     let isDirty: (ResourcePreviewTarget) -> Bool
+    let isDeleted: (ResourcePreviewTarget) -> Bool
     let onShowTask: () -> Void
     let onSelect: (ResourcePreviewTarget) -> Void
     let onClose: (ResourcePreviewTarget) -> Void
 
     public init(tabs: [ResourcePreviewTarget], active: ResourcePreviewTarget?,
                 isDirty: @escaping (ResourcePreviewTarget) -> Bool,
+                isDeleted: @escaping (ResourcePreviewTarget) -> Bool = { _ in false },
                 onShowTask: @escaping () -> Void, onSelect: @escaping (ResourcePreviewTarget) -> Void,
                 onClose: @escaping (ResourcePreviewTarget) -> Void) {
-        self.tabs = tabs; self.active = active; self.isDirty = isDirty
+        self.tabs = tabs; self.active = active; self.isDirty = isDirty; self.isDeleted = isDeleted
         self.onShowTask = onShowTask; self.onSelect = onSelect; self.onClose = onClose
     }
 
@@ -30,7 +32,8 @@ public struct FileTabStrip: View {
                             dirty: false, closable: false, onSelect: onShowTask, onClose: {})
                         .accessibilityIdentifier("file-tab.task")
                     ForEach(tabs, id: \.self) { target in
-                        FileTab(title: (target.path as NSString).lastPathComponent,
+                        let name = (target.path as NSString).lastPathComponent
+                        FileTab(title: isDeleted(target) ? "\(name) · \(FileEditText.deletedTag)" : name,
                                 systemImage: target.kind == .file ? "doc.text" : "plusminus",
                                 selected: active == target, dirty: isDirty(target), closable: true,
                                 onSelect: { onSelect(target) }, onClose: { onClose(target) })

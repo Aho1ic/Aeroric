@@ -112,6 +112,9 @@ public struct ProjectResourceScene: Sendable {
     public var drafts: [ResourcePreviewTarget: String] = [:]
     /// What the read text was when each draft started, to tell dirty apart.
     public var draftBases: [ResourcePreviewTarget: String] = [:]
+    /// Dirty `.file` tabs whose file went to the Trash (B4-21): the draft stays
+    /// and saving creates the file again.
+    public var deleted: Set<ResourcePreviewTarget> = []
     /// The file list's single-click selection; it opens nothing.
     public var listSelection: String?
     public var tabsRestored = false
@@ -163,6 +166,7 @@ public final class ProjectResourceBook {
             $0.tabs = tabs
             $0.drafts.removeValue(forKey: target)
             $0.draftBases.removeValue(forKey: target)
+            $0.deleted.remove(target)
         }
         saveTabs(projectID: target.projectID)
         guard wasFront else { return value.previewActive ? value.target : nil }
@@ -205,13 +209,59 @@ public final class ProjectResourceBook {
         disk != base
     }
 
-    /// After a successful save the draft becomes the new clean text.
+    /// What the disk holds just before a save.
+    public enum SaveCheck: Equatable, Sendable {
+        case unchanged, changed, missing
+        case failed(String)
+    }
+
+    /// Reads the file again before a save (B4-19). A failed read never lets
+    /// the save through: a file missing from its folder asks first, any other
+    /// failure stops the save.
+    public static func saveCheck(_ target: ResourcePreviewTarget, base: String,
+                                 reader: any ProjectResourceReading) async -> SaveCheck {
+        do {
+            let disk = try await reader.text(projectID: target.projectID, path: target.path)
+            return saveConflicts(disk: disk, base: base) ? .changed : .unchanged
+        } catch {
+            let name = FileEditText.name(of: target.path)
+            if let entries = try? await reader.directory(projectID: target.projectID,
+                                                         path: FileEditText.parent(of: target.path)),
+               !entries.contains(where: { $0.name == name }) {
+                return .missing
+            }
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// After a successful save the saved text becomes the base. The draft is
+    /// left alone (B4-20): what was typed while the write was in flight stays
+    /// and keeps the tab dirty.
     public func markSaved(_ target: ResourcePreviewTarget, text: String) {
         edit(target.projectID) { value in
             value.draftBases[target] = text
-            value.drafts[target] = text
             if value.target == target { value.previewText = text }
+            value.deleted.remove(target)
         }
+    }
+
+    public func isDeleted(_ target: ResourcePreviewTarget) -> Bool {
+        scene(target.projectID).deleted.contains(target)
+    }
+
+    /// Before renaming `path` to `newName` (B4-35): a clean tab already at the
+    /// new path is closed; a dirty one blocks the rename. Returns why it is
+    /// blocked, or nil to go ahead.
+    public func prepareRename(projectID: String, path: String, newName: String) -> String? {
+        func inside(_ path: String, _ root: String) -> Bool { path == root || path.hasPrefix(root + "/") }
+        let newPath = FileEditText.child(of: FileEditText.parent(of: path), name: newName)
+        guard newPath != path else { return nil }
+        let occupying = scene(projectID).tabs.filter { inside($0.path, newPath) && !inside($0.path, path) }
+        if let dirty = occupying.first(where: isDirty) {
+            return "「\(FileEditText.name(of: dirty.path))」有未保存的修改，先保存或关闭它"
+        }
+        for tab in occupying { close(tab) }
+        return nil
     }
 
     // MARK: Tab persistence (Q21): per project, restored once per window.
@@ -294,7 +344,14 @@ public final class ProjectResourceBook {
         case .create:
             return nil
         case let .trash(path):
-            for tab in value.tabs where inside(tab.path, path) { close(tab) }
+            // B4-21: an unsaved draft is never thrown away with the file.
+            for tab in value.tabs where inside(tab.path, path) {
+                if isDirty(tab) {
+                    edit(projectID) { _ = $0.deleted.insert(tab) }
+                } else {
+                    close(tab)
+                }
+            }
             guard frontAffected(path) else { return nil }
             let now = scene(projectID)
             return now.previewActive ? now.target : nil
@@ -313,6 +370,7 @@ public final class ProjectResourceBook {
                 scene.tabs = scene.tabs.map(moved)
                 scene.drafts = rekey(scene.drafts)
                 scene.draftBases = rekey(scene.draftBases)
+                scene.deleted = Set(scene.deleted.map(moved))
                 scene.positions = rekey(scene.positions)
                 scene.positionOrder = scene.positionOrder.map(moved)
                 scene.target = scene.target.map(moved)
@@ -404,6 +462,15 @@ public final class ProjectResourceBook {
     public func loadPreview(_ target: ResourcePreviewTarget, projectPath: String,
                             reader: (any ProjectResourceReading)?) async {
         guard !Task.isCancelled, scene(target.projectID).target == target else { return }
+        if isDeleted(target) {
+            // Nothing on disk to read: the draft is the content (B4-21).
+            edit(target.projectID) { value in
+                value.previewRequest = nil
+                value.previewText = value.draftBases[target] ?? ""
+                value.previewState = .loaded
+            }
+            return
+        }
         let request = UUID()
         edit(target.projectID) { $0.previewRequest = request; $0.previewState = .loading }
         guard let reader else {

@@ -325,6 +325,7 @@ public struct ProjectResourceInspector: View {
         case let .create(parent, directory): submit(.create(parent: parent, name: name, directory: directory))
         case let .rename(path):
             guard name != FileEditText.name(of: path) else { self.naming = nil; return }
+            if let problem = FileEditText.nameProblem(name) { editError = problem; return }
             submit(.rename(path: path, newName: name))
         }
     }
@@ -425,6 +426,9 @@ public struct CentralResourcePreview: View {
                 Text(target.path).font(AeroricType.mono(AeroricType.secondary)).textSelection(.enabled)
                 Text(editable ? "可编辑 · ⌘S 保存" : "只读 · 宿主快照 · 版本未知")
                     .foregroundStyle(AeroricColor.textTertiary)
+                if book.isDeleted(target) {
+                    Text(FileEditText.deletedNotice).foregroundStyle(AeroricColor.warning)
+                }
                 if target.kind != .file {
                     Text("只读 · 宿主完整 diff（超过 1 MiB 会明确失败，不截断）")
                         .foregroundStyle(AeroricColor.textSecondary)

@@ -179,6 +179,20 @@ fn rename_never_overwrites_but_allows_a_case_only_change() {
 }
 
 #[test]
+fn a_new_name_with_a_slash_is_refused() {
+    let (_tmp, root) = temp_project();
+    std::fs::create_dir(root.join("sub")).unwrap();
+    std::fs::write(root.join("note.txt"), b"note").unwrap();
+    assert_eq!(
+        read_write::rename_path(&root, "note.txt", "sub/moved.txt"),
+        Err(read_write::RENAME_NAME_HAS_SLASH.to_string())
+    );
+    assert_eq!(std::fs::read(root.join("note.txt")).unwrap(), b"note");
+    assert!(!root.join("sub/moved.txt").exists());
+    assert!(!root.join("moved.txt").exists());
+}
+
+#[test]
 fn rg_parse_and_replace_preview_and_stale_skip() {
     let (_tmp, root) = temp_project();
     read_write::write_file_content(&root, "code.txt", "alpha beta alpha\n").unwrap();

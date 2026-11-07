@@ -19,6 +19,27 @@ final class GitStoreTests: XCTestCase {
         XCTAssertEqual(store.unstagedChanges.count, 1)
     }
 
+    /// B4-24: switching projects drops the old snapshot at once, a reply of
+    /// the earlier read is no longer current, and writes check the project.
+    func testASnapshotBelongsToOneProject() {
+        let store = GitStore()
+        let first = store.beginRead(projectPath: "/a")
+        store.ingest(stash: [GitStore.StashEntry(index: 0, message: "a's")])
+        store.ingest(changes: [GitStore.Change(path: "a.txt", status: "M", staged: false)], conflictPaths: [])
+        XCTAssertTrue(store.snapshotMatches("/a"))
+        let second = store.beginRead(projectPath: "/b")
+        XCTAssertFalse(store.isCurrent(first))
+        XCTAssertTrue(store.isCurrent(second))
+        XCTAssertTrue(store.changes.isEmpty)
+        XCTAssertTrue(store.stashEntries.isEmpty)
+        XCTAssertFalse(store.snapshotMatches("/a"))
+        XCTAssertTrue(store.snapshotMatches("/b"))
+        // Reading the same project again keeps what is shown.
+        store.ingest(changes: [GitStore.Change(path: "b.txt", status: "M", staged: false)], conflictPaths: [])
+        store.beginRead(projectPath: "/b")
+        XCTAssertEqual(store.changes.map(\.path), ["b.txt"])
+    }
+
     func testConflictPathsHighlight() {
         let store = GitStore()
         store.ingest(

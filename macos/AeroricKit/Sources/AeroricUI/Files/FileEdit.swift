@@ -32,6 +32,15 @@ public enum FileEditText {
         !path.hasPrefix(LinkedFolderPath.prefix)
     }
 
+    /// A new name is one path component (B4-22); the host refuses the same.
+    public static func nameProblem(_ name: String) -> String? {
+        name.contains("/") ? "名称不能包含 /" : nil
+    }
+
+    /// A dirty tab whose file went to the Trash (B4-21).
+    public static let deletedNotice = "已在磁盘上删除 · 保存会重新创建文件"
+    public static let deletedTag = "已删除"
+
     public static func name(of path: String) -> String {
         guard let slash = path.lastIndex(of: "/") else { return path }
         return String(path[path.index(after: slash)...])

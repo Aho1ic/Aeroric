@@ -82,7 +82,13 @@ public final class GitStore {
     public private(set) var changesReadState: WorkspaceReadState = .notLoaded
     public private(set) var historyReadState: WorkspaceReadState = .notLoaded
     public private(set) var stashReadState: WorkspaceReadState = .notLoaded
+    /// The repository the snapshot belongs to (B4-24). A write for another
+    /// one is refused: its paths, stash numbers and branch came from here.
+    public private(set) var projectPath: String?
+    private var readID = UUID()
 
+    /// One per window (B4-24): two windows on two projects never share a
+    /// snapshot.
     public init() {}
 
     public var stagedChanges: [Change] {
@@ -122,11 +128,27 @@ public final class GitStore {
         diffText = text
     }
 
-    public func beginRead() {
+    /// Starts reading `projectPath`. Another project's snapshot is cleared at
+    /// once, and replies of an earlier read fail `isCurrent`.
+    @discardableResult
+    public func beginRead(projectPath: String) -> UUID {
+        if self.projectPath != projectPath {
+            changes = []; commits = []; branches = []; stashEntries = []
+            conflictPaths = []; diffText = ""; ahead = nil; behind = nil
+            actionError = nil
+        }
+        self.projectPath = projectPath
+        readID = UUID()
         changesReadState = .loading
         historyReadState = .loading
         stashReadState = .loading
+        return readID
     }
+
+    public func isCurrent(_ read: UUID) -> Bool { read == readID }
+
+    /// Whether a write for `projectPath` may act on what the page shows.
+    public func snapshotMatches(_ projectPath: String) -> Bool { self.projectPath == projectPath }
 
     /// One part failed while the others loaded (an empty repository has
     /// changes but no history).

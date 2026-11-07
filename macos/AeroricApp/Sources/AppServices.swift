@@ -38,7 +38,6 @@ final class AppServices {
     let taskStore = TaskStore()
     /// AP4: 全业务域 Store 挂载（统一由 AppServices 持有，消除仅存于库目录的断链）。
     let documentStore = DocumentStore()
-    let gitStore = GitStore()
     /// B2 (2026-10-30): built-in skills; actions attach once the host is up.
     let builtinSkillBook = BuiltinSkillBook()
     let diagnosticsStore = DiagnosticsStore()
@@ -1071,31 +1070,41 @@ extension AppServices: WorkspaceStateProviding {
 
     /// B1 Git page: status, branches, history, stash and upstream counts of
     /// `projectPath`. After a write the diff stays (the page reloads it).
-    func refreshGit(projectPath: String, keepDiff: Bool = false) async {
+    /// `gitStore` is the window's own (B4-24); a reply that arrives after a
+    /// newer read began is dropped.
+    func refreshGit(_ gitStore: GitStore, projectPath: String, keepDiff: Bool = false) async {
         guard let connection = attachedConnection else { return }
         let client = GitClient(connection: connection)
-        gitStore.beginRead()
+        let read = gitStore.beginRead(projectPath: projectPath)
         let stash = (try? await client.stashList(projectPath: projectPath)) ?? []
+        guard gitStore.isCurrent(read) else { return }
         gitStore.ingest(stash: stash.map { GitStore.StashEntry(index: $0.index, message: $0.message) })
         let counts = try? await client.remoteCounts(projectPath: projectPath)
+        guard gitStore.isCurrent(read) else { return }
         gitStore.ingest(ahead: counts?.ahead, behind: counts?.behind)
         do {
             let status = try await client.status(projectPath: projectPath)
+            guard gitStore.isCurrent(read) else { return }
             gitStore.ingest(changes: status.map { GitStore.Change(path: $0.path, status: $0.status, staged: $0.staged) },
                             conflictPaths: [])
         } catch {
+            guard gitStore.isCurrent(read) else { return }
             gitStore.failChanges("读取更改失败：\(Self.gitReason(error))")
         }
         if !keepDiff { gitStore.setDiff("") }
-        if let branches = try? await client.branches(projectPath: projectPath) {
+        let branches = try? await client.branches(projectPath: projectPath)
+        guard gitStore.isCurrent(read) else { return }
+        if let branches {
             gitStore.ingest(branches: branches.map { GitStore.Branch(name: $0.name, current: $0.current, remote: $0.remote) })
         }
         do {
             let commits = try await client.log(projectPath: projectPath)
+            guard gitStore.isCurrent(read) else { return }
             gitStore.ingest(commits: commits.map {
                 GitStore.Commit(hash: $0.hash, shortHash: $0.shortHash, author: $0.author, date: $0.date, message: $0.message)
             })
         } catch {
+            guard gitStore.isCurrent(read) else { return }
             let reason = Self.gitReason(error)
             gitStore.failHistory(reason.contains("does not have any commits") ? "这个仓库还没有提交" : "读取历史失败：\(reason)")
         }
@@ -1103,8 +1112,15 @@ extension AppServices: WorkspaceStateProviding {
 
     /// The Git page's writes (2026-10-30, first batch). One at a time; the page
     /// reloads after each, and a failure shows on the page.
-    func performGit(projectPath: String, action: GitAction) async {
+    func performGit(_ gitStore: GitStore, projectPath: String, action: GitAction) async {
         guard let connection = attachedConnection, gitStore.working == nil else { return }
+        // B4-24: the page showed another project's snapshot; read this one
+        // instead of acting on paths or stash numbers that belong elsewhere.
+        guard gitStore.snapshotMatches(projectPath) else {
+            await refreshGit(gitStore, projectPath: projectPath)
+            gitStore.actionError = GitPageText.snapshotChanged
+            return
+        }
         let client = GitClient(connection: connection)
         gitStore.actionError = nil
         gitStore.working = Self.gitWorking(action)
@@ -1142,11 +1158,11 @@ extension AppServices: WorkspaceStateProviding {
         } catch {
             gitStore.actionError = "\(Self.gitFailure(action))：\(Self.gitReason(error))"
         }
-        await refreshGit(projectPath: projectPath, keepDiff: true)
+        await refreshGit(gitStore, projectPath: projectPath, keepDiff: true)
     }
 
     /// Codex writes a commit message from the staged diff; nil on failure.
-    func generateCommitMessage(projectPath: String) async -> String? {
+    func generateCommitMessage(_ gitStore: GitStore, projectPath: String) async -> String? {
         guard let connection = attachedConnection else { return nil }
         do {
             return try await GitClient(connection: connection).generateCommitMessage(projectPath: projectPath)

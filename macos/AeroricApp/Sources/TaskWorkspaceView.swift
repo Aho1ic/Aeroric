@@ -158,6 +158,8 @@ struct TaskWorkspaceView: View {
     @State private var draftsRestored = false
     @State private var projectContextID: String?
     @State private var resourceBook = ProjectResourceBook()
+    /// This window's Git snapshot (B4-24).
+    @State private var gitStore = GitStore()
     @State private var taskInputGate = TaskPresentationInputGate()
     @State private var terminalPresentationOwner = UUID()
     @State private var visitedResourceProjects: Set<String> = []
@@ -511,7 +513,7 @@ struct TaskWorkspaceView: View {
             .init(value: .progress, title: "进度", systemImage: "checklist"),
             .init(value: .changes, title: "改动", systemImage: "plusminus"),
             .init(value: .files, title: "文件", systemImage: "folder"),
-            .init(value: .git, title: GitPageText.tabTitle("Git", count: services.gitStore.changes.count),
+            .init(value: .git, title: GitPageText.tabTitle("Git", count: gitStore.changes.count),
                   systemImage: "arrow.triangle.branch"),
         ])
     }
@@ -603,18 +605,20 @@ struct TaskWorkspaceView: View {
     @ViewBuilder private var auxiliaryGit: some View {
         if let project = resourceProject {
             GitSidebarPanel(
-                store: services.gitStore,
-                onAction: { action in Task { await services.performGit(projectPath: project.path, action: action) } },
+                store: gitStore,
+                onAction: { action in
+                    Task { await services.performGit(gitStore, projectPath: project.path, action: action) }
+                },
                 onOpenDiff: { change in
                     openPreview(.init(projectID: project.id, path: change.path,
                                       kind: change.status == "?" ? .untracked
                                           : change.staged ? .stagedDiff : .unstagedDiff))
                 },
-                onGenerate: { await services.generateCommitMessage(projectPath: project.path) }
+                onGenerate: { await services.generateCommitMessage(gitStore, projectPath: project.path) }
             )
             .task(id: gitRefreshKey) {
                 guard auxiliaryTab == .git, showsAuxiliary || showsAuxiliaryOverlay else { return }
-                await services.refreshGit(projectPath: project.path)
+                await services.refreshGit(gitStore, projectPath: project.path)
             }
         } else {
             PaneEmptyState(systemImage: "folder.badge.questionmark",
@@ -996,6 +1000,7 @@ struct TaskWorkspaceView: View {
             FileTabStrip(
                 tabs: scene.tabs, active: scene.previewActive ? scene.target : nil,
                 isDirty: { resourceBook.isDirty($0) },
+                isDeleted: { resourceBook.isDeleted($0) },
                 onShowTask: { resourceBook.showTask(projectID: id) },
                 onSelect: openPreview,
                 onClose: closeTab
@@ -1041,23 +1046,35 @@ struct TaskWorkspaceView: View {
         }
         // 2026-10-30: check the disk first; someone (often an Agent) may have
         // changed the file since it was opened.
-        if let base = resourceBook.draftBase(target),
-           let disk = try? await reader.text(projectID: target.projectID, path: target.path),
-           ProjectResourceBook.saveConflicts(disk: disk, base: base) {
-            switch askSaveConflict(target) {
-            case .overwrite:
+        if let base = resourceBook.draftBase(target) {
+            switch await ProjectResourceBook.saveCheck(target, base: base, reader: reader) {
+            case .unchanged:
                 break
-            case .reload:
-                resourceBook.discardDraft(target)
-                loadPreview(target)
-                return false
-            case .cancel:
+            case .changed:
+                switch askSaveConflict(target) {
+                case .overwrite:
+                    break
+                case .reload:
+                    resourceBook.discardDraft(target)
+                    loadPreview(target)
+                    return false
+                case .cancel:
+                    return false
+                }
+            case .missing:
+                guard askRecreate(target) else { return false }
+            case let .failed(reason):
+                presentSaveFailure("保存前读取失败：\(reason)")
                 return false
             }
         }
+        let recreated = resourceBook.isDeleted(target)
         do {
             try await reader.write(projectID: target.projectID, path: target.path, content: text)
             resourceBook.markSaved(target, text: text)
+            if recreated, let project = services.taskStore.projects.first(where: { $0.id == target.projectID }) {
+                await loadDirectory(FileEditText.parent(of: target.path), in: project)
+            }
             return true
         } catch {
             presentSaveFailure(error.localizedDescription)
@@ -1080,6 +1097,16 @@ struct TaskWorkspaceView: View {
         case .alertThirdButtonReturn: return .overwrite
         default: return .cancel
         }
+    }
+
+    /// The file is gone from disk (B4-19/21); saving creates it again.
+    private func askRecreate(_ target: ResourcePreviewTarget) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "文件已被删除"
+        alert.informativeText = "「\(FileEditText.name(of: target.path))」已不在磁盘上。保存会在原位置重新创建它。"
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "重新创建并保存")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     private func presentSaveFailure(_ reason: String) {
@@ -1174,6 +1201,10 @@ struct TaskWorkspaceView: View {
     /// A tree write (2026-10-30): apply it, re-read the folder, and let open
     /// tabs follow a rename or close on a move to the Trash.
     private func applyFileEdit(_ edit: FileEdit, in project: TaskStore.ProjectEntry) async -> String? {
+        if case let .rename(path, newName) = edit,
+           let blocked = resourceBook.prepareRename(projectID: project.id, path: path, newName: newName) {
+            return "重命名失败：\(blocked)"
+        }
         if let error = await services.applyFileEdit(projectID: project.id, edit: edit) { return error }
         await loadDirectory(edit.parent, in: project)
         if let front = resourceBook.followEdit(projectID: project.id, edit: edit) { loadPreview(front) }

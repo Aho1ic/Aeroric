@@ -110,6 +110,10 @@ pub fn create_directory(root: &std::path::Path, relative: &str) -> Result<(), St
 /// 目标已存在（含悬空链接）拒绝，绝不覆盖；只有目标就是源本身（大小写
 /// 不敏感卷上只改大小写）时放行。检查与 rename 之间仍有 TOCTOU 窗口。
 pub fn rename_path(root: &std::path::Path, relative: &str, new_name: &str) -> Result<(), String> {
+    // 新名只是一段名字：含 `/` 时宿主只取末段，磁盘与界面路径会错位（B4-22）。
+    if new_name.contains('/') {
+        return Err(RENAME_NAME_HAS_SLASH.to_string());
+    }
     super::path_policy::validate_relative_path(new_name)?;
     let canonical = super::path_policy::resolve_entry_within(root, relative)?;
     let parent = canonical
@@ -138,6 +142,9 @@ pub fn rename_path(root: &std::path::Path, relative: &str, new_name: &str) -> Re
 
 /// 重命名目标已被占用时的报错（界面原样显示）。
 pub const RENAME_TARGET_EXISTS: &str = "已有同名文件或文件夹";
+
+/// 新名含 `/` 时的报错（界面原样显示，与界面预检同文）。
+pub const RENAME_NAME_HAS_SLASH: &str = "名称不能包含 /";
 
 /// 目标条目与源是否同一个（同设备同 inode）。
 fn same_entry(source: &std::path::Path, target: &std::fs::Metadata) -> bool {

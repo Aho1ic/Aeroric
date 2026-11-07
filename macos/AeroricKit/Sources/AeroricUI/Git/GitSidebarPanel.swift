@@ -5,6 +5,8 @@ import SwiftUI
 public enum GitPageText {
     /// `GitStore.working` while a commit runs; the panel keys its draft on it.
     public static let committing = "正在提交…"
+    /// A write found the page showing another project's snapshot (B4-24).
+    public static let snapshotChanged = "Git 状态已变化，已重新读取"
 
     public static func commitTitle(stagedCount: Int) -> String {
         stagedCount > 0 ? "提交 \(stagedCount) 个文件" : "提交"
