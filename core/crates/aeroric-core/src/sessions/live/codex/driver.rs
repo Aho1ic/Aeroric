@@ -7,6 +7,7 @@
 //! approval `input_required`, and the turn's end settles `done` / `interrupted`
 //! / `failed`; the next prompt moves the task back to `running`.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -88,6 +89,9 @@ struct State {
     output_tokens: Option<u64>,
     cached_input_tokens: Option<u64>,
     idle_since: u64,
+    /// `commandExecution` items started and not completed. One still running
+    /// after its turn is a background terminal: the session is not idle.
+    commands_running: HashSet<String>,
     closed: bool,
 }
 
@@ -130,6 +134,7 @@ impl CodexSession {
             output_tokens: None,
             cached_input_tokens: None,
             idle_since: now_ms(),
+            commands_running: HashSet::new(),
             closed: false,
         }));
         let (commands, command_rx) = mpsc::unbounded_channel();
@@ -299,8 +304,11 @@ impl SessionDriver for CodexSession {
 
     fn idle_since_ms(&self) -> Option<u64> {
         let state = self.state.lock();
-        (state.subscribed && state.active_turn.is_none() && state.pending.is_empty())
-            .then_some(state.idle_since)
+        (state.subscribed
+            && state.active_turn.is_none()
+            && state.pending.is_empty()
+            && state.commands_running.is_empty())
+        .then_some(state.idle_since)
     }
 
     fn suspend(&self) {
@@ -430,7 +438,9 @@ impl Actor {
             Command::Suspend => {
                 let idle = {
                     let state = self.state.lock();
-                    state.active_turn.is_none() && state.pending.is_empty()
+                    state.active_turn.is_none()
+                        && state.pending.is_empty()
+                        && state.commands_running.is_empty()
                 };
                 if idle {
                     self.unsubscribe().await;
@@ -664,6 +674,7 @@ impl Actor {
                 self.drop_pending(|p| p.view.id == id, "resolved");
             }
             Inbound::Notification { method, params } => {
+                self.track_command(&method, &params);
                 let (mut updates, signal) = map_notification(&method, &params);
                 if WARNING_METHODS.contains(&method.as_str()) {
                     updates.retain(|update| match update {
@@ -796,14 +807,50 @@ impl Actor {
         }
     }
 
+    /// Keep [`State::commands_running`]; the idle clock restarts when the last
+    /// background one ends.
+    fn track_command(&self, method: &str, params: &Value) {
+        let Some(item) = params.get("item") else {
+            return;
+        };
+        if item.get("type").and_then(Value::as_str) != Some("commandExecution") {
+            return;
+        }
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            return;
+        };
+        let mut state = self.state.lock();
+        match method {
+            "item/started" => {
+                state.commands_running.insert(id.to_string());
+            }
+            "item/completed" => {
+                if state.commands_running.remove(id)
+                    && state.commands_running.is_empty()
+                    && state.active_turn.is_none()
+                {
+                    state.idle_since = now_ms();
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn server_exited(&mut self) {
         self.connection = None;
-        let turn = {
+        let (turn, lost) = {
             let mut state = self.state.lock();
             state.subscribed = false;
             state.idle_since = now_ms();
-            state.active_turn.take()
+            let lost = std::mem::take(&mut state.commands_running).len();
+            (state.active_turn.take(), lost)
         };
+        if lost > 0 && turn.is_none() {
+            self.push(SessionUpdateKind::Error {
+                message: format!("Codex 进程已退出，{lost} 个后台命令随之结束"),
+                recoverable: true,
+            });
+        }
         let had_pending = !self.state.lock().pending.is_empty();
         if had_pending {
             let dropped: Vec<_> = self.state.lock().pending.drain(..).collect();

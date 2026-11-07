@@ -578,3 +578,52 @@ async fn a_delivered_message_is_receipted_by_codexs_answer() {
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     assert_eq!(receipts(&h.sink).len(), 1, "a plain prompt has no receipt");
 }
+
+// 2026-11-07 (A14b): a command still running after its turn is a background
+// terminal; the session stays up until it completes.
+
+fn background_command(peer: &Peer) {
+    peer.notify(
+        "item/started",
+        json!({"threadId": "th1", "turnId": "u1", "item": {"type": "commandExecution", "id": "c1",
+            "command": "npm run dev", "cwd": "/w", "status": "inProgress", "processId": "p1",
+            "commandActions": []}}),
+    );
+}
+
+#[tokio::test]
+async fn a_background_command_keeps_the_session_until_it_completes() {
+    let mut h = start(spec());
+    let peer = running(&mut h).await;
+    background_command(&peer);
+    complete(&peer, "completed");
+    let sink = Arc::clone(&h.sink);
+    until("done", move || sink.last_status() == Some(TaskStatus::Done)).await;
+    assert_eq!(h.session.idle_since_ms(), None, "c1 still runs");
+    peer.notify(
+        "item/completed",
+        json!({"threadId": "th1", "turnId": "u1", "item": {"type": "commandExecution", "id": "c1",
+            "command": "npm run dev", "cwd": "/w", "status": "completed", "exitCode": 0,
+            "commandActions": []}}),
+    );
+    let session = Arc::clone(&h.session);
+    until("idle", move || session.idle_since_ms().is_some()).await;
+}
+
+#[tokio::test]
+async fn a_server_exit_between_turns_says_its_background_commands_ended() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    background_command(&peer);
+    complete(&peer, "completed");
+    let sink = Arc::clone(&h.sink);
+    until("done", move || sink.last_status() == Some(TaskStatus::Done)).await;
+    peer.close();
+    let sink = Arc::clone(&h.sink);
+    until("notice", move || {
+        sink.updates.lock().iter().any(|u| matches!(&u.kind,
+            SessionUpdateKind::Error { message, .. } if message == "Codex 进程已退出，1 个后台命令随之结束"))
+    })
+    .await;
+    assert_eq!(h.sink.last_status(), Some(TaskStatus::Done));
+}

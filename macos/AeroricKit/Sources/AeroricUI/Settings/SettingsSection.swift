@@ -46,6 +46,8 @@ public protocol SettingsStateProviding: AnyObject {
     var settingsImportBook: ImportBook? { get }
     /// Keep-awake switch (A14); nil or unavailable hides it.
     var settingsKeepAwake: KeepAwakeStore? { get }
+    /// Idle Agent release switch (A14b); nil or unavailable hides it.
+    var settingsIdleRelease: IdleReleaseStore? { get }
     /// A13: fetch the host's redacted diagnostics report; nil hides the entry.
     var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? { get }
     /// G: bring the main window to the Agent configuration page; nil hides the button.
@@ -57,6 +59,7 @@ public extension SettingsStateProviding {
     var connectionPhaseText: String? { nil }
     var settingsImportBook: ImportBook? { nil }
     var settingsKeepAwake: KeepAwakeStore? { nil }
+    var settingsIdleRelease: IdleReleaseStore? { nil }
     var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? { nil }
     var settingsOpenAgentConfig: (@MainActor () -> Void)? { nil }
 }

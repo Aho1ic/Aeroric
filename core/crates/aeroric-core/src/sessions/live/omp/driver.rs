@@ -127,6 +127,9 @@ struct State {
     output_tokens: Option<u64>,
     cached_input_tokens: Option<u64>,
     idle_since: u64,
+    /// False from a `prompt_result` with `sessionSettled: false` until
+    /// `session_settled`: omp still has async work that may wake the session.
+    settled: bool,
     closed: bool,
 }
 
@@ -168,6 +171,7 @@ impl OmpSession {
             output_tokens: None,
             cached_input_tokens: None,
             idle_since: now_ms(),
+            settled: true,
             closed: false,
         }));
         let (commands, command_rx) = mpsc::unbounded_channel();
@@ -187,6 +191,7 @@ impl OmpSession {
             turns: 0,
             interrupted: false,
             last_tool: None,
+            own_turn: false,
         };
         runtime.spawn(actor.run(command_rx, inbox_rx));
         Arc::new(Self {
@@ -343,8 +348,9 @@ impl SessionDriver for OmpSession {
         (state.alive
             && state.active_turn.is_none()
             && state.pending.is_empty()
-            && state.questions.is_empty())
-        .then_some(state.idle_since)
+            && state.questions.is_empty()
+            && state.settled)
+            .then_some(state.idle_since)
     }
 
     fn suspend(&self) {
@@ -381,6 +387,8 @@ struct Actor {
     interrupted: bool,
     /// The tool call an approval most likely belongs to.
     last_tool: Option<String>,
+    /// The active turn is one omp started on its own (async work woke it).
+    own_turn: bool,
 }
 
 fn s<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -641,6 +649,7 @@ impl Actor {
                     state.active_turn.is_none()
                         && state.pending.is_empty()
                         && state.questions.is_empty()
+                        && state.settled
                 };
                 if idle {
                     self.end_process();
@@ -698,6 +707,7 @@ impl Actor {
         self.turns += 1;
         let turn = format!("t{}", self.turns);
         self.interrupted = false;
+        self.own_turn = false;
         self.state.lock().active_turn = Some(turn.clone());
         self.push(SessionUpdateKind::TurnStarted { turn_id: turn });
         self.status(TaskStatus::Running, None);
@@ -827,9 +837,30 @@ impl Actor {
                 if s(&frame, "id").is_some() && s(&frame, "id") == self.prompt_id.as_deref() {
                     let status = s(&frame, "status").unwrap_or("completed").to_string();
                     let error = s(&frame, "error").map(str::to_string);
+                    // Absent on older omp: nothing to wait for then.
+                    self.state.lock().settled = frame
+                        .get("sessionSettled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true);
                     self.turn_result(&status, error).await;
                 }
             }
+            "session_settled" => {
+                let mut state = self.state.lock();
+                if !state.settled && state.active_turn.is_none() {
+                    state.idle_since = now_ms();
+                }
+                state.settled = true;
+            }
+            // Async work woke the session: a turn of omp's own, with no
+            // `prompt_result` to end it.
+            "agent_start"
+                if self.prompt_id.is_none() && self.state.lock().active_turn.is_none() =>
+            {
+                self.begin_turn();
+                self.own_turn = true;
+            }
+            "agent_end" if self.own_turn => self.turn_result("completed", None).await,
             "extension_ui_request" => self.ui_request(frame),
             "response" => {}
             kind => {
@@ -986,6 +1017,7 @@ impl Actor {
 
     async fn turn_result(&mut self, status: &str, error: Option<String>) {
         self.prompt_id = None;
+        self.own_turn = false;
         let turn = {
             let mut state = self.state.lock();
             state.idle_since = now_ms();
@@ -1066,13 +1098,21 @@ impl Actor {
         self.process = None;
         self.crashes.push_back(now_ms());
         self.prompt_id = None;
-        let turn = {
+        self.own_turn = false;
+        let (turn, unsettled) = {
             let mut state = self.state.lock();
             state.alive = false;
             state.idle_since = now_ms();
-            state.active_turn.take()
+            let unsettled = !std::mem::replace(&mut state.settled, true);
+            (state.active_turn.take(), unsettled)
         };
         self.drop_waiting();
+        if unsettled && turn.is_none() {
+            self.push(SessionUpdateKind::Error {
+                message: "omp 进程已退出，未结算的后台作业随之结束".into(),
+                recoverable: true,
+            });
+        }
         if let Some(turn_id) = turn {
             let message = "omp 进程已退出".to_string();
             self.push(SessionUpdateKind::TurnEnded {
@@ -1090,7 +1130,10 @@ impl Actor {
         // old epoch and is ignored.
         self.process = None;
         self.epoch += 1;
-        self.state.lock().alive = false;
+        self.own_turn = false;
+        let mut state = self.state.lock();
+        state.alive = false;
+        state.settled = true;
     }
 
     async fn close(&mut self) {

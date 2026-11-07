@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use aeroric_core::context::CoreContext;
 use aeroric_core::sessions::live::auto_check::{AutoCheckPolicy, AutoCheckSelection};
-use aeroric_core::sessions::live::executor::StructuredExecutor;
+use aeroric_core::sessions::live::executor::{
+    IdleReleasePolicy, StructuredExecutor, SESSION_IDLE_MS,
+};
 use aeroric_core::sessions::live::staleness;
 use aeroric_core::sessions::live::update::Replay;
 use aeroric_core::sessions::live::{
@@ -98,6 +100,8 @@ pub fn register_session_live_services(
     });
     live.executor
         .set_auto_check_policy(Arc::new(SettingsAutoChecks(Arc::clone(&live.context))));
+    live.executor
+        .set_idle_release_policy(Arc::new(SettingsIdleRelease(Arc::clone(&live.context))));
     // B4′: checkpoints live beside the other per-task files.
     live.executor
         .checkpoints()
@@ -127,6 +131,8 @@ pub fn register_session_live_services(
         AUTO_CHECK_FAILURES_METHOD,
         blocking(&live, auto_check_failures),
     );
+    set.register(IDLE_RELEASE_GET_METHOD, blocking(&live, idle_release_get));
+    set.register(IDLE_RELEASE_SET_METHOD, blocking(&live, idle_release_set));
     set.register(cp_wire::GET_METHOD, blocking(&live, checkpoint_get));
     set.register(
         cp_wire::ADD_CONSTRAINT_METHOD,
@@ -729,6 +735,54 @@ fn checkpoint_set_obligation(live: &Live, request: &Request) -> Frame {
             ErrorCode::NotFound,
             "这个任务没有这条义务",
         )
+    }
+}
+
+/// A14b (设置 → 通用 → Agent 进程): whether an idle Agent's process is
+/// released after [`SESSION_IDLE_MS`]; never while it has background work.
+pub const IDLE_RELEASE_GET_METHOD: &str = "session.idleRelease.get";
+pub const IDLE_RELEASE_SET_METHOD: &str = "session.idleRelease.set";
+
+/// Read at every sweep, so a toggle applies at the next one.
+struct SettingsIdleRelease(Arc<CoreContext>);
+
+impl IdleReleasePolicy for SettingsIdleRelease {
+    fn enabled(&self) -> bool {
+        let fields = aeroric_core::storage::load_settings(&self.0)
+            .ok()
+            .and_then(|outcome| outcome.found());
+        preferences::release_idle_agents(fields.as_ref())
+    }
+}
+
+fn idle_release_json(enabled: bool) -> Value {
+    json!({"enabled": enabled, "idleMinutes": SESSION_IDLE_MS / 60_000})
+}
+
+fn idle_release_get(live: &Live, request: &Request) -> Frame {
+    ok(
+        request,
+        idle_release_json(SettingsIdleRelease(Arc::clone(&live.context)).enabled()),
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct IdleReleaseParams {
+    enabled: bool,
+}
+
+fn idle_release_set(live: &Live, request: &Request) -> Frame {
+    let p: IdleReleaseParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    match preferences::update_preference(
+        &live.context,
+        preferences::PreferenceUpdate::ReleaseIdleAgents(p.enabled),
+    ) {
+        Ok(_) => ok(request, idle_release_json(p.enabled)),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
     }
 }
 

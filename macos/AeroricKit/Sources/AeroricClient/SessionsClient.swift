@@ -681,6 +681,27 @@ extension SessionsClient {
         return result
     }
 
+    /// A14b (2026-11-07): whether an idle Agent's process is released after
+    /// `idleMinutes`; never while it has background work (`session.idleRelease.get`).
+    public func idleRelease() async throws -> (enabled: Bool, idleMinutes: Int) {
+        let frame = try await connection.request("session.idleRelease.get", params: .object([:]))
+        return try Self.decodeIdleRelease(frame.result)
+    }
+
+    public func setIdleRelease(enabled: Bool) async throws -> (enabled: Bool, idleMinutes: Int) {
+        let frame = try await connection.request("session.idleRelease.set",
+                                                 params: .object(["enabled": .bool(enabled)]))
+        return try Self.decodeIdleRelease(frame.result)
+    }
+
+    public static func decodeIdleRelease(_ value: JSONValue) throws -> (enabled: Bool, idleMinutes: Int) {
+        guard let enabled = value["enabled"]?.boolValue,
+              let minutes = value["idleMinutes"]?.numberText.flatMap({ Int($0) }) else {
+            throw MalformedReply.malformedReply("session.idleRelease needs enabled and idleMinutes")
+        }
+        return (enabled, minutes)
+    }
+
     public static func decodeAutoCheck(_ value: JSONValue) throws -> (tests: Bool, diagnostics: Bool) {
         guard let tests = value["tests"]?.boolValue, let diagnostics = value["diagnostics"]?.boolValue else {
             throw MalformedReply.malformedReply("session.autoCheck.get needs tests and diagnostics")

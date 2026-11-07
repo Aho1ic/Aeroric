@@ -23,6 +23,32 @@ pub enum ClaudeSignal {
     /// `system/api_retry` on a refused login: retrying will not help, so
     /// the turn is stopped and reported as this failure (R1-3a 目检).
     AuthRefused { reason: String },
+    /// `system/session_state_changed` to idle: nothing runs, not even in
+    /// the background. Closes a turn Claude started on its own that never
+    /// sent its `result`.
+    SessionIdle,
+}
+
+/// Title prefix of a background command's card (`task_type: local_bash`), so
+/// the session page lists it apart from subagents.
+pub const BACKGROUND_COMMAND_PREFIX: &str = "后台命令：";
+
+/// One task Claude announced (`task_started`) and has not ended yet.
+#[derive(Clone, Debug)]
+struct Task {
+    command: bool,
+    /// Runs past the turn that started it (a backgrounded shell or subagent).
+    background: bool,
+    /// `skip_transcript`: Claude's own housekeeping, never shown.
+    hidden: bool,
+}
+
+/// How a task ended for good (`task_notification` / `task_updated`).
+fn task_over(status: &str) -> bool {
+    matches!(
+        status,
+        "completed" | "failed" | "stopped" | "killed" | "cancelled" | "canceled" | "error"
+    )
 }
 
 #[derive(Default)]
@@ -39,6 +65,9 @@ pub struct ClaudeMapper {
     /// Prompt plus reply of the latest API call: what the window holds now.
     /// Fallback for when `get_context_usage` answers nothing (gateways).
     last_context: Option<u64>,
+    /// Claude's tasks still running, by task id. Task ids belong to the
+    /// session, not the turn: an interrupt does not end background ones.
+    tasks: HashMap<String, Task>,
 }
 
 fn s<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -155,6 +184,32 @@ fn plan_from_todos(input: &Value) -> Vec<PlanEntry> {
 }
 
 impl ClaudeMapper {
+    /// Background tasks still running: while any is, the session is not idle.
+    pub fn background_tasks(&self) -> usize {
+        self.tasks.values().filter(|task| task.background).count()
+    }
+
+    /// A background subagent is running: its frames can look like the main
+    /// session's, so they do not open a turn.
+    pub fn background_agent_running(&self) -> bool {
+        self.tasks
+            .values()
+            .any(|task| task.background && !task.command)
+    }
+
+    /// The turn is over: what ran in its foreground is over too, whether or
+    /// not Claude said so (an interrupt ends them silently).
+    pub fn end_turn(&mut self) {
+        self.tasks.retain(|_, task| task.background);
+    }
+
+    /// The process is gone and its tasks with it; how many background ones.
+    pub fn forget_tasks(&mut self) -> usize {
+        let lost = self.background_tasks();
+        self.tasks.clear();
+        lost
+    }
+
     pub fn map(&mut self, message: &Value) -> (Vec<SessionUpdateKind>, Option<ClaudeSignal>) {
         // A subagent's own stream stays inside its card (its task_* events).
         if message
@@ -187,15 +242,41 @@ impl ClaudeMapper {
 
     fn system(&mut self, message: &Value) -> (Vec<SessionUpdateKind>, Option<ClaudeSignal>) {
         use SessionUpdateKind as K;
-        let task = |status: &str| K::Subagent {
-            id: s(message, "task_id").unwrap_or_default().to_string(),
-            title: s(message, "description")
-                .or_else(|| s(message, "summary"))
-                .unwrap_or("子 Agent")
-                .to_string(),
-            status: status.to_string(),
-            detail: None,
+        let id = s(message, "task_id").unwrap_or_default().to_string();
+        if s(message, "subtype") == Some("task_started") {
+            let command = s(message, "task_type") == Some("local_bash");
+            self.tasks.insert(
+                id.clone(),
+                Task {
+                    command,
+                    background: message
+                        .get("is_backgrounded")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(command),
+                    hidden: message
+                        .get("skip_transcript")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                },
+            );
+        }
+        let known = self.tasks.get(&id).cloned();
+        let hidden = known.as_ref().is_some_and(|task| task.hidden);
+        let command = known.as_ref().is_some_and(|task| task.command);
+        let task = |status: &str| {
+            let text = s(message, "description").or_else(|| s(message, "summary"));
+            K::Subagent {
+                id: id.clone(),
+                title: if command {
+                    format!("{BACKGROUND_COMMAND_PREFIX}{}", text.unwrap_or("后台命令"))
+                } else {
+                    text.unwrap_or("子 Agent").to_string()
+                },
+                status: status.to_string(),
+                detail: None,
+            }
         };
+        let shown = |update: SessionUpdateKind| if hidden { vec![] } else { vec![update] };
         match s(message, "subtype") {
             Some("init") => {
                 let signal = s(message, "session_id").map(|id| ClaudeSignal::SessionStarted {
@@ -204,15 +285,32 @@ impl ClaudeMapper {
                 });
                 (vec![], signal)
             }
-            Some("task_started") => (vec![task("running")], None),
-            Some("task_progress") => (vec![task("running")], None),
-            Some("task_notification") => (
-                vec![task(s(message, "status").unwrap_or("completed"))],
-                None,
-            ),
+            Some("task_started") | Some("task_progress") => (shown(task("running")), None),
+            Some("task_notification") => {
+                let status = s(message, "status").unwrap_or("completed");
+                let update = shown(task(status));
+                if task_over(status) {
+                    self.tasks.remove(&id);
+                }
+                (update, None)
+            }
             Some("task_updated") => {
+                if let (Some(moved), Some(task)) = (
+                    message
+                        .pointer("/patch/is_backgrounded")
+                        .and_then(Value::as_bool),
+                    self.tasks.get_mut(&id),
+                ) {
+                    task.background = moved;
+                }
                 match message.pointer("/patch/status").and_then(Value::as_str) {
-                    Some(status) => (vec![task(status)], None),
+                    Some(status) => {
+                        let update = shown(task(status));
+                        if task_over(status) {
+                            self.tasks.remove(&id);
+                        }
+                        (update, None)
+                    }
                     None => (vec![], None),
                 }
             }
@@ -226,10 +324,13 @@ impl ClaudeMapper {
             ),
             // `thinking_tokens` is a running estimate sent once per streamed
             // thinking token; the thinking itself arrives as thoughtChunk (N6a C3).
+            Some("session_state_changed") => (
+                vec![],
+                (s(message, "state") == Some("idle")).then_some(ClaudeSignal::SessionIdle),
+            ),
             Some("hook_started")
             | Some("hook_response")
             | Some("status")
-            | Some("session_state_changed")
             | Some("thinking_tokens") => (vec![], None),
             Some(other) => (vec![unknown(&format!("system/{other}"), message)], None),
             None => (vec![unknown("system", message)], None),

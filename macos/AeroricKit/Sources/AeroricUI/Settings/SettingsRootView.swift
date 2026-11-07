@@ -75,6 +75,9 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
             if let keepAwake = state.settingsKeepAwake, keepAwake.isAvailable {
                 KeepAwakeSettingsCard(store: keepAwake)
             }
+            if let idleRelease = state.settingsIdleRelease, idleRelease.isAvailable {
+                IdleReleaseSettingsCard(store: idleRelease)
+            }
             MenuBarSettingsCard()
             SidebarSettingsCard()
         case .appearance:

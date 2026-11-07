@@ -121,6 +121,9 @@ struct State {
     output_tokens: Option<u64>,
     cached_input_tokens: Option<u64>,
     idle_since: u64,
+    /// Background tasks still running (the mapper's count): the session is
+    /// not idle while any is.
+    background: usize,
     closed: bool,
     /// B4′: the handoff brief, given at every start of the process.
     instructions: Option<String>,
@@ -165,6 +168,7 @@ impl ClaudeSession {
             output_tokens: None,
             cached_input_tokens: None,
             idle_since: now_ms(),
+            background: 0,
             closed: false,
         }));
         let (commands, command_rx) = mpsc::unbounded_channel();
@@ -185,6 +189,7 @@ impl ClaudeSession {
             turns: 0,
             interrupted: false,
             refused: None,
+            own_turn: false,
         };
         runtime.spawn(actor.run(command_rx, inbox_rx));
         Arc::new(Self {
@@ -333,7 +338,10 @@ impl SessionDriver for ClaudeSession {
 
     fn idle_since_ms(&self) -> Option<u64> {
         let state = self.state.lock();
-        (state.alive && state.active_turn.is_none() && state.pending.is_empty())
+        (state.alive
+            && state.active_turn.is_none()
+            && state.pending.is_empty()
+            && state.background == 0)
             .then_some(state.idle_since)
     }
 
@@ -374,6 +382,8 @@ struct Actor {
     interrupted: bool,
     /// The login was refused mid-turn; the turn is being stopped and ends as this failure.
     refused: Option<String>,
+    /// The active turn is one Claude started on its own (no message of ours).
+    own_turn: bool,
 }
 
 impl Actor {
@@ -545,7 +555,7 @@ impl Actor {
             Command::Suspend => {
                 let idle = {
                     let state = self.state.lock();
-                    state.active_turn.is_none() && state.pending.is_empty()
+                    state.active_turn.is_none() && state.pending.is_empty() && state.background == 0
                 };
                 if idle {
                     self.end_process();
@@ -560,6 +570,7 @@ impl Actor {
         let turn = format!("t{}", self.turns);
         self.interrupted = false;
         self.refused = None;
+        self.own_turn = false;
         self.state.lock().active_turn = Some(turn.clone());
         self.push(SessionUpdateKind::TurnStarted { turn_id: turn });
         self.status(TaskStatus::Running, None);
@@ -700,11 +711,22 @@ impl Actor {
                     self.echoed(&message);
                     return;
                 }
+                // A turn Claude starts on its own (a background task reported
+                // back) opens with its `system/init`, as ours do. Nothing else
+                // may open one: a background subagent's frames look like the
+                // main session's, and no `result` would close its turn.
+                let init = message.get("type").and_then(Value::as_str) == Some("system")
+                    && message.get("subtype").and_then(Value::as_str) == Some("init");
+                if init && self.outstanding == 0 && self.state.lock().active_turn.is_none() {
+                    self.begin_turn();
+                    self.own_turn = true;
+                }
                 let (updates, signal) = self.mapper.map(&message);
                 for update in updates {
                     self.remember(&update);
                     self.push(update);
                 }
+                self.sync_background();
                 match signal {
                     Some(ClaudeSignal::SessionStarted { session_id, model }) => {
                         let (project_id, agent, path) = {
@@ -731,6 +753,11 @@ impl Actor {
                     Some(ClaudeSignal::TurnResult { failed, error }) => {
                         self.turn_result(failed, error).await
                     }
+                    Some(ClaudeSignal::SessionIdle) => {
+                        if self.own_turn && self.state.lock().active_turn.is_some() {
+                            self.turn_result(false, None).await;
+                        }
+                    }
                     Some(ClaudeSignal::AuthRefused { reason }) => {
                         if self.refused.is_none() {
                             self.refused = Some(reason);
@@ -749,6 +776,9 @@ impl Actor {
 
     async fn turn_result(&mut self, failed: bool, error: Option<String>) {
         self.outstanding = self.outstanding.saturating_sub(1);
+        self.own_turn = false;
+        self.mapper.end_turn();
+        self.sync_background();
         let turn = {
             let mut state = self.state.lock();
             state.idle_since = now_ms();
@@ -804,6 +834,17 @@ impl Actor {
         }
     }
 
+    /// Mirror the mapper's background tasks for `idle_since_ms`; the idle
+    /// clock restarts when the last one ends.
+    fn sync_background(&self) {
+        let count = self.mapper.background_tasks();
+        let mut state = self.state.lock();
+        if state.background > 0 && count == 0 && state.active_turn.is_none() {
+            state.idle_since = now_ms();
+        }
+        state.background = count;
+    }
+
     fn remember(&self, update: &SessionUpdateKind) {
         let mut state = self.state.lock();
         match update {
@@ -851,13 +892,22 @@ impl Actor {
         self.process = None;
         self.crashes.push_back(now_ms());
         self.outstanding = 0;
+        self.own_turn = false;
+        let lost = self.mapper.forget_tasks();
         let turn = {
             let mut state = self.state.lock();
             state.alive = false;
             state.idle_since = now_ms();
+            state.background = 0;
             state.active_turn.take()
         };
         self.drop_pending(|_| true, "cancelled");
+        if lost > 0 {
+            self.push(SessionUpdateKind::Error {
+                message: format!("Claude 进程已退出，{lost} 个后台任务随之结束"),
+                recoverable: true,
+            });
+        }
         if let Some(turn_id) = turn {
             let message = "Claude 进程已退出".to_string();
             self.push(SessionUpdateKind::TurnEnded {
@@ -875,7 +925,11 @@ impl Actor {
         // old epoch and is ignored.
         self.process = None;
         self.epoch += 1;
-        self.state.lock().alive = false;
+        self.own_turn = false;
+        self.mapper.forget_tasks();
+        let mut state = self.state.lock();
+        state.alive = false;
+        state.background = 0;
     }
 
     async fn close(&mut self) {

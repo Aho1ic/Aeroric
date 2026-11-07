@@ -49,6 +49,8 @@ pub enum PreferenceUpdate {
     ShiftEnterNewline(bool),
     /// A14: keep the Mac awake while tasks run (absent means on).
     KeepAwakeWhileRunning(bool),
+    /// A14b: release an idle Agent's process after an hour (absent means on).
+    ReleaseIdleAgents(bool),
     /// A05: one project's auto checks after a turn (absent means both off).
     AutoCheck {
         project_id: String,
@@ -70,6 +72,7 @@ impl PreferenceUpdate {
             ),
             Self::ShiftEnterNewline(value) => ("terminal_shift_enter_newline", Value::Bool(value)),
             Self::KeepAwakeWhileRunning(value) => ("keep_awake_while_running", Value::Bool(value)),
+            Self::ReleaseIdleAgents(value) => (RELEASE_IDLE_AGENTS_KEY, Value::Bool(value)),
             Self::AutoCleanup(value) => (
                 "auto_cleanup_settings",
                 serde_json::to_value(normalize_auto_cleanup_settings(value))
@@ -162,6 +165,16 @@ fn apply_proxy_update(
 }
 
 pub const AUTO_CHECKS_KEY: &str = "auto_checks";
+/// A14b: whether idle Agents' processes are released (absent means on).
+pub const RELEASE_IDLE_AGENTS_KEY: &str = "release_idle_agents";
+
+/// Anything missing or malformed reads as on.
+pub fn release_idle_agents(fields: Option<&Map<String, Value>>) -> bool {
+    fields
+        .and_then(|fields| fields.get(RELEASE_IDLE_AGENTS_KEY))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
 
 /// What `project_id` opted into; anything missing or malformed reads as off.
 pub fn auto_check_selection(

@@ -367,3 +367,60 @@ async fn a_delivered_message_is_receipted_by_omps_answer() {
     peer.ok(&id, "steer", json!({}));
     receipt(&h.sink, ReceiptOutcome::Delivered).await;
 }
+
+// 2026-11-07 (A14b): omp's async work keeps the session up, and a turn it
+// starts on its own has a boundary.
+
+#[tokio::test]
+async fn an_unsettled_session_stays_up_and_its_own_turn_has_a_boundary() {
+    let mut h = start();
+    let (mut peer, id) = running(&mut h).await;
+    peer.send(json!({"type": "prompt_result", "id": id, "agentInvoked": true, "status": "completed", "sessionSettled": false}));
+    peer.state(json!([])).await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    assert_eq!(h.session.idle_since_ms(), None, "async work pending");
+    let started = h
+        .sink
+        .update_types()
+        .iter()
+        .filter(|t| *t == "turnStarted")
+        .count();
+
+    peer.send(json!({"type": "agent_start"}));
+    peer.send(
+        json!({"type": "message_update", "messageId": "msg-9", "message": {"role": "assistant"},
+        "assistantMessageEvent": {"type": "text_delta", "delta": "后台任务完成了"}}),
+    );
+    wait_status(&h.sink, TaskStatus::Running).await;
+    assert_eq!(
+        h.sink
+            .update_types()
+            .iter()
+            .filter(|t| *t == "turnStarted")
+            .count(),
+        started + 1
+    );
+    peer.send(json!({"type": "agent_end"}));
+    peer.state(json!([])).await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    assert_eq!(h.session.idle_since_ms(), None, "still unsettled");
+    peer.send(json!({"type": "session_settled"}));
+    let session = Arc::clone(&h.session);
+    until("idle", move || session.idle_since_ms().is_some()).await;
+}
+
+#[tokio::test]
+async fn an_exit_while_unsettled_says_the_async_work_ended() {
+    let mut h = start();
+    let (mut peer, id) = running(&mut h).await;
+    peer.send(json!({"type": "prompt_result", "id": id, "agentInvoked": true, "status": "completed", "sessionSettled": false}));
+    peer.state(json!([])).await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    drop(peer);
+    let sink = Arc::clone(&h.sink);
+    until("notice", move || {
+        sink.updates.lock().iter().any(|u| matches!(&u.kind,
+            SessionUpdateKind::Error { message, .. } if message == "omp 进程已退出，未结算的后台作业随之结束"))
+    })
+    .await;
+}

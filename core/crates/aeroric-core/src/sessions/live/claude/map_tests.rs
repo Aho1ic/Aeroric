@@ -334,3 +334,42 @@ fn modes_and_version_gate() {
         .contains("请升级"));
     assert!(version_supported("garbage").is_err());
 }
+
+/// 2026-11-07: a background command is not a subagent, Claude's own
+/// housekeeping is not shown, and both count until they end.
+#[test]
+fn background_commands_hidden_tasks_and_what_still_runs() {
+    let mut m = ClaudeMapper::default();
+    let (shell, _) = m.map(
+        &json!({"type": "system", "subtype": "task_started", "task_id": "b1",
+        "description": "npm run dev", "task_type": "local_bash"}),
+    );
+    assert!(
+        matches!(&shell[0], SessionUpdateKind::Subagent { title, .. } if title == "后台命令：npm run dev")
+    );
+    let (hidden, _) = m.map(
+        &json!({"type": "system", "subtype": "task_started", "task_id": "h1",
+        "task_type": "local_agent", "is_backgrounded": true, "skip_transcript": true}),
+    );
+    assert!(hidden.is_empty());
+    let (foreground, _) = m.map(
+        &json!({"type": "system", "subtype": "task_started", "task_id": "k1",
+        "description": "检索代码", "task_type": "local_agent"}),
+    );
+    assert_eq!(foreground.len(), 1);
+    assert_eq!(m.background_tasks(), 2);
+    assert!(m.background_agent_running());
+    m.end_turn();
+    assert_eq!(
+        m.background_tasks(),
+        2,
+        "a turn's end leaves background tasks"
+    );
+    let (gone, _) = m.map(&json!({"type": "system", "subtype": "task_notification", "task_id": "h1", "status": "completed"}));
+    assert!(gone.is_empty());
+    let (_, _) = m.map(&json!({"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {"status": "killed"}}));
+    assert_eq!(m.background_tasks(), 0);
+    let (_, idle) =
+        m.map(&json!({"type": "system", "subtype": "session_state_changed", "state": "idle"}));
+    assert_eq!(idle, Some(ClaudeSignal::SessionIdle));
+}

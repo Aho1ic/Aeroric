@@ -216,6 +216,17 @@ public struct LiveSubagent: Equatable, Sendable {
     public var status: String
     /// The latest activity, one line.
     public var detail: String? = nil
+
+    /// The title prefix core gives a background command's card (Claude
+    /// `local_bash`, `BACKGROUND_COMMAND_PREFIX`): it is not a subagent.
+    public static let backgroundCommandPrefix = "后台命令："
+
+    public var isBackgroundCommand: Bool { title.hasPrefix(Self.backgroundCommandPrefix) }
+
+    /// The title without the background-command prefix.
+    public var shownTitle: String {
+        isBackgroundCommand ? String(title.dropFirst(Self.backgroundCommandPrefix.count)) : title
+    }
 }
 
 public struct LiveConfig: Equatable, Sendable {

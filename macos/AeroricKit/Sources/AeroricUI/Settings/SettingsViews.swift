@@ -225,6 +225,37 @@ struct KeepAwakeSettingsCard: View {
     }
 }
 
+/// A14b (2026-11-07): release an idle Agent's process after an hour
+/// (host-held; on by default). Never while it has background work.
+struct IdleReleaseSettingsCard: View {
+    let store: IdleReleaseStore
+
+    var body: some View {
+        SettingsCard("Agent 进程") {
+            SettingsRow("空闲 \(hours)后释放 Agent 进程", detail: detail) {
+                Toggle("", isOn: Binding(
+                    get: { store.enabled },
+                    set: { on in Task { await store.setEnabled(on) } }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .accessibilityIdentifier("settings.idle-release")
+            }
+        }
+        .task { await store.refresh() }
+    }
+
+    private var hours: String {
+        store.idleMinutes % 60 == 0 ? "\(store.idleMinutes / 60) 小时" : "\(store.idleMinutes) 分钟"
+    }
+
+    private var detail: String {
+        if let error = store.lastError { return "没能保存：\(error)" }
+        guard store.enabled else { return "已关闭：从不自动释放，进程一直保留到你关闭会话。" }
+        return "没有回合、没有待审批、也没有后台任务的会话，空闲 \(hours)后结束进程；下次发消息自动续接。后台命令或后台子 Agent 还在跑时不释放。关闭后从不自动释放。"
+    }
+}
+
 struct AppearanceSettingsPane: View {
     @AppStorage(AppTheme.storageKey) private var themeRaw = AppTheme.system.rawValue
     @AppStorage("settings.surfacePreference") private var surfaceRaw = SurfacePreference.glass.rawValue

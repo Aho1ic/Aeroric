@@ -20,8 +20,16 @@ use crate::tasks::executor::{
 };
 use crate::tasks::{ProtocolFamily, WorkingDirectory};
 
-/// A session idle this long releases its thread; the next prompt resumes it.
-pub const SESSION_IDLE_MS: u64 = 10 * 60_000;
+/// A session idle this long releases its process; the next prompt resumes it.
+/// A session with background work never counts as idle (2026-11-07: 10 minutes
+/// ended dev servers and long builds an agent had left running).
+pub const SESSION_IDLE_MS: u64 = 60 * 60_000;
+
+/// Whether idle sessions are released at all (设置 → 通用 → Agent 进程; on
+/// unless the user turned it off).
+pub trait IdleReleasePolicy: Send + Sync {
+    fn enabled(&self) -> bool;
+}
 const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Which shared app-server a structured Codex run talks to: the built-in
@@ -163,6 +171,8 @@ pub struct StructuredExecutor {
     owners: Mutex<std::collections::HashMap<String, (String, u64)>>,
     servers: Mutex<HashMap<ServerKey, Arc<CodexServer>>>,
     claude_launchers: Mutex<HashMap<ClaudeKey, ClaudeLauncher>>,
+    /// Unset releases idle sessions (tests, and hosts without the setting).
+    idle_release: Mutex<Option<Arc<dyn IdleReleasePolicy>>>,
 }
 
 impl StructuredExecutor {
@@ -237,6 +247,7 @@ impl StructuredExecutor {
             owners: Mutex::default(),
             servers: Mutex::default(),
             claude_launchers: Mutex::default(),
+            idle_release: Mutex::default(),
         });
         let weak: Weak<Self> = Arc::downgrade(&executor);
         runtime.spawn(async move {
@@ -256,6 +267,11 @@ impl StructuredExecutor {
     /// A05: which projects run their tests / diagnostics after a turn.
     pub fn set_auto_check_policy(&self, policy: Arc<dyn super::auto_check::AutoCheckPolicy>) {
         self.turn_changes.checks.set_policy(policy);
+    }
+
+    /// Whether the sweep releases idle sessions.
+    pub fn set_idle_release_policy(&self, policy: Arc<dyn IdleReleasePolicy>) {
+        *self.idle_release.lock() = Some(policy);
     }
 
     /// B4′: give a session that is about to start the brief armed for its
@@ -402,12 +418,16 @@ impl StructuredExecutor {
         &self.registry
     }
 
-    /// Suspend sessions idle for [`SESSION_IDLE_MS`], then stop servers nobody uses.
+    /// Suspend sessions idle for [`SESSION_IDLE_MS`] (unless the user turned
+    /// that off), then stop servers nobody uses.
     pub async fn sweep(&self, now: u64) {
+        let policy = self.idle_release.lock().clone();
+        let release = policy.is_none_or(|policy| policy.enabled());
         for (_, driver) in self.registry.all() {
-            if driver
-                .idle_since_ms()
-                .is_some_and(|since| now.saturating_sub(since) >= SESSION_IDLE_MS)
+            if release
+                && driver
+                    .idle_since_ms()
+                    .is_some_and(|since| now.saturating_sub(since) >= SESSION_IDLE_MS)
             {
                 driver.suspend();
             }

@@ -461,3 +461,139 @@ async fn claudes_echo_settles_a_delivered_message() {
         "the echo adds only the receipt"
     );
 }
+
+// 2026-11-07 (A14b): background work and turns Claude starts on its own.
+
+fn task_started(peer: &Peer, id: &str, task_type: &str) {
+    peer.send(
+        json!({"type": "system", "subtype": "task_started", "session_id": "cs1",
+        "task_id": id, "tool_use_id": "tu1", "description": "npm run dev", "task_type": task_type}),
+    );
+}
+
+fn turns_started(sink: &Sink) -> usize {
+    sink.update_types()
+        .iter()
+        .filter(|t| *t == "turnStarted")
+        .count()
+}
+
+#[tokio::test]
+async fn a_running_background_task_keeps_the_session_from_idling() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    task_started(&peer, "b1", "local_bash");
+    peer.result("success");
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    assert_eq!(h.session.idle_since_ms(), None, "b1 still runs");
+    h.session.suspend();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        matches!(
+            peer.from_client.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ),
+        "the process stays up"
+    );
+    let card = h.sink.updates.lock().iter().find_map(|u| match &u.kind {
+        SessionUpdateKind::Subagent { title, .. } => Some(title.clone()),
+        _ => None,
+    });
+    assert_eq!(card.as_deref(), Some("后台命令：npm run dev"));
+
+    peer.send(
+        json!({"type": "system", "subtype": "task_notification", "session_id": "cs1",
+        "task_id": "b1", "status": "completed", "summary": "done"}),
+    );
+    let session = Arc::clone(&h.session);
+    until("idle again", move || session.idle_since_ms().is_some()).await;
+}
+
+#[tokio::test]
+async fn a_turn_claude_starts_itself_has_its_own_boundary() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    peer.result("success");
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    let started = turns_started(&h.sink);
+
+    peer.send(
+        json!({"type": "system", "subtype": "init", "session_id": "cs1", "model": "claude-sonnet"}),
+    );
+    peer.send(json!({"type": "assistant", "session_id": "cs1", "parent_tool_use_id": null,
+        "message": {"id": "m2", "role": "assistant", "content": [{"type": "text", "text": "后台测试跑完了"}]}}));
+    wait_status(&h.sink, TaskStatus::Running).await;
+    assert_eq!(turns_started(&h.sink), started + 1);
+    assert_eq!(h.session.idle_since_ms(), None, "mid-turn");
+    peer.result("success");
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    assert!(h.session.idle_since_ms().is_some());
+}
+
+#[tokio::test]
+async fn frames_outside_a_turn_open_none_and_idle_closes_a_turn_without_result() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    peer.result("success");
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    let started = turns_started(&h.sink);
+    // A background subagent's frame looks like the main session's.
+    peer.send(json!({"type": "assistant", "session_id": "cs1", "parent_tool_use_id": null,
+        "message": {"id": "m3", "role": "assistant", "content": [{"type": "text", "text": "子任务进展"}]}}));
+    let sink = Arc::clone(&h.sink);
+    until("frame shown", move || {
+        sink.update_types().iter().any(|t| t == "messageChunk")
+    })
+    .await;
+    assert_eq!(turns_started(&h.sink), started, "no turn without init");
+
+    peer.send(json!({"type": "system", "subtype": "init", "session_id": "cs1"}));
+    wait_status(&h.sink, TaskStatus::Running).await;
+    peer.send(json!({"type": "system", "subtype": "session_state_changed", "state": "idle", "session_id": "cs1"}));
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+}
+
+#[tokio::test]
+async fn an_exit_between_turns_says_which_background_tasks_ended_with_it() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    task_started(&peer, "b1", "local_bash");
+    task_started(&peer, "b2", "local_agent");
+    peer.send(
+        json!({"type": "system", "subtype": "task_updated", "session_id": "cs1",
+        "task_id": "b2", "patch": {"is_backgrounded": true}}),
+    );
+    peer.result("success");
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    peer.to_client = None;
+    let sink = Arc::clone(&h.sink);
+    until("notice", move || {
+        sink.updates.lock().iter().any(|u| matches!(&u.kind,
+            SessionUpdateKind::Error { message, recoverable: true } if message == "Claude 进程已退出，2 个后台任务随之结束"))
+    })
+    .await;
+    assert_eq!(
+        h.sink.last_status(),
+        Some(TaskStatus::Done),
+        "the task itself did not fail"
+    );
+}
+
+#[tokio::test]
+async fn an_exit_between_turns_without_background_work_stays_quiet() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    peer.result("success");
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    peer.to_client = None;
+    let session = Arc::clone(&h.session);
+    until("gone", move || session.idle_since_ms().is_none()).await;
+    assert!(!h.sink.update_types().contains(&"error".to_string()));
+}

@@ -825,6 +825,15 @@ fn claude_launcher(context: Arc<CoreContext>, key: ClaudeKey) -> ClaudeLauncher 
         };
         let mut spec = spec_with_login_env(input);
         spec.cwd = Some(start.cwd.clone());
+        // `session_state_changed`: its idle closes a turn Claude started on
+        // its own that never sent a `result` (2026-11-07).
+        push_ops(
+            &mut spec,
+            vec![EnvOp::Set(
+                "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS".into(),
+                "1".into(),
+            )],
+        );
         let mut args = claude_args(start, passes_model);
         let cwd = std::path::Path::new(&start.cwd);
         if key.config.is_none() && key.agent == "claude" {

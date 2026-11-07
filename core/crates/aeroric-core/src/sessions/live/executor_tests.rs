@@ -271,6 +271,34 @@ async fn the_sweep_suspends_sessions_idle_past_the_limit() {
     peer.expect("thread/unsubscribe").await;
 }
 
+struct Never;
+
+impl IdleReleasePolicy for Never {
+    fn enabled(&self) -> bool {
+        false
+    }
+}
+
+/// 2026-11-07: an hour, and never when the user turned release off.
+#[tokio::test]
+async fn the_sweep_keeps_idle_sessions_when_release_is_off() {
+    assert_eq!(SESSION_IDLE_MS, 60 * 60_000);
+    let mut s = setup();
+    s.executor.set_idle_release_policy(Arc::new(Never));
+    s.executor
+        .launch(&launch("t1", ProtocolFamily::Codex))
+        .unwrap();
+    let mut peer = running(&mut s).await;
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th1", "turn": {"id": "u1", "status": "completed"}}),
+    );
+    let sink = Arc::clone(&s.sink);
+    until("done", move || sink.last_status() == Some(TaskStatus::Done)).await;
+    s.executor.sweep(now_ms() + 10 * SESSION_IDLE_MS).await;
+    peer.silent().await;
+}
+
 #[tokio::test]
 async fn resuming_an_open_session_rebinds_it_instead_of_starting_another() {
     let mut s = setup();

@@ -87,23 +87,32 @@ struct SessionInfoCard: View {
         }
     }
 
+    /// 2026-11-07: background commands are listed apart from subagents.
     @ViewBuilder private var subagentSection: some View {
-        if let subagents = model?.subagents, !subagents.isEmpty {
-            section("子 Agent") {
-                ForEach(subagents, id: \.id) { agent in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(agent.title).lineLimit(1)
-                            Spacer()
-                            Text(agent.status).foregroundStyle(AeroricColor.textTertiary)
-                        }
-                        if let detail = agent.detail, agent.status == "running" {
-                            Text(detail).lineLimit(1).truncationMode(.middle).foregroundStyle(AeroricColor.textSecondary)
-                        }
-                    }
-                    .font(.system(size: AeroricType.caption))
+        let all = model?.subagents ?? []
+        let commands = all.filter(\.isBackgroundCommand)
+        let agents = all.filter { !$0.isBackgroundCommand }
+        if !commands.isEmpty {
+            section("后台命令") { taskRows(commands) }
+        }
+        if !agents.isEmpty {
+            section("子 Agent") { taskRows(agents) }
+        }
+    }
+
+    private func taskRows(_ tasks: [LiveSubagent]) -> some View {
+        ForEach(tasks, id: \.id) { agent in
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(agent.shownTitle).lineLimit(1)
+                    Spacer()
+                    Text(agent.status).foregroundStyle(AeroricColor.textTertiary)
+                }
+                if let detail = agent.detail, agent.status == "running" {
+                    Text(detail).lineLimit(1).truncationMode(.middle).foregroundStyle(AeroricColor.textSecondary)
                 }
             }
+            .font(.system(size: AeroricType.caption))
         }
     }
 

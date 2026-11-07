@@ -1064,6 +1064,28 @@ async fn auto_checks_are_toggled_per_project_through_a_task() {
     );
 }
 
+/// A14b (2026-11-07): the 设置 → 通用 → Agent 进程 switch; absent means on.
+#[tokio::test]
+async fn idle_release_is_on_until_switched_off() {
+    let host = Host::start(true).await;
+    let get = || host.call("session.idleRelease.get", json!({}));
+    assert_eq!(
+        get().await.unwrap(),
+        json!({"enabled": true, "idleMinutes": 60})
+    );
+    let set = host
+        .call("session.idleRelease.set", json!({"enabled": false}))
+        .await
+        .unwrap();
+    assert_eq!(set, json!({"enabled": false, "idleMinutes": 60}));
+    assert_eq!(get().await.unwrap(), set);
+    let saved = aeroric_core::storage::load_settings(&host.context)
+        .unwrap()
+        .found()
+        .unwrap();
+    assert_eq!(saved["release_idle_agents"], json!(false));
+}
+
 /// B4′: the checkpoint follows the session — the goal from the first prompt,
 /// an approval recorded the moment it is asked — and is kept on disk.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

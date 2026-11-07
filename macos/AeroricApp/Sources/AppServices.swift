@@ -75,6 +75,8 @@ final class AppServices {
     /// The sidebar's "打开远程项目…" asks the workspace to show its sheet.
     var openRemoteRequested = false
     let keepAwakeStore = KeepAwakeStore()
+    /// A14b: 设置 → 通用 → Agent 进程.
+    let idleReleaseStore = IdleReleaseStore()
     /// Canvas boards and node layout (M5); gated on the host's `canvas` capability.
     let canvasBook = CanvasBook()
     /// P5-01/P5-02：模式控制器（迁移默认按旧客户端存在性）。
@@ -267,6 +269,9 @@ final class AppServices {
                         capabilityEnabled: advertised[PowerClient.capability] == true
                     )
                     self.liveCapability = advertised[SessionsClient.liveCapability] == true
+                    self.idleReleaseStore.attach(client: SessionsClient(connection: connection),
+                                                 liveEnabled: self.liveCapability)
+                    Task { @MainActor in await self.idleReleaseStore.refresh() }
                     self.liveStructured.removeAll()
                     self.liveStores.removeAll()
                     self.notifier.install()
@@ -1475,6 +1480,7 @@ extension AppServices: SettingsStateProviding {
     var connectionPhaseText: String? { phaseText }
     var settingsImportBook: ImportBook? { importBook }
     var settingsKeepAwake: KeepAwakeStore? { keepAwakeStore }
+    var settingsIdleRelease: IdleReleaseStore? { idleReleaseStore }
     var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? {
         guard let connection = attachedConnection else { return nil }
         return { try await DiagnosticsClient(connection: connection).exportReport() }
