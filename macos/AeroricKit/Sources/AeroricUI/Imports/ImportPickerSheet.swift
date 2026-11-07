@@ -18,10 +18,13 @@ struct ImportPickerSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.l) {
             header
+            if let error = book.actionError {
+                CapsuleErrorLine(error, identifier: "imports.picker.error") { book.dismissError() }
+            }
             if book.pick != nil {
                 toolbar
                 list
-            } else {
+            } else if book.pickLoading || book.actionError == nil {
                 VStack(spacing: AeroricSpace.m) {
                     ProgressView().controlSize(.small)
                     Text("正在读取会话…")
@@ -29,6 +32,8 @@ struct ImportPickerSheet: View {
                         .foregroundStyle(AeroricColor.textTertiary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Spacer(minLength: 0)
             }
             footer
         }
@@ -227,10 +232,7 @@ struct ImportPickerSheet: View {
                 .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
                 .keyboardShortcut(.cancelAction)
             Button(count == 0 ? "确认" : "导入 \(count) 个会话") {
-                Task {
-                    await book.applyPick()
-                    dismiss()
-                }
+                Task { if await book.applyPick() { dismiss() } }
             }
             .buttonStyle(AeroricCapsuleButtonStyle(.primary))
             .keyboardShortcut(.defaultAction)

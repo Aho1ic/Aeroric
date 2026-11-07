@@ -196,6 +196,9 @@ public final class LiveSessionStore {
     public private(set) var connectionProblem: String?
     @ObservationIgnored private var pollFailures = 0
     public var errorText: String?
+    /// B4-1: why the history could not be read; shown with 重试 instead of
+    /// an empty page. Cleared by the next successful read.
+    public private(set) var historyError: String?
     /// R1-3a: what this session's family can do; empty until loaded.
     public var capabilities = LiveCapabilities()
     /// R1-3a: this session's login, when the agent refused it.
@@ -432,11 +435,22 @@ public final class LiveSessionStore {
     }
 
     private func reloadHistory() async {
-        if let page = try? await actions.historyWithStats(taskID: taskID) {
+        do {
+            let page = try await actions.historyWithStats(taskID: taskID)
             history = page.messages
             if let stats = page.stats { transcriptStats = stats }
+            historyError = nil
+        } catch {
+            historyError = "历史载入失败：\(error)"
         }
     }
+
+    public func retryHistory() async {
+        await reloadHistory()
+        baseline = LiveHistoryMerge.assistantCount(history)
+    }
+
+    public func dismissHistoryError() { historyError = nil }
 
     // MARK: - User actions
 

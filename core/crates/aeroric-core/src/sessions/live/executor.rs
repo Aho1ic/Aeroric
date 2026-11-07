@@ -650,10 +650,7 @@ impl TaskExecutor for StructuredExecutor {
                 cwd: local_path(&request.working_directory),
                 extra_dirs: request.linked_folders.clone(),
                 permission: request.permission_mode_wire.clone(),
-                model: request
-                    .selected_model
-                    .clone()
-                    .filter(|m| !m.trim().is_empty()),
+                model: super::codex::models::chosen_model(request.selected_model.as_ref()),
                 effort: request.reasoning_effort.clone(),
                 thread_id: request.session_id.clone(),
             },
@@ -716,10 +713,7 @@ impl TaskExecutor for StructuredExecutor {
                 cwd: local_path(&request.working_directory),
                 extra_dirs: request.linked_folders.clone(),
                 permission: request.permission_mode_wire.clone(),
-                model: request
-                    .selected_model
-                    .clone()
-                    .filter(|m| !m.trim().is_empty()),
+                model: super::codex::models::chosen_model(request.selected_model.as_ref()),
                 effort: request.reasoning_effort.clone(),
                 thread_id: Some(request.session_id.clone()),
             },

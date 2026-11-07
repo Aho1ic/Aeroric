@@ -1272,6 +1272,7 @@ extension AppServices: WorkspaceStateProviding {
                     updatedAt: Date(timeIntervalSince1970: Double(session.lastAtMs) / 1000),
                     imported: true, path: session.cwd, harness: session.agent,
                     sessionID: session.sessionId)
+            .with(projectID: session.projectId)
     }
 
     static func taskItem(_ task: TaskStore.TaskEntry, group: SidebarGroup) -> SidebarItem {
@@ -1281,6 +1282,7 @@ extension AppServices: WorkspaceStateProviding {
                                updatedAt: task.updatedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) },
                                harness: task.harness, sessionID: task.sessionID)
         item.childKind = task.parentTaskID == nil ? nil : task.childKind
+        item.projectID = task.projectID
         item.copy = task.isCopy
         return item
     }

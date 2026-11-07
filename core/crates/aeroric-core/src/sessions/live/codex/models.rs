@@ -55,6 +55,17 @@ pub fn install_fetcher(fetch: Fetcher) {
 
 /// `None` when no host offers structured Codex (the catalog keeps the built-in
 /// entry unavailable); otherwise the cached or freshly fetched answer.
+/// B2-14: what a remote project's built-in Codex offers when this Mac could
+/// not list models: no model is sent, the remote Codex picks its own default.
+pub const REMOTE_DEFAULT_MODEL: &str = "默认模型";
+
+/// The model to send to Codex: none for an empty choice or the remote default.
+pub fn chosen_model(selected: Option<&String>) -> Option<String> {
+    selected
+        .filter(|m| !m.trim().is_empty() && m.as_str() != REMOTE_DEFAULT_MODEL)
+        .cloned()
+}
+
 pub fn builtin_models(agent: &str) -> Option<Result<Vec<CodexModel>, String>> {
     let fetch = fetcher().lock().clone()?;
     let now = now_ms();

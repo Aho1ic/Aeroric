@@ -298,7 +298,14 @@ public struct LiveSessionView: View {
                     // 2026-10-29: finished turns are spaced apart; the live
                     // turn below keeps the tighter row rhythm.
                     LazyVStack(alignment: .leading, spacing: 40) {
-                        if historyItems.isEmpty && liveItems.isEmpty && store.pending.isEmpty && openingPrompt == nil {
+                        if let error = store.historyError {
+                            CapsuleErrorLine(error, identifier: "session.history-error",
+                                             action: ("重试", { Task { await store.retryHistory() } })) {
+                                store.dismissHistoryError()
+                            }
+                        }
+                        if historyItems.isEmpty && liveItems.isEmpty && store.pending.isEmpty && openingPrompt == nil
+                            && store.historyError == nil {
                             AeroricEmptyState(systemImage: store.loading ? "hourglass" : "text.bubble",
                                               title: store.loading ? "正在打开会话…" : "发一条消息开始",
                                               message: nil)

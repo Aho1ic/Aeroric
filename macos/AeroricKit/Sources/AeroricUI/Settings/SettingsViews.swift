@@ -461,7 +461,9 @@ struct ImportsSettingsPane: View {
                 }
                 SettingsRow("DSH / oh-my-pi", detail: "这两种 Agent 的会话导入将在后续版本支持。") { ComingSoonBadge() }
             }
-            if let error = book.lastError ?? book.status?.lastError {
+            if let error = book.actionError {
+                CapsuleErrorLine(error, identifier: "settings.imports.error") { book.dismissError() }
+            } else if let error = book.readError ?? book.status?.lastError {
                 Text(error)
                     .font(.system(size: AeroricType.caption))
                     .foregroundStyle(AeroricColor.danger)

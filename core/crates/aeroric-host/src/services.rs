@@ -4435,24 +4435,37 @@ fn session_history(
         .get("cursor")
         .and_then(Value::as_str)
         .and_then(|cursor| cursor.parse::<usize>().ok());
-    let page = crate::imports_services::history_page(
+    // 2026-10-29: the 统计栏 figures for the whole session, on the first page.
+    // B4-1: they share the page's budget, so the reply still fits one frame.
+    let stats = before
+        .is_none()
+        .then(|| {
+            use aeroric_core::sessions::transcript_stats;
+            match family {
+                ProtocolFamily::Codex => transcript_stats::codex(&lines),
+                ProtocolFamily::Claude => transcript_stats::claude(&lines),
+                ProtocolFamily::Omp => transcript_stats::omp(&lines),
+                ProtocolFamily::Dsh => transcript_stats::dsh(&lines),
+            }
+        })
+        .flatten()
+        .map(|stats| serde_json::to_value(stats).unwrap_or_default())
+        .and_then(|stats| {
+            let size = serde_json::to_vec(&stats).map_or(0, |bytes| bytes.len());
+            crate::imports_services::message_budget(size).map(|budget| (stats, budget))
+        });
+    let page = crate::imports_services::history_page_within(
         session_page(session_id, family, parse_messages(&lines, family)),
         before,
+        stats.as_ref().map_or_else(
+            || crate::imports_services::message_budget(0).unwrap_or_default(),
+            |s| s.1,
+        ),
     );
     let mut reply = serde_json::to_value(page).unwrap_or_default();
     reply["path"] = json!(path);
-    // 2026-10-29: the 统计栏 figures for the whole session, on the first page.
-    if before.is_none() {
-        use aeroric_core::sessions::transcript_stats;
-        let stats = match family {
-            ProtocolFamily::Codex => transcript_stats::codex(&lines),
-            ProtocolFamily::Claude => transcript_stats::claude(&lines),
-            ProtocolFamily::Omp => transcript_stats::omp(&lines),
-            ProtocolFamily::Dsh => transcript_stats::dsh(&lines),
-        };
-        if let Some(stats) = stats {
-            reply["stats"] = serde_json::to_value(stats).unwrap_or_default();
-        }
+    if let Some((stats, _)) = stats {
+        reply["stats"] = stats;
     }
     ok(&request, reply)
 }

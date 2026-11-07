@@ -194,6 +194,11 @@ public struct ProjectSidebar: View {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         projectsHeader
                             .padding(.top, AeroricSpace.m)
+                        if let tagBook, let error = tagBook.errorText {
+                            CapsuleErrorLine(error, identifier: "sidebar.tag-error") { tagBook.errorText = nil }
+                                .padding(.horizontal, AeroricSpace.s)
+                                .padding(.vertical, AeroricSpace.xs)
+                        }
                         if projectItems.isEmpty {
                             Text("尚未打开项目；文件 → 打开项目…")
                                 .font(.system(size: AeroricType.secondary))
@@ -283,7 +288,7 @@ public struct ProjectSidebar: View {
 
     /// The project a session row sits under, for its 仅当前项目 tags.
     private func projectID(of item: SidebarItem) -> String? {
-        projectItems.first { $0.children?.contains { $0.id == item.id } == true }?.id
+        item.projectID ?? projectItems.first { $0.children?.contains { $0.id == item.id } == true }?.id
     }
 
     private func projectTitle(_ id: String?) -> String? {

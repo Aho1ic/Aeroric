@@ -438,6 +438,8 @@ struct RemoteJob {
     total: u64,
     log: std::collections::VecDeque<String>,
     message: Option<String>,
+    /// What `command -v <agent>` found after a direct install (B2-7).
+    resolved: Option<String>,
 }
 
 static JOBS: Mutex<Option<HashMap<(String, String), RemoteJob>>> = Mutex::new(None);
@@ -457,6 +459,11 @@ fn push_job_line(key: &(String, String), line: &str) {
     if line.is_empty() {
         return;
     }
+    if let Some(path) = line.strip_prefix(RESOLVED_MARKER) {
+        let path = path.trim().to_string();
+        update_job(key, |job| job.resolved = (!path.is_empty()).then_some(path));
+        return;
+    }
     if let Some(step) = line.strip_prefix("AERORIC_STEP ") {
         let step = step.trim().to_string();
         update_job(key, |job| {
@@ -473,6 +480,43 @@ fn push_job_line(key: &(String, String), line: &str) {
         }
         job.log.push_back(line.to_string());
     });
+}
+
+/// Printed after a direct install with the path the agent now resolves to.
+const RESOLVED_MARKER: &str = "AERORIC_RESOLVED ";
+
+/// B2-7: after `npm install -g`, Aeroric still runs whatever comes first on
+/// its remote PATH, and `~/.local/bin` (offline installs) is always first.
+/// When the agent resolves there, the npm upgrade is hidden behind it.
+/// Nothing is deleted: Claude's own installer also lives in `~/.local/bin`.
+fn shadowed_upgrade(install_line: &str, agent: &str, resolved: Option<&str>) -> Option<String> {
+    let resolved = resolved?;
+    (install_line.starts_with("npm install -g")
+        && resolved.ends_with(&format!("/.local/bin/{agent}")))
+    .then(|| {
+        format!(
+            "npm 已安装新版本，但 {resolved} 里离线安装的旧版本挡在前面：删除它，或改用“本机下载后传输”升级"
+        )
+    })
+}
+
+/// The finished job's message: what runs now, and whether it changed.
+fn install_result(
+    before: Option<&str>,
+    after: Option<&str>,
+    shadowed: Option<String>,
+) -> (&'static str, String) {
+    match (after, shadowed) {
+        (_, Some(reason)) => ("failed", reason),
+        (Some(version), None) if before == Some(version) => {
+            ("succeeded", format!("已可用：{version}（版本未变化）"))
+        }
+        (Some(version), None) => ("succeeded", format!("已可用：{version}")),
+        (None, None) => (
+            "failed",
+            "命令已完成，但远程仍找不到它（可能需要重新登录 shell 让 PATH 生效）".into(),
+        ),
+    }
 }
 
 /// Start installing (or upgrading) `agent` on the host, `method` "direct" or
@@ -531,15 +575,25 @@ pub fn start_install(
             total: 0,
             log: Default::default(),
             message: None,
+            resolved: None,
         },
     );
+    let before = load_probes(&context)
+        .get(connection_id)
+        .and_then(|probe| probed_version(probe, agent));
     let connection_id = connection_id.to_string();
     let agent = agent.to_string();
+    let install_line = remote_line.clone().unwrap_or_default();
     std::thread::spawn(move || {
         let mut ticket = None;
         let outcome = (|| -> Result<(), String> {
             let (remote_line, upload) = match (remote_line, platform) {
-                (Some(line), _) => (remote::shell_command(&line), None),
+                (Some(line), _) => (
+                    remote::shell_command(&format!(
+                        "{line} && printf '{RESOLVED_MARKER}%s\\n' \"$(command -v {agent})\""
+                    )),
+                    None,
+                ),
                 (None, Some(platform)) => {
                     let package = crate::remote_packages::resolve(&agent, &platform)?;
                     update_job(&key, |job| job.total = package.size);
@@ -586,13 +640,18 @@ pub fn start_install(
         let version = after
             .as_ref()
             .and_then(|probe| probed_version(probe, &agent));
-        let (state, message) = match (outcome, version) {
-            (Ok(()), Some(version)) => ("succeeded", format!("已可用：{version}")),
-            (Ok(()), None) => (
-                "failed",
-                "命令已完成，但远程仍找不到它（可能需要重新登录 shell 让 PATH 生效）".into(),
+        let resolved = JOBS
+            .lock()
+            .as_ref()
+            .and_then(|jobs| jobs.get(&key))
+            .and_then(|job| job.resolved.clone());
+        let (state, message) = match outcome {
+            Ok(()) => install_result(
+                before.as_deref(),
+                version.as_deref(),
+                shadowed_upgrade(&install_line, &agent, resolved.as_deref()),
             ),
-            (Err(error), _) => ("failed", error),
+            Err(error) => ("failed", error),
         };
         update_job(&key, |job| {
             job.state = state;
@@ -1069,6 +1128,70 @@ pub fn mark_remote_availability(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_remote_builtin_codex_ignores_the_local_model_query() {
+        use aeroric_core::sessions::live::codex::models::{chosen_model, REMOTE_DEFAULT_MODEL};
+        use aeroric_core::settings::session_catalog::remote_builtin_codex;
+        let mut codex = aeroric_protocol::submission::AgentConfiguration {
+            model_details: Vec::new(),
+            id: "codex".into(),
+            version: "r".into(),
+            display_name: "Codex".into(),
+            agent: "codex".into(),
+            harness: "codex".into(),
+            models: Vec::new(),
+            efforts: Vec::new(),
+            permission_modes: vec!["ask".into()],
+            blocked_reasons: vec!["本机 Codex 未登录".into()],
+        };
+        let mut preset = codex.clone();
+        preset.id = "preset-1".into();
+        remote_builtin_codex(&mut codex);
+        remote_builtin_codex(&mut preset);
+        assert!(codex.blocked_reasons.is_empty());
+        assert_eq!(codex.models, vec![REMOTE_DEFAULT_MODEL.to_string()]);
+        assert_eq!(
+            preset.blocked_reasons.len(),
+            1,
+            "gateway presets keep their reasons"
+        );
+        assert_eq!(chosen_model(Some(&REMOTE_DEFAULT_MODEL.to_string())), None);
+        assert_eq!(
+            chosen_model(Some(&"gpt-5".to_string())),
+            Some("gpt-5".to_string())
+        );
+    }
+
+    #[test]
+    fn an_npm_upgrade_hidden_by_an_offline_copy_is_a_failure() {
+        let npm = "npm install -g @openai/codex@latest";
+        let offline = Some("/home/u/.local/bin/codex");
+        assert!(shadowed_upgrade(npm, "codex", offline).is_some());
+        assert!(shadowed_upgrade(npm, "codex", Some("/home/u/.nvm/bin/codex")).is_none());
+        // Claude's own installer lives in ~/.local/bin: not a shadow.
+        assert!(
+            shadowed_upgrade("claude update", "claude", Some("/home/u/.local/bin/claude"))
+                .is_none()
+        );
+        assert!(shadowed_upgrade(npm, "codex", None).is_none());
+
+        assert_eq!(
+            install_result(Some("0.1"), Some("0.2"), None),
+            ("succeeded", "已可用：0.2".to_string())
+        );
+        assert_eq!(
+            install_result(Some("0.2"), Some("0.2"), None),
+            ("succeeded", "已可用：0.2（版本未变化）".to_string())
+        );
+        let (state, _) = install_result(
+            Some("0.1"),
+            Some("0.1"),
+            shadowed_upgrade(npm, "codex", offline),
+        );
+        assert_eq!(state, "failed");
+        assert_eq!(install_result(None, None, None).0, "failed");
+    }
 
     #[test]
     fn tickets_are_bound_used_up_and_revocable() {

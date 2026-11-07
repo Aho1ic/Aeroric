@@ -242,3 +242,42 @@ public enum RelativeTime {
         }
     }
 }
+
+/// A failed action, one line in a red capsule with a close mark (the Git
+/// panel's error line, shared since 2026-11-07).
+public struct CapsuleErrorLine: View {
+    let text: String
+    let identifier: String
+    let action: (title: String, run: () -> Void)?
+    let onClose: () -> Void
+
+    public init(_ text: String, identifier: String, action: (title: String, run: () -> Void)? = nil,
+                onClose: @escaping () -> Void) {
+        self.text = text; self.identifier = identifier; self.action = action; self.onClose = onClose
+    }
+
+    public var body: some View {
+        HStack(spacing: AeroricSpace.s) {
+            Image(systemName: "exclamationmark.triangle")
+            Text(text).lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: AeroricSpace.xs)
+            if let action {
+                Button(action.title, action: action.run)
+                    .buttonStyle(.plain)
+                    .font(.system(size: AeroricType.caption, weight: .semibold))
+                    .accessibilityIdentifier("\(identifier).action")
+            }
+            Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("关闭")
+        }
+        .font(.system(size: AeroricType.caption))
+        .foregroundStyle(AeroricColor.danger)
+        .padding(.horizontal, AeroricSpace.l)
+        .frame(height: 26)
+        .background(AeroricColor.danger.opacity(0.12), in: Capsule(style: .continuous))
+        .help(text)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
+    }
+}

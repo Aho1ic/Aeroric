@@ -292,6 +292,23 @@ fn import_roots(env: &Env) -> Vec<(ImportAgent, PathBuf)> {
         .collect()
 }
 
+/// B2-1: one grant per agent with all of its roots (Cursor CLI and editor,
+/// Qoder's variants). Granting root by root kept only the last one, since a
+/// grant replaces the agent's earlier roots.
+fn grants_by_agent(
+    roots: &[(ImportAgent, PathBuf)],
+    picked: &[ImportAgent],
+) -> Vec<(ImportAgent, Vec<PathBuf>)> {
+    let mut grants: Vec<(ImportAgent, Vec<PathBuf>)> = Vec::new();
+    for (agent, root) in roots.iter().filter(|(agent, _)| picked.contains(agent)) {
+        match grants.iter_mut().find(|(known, _)| known == agent) {
+            Some((_, list)) => list.push(root.clone()),
+            None => grants.push((*agent, vec![root.clone()])),
+        }
+    }
+    grants
+}
+
 /// 2026-10-27 import picker: every session on disk, grouped later by its
 /// working directory; nothing is saved. Opening the picker is the consent to
 /// read the default roots (the same roots `imports.grant` reads).
@@ -328,11 +345,10 @@ fn apply(request: Request, env: Arc<Env>) -> Frame {
     if let Err(error) = store.choose(&offered_ids, &selected) {
         return io_failure(&request, error);
     }
-    for (agent, root) in &roots {
-        if picked.iter().any(|p| p.session.agent == *agent) {
-            if let Err(error) = store.grant(*agent, root.clone(), now_ms()) {
-                return io_failure(&request, error);
-            }
+    let picked_agents: Vec<ImportAgent> = picked.iter().map(|p| p.session.agent).collect();
+    for (agent, agent_roots) in grants_by_agent(&roots, &picked_agents) {
+        if let Err(error) = store.grant_roots(agent, agent_roots, now_ms()) {
+            return io_failure(&request, error);
         }
     }
     let mut created = Vec::new();
@@ -473,8 +489,24 @@ const BLOCK_MAX_CHARS: usize = 24 * 1024;
 const BLOCK_MIN_CHARS: usize = 1024;
 
 pub(crate) fn history_page(
+    page: aeroric_protocol::session::SessionPage,
+    before: Option<usize>,
+) -> aeroric_protocol::session::SessionPage {
+    history_page_within(page, before, HISTORY_PAGE_BYTES)
+}
+
+/// B4-1: what is left of a page for messages once `extra` bytes (the first
+/// page's session stats) ride along. None when the extra alone would take
+/// more than half a page: it is then left out rather than risk the frame.
+pub(crate) fn message_budget(extra: usize) -> Option<usize> {
+    (extra <= HISTORY_PAGE_BYTES / 2).then(|| HISTORY_PAGE_BYTES - extra)
+}
+
+/// One page of at most `budget` encoded bytes (always at least one message).
+pub(crate) fn history_page_within(
     mut page: aeroric_protocol::session::SessionPage,
     before: Option<usize>,
+    budget: usize,
 ) -> aeroric_protocol::session::SessionPage {
     let mut messages = std::mem::take(&mut page.messages);
     let end = before.unwrap_or(messages.len()).min(messages.len());
@@ -484,11 +516,11 @@ pub(crate) fn history_page(
     while let Some(mut message) = messages.pop() {
         clip_message(&mut message, BLOCK_MAX_CHARS);
         let mut size = encoded_len(&message);
-        if size > HISTORY_PAGE_BYTES {
+        if size > budget {
             clip_message(&mut message, BLOCK_MIN_CHARS);
             size = encoded_len(&message);
         }
-        if !picked.is_empty() && bytes + size > HISTORY_PAGE_BYTES {
+        if !picked.is_empty() && bytes + size > budget {
             messages.push(message);
             break;
         }
@@ -550,6 +582,52 @@ fn detect(request: Request, env: Arc<Env>) -> Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_root_of_a_picked_agent_is_granted_together() {
+        let roots = vec![
+            (ImportAgent::Cursor, PathBuf::from("/cli")),
+            (ImportAgent::Claude, PathBuf::from("/claude")),
+            (ImportAgent::Cursor, PathBuf::from("/editor")),
+        ];
+        assert_eq!(
+            grants_by_agent(&roots, &[ImportAgent::Cursor, ImportAgent::Cursor]),
+            vec![(
+                ImportAgent::Cursor,
+                vec![PathBuf::from("/cli"), PathBuf::from("/editor")]
+            )]
+        );
+        assert!(grants_by_agent(&roots, &[]).is_empty());
+    }
+
+    #[test]
+    fn the_first_page_leaves_room_for_the_stats() {
+        assert_eq!(message_budget(0), Some(HISTORY_PAGE_BYTES));
+        assert_eq!(message_budget(100_000), Some(HISTORY_PAGE_BYTES - 100_000));
+        assert_eq!(message_budget(HISTORY_PAGE_BYTES / 2 + 1), None);
+        use aeroric_protocol::session::{ContentBlock, MessageRole, SessionMessage, SessionPage};
+        let message = |i: usize| SessionMessage {
+            id: format!("m{i}"),
+            role: MessageRole::User,
+            blocks: vec![ContentBlock::Text {
+                kind: "text".into(),
+                text: "字".repeat(30_000),
+            }],
+            created_at: None,
+        };
+        let page = || SessionPage {
+            session_id: "s".into(),
+            family: ProtocolFamily::Codex,
+            messages: (0..40).map(message).collect(),
+            next_cursor: None,
+            has_more: false,
+        };
+        let full = history_page(page(), None).messages.len();
+        let shared = history_page_within(page(), None, HISTORY_PAGE_BYTES - 300_000)
+            .messages
+            .len();
+        assert!(shared < full, "{shared} < {full}");
+    }
 
     #[test]
     fn a_long_history_is_paged_to_fit_one_frame() {

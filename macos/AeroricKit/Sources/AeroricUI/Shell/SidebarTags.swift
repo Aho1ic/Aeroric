@@ -23,7 +23,7 @@ public final class TagBook {
 
     public func reload() async {
         guard let client else { return }
-        do { library = try await client.tagLibrary() } catch { errorText = "读取标签失败：\(error)" }
+        do { library = try await client.tagLibrary() } catch { errorText = "读取标签失败：\(Self.reason(error))" }
     }
 
     /// A row's tags in library order.
@@ -43,17 +43,31 @@ public final class TagBook {
         set(ids, on: row, isProject: isProject, projectID: projectID)
     }
 
+    /// Shows the change at once, then writes it; a refusal shows on the
+    /// sidebar (B1-7) and the reload takes the tick back.
     private func set(_ ids: [String], on row: String, isProject: Bool, projectID: String?) {
+        Task { if let reason = await assign(ids, on: row, isProject: isProject, projectID: projectID) {
+            errorText = "设置标签失败：\(reason)"
+        } }
+    }
+
+    /// Writes a row's tags; the reason when the host refused, else nil.
+    private func assign(_ ids: [String], on row: String, isProject: Bool, projectID: String?) async -> String? {
         library.assignments[row] = ids.isEmpty ? nil : ids
-        guard let client else { return }
-        Task {
-            do {
-                try await client.assignTags(target: row, isProject: isProject, projectId: projectID, tagIds: ids)
-            } catch {
-                errorText = "设置标签失败：\(error)"
-            }
-            await reload()
+        guard let client else { return "没有连接宿主" }
+        var failure: String?
+        do {
+            try await client.assignTags(target: row, isProject: isProject, projectId: projectID, tagIds: ids)
+        } catch {
+            failure = Self.reason(error)
         }
+        await reload()
+        return failure
+    }
+
+    nonisolated static func reason(_ error: Error) -> String {
+        if case let ConnectionError.refused(failure) = error { return failure.error.message }
+        return "\(error)"
     }
 
     /// Creates a tag and, when `row` is given, puts it on that row.
@@ -63,9 +77,12 @@ public final class TagBook {
         do {
             let tag = try await client.createTag(name: name, color: color, projectId: projectID)
             library.tags.append(tag)
+            // B1-7: 创建并贴上 succeeds only once the tag is on the row.
             if let row {
                 let ids = (library.assignments[row.id] ?? []) + [tag.id]
-                set(ids, on: row.id, isProject: row.isProject, projectID: row.projectID)
+                if let reason = await assign(ids, on: row.id, isProject: row.isProject, projectID: row.projectID) {
+                    return "标签已创建，但没能贴上：\(reason)"
+                }
             }
             return nil
         } catch let ConnectionError.refused(failure) {
@@ -97,7 +114,7 @@ public final class TagBook {
 
     public func delete(_ tag: TagRecord) async {
         guard let client else { return }
-        do { try await client.deleteTag(id: tag.id) } catch { errorText = "删除标签失败：\(error)" }
+        do { try await client.deleteTag(id: tag.id) } catch { errorText = "删除标签失败：\(Self.reason(error))" }
         await reload()
     }
 

@@ -67,7 +67,8 @@ public final class SshHostsStore {
     public private(set) var preparing: Set<String> = []
     /// Bytes of standalone builds kept on this Mac (O4).
     public private(set) var packageCacheBytes: UInt64 = 0
-    @ObservationIgnored private var installPoll: Task<Void, Never>?
+    /// One poll per host (B2-10): a second host's install never waits on the first's.
+    @ObservationIgnored private var installPolls: [String: Task<Void, Never>] = [:]
 
     /// The minimum each agent's native session needs (ADR-043 §8, omp phase two).
     public static let minimums = ["claude": "2.1.0", "codex": "0.162.0", "omp": "18.12.0"]
@@ -134,8 +135,8 @@ public final class SshHostsStore {
     private func pollInstalls(_ hostID: String) async {
         guard let client else { return }
         installs[hostID] = (try? await client.installStatus(id: hostID)) ?? installs[hostID]
-        guard installs[hostID]?.contains(where: \.running) == true, installPoll == nil else { return }
-        installPoll = Task { [weak self] in
+        guard installs[hostID]?.contains(where: \.running) == true, installPolls[hostID] == nil else { return }
+        installPolls[hostID] = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, let client = self.client else { return }
@@ -146,7 +147,7 @@ public final class SshHostsStore {
                     break
                 }
             }
-            self?.installPoll = nil
+            self?.installPolls[hostID] = nil
         }
     }
 
@@ -256,6 +257,10 @@ public final class SshHostsStore {
             packageCacheBytes = (try? await client.packageCacheBytes()) ?? packageCacheBytes
             if let id = selectedID, !hosts.contains(where: { $0.id == id }) { select(nil) }
             if selectedID == nil, let first = hosts.first { select(first.id) }
+            // B2-10: a host shown as installing picks its poll up again.
+            for hostID in hosts.map(\.id) where installs[hostID]?.contains(where: \.running) == true {
+                await pollInstalls(hostID)
+            }
         } catch {
             errorText = "读取 SSH 主机失败：\(error)"
         }

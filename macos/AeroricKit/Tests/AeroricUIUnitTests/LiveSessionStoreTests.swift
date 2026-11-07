@@ -17,7 +17,12 @@ private final class FakeLiveActions: LiveSessionActions {
         calls.append("updates \(after)")
         return batches.isEmpty ? LiveUpdatesBatch(updates: [], latestSeq: after) : batches.removeFirst()
     }
-    func history(taskID: String) async throws -> [AeroricUI.SessionMessage] { calls.append("history"); return historyValue }
+    var failHistory = false
+    func history(taskID: String) async throws -> [AeroricUI.SessionMessage] {
+        calls.append("history")
+        if failHistory { throw LiveSessionError.unsupported("帧过大") }
+        return historyValue
+    }
     var writers: [LiveSharedWriter] = []
     func prompt(taskID: String, text: String, afterTurn: Bool) async throws -> LivePromptReceipt {
         calls.append(afterTurn ? "prompt after \(text)" : "prompt \(text)")
@@ -91,6 +96,21 @@ final class LiveSessionStoreTests: XCTestCase {
         XCTAssertEqual(store.model?.items, [])
         XCTAssertEqual(store.history, [user, reply])
         XCTAssertTrue(actions.calls.contains("prompt hi"))
+    }
+
+    /// B4-1: a failed history read is shown with 重试, never a silent blank page.
+    func testAFailedHistoryReadIsShownAndCanBeRetried() async {
+        let actions = FakeLiveActions(state: state(seq: 1))
+        actions.failHistory = true
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        XCTAssertNotNil(store.historyError)
+        XCTAssertTrue(store.history.isEmpty)
+        actions.failHistory = false
+        actions.historyValue = [user, reply]
+        await store.retryHistory()
+        XCTAssertNil(store.historyError)
+        XCTAssertEqual(store.history, [user, reply])
     }
 
     /// B4-2: "#角色 …" delegates instead of prompting; an unknown name is a message.

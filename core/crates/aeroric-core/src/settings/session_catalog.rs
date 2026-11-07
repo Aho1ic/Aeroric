@@ -84,8 +84,30 @@ pub fn for_project(
         .found()
         .unwrap_or_default();
     let sources = AgentSources::load(context)?;
-    let directory = catalog_with(&fields, &sources, project_id, path, context.clock.now_ms())?;
+    let mut directory = catalog_with(&fields, &sources, project_id, path, context.clock.now_ms())?;
+    if matches!(target, aeroric_protocol::project::ProjectTarget::Ssh { .. }) {
+        // Both the picker and the submit check read this, so they agree.
+        directory
+            .configurations
+            .iter_mut()
+            .for_each(remote_builtin_codex);
+    }
     Ok((project, directory))
+}
+
+/// B2-14: the built-in Codex on a remote project runs with the remote login,
+/// so this Mac's model query neither blocks it nor limits it. Its only
+/// blocked reasons came from that query; the host marks the remote checks
+/// afterwards. Without a local list it offers the remote Codex's own default.
+pub fn remote_builtin_codex(configuration: &mut AgentConfiguration) {
+    if configuration.id != "codex" || configuration.harness != "codex" {
+        return;
+    }
+    configuration.blocked_reasons.clear();
+    if configuration.models.is_empty() {
+        configuration.models =
+            vec![crate::sessions::live::codex::models::REMOTE_DEFAULT_MODEL.to_string()];
+    }
 }
 
 pub fn catalog(

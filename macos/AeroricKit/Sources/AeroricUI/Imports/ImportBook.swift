@@ -13,7 +13,12 @@ public final class ImportBook {
     public private(set) var detected: [ImportsClient.DetectedAgent] = []
     public private(set) var estimates: [String: ImportsClient.Estimate] = [:]
     public private(set) var busyAgents: Set<String> = []
-    public private(set) var lastError: String?
+    /// B2-5: why the last action failed; a later successful refresh keeps it,
+    /// it goes when dismissed or when the next action starts.
+    public private(set) var actionError: String?
+    /// Why the last refresh failed; the next refresh replaces it.
+    public private(set) var readError: String?
+    public var lastError: String? { actionError ?? readError }
     /// The open import picker (nil when closed or still loading).
     public var pick: ImportPick?
     public private(set) var pickLoading = false
@@ -45,11 +50,13 @@ public final class ImportBook {
         do {
             status = try await client.status()
             sessions = try await client.list()
-            lastError = nil
+            readError = nil
         } catch {
-            lastError = String(describing: error)
+            readError = String(describing: error)
         }
     }
+
+    public func dismissError() { actionError = nil }
 
     public func detectAgents() async {
         guard let client else { return }
@@ -137,29 +144,38 @@ public final class ImportBook {
         guard let client else { return }
         pickLoading = true
         defer { pickLoading = false }
+        actionError = nil
         do {
             pick = ImportPick(rows: try await client.preview())
-            lastError = nil
         } catch {
-            lastError = String(describing: error)
+            actionError = "读取会话失败：\(error)"
         }
     }
 
-    /// Imports the ticked sessions and adds their missing projects.
-    public func applyPick() async {
-        guard let client, let pick else { return }
+    /// Imports the ticked sessions and adds their missing projects. False
+    /// when the import itself failed: the picker stays open with the reason
+    /// (B2-5). Directories that could not become projects are reported but
+    /// the import went through.
+    @discardableResult
+    public func applyPick() async -> Bool {
+        guard let client, let pick else { return false }
         busyAgents.insert("apply")
         defer { busyAgents.remove("apply") }
+        actionError = nil
+        var applied = false
         do {
             lastApply = try await client.apply(selected: Array(pick.selected))
             self.pick = nil
-            lastError = lastApply?.failedProjects.isEmpty == false
-                ? "以下目录没能添加为项目：" + (lastApply?.failedProjects.joined(separator: "；") ?? "") : nil
+            applied = true
+            if let failed = lastApply?.failedProjects, !failed.isEmpty {
+                actionError = "以下目录没能添加为项目：" + failed.joined(separator: "；")
+            }
         } catch {
-            lastError = String(describing: error)
+            actionError = "导入失败：\(error)"
         }
         await onProjectsChanged?()
         await refresh()
+        return applied
     }
 
     public func agentStatus(_ agent: String) -> ImportsClient.AgentStatus? {
@@ -170,11 +186,11 @@ public final class ImportBook {
         guard let client else { return }
         busyAgents.insert(key)
         defer { busyAgents.remove(key) }
+        actionError = nil
         do {
             try await body(client)
-            lastError = nil
         } catch {
-            lastError = String(describing: error)
+            actionError = String(describing: error)
         }
         await refresh()
     }

@@ -145,10 +145,19 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
     public var copy = false
     /// 2026-11-06: a project on an SSH host — its label (远程项目 · 名称 · 路径).
     public var remote: String?
+    /// Session rows: the project the session belongs to, also while it sits
+    /// under 已归档 (B1-4); nil for an unassigned import.
+    public var projectID: String?
     /// Agent configuration id and group (更多 menu, 2026-10-28).
     public var color: String?
     public var defaultAgent: String?
     public var projectGroup: String?
+
+    public func with(projectID: String?) -> Self {
+        var item = self
+        item.projectID = projectID
+        return item
+    }
 
     public init(
         id: String,
