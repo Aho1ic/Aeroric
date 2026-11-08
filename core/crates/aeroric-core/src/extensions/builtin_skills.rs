@@ -536,11 +536,19 @@ fn install(
             return Err(error.to_string());
         }
         if changed_since_made(&old) {
-            remove(&old)
+            // An edited copy that will not go to the Trash stays where it is
+            // now; clearing the staging area below would have lost it.
+            if let Err(error) = remove(&old) {
+                return Err(format!("{error}；改过的旧副本留在 {}", old.display()));
+            }
+            Ok(())
         } else {
             std::fs::remove_dir_all(&old).map_err(|e| e.to_string())
         }
     })();
+    if work.join("old").join(&skill.id).exists() && built.is_err() {
+        return built;
+    }
     let _ = std::fs::remove_dir_all(&work);
     let _ = std::fs::remove_dir(&staging);
     built

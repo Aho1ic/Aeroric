@@ -380,3 +380,29 @@ fn copies_are_replaced_whole_and_edited_ones_go_to_the_trash() {
     assert!(copy.join("locked.md").is_file());
     assert!(project_copies(&project).contains("probe"));
 }
+
+/// A copy someone edited, whose way to the Trash fails, is kept where it
+/// waited rather than cleared with the staging area (夜间自查 2026-11-09).
+#[test]
+fn an_edited_copy_that_cannot_go_to_the_trash_is_kept() {
+    let project = temp();
+    git_init(&project);
+    let source = temp();
+    std::fs::write(source.join("SKILL.md"), "v1").unwrap();
+    let offer = |version: &str| Offer {
+        id: "probe".into(),
+        dir: source.clone(),
+        version: version.into(),
+    };
+    let keep = |_: &Path| Ok(());
+    sync_offers(&project, &[offer("v1")], &keep).unwrap();
+    std::fs::write(project.join(".agents/skills/probe/SKILL.md"), "我改过").unwrap();
+    let no_trash = |_: &Path| Err("废纸篓不可用".to_string());
+    let error = sync_offers(&project, &[offer("v2")], &no_trash).unwrap_err();
+    assert!(error.contains("改过的旧副本留在"), "{error}");
+    let kept = error.rsplit("留在 ").next().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(Path::new(kept).join("SKILL.md")).unwrap(),
+        "我改过"
+    );
+}
