@@ -155,12 +155,14 @@ fn bounded(kind: SessionUpdateKind) -> SessionUpdateKind {
             kind,
             summary,
             options,
+            subagent,
         } => K::PermissionRequest {
             id,
             tool_call_id,
             kind,
             summary: cut(summary),
             options,
+            subagent,
         },
         K::Error {
             message,

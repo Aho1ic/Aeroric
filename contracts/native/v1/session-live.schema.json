@@ -122,6 +122,9 @@
                 },
                 "type": "array"
               },
+              "subagent": {
+                "type": "string"
+              },
               "summary": {
                 "type": "string"
               },
@@ -460,6 +463,9 @@
                     "type": "string"
                   },
                   "type": "array"
+                },
+                "subagent": {
+                  "type": "string"
                 },
                 "summary": {
                   "type": "string"

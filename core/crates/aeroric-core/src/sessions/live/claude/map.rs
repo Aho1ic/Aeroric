@@ -562,6 +562,7 @@ pub fn map_permission_request(request_id: &str, request: &Value) -> SessionUpdat
         kind: tool.to_string(),
         summary,
         options,
+        subagent: None,
     }
 }
 

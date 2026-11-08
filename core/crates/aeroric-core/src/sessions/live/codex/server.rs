@@ -38,7 +38,15 @@ struct Running {
     _guard: Option<ChildGuard>,
 }
 
-type Route = (u64, mpsc::UnboundedSender<Inbound>);
+/// Where one thread's traffic goes. `owner` is the session's own thread: a
+/// Codex subagent's thread (and its subagents') is routed to the session that
+/// spawned it, and leaves with it.
+#[derive(Clone)]
+struct Route {
+    epoch: u64,
+    inbox: mpsc::UnboundedSender<Inbound>,
+    owner: String,
+}
 
 pub struct CodexServer {
     launcher: Launcher,
@@ -89,17 +97,88 @@ impl CodexServer {
 
     /// Route a thread's traffic from the server generation `epoch` to `inbox`.
     pub fn register(&self, thread_id: &str, epoch: u64, inbox: mpsc::UnboundedSender<Inbound>) {
-        self.routes
-            .lock()
-            .insert(thread_id.to_string(), (epoch, inbox));
+        self.routes.lock().insert(
+            thread_id.to_string(),
+            Route {
+                epoch,
+                inbox,
+                owner: thread_id.to_string(),
+            },
+        );
         *self.unused_since.lock() = None;
     }
 
+    /// The session's thread and every subagent thread routed with it.
     pub fn unregister(&self, thread_id: &str) {
         let mut routes = self.routes.lock();
-        routes.remove(thread_id);
+        routes.retain(|thread, route| thread != thread_id && route.owner != thread_id);
         if routes.is_empty() {
             *self.unused_since.lock() = Some(now_ms());
+        }
+    }
+
+    /// 2026-11-07: a thread Codex spawned for a subagent goes where the
+    /// thread that spawned it goes, so its approvals reach the user. Only a
+    /// parent the protocol names counts (`thread.parentThreadId`, the spawn
+    /// source, a collab call's `receiverThreadIds`, or a `subAgentActivity`'s
+    /// `agentThreadId`); any other thread stays unrouted. 2026-11-08: Codex
+    /// 0.163 and 0.166 send no `thread/started` for a child at all, so in
+    /// practice only the two items name it (v1 the collab call, v2 the activity).
+    fn adopt(&self, message: &Inbound, epoch: u64) {
+        let Inbound::Notification { method, params } = message else {
+            return;
+        };
+        let pairs: Vec<(String, String)> = match method.as_str() {
+            "thread/started" => {
+                let thread = params.get("thread").unwrap_or(&Value::Null);
+                let parent = thread
+                    .get("parentThreadId")
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        thread
+                            .pointer("/source/subAgent/thread_spawn/parent_thread_id")
+                            .and_then(Value::as_str)
+                    });
+                match (thread.get("id").and_then(Value::as_str), parent) {
+                    (Some(child), Some(parent)) => vec![(parent.to_string(), child.to_string())],
+                    _ => Vec::new(),
+                }
+            }
+            "item/started" | "item/completed" => {
+                let item = params.get("item").unwrap_or(&Value::Null);
+                let parent = params.get("threadId").and_then(Value::as_str);
+                match (item.get("type").and_then(Value::as_str), parent) {
+                    // Multi-agent v2: the only word of a child is this item
+                    // (no `thread/started`, no collab spawn card).
+                    (Some("subAgentActivity"), Some(parent)) => item
+                        .get("agentThreadId")
+                        .and_then(Value::as_str)
+                        .map(|child| vec![(parent.to_string(), child.to_string())])
+                        .unwrap_or_default(),
+                    (Some("collabAgentToolCall"), Some(parent)) => item
+                        .get("receiverThreadIds")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(|child| (parent.to_string(), child.to_string()))
+                        .collect(),
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        };
+        if pairs.is_empty() {
+            return;
+        }
+        let mut routes = self.routes.lock();
+        for (parent, child) in pairs {
+            if routes.contains_key(&child) {
+                continue;
+            }
+            if let Some(route) = routes.get(&parent).filter(|r| r.epoch == epoch).cloned() {
+                routes.insert(child, route);
+            }
         }
     }
 
@@ -161,15 +240,16 @@ impl CodexServer {
             let mut routes = self.routes.lock();
             let threads: Vec<String> = routes
                 .iter()
-                .filter(|(_, (e, _))| *e == epoch)
+                .filter(|(_, route)| route.epoch == epoch)
                 .map(|(t, _)| t.clone())
                 .collect();
             threads
                 .into_iter()
-                .filter_map(|t| routes.remove(&t))
+                .filter_map(|t| routes.remove(&t).filter(|route| route.owner == t))
                 .collect()
         };
-        for (_, inbox) in gone {
+        // One notice per session: its subagents' routes go with it.
+        for Route { inbox, .. } in gone {
             let _ = inbox.send(Inbound::Notification {
                 method: SERVER_EXITED.into(),
                 params: Value::Null,
@@ -189,8 +269,8 @@ impl CodexServer {
         self.routes
             .lock()
             .get(thread)
-            .filter(|(e, _)| *e == epoch)
-            .map(|(_, inbox)| inbox.clone())
+            .filter(|route| route.epoch == epoch)
+            .map(|route| route.inbox.clone())
     }
 }
 
@@ -203,6 +283,7 @@ async fn route(
         let Some(server) = server.upgrade() else {
             return;
         };
+        server.adopt(&message, epoch);
         match server.inbox_for(&message, epoch) {
             Some(inbox) => {
                 let _ = inbox.send(message);

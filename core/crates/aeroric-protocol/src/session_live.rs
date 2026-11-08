@@ -171,6 +171,10 @@ pub enum SessionUpdateKind {
         summary: String,
         /// Decisions the agent accepts for this request.
         options: Vec<String>,
+        /// The agent's own subagent asking (a Codex subagent thread's
+        /// nickname, role or path); absent for the session's own requests.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent: Option<String>,
     },
     PermissionResolved {
         id: String,
@@ -344,6 +348,9 @@ pub struct PendingPermission {
     /// can scope an allowance to the session).
     #[serde(default)]
     pub options: Vec<String>,
+    /// The agent's own subagent asking; absent for the session's own requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<String>,
 }
 
 /// A question card still waiting for the user.
@@ -558,6 +565,7 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
             kind: "command".into(),
             summary: "ls -la".into(),
             options: vec!["allowOnce".into(), "allowForSession".into(), "deny".into()],
+            subagent: None,
         },
         K::PermissionResolved {
             id: "7".into(),
@@ -871,6 +879,7 @@ pub fn fixture_state() -> SessionState {
             summary: "ls -la".into(),
             tool_call_id: Some("c1".into()),
             options: vec!["allowOnce".into(), "allowForSession".into(), "deny".into()],
+            subagent: None,
         }],
         plan: vec![PlanEntry {
             text: "读代码".into(),
@@ -967,7 +976,8 @@ pub fn schema() -> Value {
                 "sessionId": opt_string, "turnActive": {"type": "boolean"},
                 "pending": {"type": "array", "items": {"type": "object", "required": ["id", "kind", "summary"], "properties": {
                     "id": s, "kind": s, "summary": s, "toolCallId": opt_string,
-                    "options": {"type": "array", "items": {"enum": ["allowOnce", "allowForSession", "deny"]}}}}},
+                    "options": {"type": "array", "items": {"enum": ["allowOnce", "allowForSession", "deny"]}},
+                    "subagent": s}}},
                 "plan": {"type": "array", "items": {"$ref": "#/$defs/planEntry"}},
                 "model": opt_string, "permission": opt_string, "effort": opt_string,
                 "contextUsed": opt_u64, "contextLimit": opt_u64, "inputTokens": opt_u64, "outputTokens": opt_u64,
@@ -1020,7 +1030,7 @@ pub fn schema() -> Value {
             "permissionRequest",
             json!(["id", "kind", "summary", "options"]),
             json!({"id": s, "toolCallId": s, "kind": s, "summary": s,
-            "options": {"type": "array", "items": s}}),
+            "options": {"type": "array", "items": s}, "subagent": s}),
         ),
         update_variant(
             "permissionResolved",

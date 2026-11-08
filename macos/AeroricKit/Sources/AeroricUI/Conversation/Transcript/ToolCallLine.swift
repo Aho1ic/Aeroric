@@ -71,7 +71,7 @@ struct ToolCallLine: View {
             if !call.input.isEmpty {
                 section("参数") { CodeText(call.input) }
             }
-            if let output = call.output {
+            if let output = call.output, !output.isEmpty {
                 let lines = output.split(separator: "\n", omittingEmptySubsequences: false)
                 let shown = lines.count > Self.outputLineLimit
                     ? lines.prefix(Self.outputLineLimit).joined(separator: "\n") : output

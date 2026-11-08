@@ -52,7 +52,9 @@ public enum LiveUpdateKind: Equatable, Sendable {
     case toolCall(id: String, kind: LiveToolKind, title: String, input: JSONValue)
     case toolCallUpdate(id: String, status: LiveToolStatus, outputDelta: String?, result: JSONValue?)
     case plan([LivePlanEntry])
-    case permissionRequest(id: String, toolCallId: String?, kind: String, summary: String, options: [String])
+    /// `subagent`: the agent's own subagent asking (a Codex subagent thread), nil for the session itself.
+    case permissionRequest(id: String, toolCallId: String?, kind: String, summary: String, options: [String],
+                           subagent: String? = nil)
     case permissionResolved(id: String, decision: String)
     case subagent(id: String, title: String, status: String, detail: String?)
     /// Answered for the user from an "always allow in this session" grant.
@@ -148,15 +150,19 @@ public struct LivePendingPermission: Equatable, Sendable {
     public var toolCallId: String?
     /// Decisions the agent accepts; "always allow in this session" only when listed.
     public var options: [String]
+    /// The agent's own subagent asking (2026-11-07); nil for the session itself.
+    public var subagent: String?
 
     public static let allOptions = ["allowOnce", "allowForSession", "deny"]
 
-    public init(id: String, kind: String, summary: String, toolCallId: String?, options: [String] = allOptions) {
+    public init(id: String, kind: String, summary: String, toolCallId: String?, options: [String] = allOptions,
+                subagent: String? = nil) {
         self.id = id
         self.kind = kind
         self.summary = summary
         self.toolCallId = toolCallId
         self.options = options
+        self.subagent = subagent
     }
 }
 
@@ -332,7 +338,8 @@ extension LiveUpdateKind {
         case "permissionRequest":
             guard let id = string(f, "id"), let kind = string(f, "kind"), let summary = string(f, "summary"),
                   let options = f["options"]?.arrayValue?.compactMap(\.stringValue) else { return nil }
-            return .permissionRequest(id: id, toolCallId: string(f, "toolCallId"), kind: kind, summary: summary, options: options)
+            return .permissionRequest(id: id, toolCallId: string(f, "toolCallId"), kind: kind, summary: summary, options: options,
+                                      subagent: string(f, "subagent"))
         case "permissionResolved":
             guard let id = string(f, "id"), let decision = string(f, "decision") else { return nil }
             return .permissionResolved(id: id, decision: decision)
@@ -438,7 +445,8 @@ extension LiveSessionState {
             }
             let options = p["options"]?.arrayValue?.compactMap(\.stringValue) ?? []
             return LivePendingPermission(id: id, kind: kind, summary: summary, toolCallId: string(p, "toolCallId"),
-                                         options: options.isEmpty ? LivePendingPermission.allOptions : options)
+                                         options: options.isEmpty ? LivePendingPermission.allOptions : options,
+                                         subagent: string(p, "subagent"))
         }
         let entries = plan.compactMap(LivePlanEntry.decode)
         guard entries.count == plan.count else { throw LiveSessionDecodeError("a plan entry needs text and status") }

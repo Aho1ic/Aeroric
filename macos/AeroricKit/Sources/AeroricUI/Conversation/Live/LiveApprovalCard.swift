@@ -37,6 +37,17 @@ struct LiveApprovalCard: View {
                 HStack(spacing: AeroricSpace.m) {
                     Image(systemName: "exclamationmark.shield.fill").foregroundStyle(AeroricColor.warning)
                     Text(title).font(.system(size: AeroricType.body, weight: .semibold))
+                    if let subagent = request.subagent {
+                        // 2026-11-07: a Codex subagent of this session asks.
+                        // Multi-agent v1 names none; the host then sends "子代理".
+                        Text(subagent == "子代理" ? subagent : "子代理 · \(subagent)")
+                            .font(.system(size: AeroricType.caption))
+                            .foregroundStyle(AeroricColor.accent)
+                            .padding(.horizontal, AeroricSpace.m)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(AeroricColor.accent.opacity(0.14)))
+                            .accessibilityIdentifier("session.live.approval.subagent")
+                    }
                     if let agentLabel {
                         Spacer()
                         Text(agentLabel).font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)

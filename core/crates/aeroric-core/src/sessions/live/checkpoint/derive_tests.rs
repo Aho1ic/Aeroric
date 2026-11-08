@@ -40,6 +40,7 @@ fn ask(id: &str, call: &str, summary: &str) -> SessionUpdateKind {
         kind: "command".into(),
         summary: summary.into(),
         options: vec!["allowOnce".into(), "deny".into()],
+        subagent: None,
     }
 }
 

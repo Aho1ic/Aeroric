@@ -290,6 +290,7 @@ fn approvals_map_both_ways() {
             kind: "Bash".into(),
             summary: "rm -rf build".into(),
             options: vec!["allowOnce".into(), "allowForSession".into(), "deny".into()],
+            subagent: None,
         }
     );
     let plain = json!({"tool_name": "Write", "input": {"file_path": "/w/a"}});

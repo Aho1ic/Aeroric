@@ -179,6 +179,36 @@ pub fn map_notification(
     }
 }
 
+/// A multi-agent v2 path (`/root/probe`) → the name it ends in.
+pub fn subagent_name(path: &str) -> Option<String> {
+    path.rsplit('/')
+        .next()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+/// What a multi-agent tool does, as its card says it: the app-server's
+/// camelCase names and the rollout's snake_case ones alike.
+pub fn multi_agent_action(tool: &str) -> Option<&'static str> {
+    Some(match tool {
+        "spawnAgent" | "spawn_agent" => "子代理",
+        "wait" | "wait_agent" => "等待子代理",
+        "sendInput" | "send_input" | "sendMessage" | "send_message" => "给子代理发消息",
+        "followupTask" | "followup_task" => "给子代理追加任务",
+        "interruptAgent" | "interrupt_agent" => "中断子代理",
+        "listAgents" | "list_agents" => "列出子代理",
+        "closeAgent" | "close_agent" => "关闭子代理",
+        "resumeAgent" | "resume_agent" => "恢复子代理",
+        _ => return None,
+    })
+}
+
+/// Codex stores a v2 spawn's message encrypted (a Fernet token): not text to show.
+pub fn looks_encrypted(text: &str) -> bool {
+    text.starts_with("gAAAAA") && text.len() > 60 && !text.contains(char::is_whitespace)
+}
+
 fn unknown(kind: &str, payload: &Value) -> SessionUpdateKind {
     SessionUpdateKind::Unknown {
         kind: kind.to_string(),
@@ -263,11 +293,35 @@ fn map_item(item: &Value, completed: bool) -> Vec<SessionUpdateKind> {
             json!({"query": item.get("query")}),
             Some(json!({"results": item.get("results")})),
         ),
-        Some("collabAgentToolCall") | Some("subAgentActivity") => tool(
+        // Multi-agent v2 (2026-11-08): `started` is the spawn's own card (its
+        // id is the spawn call's) and carries the child's progress lines; the
+        // child's later activities are those lines, not cards of their own.
+        Some("subAgentActivity") if s(item, "kind") == Some("started") => tool(
+            ToolKind::Subagent,
+            format!(
+                "子代理 {}",
+                s(item, "agentPath")
+                    .and_then(subagent_name)
+                    .unwrap_or_default()
+            )
+            .trim_end()
+            .to_string(),
+            item.clone(),
+            None,
+        ),
+        Some("subAgentActivity") => vec![],
+        // A spawn is named by its task (v2's is encrypted); every other call
+        // by what it does, as the history names it.
+        Some("collabAgentToolCall") => tool(
             ToolKind::Subagent,
             s(item, "prompt")
-                .or_else(|| s(item, "agentPath"))
-                .unwrap_or("子 Agent")
+                .filter(|prompt| {
+                    s(item, "tool") == Some("spawnAgent")
+                        && !prompt.trim().is_empty()
+                        && !looks_encrypted(prompt)
+                })
+                .or_else(|| s(item, "tool").and_then(multi_agent_action))
+                .unwrap_or("子代理")
                 .chars()
                 .take(80)
                 .collect(),
@@ -320,6 +374,7 @@ pub fn map_approval_request(
         kind: kind.into(),
         summary,
         options: vec!["allowOnce".into(), "allowForSession".into(), "deny".into()],
+        subagent: None,
     })
 }
 

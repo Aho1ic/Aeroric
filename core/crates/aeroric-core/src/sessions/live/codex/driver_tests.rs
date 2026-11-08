@@ -1,6 +1,6 @@
 use super::*;
 use crate::sessions::live::codex::fake::{launched, launcher, until, Peer, Sink};
-use crate::sessions::live::update::{Replay, SessionUpdate};
+use crate::sessions::live::update::{Replay, SessionUpdate, ToolKind};
 
 struct Harness {
     session: Arc<CodexSession>,
@@ -626,4 +626,294 @@ async fn a_server_exit_between_turns_says_its_background_commands_ended() {
     })
     .await;
     assert_eq!(h.sink.last_status(), Some(TaskStatus::Done));
+}
+
+// 2026-11-07: Codex's own subagents. Their threads are routed here; their
+// approvals are asked here and answered to them; their progress is a line on
+// the collab card that spawned them.
+
+fn spawn_worker(peer: &Peer) {
+    peer.notify(
+        "item/started",
+        json!({"threadId": "th1", "turnId": "u1", "item": {"type": "collabAgentToolCall", "id": "col1",
+            "tool": "spawnAgent", "status": "inProgress", "senderThreadId": "th1",
+            "receiverThreadIds": ["th-kid"], "prompt": "跑测试", "agentsStates": {}}}),
+    );
+    peer.notify(
+        "thread/started",
+        json!({"thread": {"id": "th-kid", "parentThreadId": "th1", "agentNickname": "worker"}}),
+    );
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-kid", "turn": {"id": "ku1"}}),
+    );
+}
+
+fn card_lines(sink: &Sink) -> Vec<(ToolStatus, String)> {
+    lines_on(sink, "col1")
+}
+
+fn lines_on(sink: &Sink, card: &str) -> Vec<(ToolStatus, String)> {
+    sink.updates
+        .lock()
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::ToolCallUpdate {
+                id,
+                status,
+                output_delta: Some(line),
+                ..
+            } if id == card => Some((*status, line.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Multi-agent v2 as Codex 0.163 / 0.166 send it (2026-11-08 wire capture):
+/// the spawn is a `subAgentActivity`, the child gets no `thread/started`.
+fn spawn_v2_probe(peer: &Peer) {
+    let activity = json!({"type": "subAgentActivity", "id": "call1", "kind": "started",
+        "agentPath": "/root/probe", "agentThreadId": "th-v2"});
+    for method in ["item/started", "item/completed"] {
+        peer.notify(
+            method,
+            json!({"threadId": "th1", "turnId": "u1", "item": activity}),
+        );
+    }
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-v2", "turn": {"id": "ku2"}}),
+    );
+}
+
+#[tokio::test]
+async fn a_v2_subagent_is_named_by_its_activity_and_a_refused_reason_goes_to_the_session() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    spawn_v2_probe(&peer);
+    let sink = Arc::clone(&h.sink);
+    until("started line", move || !lines_on(&sink, "call1").is_empty()).await;
+    assert_eq!(
+        lines_on(&h.sink, "call1")[0],
+        (ToolStatus::Running, "子代理 probe 开始\n".to_string())
+    );
+    assert!(h.sink.updates.lock().iter().any(|u| matches!(&u.kind,
+        SessionUpdateKind::ToolCall { id, kind: ToolKind::Subagent, title, .. }
+            if id == "call1" && title == "子代理 probe")));
+
+    peer.request(
+        9,
+        "item/commandExecution/requestApproval",
+        json!({"threadId": "th-v2", "turnId": "ku2", "itemId": "kc1", "command": "touch probe.txt"}),
+    );
+    let sink = Arc::clone(&h.sink);
+    until("input required", move || {
+        sink.last_status() == Some(TaskStatus::InputRequired)
+    })
+    .await;
+    assert_eq!(
+        h.session.snapshot().pending[0].subagent.as_deref(),
+        Some("probe")
+    );
+    h.session
+        .respond(
+            "9",
+            Decision::Deny {
+                reason: Some("别建文件".into()),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        peer.next().await,
+        json!({"jsonrpc": "2.0", "id": 9, "result": {"decision": "decline"}})
+    );
+    let to_child = peer.expect("turn/steer").await;
+    assert_eq!(to_child["params"]["threadId"], "th-v2");
+    peer.reply_error(
+        &to_child,
+        -32600,
+        "direct app-server input is not allowed for multi-agent v2 sub-agents",
+    );
+    let to_session = peer.expect("turn/steer").await;
+    assert_eq!(
+        (
+            to_session["params"]["threadId"].clone(),
+            to_session["params"]["expectedTurnId"].clone(),
+            to_session["params"]["input"][0]["text"].clone()
+        ),
+        (
+            json!("th1"),
+            json!("u1"),
+            json!("用户拒绝了子代理 probe 的这一步：别建文件")
+        )
+    );
+    peer.reply(&to_session, json!({"turnId": "u1"}));
+
+    let finished = json!({"type": "subAgentActivity", "id": "subagent-completed-ku2",
+        "kind": "completed", "agentPath": "/root/probe", "agentThreadId": "th-v2"});
+    for method in ["item/started", "item/completed"] {
+        peer.notify(
+            method,
+            json!({"threadId": "th1", "turnId": "u1", "item": finished}),
+        );
+    }
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-v2", "turn": {"id": "ku2", "status": "completed"}}),
+    );
+    let sink = Arc::clone(&h.sink);
+    until("finished line", move || lines_on(&sink, "call1").len() == 2).await;
+    assert_eq!(
+        lines_on(&h.sink, "call1")[1],
+        (ToolStatus::Completed, "子代理 probe 完成\n".to_string())
+    );
+    assert!(
+        !h.sink.updates.lock().iter().any(|u| matches!(&u.kind,
+            SessionUpdateKind::ToolCall { id, .. } | SessionUpdateKind::ToolCallUpdate { id, .. }
+                if id == "subagent-completed-ku2")),
+        "the child's end is a line on its card, not a card of its own"
+    );
+}
+
+#[tokio::test]
+async fn a_subagent_s_approval_is_asked_here_and_its_denial_reason_goes_to_it() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    spawn_worker(&peer);
+    peer.request(
+        9,
+        "item/commandExecution/requestApproval",
+        json!({"threadId": "th-kid", "turnId": "ku1", "itemId": "kc1", "command": "npm test"}),
+    );
+    let sink = Arc::clone(&h.sink);
+    until("input required", move || {
+        sink.last_status() == Some(TaskStatus::InputRequired)
+    })
+    .await;
+    let pending = h.session.snapshot().pending;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].subagent.as_deref(), Some("worker"));
+    assert!(h.sink.updates.lock().iter().any(|u| matches!(&u.kind,
+        SessionUpdateKind::PermissionRequest { subagent: Some(label), .. } if label == "worker")));
+
+    h.session
+        .respond(
+            "9",
+            Decision::Deny {
+                reason: Some("先别跑全量".into()),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        peer.next().await,
+        json!({"jsonrpc": "2.0", "id": 9, "result": {"decision": "decline"}})
+    );
+    let steer = peer.expect("turn/steer").await;
+    assert_eq!(
+        (
+            steer["params"]["threadId"].clone(),
+            steer["params"]["expectedTurnId"].clone()
+        ),
+        (json!("th-kid"), json!("ku1")),
+        "the reason goes to the subagent's turn"
+    );
+    peer.reply(&steer, json!({"turnId": "ku1"}));
+    let sink = Arc::clone(&h.sink);
+    until("running again", move || {
+        sink.last_status() == Some(TaskStatus::Running)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_subagent_s_turn_is_a_line_on_its_card_and_leaves_the_session_s_status() {
+    let mut h = start(spec());
+    let peer = running(&mut h).await;
+    spawn_worker(&peer);
+    let sink = Arc::clone(&h.sink);
+    until("started line", move || !card_lines(&sink).is_empty()).await;
+    assert_eq!(
+        card_lines(&h.sink)[0],
+        (ToolStatus::Running, "子代理 worker 开始\n".to_string())
+    );
+    peer.notify(
+        "item/completed",
+        json!({"threadId": "th-kid", "turnId": "ku1", "item": {"type": "fileChange", "id": "kf1",
+            "status": "completed", "changes": [{"path": "src/a.rs", "kind": {"type": "update"}}]}}),
+    );
+    // v1's wait names the same child; its lines stay on the spawn's card.
+    peer.notify(
+        "item/started",
+        json!({"threadId": "th1", "turnId": "u1", "item": {"type": "collabAgentToolCall", "id": "col2",
+            "tool": "wait", "status": "inProgress", "senderThreadId": "th1",
+            "receiverThreadIds": ["th-kid"], "agentsStates": {}}}),
+    );
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-kid", "turn": {"id": "ku1", "status": "completed"}}),
+    );
+    let sink = Arc::clone(&h.sink);
+    until("finished line", move || card_lines(&sink).len() == 2).await;
+    assert_eq!(
+        card_lines(&h.sink)[1],
+        (
+            ToolStatus::Completed,
+            "子代理 worker 完成 · 改了 src/a.rs\n".to_string()
+        )
+    );
+    assert_eq!(
+        h.sink.last_status(),
+        Some(TaskStatus::Running),
+        "the session's own turn still runs"
+    );
+    assert!(!h.sink.update_types().contains(&"turnEnded".to_string()));
+}
+
+#[tokio::test]
+async fn a_running_subagent_keeps_the_session_up_and_its_late_approval_returns_to_done() {
+    let mut h = start(spec());
+    let peer = running(&mut h).await;
+    spawn_worker(&peer);
+    complete(&peer, "completed");
+    let sink = Arc::clone(&h.sink);
+    until("done", move || sink.last_status() == Some(TaskStatus::Done)).await;
+    assert_eq!(h.session.idle_since_ms(), None, "the subagent still runs");
+
+    peer.request(
+        10,
+        "item/fileChange/requestApproval",
+        json!({"threadId": "th-kid", "turnId": "ku1", "itemId": "kf2"}),
+    );
+    let sink = Arc::clone(&h.sink);
+    until("input required", move || {
+        sink.last_status() == Some(TaskStatus::InputRequired)
+    })
+    .await;
+    h.session.respond("10", Decision::AllowOnce).unwrap();
+    let sink = Arc::clone(&h.sink);
+    until("done again", move || {
+        sink.last_status() == Some(TaskStatus::Done)
+    })
+    .await;
+
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-kid", "turn": {"id": "ku1", "status": "completed"}}),
+    );
+    let session = Arc::clone(&h.session);
+    until("idle", move || session.idle_since_ms().is_some()).await;
+}
+
+#[tokio::test]
+async fn a_thread_nobody_spawned_is_still_refused() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    peer.request(
+        11,
+        "item/commandExecution/requestApproval",
+        json!({"threadId": "th-stranger", "turnId": "x", "itemId": "c", "command": "rm -rf /"}),
+    );
+    let answer = peer.next().await;
+    assert_eq!(answer["error"]["code"], -32601);
+    assert!(h.session.snapshot().pending.is_empty());
 }

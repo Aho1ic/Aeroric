@@ -453,10 +453,11 @@ public struct LiveSessionModel: Equatable, Sendable {
             }
         case let .plan(entries):
             plan = entries
-        case let .permissionRequest(id, toolCallId, kind, summary, options):
+        case let .permissionRequest(id, toolCallId, kind, summary, options, subagent):
             if !pending.contains(where: { $0.id == id }) {
                 pending.append(LivePendingPermission(id: id, kind: kind, summary: summary, toolCallId: toolCallId,
-                                                     options: options.isEmpty ? LivePendingPermission.allOptions : options))
+                                                     options: options.isEmpty ? LivePendingPermission.allOptions : options,
+                                                     subagent: subagent))
             }
         case let .permissionResolved(id, _):
             pending.removeAll { $0.id == id }

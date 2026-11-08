@@ -55,6 +55,10 @@ impl Peer {
         self.send(json!({"jsonrpc": "2.0", "id": request["id"], "result": result}));
     }
 
+    pub fn reply_error(&self, request: &Value, code: i64, message: &str) {
+        self.send(json!({"jsonrpc": "2.0", "id": request["id"], "error": {"code": code, "message": message}}));
+    }
+
     pub fn notify(&self, method: &str, params: Value) {
         self.send(json!({"jsonrpc": "2.0", "method": method, "params": params}));
     }

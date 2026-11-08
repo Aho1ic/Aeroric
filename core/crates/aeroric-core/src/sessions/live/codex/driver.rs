@@ -7,7 +7,7 @@
 //! approval `input_required`, and the turn's end settles `done` / `interrupted`
 //! / `failed`; the next prompt moves the task back to `running`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -15,12 +15,12 @@ use serde_json::{json, Map, Value};
 use tokio::sync::mpsc;
 
 use super::map::{
-    approval_response, codex_policy, map_approval_request, map_notification, TurnSignal,
-    WARNING_METHODS,
+    approval_response, codex_policy, map_approval_request, map_notification, subagent_name,
+    TurnSignal, WARNING_METHODS,
 };
 use super::rpc::{Inbound, RpcClient, RpcError};
 use super::server::{CodexServer, Connection, SERVER_EXITED};
-use crate::sessions::live::update::{PlanEntry, SessionUpdateKind, TurnEndReason};
+use crate::sessions::live::update::{PlanEntry, SessionUpdateKind, ToolStatus, TurnEndReason};
 use crate::sessions::live::{
     now_ms, ConfigChange, Decision, DriverError, LiveStatusSink, PendingPermission, SessionDriver,
     SessionState, SharedLog, SlashCommand,
@@ -62,6 +62,48 @@ struct Pending {
     method: String,
     params: Value,
     view: PendingPermission,
+    /// The subagent thread that asked; `None` for the session's own thread.
+    child: Option<String>,
+}
+
+/// A Codex subagent's thread routed to this session (2026-11-07): its
+/// approvals become cards here, its progress a line on the collab card that
+/// spawned it. Its own conversation stays out of this one.
+#[derive(Clone, Debug)]
+struct Child {
+    /// Nickname, role or "子代理", for the approval card.
+    label: String,
+    /// The collab call's card that spawned it, once seen.
+    card: Option<String>,
+    /// Its running turn.
+    turn: Option<String>,
+    /// Files its running turn changed.
+    files: BTreeSet<String>,
+}
+
+/// A child Codex gave no name (multi-agent v1 never does).
+const UNNAMED: &str = "子代理";
+
+impl Child {
+    /// "子代理 X", or just "子代理" when it has no name of its own.
+    fn title(&self) -> String {
+        if self.label == UNNAMED {
+            UNNAMED.into()
+        } else {
+            format!("子代理 {}", self.label)
+        }
+    }
+}
+
+impl Default for Child {
+    fn default() -> Self {
+        Self {
+            label: UNNAMED.into(),
+            card: None,
+            turn: None,
+            files: BTreeSet::new(),
+        }
+    }
 }
 
 struct State {
@@ -92,6 +134,12 @@ struct State {
     /// `commandExecution` items started and not completed. One still running
     /// after its turn is a background terminal: the session is not idle.
     commands_running: HashSet<String>,
+    /// Subagent threads routed here; one with a running turn keeps the
+    /// session up.
+    children: HashMap<String, Child>,
+    /// How the session's own last turn ended: what it shows again once a
+    /// subagent's approval is answered.
+    settled: (TaskStatus, Option<String>),
     closed: bool,
 }
 
@@ -135,6 +183,8 @@ impl CodexSession {
             cached_input_tokens: None,
             idle_since: now_ms(),
             commands_running: HashSet::new(),
+            children: HashMap::new(),
+            settled: (TaskStatus::Done, None),
             closed: false,
         }));
         let (commands, command_rx) = mpsc::unbounded_channel();
@@ -307,7 +357,8 @@ impl SessionDriver for CodexSession {
         (state.subscribed
             && state.active_turn.is_none()
             && state.pending.is_empty()
-            && state.commands_running.is_empty())
+            && state.commands_running.is_empty()
+            && state.children.values().all(|c| c.turn.is_none()))
         .then_some(state.idle_since)
     }
 
@@ -441,6 +492,7 @@ impl Actor {
                     state.active_turn.is_none()
                         && state.pending.is_empty()
                         && state.commands_running.is_empty()
+                        && state.children.values().all(|c| c.turn.is_none())
                 };
                 if idle {
                     self.unsubscribe().await;
@@ -634,35 +686,186 @@ impl Actor {
             id,
             decision: decision.wire().into(),
         });
-        let (thread, turn, waiting) = {
-            let state = self.state.lock();
-            (
-                state.thread_id.clone(),
-                state.active_turn.clone(),
-                !state.pending.is_empty(),
-            )
-        };
+        let waiting = !self.state.lock().pending.is_empty();
         // N2 D6: Codex's decline carries no reason, so the reason follows as a steer.
-        if let (
-            Decision::Deny {
-                reason: Some(reason),
-            },
-            Some(thread),
-            Some(turn),
-        ) = (&decision, &thread, &turn)
+        if let Decision::Deny {
+            reason: Some(reason),
+        } = &decision
         {
             if !reason.trim().is_empty() {
-                let input = json!([{"type": "text", "text": format!("用户拒绝了这一步：{reason}"), "text_elements": []}]);
-                let _ = client
-                    .request(
-                        "turn/steer",
-                        json!({"threadId": thread, "input": input, "expectedTurnId": turn}),
-                    )
+                self.steer_reason(&client, pending.child.as_deref(), reason)
                     .await;
             }
         }
-        if turn.is_some() && !waiting {
+        if !waiting {
+            self.waiting_over();
+        }
+    }
+
+    /// The reason goes to the turn that asked. A subagent's goes to its own
+    /// turn; Codex refuses input to a multi-agent v2 child (2026-11-08,
+    /// "direct app-server input is not allowed"), so then the session's own
+    /// running turn hears it, naming the subagent, and can pass it on.
+    async fn steer_reason(&self, client: &RpcClient, child: Option<&str>, reason: &str) {
+        let (own, child_turn, title) = {
+            let state = self.state.lock();
+            let entry = child.and_then(|c| state.children.get(c));
+            (
+                state.thread_id.clone().zip(state.active_turn.clone()),
+                entry.and_then(|e| e.turn.clone()),
+                entry.map_or_else(|| Child::default().title(), Child::title),
+            )
+        };
+        let Some(child) = child else {
+            if let Some((thread, turn)) = &own {
+                let _ = steer(client, thread, turn, format!("用户拒绝了这一步：{reason}")).await;
+            }
+            return;
+        };
+        if let Some(turn) = &child_turn {
+            let text = format!("用户拒绝了这一步：{reason}");
+            if steer(client, child, turn, text).await.is_ok() {
+                return;
+            }
+        }
+        match &own {
+            Some((thread, turn)) => {
+                let who = if title == UNNAMED {
+                    title
+                } else {
+                    format!("{title} ")
+                };
+                let text = format!("用户拒绝了{who}的这一步：{reason}");
+                let _ = steer(client, thread, turn, text).await;
+            }
+            None => self.push(SessionUpdateKind::Error {
+                message: format!("拒绝理由没能送到{title}：它不接收插话，会话这一轮也已结束"),
+                recoverable: true,
+            }),
+        }
+    }
+
+    /// Nothing waits for the user any more: the session's own turn runs, or
+    /// it shows again how that turn ended (a subagent asked meanwhile).
+    fn waiting_over(&self) {
+        let (active, settled) = {
+            let state = self.state.lock();
+            (state.active_turn.is_some(), state.settled.clone())
+        };
+        if active {
             self.status(TaskStatus::Running, None);
+        } else {
+            self.status(settled.0, settled.1);
+        }
+    }
+
+    /// The thread a message is about, when it is not the session's own.
+    fn child_of(&self, params: &Value) -> Option<String> {
+        let thread = params
+            .get("threadId")
+            .or_else(|| params.pointer("/thread/id"))
+            .and_then(Value::as_str)?;
+        let own = self.state.lock().thread_id.clone();
+        (own.as_deref() != Some(thread)).then(|| thread.to_string())
+    }
+
+    /// A subagent thread's traffic: its start, end and changed files on the
+    /// collab card; nothing of its conversation.
+    fn child_notification(&mut self, child: String, method: &str, params: &Value) {
+        match method {
+            "thread/started" => {
+                let thread = params.get("thread").unwrap_or(&Value::Null);
+                let label = ["agentNickname", "agentRole"]
+                    .iter()
+                    .find_map(|key| thread.get(*key).and_then(Value::as_str))
+                    .filter(|label| !label.trim().is_empty())
+                    .map(str::to_string);
+                let mut state = self.state.lock();
+                let entry = state.children.entry(child).or_default();
+                if let Some(label) = label {
+                    entry.label = label;
+                }
+            }
+            "turn/started" => {
+                let turn = params.pointer("/turn/id").and_then(Value::as_str);
+                let (card, title) = {
+                    let mut state = self.state.lock();
+                    let entry = state.children.entry(child).or_default();
+                    entry.turn = turn.map(str::to_string);
+                    entry.files.clear();
+                    (entry.card.clone(), entry.title())
+                };
+                if let Some(card) = card {
+                    self.push(SessionUpdateKind::ToolCallUpdate {
+                        id: card,
+                        status: ToolStatus::Running,
+                        output_delta: Some(format!("{title} 开始\n")),
+                        result: None,
+                    });
+                }
+            }
+            "item/completed" => {
+                let item = params.get("item").unwrap_or(&Value::Null);
+                if item.get("type").and_then(Value::as_str) == Some("fileChange") {
+                    let paths: Vec<String> = item
+                        .get("changes")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|c| c.get("path").and_then(Value::as_str))
+                        .map(str::to_string)
+                        .collect();
+                    if let Some(entry) = self.state.lock().children.get_mut(&child) {
+                        entry.files.extend(paths);
+                    }
+                }
+            }
+            "turn/completed" => {
+                let status = params
+                    .pointer("/turn/status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("completed");
+                let (card, title, files, others) = {
+                    let mut state = self.state.lock();
+                    let entry = state.children.entry(child.clone()).or_default();
+                    entry.turn = None;
+                    let files = std::mem::take(&mut entry.files);
+                    let (card, title) = (entry.card.clone(), entry.title());
+                    let others = state.children.iter().any(|(id, c)| {
+                        *id != child && c.turn.is_some() && c.card.is_some() && c.card == card
+                    });
+                    let quiet = state.active_turn.is_none()
+                        && state.children.values().all(|c| c.turn.is_none());
+                    if quiet {
+                        state.idle_since = now_ms();
+                    }
+                    (card, title, files, others)
+                };
+                // Its unanswered approvals died with its turn.
+                self.drop_pending(|p| p.child.as_deref() == Some(child.as_str()), "cancelled");
+                if let Some(card) = card {
+                    let (word, done) = match status {
+                        "failed" => ("失败", ToolStatus::Failed),
+                        "interrupted" => ("中断", ToolStatus::Failed),
+                        _ => ("完成", ToolStatus::Completed),
+                    };
+                    let changed = if files.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " · 改了 {}",
+                            files.into_iter().collect::<Vec<_>>().join("、")
+                        )
+                    };
+                    self.push(SessionUpdateKind::ToolCallUpdate {
+                        id: card,
+                        status: if others { ToolStatus::Running } else { done },
+                        output_delta: Some(format!("{title} {word}{changed}\n")),
+                        result: None,
+                    });
+                }
+            }
+            _ => {}
         }
     }
 
@@ -674,6 +877,10 @@ impl Actor {
                 self.drop_pending(|p| p.view.id == id, "resolved");
             }
             Inbound::Notification { method, params } => {
+                if let Some(child) = self.child_of(&params) {
+                    return self.child_notification(child, &method, &params);
+                }
+                self.note_spawned(&params);
                 self.track_command(&method, &params);
                 let (mut updates, signal) = map_notification(&method, &params);
                 if WARNING_METHODS.contains(&method.as_str()) {
@@ -694,21 +901,27 @@ impl Actor {
                         self.status(TaskStatus::Running, None);
                     }
                     Some(TurnSignal::Ended { reason, error, .. }) => {
-                        self.drop_pending(|_| true, "cancelled");
-                        {
-                            let mut state = self.state.lock();
-                            state.active_turn = None;
-                            state.idle_since = now_ms();
-                        }
-                        match reason {
-                            TurnEndReason::Completed => self.status(TaskStatus::Done, None),
-                            TurnEndReason::Interrupted => {
-                                self.status(TaskStatus::Interrupted, None)
-                            }
-                            TurnEndReason::Failed => self.status(
+                        // A subagent's approvals outlive this turn: it may still run.
+                        self.drop_pending(|p| p.child.is_none(), "cancelled");
+                        let settled = match reason {
+                            TurnEndReason::Completed => (TaskStatus::Done, None),
+                            TurnEndReason::Interrupted => (TaskStatus::Interrupted, None),
+                            TurnEndReason::Failed => (
                                 TaskStatus::Failed,
                                 Some(error.unwrap_or_else(|| "Codex 这一轮失败了".into())),
                             ),
+                        };
+                        let waiting = {
+                            let mut state = self.state.lock();
+                            state.active_turn = None;
+                            state.idle_since = now_ms();
+                            state.settled = settled.clone();
+                            !state.pending.is_empty()
+                        };
+                        if waiting {
+                            self.status(TaskStatus::InputRequired, None);
+                        } else {
+                            self.status(settled.0, settled.1);
                         }
                     }
                     None => {}
@@ -716,22 +929,35 @@ impl Actor {
             }
             Inbound::Request { id, method, params } => {
                 let key = request_key(&id);
+                let child = self.child_of(&params);
+                let label = child.as_ref().map(|child| {
+                    self.state
+                        .lock()
+                        .children
+                        .get(child)
+                        .map_or_else(|| Child::default().label, |c| c.label.clone())
+                });
                 match map_approval_request(&method, &key, &params) {
-                    Some(update) => {
-                        let view = match &update {
+                    Some(mut update) => {
+                        let view = match &mut update {
                             SessionUpdateKind::PermissionRequest {
                                 id,
                                 kind,
                                 summary,
                                 tool_call_id,
                                 options,
-                            } => PendingPermission {
-                                id: id.clone(),
-                                kind: kind.clone(),
-                                summary: summary.clone(),
-                                tool_call_id: tool_call_id.clone(),
-                                options: options.clone(),
-                            },
+                                subagent,
+                            } => {
+                                subagent.clone_from(&label);
+                                PendingPermission {
+                                    id: id.clone(),
+                                    kind: kind.clone(),
+                                    summary: summary.clone(),
+                                    tool_call_id: tool_call_id.clone(),
+                                    options: options.clone(),
+                                    subagent: label.clone(),
+                                }
+                            }
                             _ => unreachable!("map_approval_request returns permission requests"),
                         };
                         self.state.lock().pending.push(Pending {
@@ -739,6 +965,7 @@ impl Actor {
                             method,
                             params,
                             view,
+                            child,
                         });
                         self.push(update);
                         self.status(TaskStatus::InputRequired, None);
@@ -784,26 +1011,62 @@ impl Actor {
     }
 
     fn drop_pending(&self, matches: impl Fn(&Pending) -> bool, decision: &str) {
-        let (dropped, resume_running) = {
+        let (dropped, cleared) = {
             let mut state = self.state.lock();
-            let before = state.pending.len();
             let (dropped, kept): (Vec<_>, Vec<_>) =
                 state.pending.drain(..).partition(|p| matches(p));
             state.pending = kept;
-            let resume = before > 0
-                && state.pending.is_empty()
-                && state.active_turn.is_some()
-                && !dropped.is_empty();
-            (dropped, resume)
+            let cleared = !dropped.is_empty() && state.pending.is_empty();
+            (dropped, cleared)
         };
+        let child_asked = dropped.iter().any(|p| p.child.is_some());
         for pending in dropped {
             self.push(SessionUpdateKind::PermissionResolved {
                 id: pending.view.id,
                 decision: decision.into(),
             });
         }
-        if resume_running {
-            self.status(TaskStatus::Running, None);
+        if cleared && (child_asked || self.state.lock().active_turn.is_some()) {
+            self.waiting_over();
+        }
+    }
+
+    /// A collab call names the subagent threads it spawned: their progress
+    /// goes on its card.
+    fn note_spawned(&self, params: &Value) {
+        let item = params.get("item").unwrap_or(&Value::Null);
+        let Some(card) = item.get("id").and_then(Value::as_str) else {
+            return;
+        };
+        let field = |key: &str| item.get(key).and_then(Value::as_str);
+        if field("type") == Some("subAgentActivity") {
+            // v2: the child is named once, by its path; there is no thread/started.
+            if let (Some("started"), Some(child)) = (field("kind"), field("agentThreadId")) {
+                let mut state = self.state.lock();
+                let entry = state.children.entry(child.to_string()).or_default();
+                entry.card = Some(card.to_string());
+                if let Some(name) = field("agentPath").and_then(subagent_name) {
+                    entry.label = name;
+                }
+            }
+            return;
+        }
+        // v1: only the spawn owns the card; `wait` and `sendInput` list the
+        // same child as a receiver too.
+        if field("type") != Some("collabAgentToolCall")
+            || !matches!(field("tool"), Some("spawnAgent" | "spawn_agent"))
+        {
+            return;
+        }
+        let mut state = self.state.lock();
+        for child in item
+            .get("receiverThreadIds")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            state.children.entry(child.to_string()).or_default().card = Some(card.to_string());
         }
     }
 
@@ -843,6 +1106,7 @@ impl Actor {
             state.subscribed = false;
             state.idle_since = now_ms();
             let lost = std::mem::take(&mut state.commands_running).len();
+            state.children.clear();
             (state.active_turn.take(), lost)
         };
         if lost > 0 && turn.is_none() {
@@ -881,7 +1145,12 @@ impl Actor {
             return;
         };
         self.server.unregister(&thread);
-        self.state.lock().subscribed = false;
+        {
+            let mut state = self.state.lock();
+            state.subscribed = false;
+            // Their routes left with this thread's.
+            state.children.clear();
+        }
         if let Some(client) = self.client() {
             let _ = client
                 .request("thread/unsubscribe", json!({"threadId": thread}))
@@ -920,6 +1189,21 @@ impl Actor {
             });
         }
     }
+}
+
+async fn steer(
+    client: &RpcClient,
+    thread: &str,
+    turn: &str,
+    text: String,
+) -> Result<Value, RpcError> {
+    let input = json!([{"type": "text", "text": text, "text_elements": []}]);
+    client
+        .request(
+            "turn/steer",
+            json!({"threadId": thread, "input": input, "expectedTurnId": turn}),
+        )
+        .await
 }
 
 /// JSON-RPC ids are numbers or strings; the UI addresses them as strings.

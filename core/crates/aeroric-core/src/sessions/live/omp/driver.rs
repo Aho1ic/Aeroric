@@ -910,6 +910,7 @@ impl Actor {
                 summary: approval.summary.clone(),
                 tool_call_id: self.last_tool.clone(),
                 options: approval.options(),
+                subagent: None,
             };
             self.push(SessionUpdateKind::PermissionRequest {
                 id,
@@ -917,6 +918,7 @@ impl Actor {
                 kind: view.kind.clone(),
                 summary: view.summary.clone(),
                 options: view.options.clone(),
+                subagent: None,
             });
             self.state.lock().pending.push(Approval { approval, view });
             self.status(TaskStatus::InputRequired, None);

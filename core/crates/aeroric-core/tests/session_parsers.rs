@@ -303,3 +303,103 @@ fn codex_merges_assistant_parts_and_dedups_adjacent_user_text() {
         "string-array summary joins to empty thinking and is dropped —不产空块"
     );
 }
+
+/// 2026-11-08：Codex 原生多代理在落盘记录里是普通函数调用。形状取自 0.163 的
+/// 真实记录（v2 的 spawn 消息是加密串）和同版本 v1 的探针记录。
+#[test]
+fn codex_multi_agent_calls_become_subagent_cards_with_their_child_s_report() {
+    let tool_uses = |messages: &[SessionMessage]| -> Vec<(String, String, String)> {
+        messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                SessionContent::ToolUse { id, name, input } => {
+                    Some((id.clone(), name.clone(), input.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let result_of = |messages: &[SessionMessage], wanted: &str| -> String {
+        messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .find_map(|c| match c {
+                SessionContent::ToolResult { id, output } if id == wanted => Some(output.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    };
+
+    let v2 = parse_codex_session(&[
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"collaboration","arguments":"{\"task_name\":\"subagent_probe\",\"message\":\"gAAAAABq71aAz2tYwXpuq_cBLthUldACzjzjly4Aspqk2VPEMAiLyLfbC0UB2_f3LCmE64cqzSz\"}","call_id":"c-spawn"}}"#,
+        r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","id":"c-spawn","kind":"started","agent_thread_id":"th-kid","agent_path":"/root/subagent_probe"}}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call_output","id":"fco_1","call_id":"c-spawn","output":"{\"task_name\":\"/root/subagent_probe\"}"}}"#,
+        // 2026-11-08 review: a delivered `send_message` is recorded with an empty output.
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"send_message","namespace":"collaboration","arguments":"{\"target\":\"subagent_probe\",\"message\":\"gAAAAABq72qSBoro1nvKvbfr0hF1O-qVG7xtbSKOHAW8qL04vMj1KRE4i1VXH8_BTx5WrLkro\"}","call_id":"c-send"}}"#,
+        r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","id":"c-send","kind":"interacted","agent_thread_id":"th-kid","agent_path":"/root/subagent_probe"}}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call_output","id":"fco_3","call_id":"c-send","output":""}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"wait_agent","namespace":"collaboration","arguments":"{\"timeout_ms\":10000}","call_id":"c-wait"}}"#,
+        r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","id":"subagent-completed-ku1","kind":"completed","agent_thread_id":"th-kid","agent_path":"/root/subagent_probe"}}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call_output","id":"fco_2","call_id":"c-wait","output":"{\"message\":\"Wait completed.\",\"timed_out\":false}"}}"#,
+        r#"{"type":"response_item","payload":{"type":"agent_message","author":"/root/subagent_probe","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/subagent_probe\nPayload:\ntouch failed: Operation not permitted"}]}}"#,
+    ]);
+    let uses = tool_uses(&v2);
+    assert_eq!(
+        uses.iter()
+            .map(|(id, name, _)| (id.as_str(), name.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("c-spawn", "Agent"),
+            ("c-send", "Agent"),
+            ("c-wait", "Agent")
+        ],
+        "多代理调用都显示成子代理卡，和 Claude 的 Agent 工具同名（人形图标）"
+    );
+    assert!(uses[0]
+        .2
+        .contains("\"description\": \"子代理 subagent_probe\""));
+    assert!(
+        !uses[0].2.contains("gAAAAA"),
+        "加密的 spawn 消息不显示：{}",
+        uses[0].2
+    );
+    assert!(uses[1].2.contains("\"description\": \"给子代理发消息\""));
+    assert!(!uses[1].2.contains("gAAAAA"));
+    assert!(
+        v2.iter().flat_map(|m| m.content.iter()).any(
+            |c| matches!(c, SessionContent::ToolResult { id, output } if id == "c-send" && output.is_empty())
+        ),
+        "输出为空也有结果记录，调用算完成而不是未完成"
+    );
+    assert!(uses[2].2.contains("\"description\": \"等待子代理\""));
+    assert_eq!(
+        result_of(&v2, "c-spawn"),
+        "子代理 subagent_probe 开始\n子代理 subagent_probe 完成\n回报：touch failed: Operation not permitted"
+    );
+    assert!(
+        !v2.iter()
+            .flat_map(|m| m.content.iter())
+            .any(|c| matches!(c, SessionContent::Text { text } if text.contains("FINAL_ANSWER"))),
+        "代理之间的消息不当作对话显示"
+    );
+
+    let v1 = parse_codex_session(&[
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"multi_agent_v1","arguments":"{\"message\": \"run the tests\"}","call_id":"p-spawn"}}"#,
+        r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CollabAgentToolCall","id":"p-spawn","tool":"spawn_agent","status":"completed","receiver_thread_ids":["th-v1"]}}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"p-spawn","output":"{\"agent_id\":\"th-v1\",\"nickname\":\"Volta\"}"}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"wait","arguments":"{}","call_id":"other-wait"}}"#,
+    ]);
+    let uses = tool_uses(&v1);
+    assert!(uses[0].2.contains("\"description\": \"子代理 Volta\""));
+    assert!(
+        uses[0].2.contains("\"message\": \"run the tests\""),
+        "明文的任务照常显示"
+    );
+    assert!(uses[0].2.contains("\"thread\": \"th-v1\""));
+    assert_eq!(result_of(&v1, "p-spawn"), "子代理 Volta 开始");
+    assert_eq!(
+        uses[1].1, "wait",
+        "没有多代理命名空间的同名工具不当作子代理"
+    );
+}

@@ -52,6 +52,101 @@ async fn routes_by_thread_and_refuses_requests_nobody_owns() {
     assert_eq!(refused["error"]["code"], -32601);
 }
 
+/// 2026-11-07: a Codex subagent's thread (and its own subagent's) is routed
+/// with the session that spawned it, leaves with it, and an exit tells that
+/// session once.
+#[tokio::test]
+async fn subagent_threads_go_with_their_parent_and_leave_with_it() {
+    let (launcher, mut peers) = launcher();
+    let server = CodexServer::new(launcher);
+    let connecting = tokio::spawn({
+        let server = Arc::clone(&server);
+        async move { server.connect().await.map(|c| c.epoch) }
+    });
+    let mut peer = launched(&mut peers).await;
+    peer.handshake().await;
+    let epoch = connecting.await.unwrap().unwrap();
+    let (inbox, mut inbound) = mpsc::unbounded_channel();
+    server.register("th", epoch, inbox);
+    let method = |message: Option<Inbound>| match message {
+        Some(Inbound::Notification { method, .. }) | Some(Inbound::Request { method, .. }) => {
+            method
+        }
+        None => String::new(),
+    };
+
+    peer.notify(
+        "thread/started",
+        json!({"thread": {"id": "kid", "parentThreadId": "th"}}),
+    );
+    peer.notify(
+        "thread/started",
+        json!({"thread": {"id": "grandkid", "source": {"subAgent": {"thread_spawn": {"parent_thread_id": "kid", "depth": 2}}}}}),
+    );
+    peer.notify(
+        "item/started",
+        json!({"threadId": "th", "item": {"type": "collabAgentToolCall", "id": "col", "receiverThreadIds": ["named"]}}),
+    );
+    peer.notify(
+        "item/completed",
+        json!({"threadId": "th", "item": {"type": "subAgentActivity", "id": "call", "kind": "started",
+            "agentPath": "/root/probe", "agentThreadId": "v2kid"}}),
+    );
+    for _ in 0..4 {
+        method(inbound.recv().await);
+    }
+    for (id, thread) in [(1, "kid"), (2, "grandkid"), (3, "named"), (6, "v2kid")] {
+        peer.request(
+            id,
+            "item/commandExecution/requestApproval",
+            json!({"threadId": thread}),
+        );
+        assert_eq!(
+            method(inbound.recv().await),
+            "item/commandExecution/requestApproval",
+            "{thread} is routed here"
+        );
+    }
+    peer.notify(
+        "thread/started",
+        json!({"thread": {"id": "stranger", "parentThreadId": "nobody"}}),
+    );
+    peer.request(
+        4,
+        "item/commandExecution/requestApproval",
+        json!({"threadId": "stranger"}),
+    );
+    assert_eq!(peer.next().await["error"]["code"], -32601);
+
+    server.unregister("th");
+    peer.request(
+        5,
+        "item/commandExecution/requestApproval",
+        json!({"threadId": "kid"}),
+    );
+    assert_eq!(
+        peer.next().await["error"]["code"],
+        -32601,
+        "the subagent left with its session"
+    );
+
+    let (inbox, mut inbound) = mpsc::unbounded_channel();
+    server.register("th2", epoch, inbox);
+    peer.notify(
+        "thread/started",
+        json!({"thread": {"id": "kid2", "parentThreadId": "th2"}}),
+    );
+    assert_eq!(method(inbound.recv().await), "thread/started");
+    peer.close();
+    assert_eq!(method(inbound.recv().await), SERVER_EXITED);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), inbound.recv())
+            .await
+            .map_or(true, |m| m.is_none()),
+        "one notice per session"
+    );
+}
+
 #[tokio::test]
 async fn an_exit_tells_its_sessions_and_repeated_exits_stop_restarts() {
     let (launcher, mut peers) = launcher();

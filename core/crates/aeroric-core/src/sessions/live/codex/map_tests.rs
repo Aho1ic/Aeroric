@@ -306,3 +306,43 @@ fn thread_goal_notifications_are_bookkeeping() {
         );
     }
 }
+
+// 2026-11-08 review: a v2 `wait` card read "子 Agent". Every collab card is
+// named by what its tool does, in the history's words; only a spawn's own
+// task (unless encrypted) names it instead.
+#[test]
+fn collab_cards_are_named_by_what_their_tool_does() {
+    let title = |tool: &str, prompt: Option<&str>| {
+        let item = json!({"type": "collabAgentToolCall", "id": "col", "tool": tool,
+            "status": "inProgress", "prompt": prompt});
+        let (updates, _) = map_notification(
+            "item/started",
+            &json!({"item": item, "threadId": "th", "turnId": "u1"}),
+        );
+        match &updates[0] {
+            SessionUpdateKind::ToolCall {
+                kind: ToolKind::Subagent,
+                title,
+                ..
+            } => title.clone(),
+            other => panic!("not a subagent card: {other:?}"),
+        }
+    };
+    let sealed = "gAAAAABq72qSBoro1nvKvbfr0hF1O-qVG7xtbSKOHAW8qL04vMj1KRE4i1VXH8_BTx5WrLkro";
+    assert_eq!(title("spawnAgent", Some("跑测试")), "跑测试");
+    assert_eq!(title("spawnAgent", Some(sealed)), "子代理");
+    assert_eq!(title("spawnAgent", None), "子代理");
+    for (tool, name) in [
+        ("wait", "等待子代理"),
+        ("sendInput", "给子代理发消息"),
+        ("sendMessage", "给子代理发消息"),
+        ("followupTask", "给子代理追加任务"),
+        ("interruptAgent", "中断子代理"),
+        ("listAgents", "列出子代理"),
+        ("closeAgent", "关闭子代理"),
+        ("resumeAgent", "恢复子代理"),
+        ("somethingNew", "子代理"),
+    ] {
+        assert_eq!(title(tool, Some("keep going")), name, "{tool}");
+    }
+}

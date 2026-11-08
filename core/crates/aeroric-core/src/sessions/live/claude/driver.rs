@@ -667,12 +667,14 @@ impl Actor {
                             summary,
                             tool_call_id,
                             options,
+                            ..
                         } => PendingPermission {
                             id: id.clone(),
                             kind: kind.clone(),
                             summary: summary.clone(),
                             tool_call_id: tool_call_id.clone(),
                             options: options.clone(),
+                            subagent: None,
                         },
                         _ => unreachable!("map_permission_request returns permission requests"),
                     };
