@@ -231,7 +231,10 @@ fn approvals_map_both_ways() {
 
 #[test]
 fn policies_and_version_gate() {
-    assert_eq!(codex_policy("ask").sandbox_mode, "read-only");
+    assert_eq!(codex_policy("ask").sandbox_mode, "workspace-write");
+    assert_eq!(codex_policy("ask").approval, "untrusted");
+    assert_eq!(codex_policy("plan").approval, "on-request");
+    assert_eq!(codex_policy("plan").sandbox_mode, "read-only");
     assert_eq!(
         codex_policy("auto_edit").sandbox_policy,
         json!({"type": "workspaceWrite"})

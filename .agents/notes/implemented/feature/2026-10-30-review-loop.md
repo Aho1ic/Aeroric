@@ -29,6 +29,8 @@ Status: implemented
 
 **提示词与解析**
 
+- 2026-11-08 起，本轮 diff 里删测试、跳测试、压检查、放松 CI 的改动会按规则标出，列在提示的"门禁完整性"一节（[审查提示里标出削弱门禁的改动](2026-11-08-review-gate-flags.md)）。
+
 - reviewer 拿到的内容：本回合 diff（6 万字符以内内联，否则只给文件列表和 `git -C … diff <before> <after>` 命令）、检查点里的验收条款与约束、自动检查结论，以及上一轮的意见与答复。拿不到对话（Q-B4）。
 - reviewer 末尾给一个 JSON 代码块。coder 收到逐条意见，末尾给 `responses`。
 - 解析取最后一个 json 代码块，词汇宽松：阻断、blocker 都认；采纳、adopt 都认。

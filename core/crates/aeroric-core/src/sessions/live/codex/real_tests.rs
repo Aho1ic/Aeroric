@@ -106,7 +106,7 @@ multi_agent_v2 = {v2}
             agent: "codex".into(),
             cwd: project.display().to_string(),
             extra_dirs: Vec::new(),
-            // 「每次询问」: on-request, read-only sandbox.
+            // 「每次询问」: untrusted, workspace-write sandbox (C 批).
             permission: "ask".into(),
             model: None,
             effort: None,

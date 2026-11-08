@@ -23,7 +23,7 @@ Status: implemented
 | Claude Code 直连 | 会话级插件目录 `--plugin-dir`，插件名 `aeroric`，调用写法 `/aeroric:<id>`；不写 `~/.claude` |
 | Claude Code / Codex 托管 home（第三方配置、本机登录网关） | 在 home 的 `skills/` 下放链接 |
 | OMP（内建 / 配置）、DSH | 在 `PI_CODING_AGENT_DIR/skills`、`DSH_HOME/skills` 下放链接 |
-| Codex 直连 | 复制进项目 `.agents/skills/<id>/` 并放标记文件；写入 `.git/info/exclude` 的受管区块；被关闭的副本移到废纸篓（owner 选 Q9-b） |
+| Codex 直连 | 复制进项目 `.agents/skills/<id>/` 并放标记文件；写入 `.git/info/exclude` 的受管区块；被关闭的副本移到废纸篓（owner 选 Q9-b）；升级时整份换上，改过的旧副本也进废纸篓（[整份换上](../bug-fix/2026-11-08-skill-copies-swapped-whole.md)） |
 
 - 用户自己的同名技能优先，同名的内置技能不挂载（Q6）。判断时只读用户目录。
 - OMP / DSH 在项目里已有 Aeroric 副本时，不在 home 里重复链接（Q17）。

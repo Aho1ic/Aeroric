@@ -425,10 +425,22 @@ pub fn codex_policy(permission_mode: &str) -> CodexPolicy {
             sandbox_mode: "workspace-write",
             sandbox_policy: json!({"type": "workspaceWrite"}),
         },
-        _ => CodexPolicy {
+        "plan" => CodexPolicy {
             approval: "on-request",
             sandbox_mode: "read-only",
             sandbox_policy: json!({"type": "readOnly"}),
+        },
+        // "ask" (C 批 2026-11-08): every command and edit Codex does not
+        // know to be safe is asked first, and runs once allowed. Under
+        // `on-request` a write command just failed in the read-only sandbox,
+        // unasked and unseen; under `untrusted` with that sandbox an allowed
+        // command still ran inside it about half the time (0.167). The
+        // workspace-write sandbox lets an allowed command write the project;
+        // what runs unasked is only what Codex knows to be read-only.
+        _ => CodexPolicy {
+            approval: "untrusted",
+            sandbox_mode: "workspace-write",
+            sandbox_policy: json!({"type": "workspaceWrite"}),
         },
     }
 }

@@ -141,9 +141,12 @@ fn comments_wait_and_go_once() {
         .comment("t", ChangeScope::Turn, Some("u1"), &first, " 换个名字 ")
         .unwrap();
     assert_eq!(review.diff("t", ChangeScope::Turn, Some("u1")).unsent, 1);
-    let message = review.take_comments("t").unwrap();
+    let refused = review.take_comments("t", |_| Err::<(), _>("队列写不进".to_string()));
+    assert!(refused.unwrap().is_err());
+    assert!(!hunks(&review)[0].comment_sent, "没排上队就还算未发送");
+    let message = review.take_comments("t", Ok).unwrap().unwrap();
     assert!(message.contains("- a.txt:3 — 换个名字"), "{message}");
-    assert!(review.take_comments("t").is_none());
+    assert!(review.take_comments("t", Ok).is_none());
     assert!(hunks(&review)[0].comment_sent);
 }
 

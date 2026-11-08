@@ -303,8 +303,13 @@ impl ChangeReview {
         Ok(())
     }
 
-    /// The unsent comments as one message (and marked sent); `None` when none.
-    pub fn take_comments(&self, task_id: &str) -> Option<String> {
+    /// The unsent comments as one message, handed to `send`; they are
+    /// marked sent only when it succeeds (C 批 2026-11-08). `None` when none.
+    pub fn take_comments<T>(
+        &self,
+        task_id: &str,
+        send: impl FnOnce(String) -> Result<T, String>,
+    ) -> Option<Result<T, String>> {
         let mut notes = self.load(task_id);
         let mut lines: Vec<(String, u32, String)> = notes
             .hunks
@@ -316,17 +321,20 @@ impl ChangeReview {
             return None;
         }
         lines.sort();
-        for note in notes.hunks.values_mut() {
-            if note.comment.is_some() {
-                note.comment_sent = true;
-            }
-        }
-        self.store(task_id, notes);
         let body: Vec<String> = lines
             .into_iter()
             .map(|(path, line, text)| format!("- {path}:{line} — {text}"))
             .collect();
-        Some(format!("请按这些审查意见修改：\n{}", body.join("\n")))
+        let sent = send(format!("请按这些审查意见修改：\n{}", body.join("\n")));
+        if sent.is_ok() {
+            for note in notes.hunks.values_mut() {
+                if note.comment.is_some() {
+                    note.comment_sent = true;
+                }
+            }
+            self.store(task_id, notes);
+        }
+        Some(sent)
     }
 
     /// Snapshot the working tree as what the user has now seen.

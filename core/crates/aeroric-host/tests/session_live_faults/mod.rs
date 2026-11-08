@@ -56,8 +56,10 @@ async fn codex_first_turn(host: &mut Host) -> Peer {
         "turn/completed",
         json!({"threadId": "th-1", "turn": {"id": "u1", "status": "completed"}}),
     );
-    host.until("idle", |h| h.record()["status"] != "running")
-        .await;
+    // "done", not "not running": before the driver has seen the turn start,
+    // the record is not running and turnActive is false either, and the
+    // next message was steered into the turn (C 批, a flake on a busy Mac).
+    host.until("done", |h| h.record()["status"] == "done").await;
     host.until_state("turn over", |s| s["turnActive"] == false)
         .await;
     peer

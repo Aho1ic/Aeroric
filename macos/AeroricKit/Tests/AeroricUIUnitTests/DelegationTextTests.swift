@@ -46,7 +46,8 @@ final class DelegationTextTests: XCTestCase {
         card.state = "running"
         XCTAssertTrue(card.isOpen)
         XCTAssertFalse(card.canSend)
-        XCTAssertEqual(DelegationText.workspace("shared", permission: "auto_edit"), "可写 · 自动编辑")
+        // R2-3b added the isolated copy, so the shared one says so.
+        XCTAssertEqual(DelegationText.workspace("shared", permission: "auto_edit"), "共享可写 · 自动编辑")
     }
 
     func testTrackRecordsAndAuditReadAsOneLine() {

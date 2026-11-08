@@ -4,6 +4,7 @@
 //! remote plane. Drivers come from the executor's registry; task records are
 //! changed only through `TaskService`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use aeroric_core::context::CoreContext;
@@ -266,7 +267,8 @@ fn branch_return(live: &Live, request: &Request) -> Frame {
             "这个会话不是侧支",
         );
     };
-    let Some(answer) = context_messages(live, &record)
+    let Some(answer) = context_messages(live, &record, false)
+        .unwrap_or_default()
         .into_iter()
         .rev()
         .find(|(role, _)| role == "assistant")
@@ -321,9 +323,14 @@ fn branch_return(live: &Live, request: &Request) -> Frame {
 pub const CONTEXT_SEARCH_METHOD: &str = "context.searchSessions";
 pub const CONTEXT_READ_METHOD: &str = "context.readSession";
 pub const CONTEXT_HANDOFF_METHOD: &str = "context.readHandoff";
-/// A transcript bigger than this is skipped by the search (not truncated).
+/// A transcript bigger than this is not read: the search skips it, a read
+/// says so.
 const CONTEXT_MAX_FILE: u64 = 32 * 1024 * 1024;
 const CONTEXT_SNIPPET: usize = 80;
+/// How much of one message a read returns; the rest is read on by offset.
+const CONTEXT_PIECE: usize = 4000;
+/// How much of a tool's result its line in the message keeps.
+const CONTEXT_TOOL_RESULT: usize = 200;
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -339,6 +346,8 @@ struct ContextParams {
     task_id: Option<String>,
     #[serde(default)]
     from: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 /// `(task_id, project_id)` the token was issued for.
@@ -357,37 +366,104 @@ fn context_scope(
     }
 }
 
-/// The text blocks of a task's current session, in order (role, text).
-fn context_messages(live: &Live, record: &Record) -> Vec<(String, String)> {
+/// A task's current session as (role, text), in order; with `tools`, each
+/// tool call is a line of its message (what search and read_session show,
+/// so a search hit's index reads the same message). A session not written
+/// yet is empty; one too big or unreadable is the reason why (C 批
+/// 2026-11-08: it read as empty).
+fn context_messages(
+    live: &Live,
+    record: &Record,
+    tools: bool,
+) -> Result<Vec<(String, String)>, String> {
+    use aeroric_core::sessions::SessionContent;
     let (_, path) = aeroric_core::tasks::session_owner::current_session(record);
     let Some(path) = path else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let too_big = std::fs::metadata(&path)
-        .map(|m| m.len() > CONTEXT_MAX_FILE)
-        .unwrap_or(true);
-    if too_big {
-        return Vec::new();
+    let size = match std::fs::metadata(&path) {
+        Ok(meta) => meta.len(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("会话记录读不出来：{e}")),
+    };
+    if size > CONTEXT_MAX_FILE {
+        return Err(format!(
+            "会话记录有 {} MiB，超过 {} MiB，没有读取",
+            size / (1024 * 1024),
+            CONTEXT_MAX_FILE / (1024 * 1024)
+        ));
     }
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return Vec::new();
-    };
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("会话记录读不出来：{e}"))?;
     let lines: Vec<String> = raw.lines().map(str::to_string).collect();
     let family = launch_family_of(record, live.families.as_ref());
-    crate::services::parse_messages(&lines, family)
-        .into_iter()
+    let messages = crate::services::parse_messages(&lines, family);
+    let results: HashMap<&str, &str> = messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|c| match c {
+            SessionContent::ToolResult { id, output } => Some((id.as_str(), output.as_str())),
+            _ => None,
+        })
+        .collect();
+    Ok(messages
+        .iter()
         .filter_map(|m| {
             let text: Vec<String> = m
                 .content
                 .iter()
                 .filter_map(|c| match c {
-                    aeroric_core::sessions::SessionContent::Text { text } => Some(text.clone()),
+                    SessionContent::Text { text } => Some(text.clone()),
+                    SessionContent::ToolUse { id, name, input } if tools => {
+                        Some(tool_line(name, input, results.get(id.as_str()).copied()))
+                    }
                     _ => None,
                 })
                 .collect();
             (!text.is_empty()).then(|| (m.role.clone(), text.join("\n")))
         })
-        .collect()
+        .collect())
+}
+
+/// `[工具] name：its telling argument → the start of its result`, one line.
+fn tool_line(name: &str, input: &str, result: Option<&str>) -> String {
+    let one_line = |text: &str, limit: usize| {
+        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut cut: String = flat.chars().take(limit).collect();
+        if flat.chars().count() > limit {
+            cut.push('…');
+        }
+        cut
+    };
+    let fields = serde_json::from_str::<Value>(input).ok();
+    let argument = [
+        "cmd",
+        "command",
+        "file_path",
+        "path",
+        "pattern",
+        "query",
+        "url",
+        "description",
+        "prompt",
+    ]
+    .iter()
+    .find_map(|key| match fields.as_ref()?.get(*key)? {
+        Value::String(text) if !text.is_empty() => Some(text.clone()),
+        Value::Array(parts) if !parts.is_empty() => Some(
+            parts
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        _ => None,
+    })
+    .unwrap_or_else(|| input.to_string());
+    let mut line = format!("[工具] {name}：{}", one_line(&argument, 120));
+    if let Some(result) = result.filter(|r| !r.trim().is_empty()) {
+        line.push_str(&format!(" → {}", one_line(result, CONTEXT_TOOL_RESULT)));
+    }
+    line
 }
 
 fn context_title(record: &Record) -> String {
@@ -463,7 +539,8 @@ fn context_search(live: &Live, request: &Request) -> Frame {
         let Some(id) = record.get("id").and_then(Value::as_str) else {
             continue;
         };
-        for (index, (role, text)) in context_messages(live, record).iter().enumerate() {
+        let messages = context_messages(live, record, true).unwrap_or_default();
+        for (index, (role, text)) in messages.iter().enumerate() {
             let lower = text.to_lowercase();
             // Lowercasing can move byte offsets; match on the original when it does.
             let found = if lower.len() == text.len() {
@@ -489,8 +566,10 @@ fn context_search(live: &Live, request: &Request) -> Frame {
     ok(request, json!({"query": query, "hits": hits}))
 }
 
-/// `context.readSession {token, taskId?, from?, limit?}`: a session's text
-/// messages in this project (the token's own task by default).
+/// `context.readSession {token, taskId?, from?, limit?, offset?}`: a
+/// session's messages in this project (the token's own task by default),
+/// each at most [`CONTEXT_PIECE`] chars; `offset` reads the first one on
+/// from there, so the pieces add up to the whole text.
 fn context_read(live: &Live, request: &Request) -> Frame {
     let (p, task_id, project_id) = match context_scope(live, request) {
         Ok(scope) => scope,
@@ -511,7 +590,10 @@ fn context_read(live: &Live, request: &Request) -> Frame {
             "本项目没有这个会话",
         );
     };
-    let messages = context_messages(live, record);
+    let messages = match context_messages(live, record, true) {
+        Ok(messages) => messages,
+        Err(reason) => return failure(request.id.clone(), ErrorCode::IoError, &reason),
+    };
     let limit = p.limit.unwrap_or(40).clamp(1, 200);
     let from = p
         .from
@@ -522,14 +604,31 @@ fn context_read(live: &Live, request: &Request) -> Frame {
         .skip(from)
         .take(limit)
         .map(|(i, (role, text))| {
-            let text: String = text.chars().take(4000).collect();
-            json!({"index": i, "role": role, "text": text})
+            let start = if i == from { p.offset.unwrap_or(0) } else { 0 };
+            context_piece(i, role, text, start)
         })
         .collect();
     ok(
         request,
         json!({"taskId": wanted, "title": context_title(record), "total": messages.len(), "messages": page}),
     )
+}
+
+/// One message of a read: `chars` is its whole length; a cut one says
+/// where to read on.
+fn context_piece(index: usize, role: &str, text: &str, start: usize) -> Value {
+    let chars = text.chars().count();
+    let piece: String = text.chars().skip(start).take(CONTEXT_PIECE).collect();
+    let end = (start + CONTEXT_PIECE).min(chars);
+    let mut out = json!({"index": index, "role": role, "text": piece, "chars": chars,
+        "truncated": end < chars});
+    if start > 0 {
+        out["offset"] = json!(start);
+    }
+    if end < chars {
+        out["nextOffset"] = json!(end);
+    }
+    out
 }
 
 /// `context.readHandoff {token}`: the token's task checkpoint, as the brief.
@@ -1137,14 +1236,17 @@ fn prompt(live: &Live, request: &Request) -> Frame {
     // R1-2b: the message goes through the delivery queue; Q8 — a pending
     // handoff travels in the same delivery.
     let handoff = driver.is_none() && record.get(HANDOFF_KEY).is_some();
-    let item = live.executor.deliveries().enqueue(
+    let item = match live.executor.deliveries().enqueue(
         &p.task_id,
         DeliveryKind::User,
         p.mode.unwrap_or(DeliveryMode::Now),
         &delivery::label("你的消息", &p.text),
         &p.text,
         handoff.then_some("handoff"),
-    );
+    ) {
+        Ok(item) => item,
+        Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error),
+    };
     // R1-1: not refused — the user's own sessions are theirs to run — but said.
     let own_turn_writes = driver.is_none_or(|d| d.snapshot().permission.as_deref() != Some("plan"));
     let shared: Vec<Value> = if own_turn_writes {

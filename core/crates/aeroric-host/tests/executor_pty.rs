@@ -508,6 +508,11 @@ async fn session_history_reads_the_record_transcript_via_the_family_parser() {
                 "permissionMode": "ask", "status": "done", "sessionFamily": "claude",
                 "claudeSessionId": "c-3",
                 "claudeSessionPath": root.join("not-yet.jsonl").to_string_lossy()
+            },
+            // C 批：Codex 的落盘路径要等线程开起来才知道。
+            {
+                "id": "t4", "projectId": "p1", "prompt": "问", "agent": "codex",
+                "permissionMode": "ask", "status": "running", "sessionFamily": "codex"
             }
         ]))
         .expect("tasks"),
@@ -628,6 +633,23 @@ async fn session_history_reads_the_record_transcript_via_the_family_parser() {
             }
             other => panic!("{task}: expected success, got {other:?}"),
         }
+    }
+    // C 批 (2026-11-08): no transcript path yet is an empty history, not NotFound.
+    let frame = aeroric_host::dispatcher::dispatch(
+        req(
+            "4",
+            "session.history",
+            serde_json::json!({ "taskId": "t4" }),
+        ),
+        Arc::clone(&call),
+    )
+    .await;
+    match frame {
+        aeroric_protocol::envelope::Frame::Success(success) => {
+            assert_eq!(success.result["sessionId"], "t4");
+            assert_eq!(success.result["messages"], serde_json::json!([]));
+        }
+        other => panic!("t4: expected an empty page, got {other:?}"),
     }
     let frame =
         aeroric_host::dispatcher::dispatch(req("3", "session.list", serde_json::json!({})), call)

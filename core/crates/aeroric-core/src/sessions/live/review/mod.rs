@@ -11,6 +11,7 @@
 //! sending messages is the host's ([`ReviewHost`]), always off the caller's
 //! thread: a sink callback never waits on a session.
 
+pub mod gates;
 pub mod parse;
 pub mod prompt;
 
@@ -386,7 +387,10 @@ impl ReviewLoop {
     fn review_act(&self, task: &str, l: &Loop) -> Act {
         let diff = l.diff.clone().unwrap_or_default();
         let (acceptance, constraints) = self.context(task);
-        let text = diff_text(&diff);
+        // Gate flags come from the whole diff, inlined or not.
+        let full = diff_text(&diff);
+        let gates = full.as_deref().map(gates::flags).unwrap_or_default();
+        let text = full.filter(|t| t.len() <= prompt::MAX_INLINE_DIFF);
         let prompt = prompt::reviewer(
             &diff,
             &prompt::Context {
@@ -394,6 +398,7 @@ impl ReviewLoop {
                 acceptance: &acceptance,
                 constraints: &constraints,
                 checks: l.checks.as_deref(),
+                gates: &gates,
                 diff_text: text.as_deref(),
                 previous: l.previous.as_ref(),
             },
@@ -815,8 +820,11 @@ fn diff_text(diff: &TurnDiff) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    (text.len() <= prompt::MAX_INLINE_DIFF).then(|| text.trim_end().to_string())
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_string(),
+    )
 }
 
 fn cut_raw(text: &str) -> String {

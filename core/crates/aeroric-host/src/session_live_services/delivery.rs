@@ -52,7 +52,7 @@ impl DeliveryHost for HostDeliveries {
     fn recorded(&self, task_id: &str, text: &str) -> Option<bool> {
         let live = self.live.upgrade()?;
         let (_, record) = live.record(task_id)?;
-        let messages = super::context_messages(&live, &record);
+        let messages = super::context_messages(&live, &record, false).ok()?;
         if messages.is_empty() {
             return None;
         }
@@ -89,21 +89,29 @@ pub(super) fn label(kind: &str, text: &str) -> String {
 
 /// Queue something Aeroric sends on its own; it goes when the session's
 /// turn has ended (Q-S5).
-pub(super) fn enqueue_internal(live: &Live, task_id: &str, kind: DeliveryKind, text: String) {
+pub(super) fn enqueue_internal(
+    live: &Live,
+    task_id: &str,
+    kind: DeliveryKind,
+    text: String,
+) -> Result<(), String> {
     let name = match kind {
         DeliveryKind::Delegation => "委派",
         DeliveryKind::Review => "审查",
         DeliveryKind::Handoff => "交接",
         DeliveryKind::User => "你的消息",
     };
-    live.executor.deliveries().enqueue(
-        task_id,
-        kind,
-        DeliveryMode::AfterTurn,
-        &label(name, &text),
-        &text,
-        None,
-    );
+    live.executor
+        .deliveries()
+        .enqueue(
+            task_id,
+            kind,
+            DeliveryMode::AfterTurn,
+            &label(name, &text),
+            &text,
+            None,
+        )
+        .map(|_| ())
 }
 
 pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {

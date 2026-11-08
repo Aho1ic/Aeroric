@@ -21,6 +21,7 @@ struct FakeHost {
     busy: Mutex<HashSet<String>>,
     tokens: Mutex<HashMap<String, u64>>,
     fail_start: Mutex<bool>,
+    fail_prompt: Mutex<bool>,
     writers: Mutex<Vec<WriterRef>>,
 }
 
@@ -44,6 +45,9 @@ impl DelegationHost for FakeHost {
         })
     }
     fn prompt(&self, task_id: &str, text: String) -> Result<(), String> {
+        if *self.fail_prompt.lock() {
+            return Err("会话打不开".into());
+        }
         self.sent.lock().push((task_id.into(), text));
         Ok(())
     }
@@ -771,4 +775,28 @@ fn done_without_the_criteria_or_without_evidence_is_flagged() {
         rig.card(&traced).state == DelegationState::Reported
     });
     assert!(probes(&rig, &traced).is_empty());
+}
+
+/// C 批 (2026-11-08): a result that did not reach the parent is not sent
+/// after all; the card says why and it can be sent again.
+#[test]
+fn a_send_that_never_arrives_can_be_sent_again() {
+    let rig = rig("ask");
+    let (id, child) = rig.running(contract("查"), Origin::User);
+    rig.answer(&child, "t1", "结论", None, false);
+    wait("reported", || {
+        rig.card(&id).state == DelegationState::Reported
+    });
+    *rig.host.fail_prompt.lock() = true;
+    rig.d.send("p", &id, "user").unwrap();
+    wait("unsent", || !rig.card(&id).sent);
+    assert_eq!(
+        rig.card(&id).error.as_deref(),
+        Some("没送到父会话：会话打不开")
+    );
+    *rig.host.fail_prompt.lock() = false;
+    rig.d.send("p", &id, "user").unwrap();
+    wait("sent", || rig.sent_to("p").len() == 1);
+    assert!(rig.card(&id).sent);
+    assert!(rig.card(&id).error.is_none(), "送到之后不再说没送到");
 }

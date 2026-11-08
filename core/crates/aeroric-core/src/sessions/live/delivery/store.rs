@@ -52,23 +52,39 @@ impl Store {
         })
     }
 
-    /// Keep `item`; a failed write is said, the item stays in memory.
+    /// Keep a change to a queued item; a failed write is said, the item
+    /// stays in memory with its new state.
     pub(super) fn save(&mut self, item: &Delivery) {
         self.items.insert(item.id.clone(), item.clone());
+        if let Err(error) = self.write(item) {
+            eprintln!("delivery: saving {} failed: {error}", item.id);
+        }
+    }
+
+    /// Keep a new item only once it is on disk (C 批 2026-11-08): queued
+    /// in memory alone, it was gone after a restart while the caller had
+    /// been told it was queued.
+    pub(super) fn add(&mut self, item: &Delivery) -> Result<(), String> {
+        self.write(item)?;
+        self.items.insert(item.id.clone(), item.clone());
+        Ok(())
+    }
+
+    fn write(&self, item: &Delivery) -> Result<(), String> {
         let Some(db) = &self.db else {
-            return;
+            return Ok(());
         };
         let state = serde_json::to_value(item.state)
             .ok()
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_default();
-        let body = serde_json::to_string(item).unwrap_or_default();
-        if let Err(error) = db.execute(
+        let body = serde_json::to_string(item).map_err(|e| e.to_string())?;
+        db.execute(
             "INSERT OR REPLACE INTO deliveries (id, task_id, state, updated_ms, body) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![item.id, item.task_id, state, item.updated_ms as i64, body],
-        ) {
-            eprintln!("delivery: saving {} failed: {error}", item.id);
-        }
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     }
 
     /// A new item's creation time, later than every earlier one's: two

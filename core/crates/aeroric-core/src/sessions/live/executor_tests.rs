@@ -133,7 +133,7 @@ async fn running(setup: &mut Setup) -> Peer {
     let start = peer.expect("thread/start").await;
     assert_eq!(
         start["params"],
-        json!({"cwd": "/w", "approvalPolicy": "on-request", "sandbox": "read-only"})
+        json!({"cwd": "/w", "approvalPolicy": "untrusted", "sandbox": "workspace-write"})
     );
     peer.reply(&start, json!({"thread": {"id": "th1"}}));
     let turn = peer.expect("turn/start").await;
@@ -210,14 +210,18 @@ async fn cancelling_a_structured_run_closes_its_session_and_others_are_delegated
         .launch(&launch("t1", ProtocolFamily::Codex))
         .unwrap();
     let mut peer = running(&mut s).await;
-    let queued = s.executor.deliveries().enqueue(
-        "t1",
-        aeroric_protocol::delivery::DeliveryKind::Delegation,
-        aeroric_protocol::delivery::DeliveryMode::AfterTurn,
-        "委派",
-        "结果",
-        None,
-    );
+    let queued = s
+        .executor
+        .deliveries()
+        .enqueue(
+            "t1",
+            aeroric_protocol::delivery::DeliveryKind::Delegation,
+            aeroric_protocol::delivery::DeliveryMode::AfterTurn,
+            "委派",
+            "结果",
+            None,
+        )
+        .unwrap();
     s.executor
         .cancel(
             "t1",

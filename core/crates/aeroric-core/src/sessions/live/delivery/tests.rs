@@ -95,14 +95,16 @@ fn state(queue: &Deliveries, id: &str) -> DeliveryState {
 }
 
 fn result(queue: &Deliveries, task: &str, text: &str) -> Delivery {
-    queue.enqueue(
-        task,
-        DeliveryKind::Delegation,
-        DeliveryMode::AfterTurn,
-        "委派结果",
-        text,
-        Some("dg-1"),
-    )
+    queue
+        .enqueue(
+            task,
+            DeliveryKind::Delegation,
+            DeliveryMode::AfterTurn,
+            "委派结果",
+            text,
+            Some("dg-1"),
+        )
+        .unwrap()
 }
 
 /// Q-S5: ours waits for the turn, goes one at a time, and the agent's
@@ -354,7 +356,9 @@ fn a_restart_settles_what_was_out_and_sends_what_waited() {
 }
 
 fn user(queue: &Deliveries, task: &str, mode: DeliveryMode, text: &str) -> Delivery {
-    queue.enqueue(task, DeliveryKind::User, mode, "你的消息", text, None)
+    queue
+        .enqueue(task, DeliveryKind::User, mode, "你的消息", text, None)
+        .unwrap()
 }
 
 /// R1-2b: the user's message during a turn steers it at once, even with a
@@ -480,4 +484,29 @@ fn a_result_goes_once_the_session_has_settled_after_its_turn() {
     queue.status("proj", "p", 1, TaskStatus::Done, None);
     wait("second sent", || host.sent.lock().len() == 2);
     assert_eq!(state(&queue, &second.id), DeliveryState::Sending);
+}
+
+/// C 批 (2026-11-08): a new item that cannot be written down is refused,
+/// not queued in memory only (it used to be gone after a restart while the
+/// caller had been told it was queued).
+#[test]
+fn an_item_that_cannot_be_written_down_is_not_queued() {
+    let (queue, host, dir) = rig();
+    host.busy.lock().insert("t".into());
+    rusqlite::Connection::open(dir.join("delivery.db"))
+        .unwrap()
+        .execute_batch("DROP TABLE deliveries")
+        .unwrap();
+    let refused = queue
+        .enqueue(
+            "t",
+            DeliveryKind::Delegation,
+            DeliveryMode::AfterTurn,
+            "委派结果",
+            "结论",
+            None,
+        )
+        .unwrap_err();
+    assert!(refused.starts_with("没能排上队"), "{refused}");
+    assert!(queue.list("t").is_empty());
 }

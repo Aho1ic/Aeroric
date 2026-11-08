@@ -484,3 +484,24 @@ fn a_loop_left_mid_round_reads_back_as_interrupted() {
     assert_eq!(card.state, ReviewState::Interrupted);
     assert_eq!(again.parent_of("rev-1").as_deref(), Some("t1"));
 }
+
+/// C 批 (2026-11-08): the reviewer is told what in the diff may weaken its
+/// checks, to judge each; a diff without any says nothing about it.
+#[test]
+fn gate_flags_reach_the_reviewer_to_judge() {
+    let flags = vec!["a.rs:3 加了 `#[ignore`，跳过了测试".to_string()];
+    let context = |gates| prompt::Context {
+        round: 1,
+        acceptance: &[],
+        constraints: &[],
+        checks: None,
+        gates,
+        diff_text: Some("diff"),
+        previous: None,
+    };
+    let text = prompt::reviewer(&diff(&["a.rs"]), &context(&flags));
+    assert!(text.contains("## 门禁完整性"), "{text}");
+    assert!(text.contains("- a.rs:3 加了 `#[ignore`，跳过了测试"));
+    let clean = prompt::reviewer(&diff(&["a.rs"]), &context(&[]));
+    assert!(!clean.contains("门禁完整性"));
+}

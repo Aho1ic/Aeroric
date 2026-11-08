@@ -54,7 +54,7 @@ Status: implemented
 
 **Context MCP**
 
-- `aeroric-cli mcp-context` 是 stdio MCP 服务，提供 `search_sessions` / `read_session` / `read_handoff`。
+- `aeroric-cli mcp-context` 是 stdio MCP 服务，提供 `search_sessions` / `read_session` / `read_handoff`。`read_session` 的分段续读和工具行见 [read_session 分段续读](2026-11-08-read-session-pages.md)。
 - 令牌按任务签发：经 `AERORIC_CONTEXT_TOKEN` 传入，会话关闭即作废，再次签发时旧令牌失效。
 - 每次启动随参数注入（Claude `--mcp-config`，Codex `thread/start` 的 `config`），不写全局配置。只给本机的 Claude、Codex 会话，远程会话和 omp/DSH 都不给。
 - 检索只查令牌所属项目。`allProjects` 一律拒绝（Q-F18 要求用户授权，目前还没有开关）。

@@ -133,18 +133,28 @@ fn send_comments(live: &Live, request: &Request) -> Frame {
         Ok(p) => p,
         Err(frame) => return *frame,
     };
-    let Some(text) = live.executor.change_review().take_comments(&p.task_id) else {
-        return invalid(request, "没有待发送的评论");
-    };
-    let item = live.executor.deliveries().enqueue(
-        &p.task_id,
-        DeliveryKind::User,
-        DeliveryMode::AfterTurn,
-        &super::delivery::label("审查意见", &text),
-        &text,
-        None,
-    );
-    ok(request, json!({ "deliveryId": item.id }))
+    let queued = live
+        .executor
+        .change_review()
+        .take_comments(&p.task_id, |text| {
+            live.executor.deliveries().enqueue(
+                &p.task_id,
+                DeliveryKind::User,
+                DeliveryMode::AfterTurn,
+                &super::delivery::label("审查意见", &text),
+                &text,
+                None,
+            )
+        });
+    match queued {
+        None => invalid(request, "没有待发送的评论"),
+        Some(Ok(item)) => ok(request, json!({ "deliveryId": item.id })),
+        Some(Err(error)) => crate::dispatcher::failure(
+            request.id.clone(),
+            aeroric_protocol::error::ErrorCode::IoError,
+            &error,
+        ),
+    }
 }
 
 fn mark_seen(live: &Live, request: &Request) -> Frame {

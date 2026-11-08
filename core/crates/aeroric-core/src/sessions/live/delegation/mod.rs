@@ -654,19 +654,38 @@ impl Delegations {
         if entry.card.state.is_open() || entry.card.sent {
             return Err(DelegationError::NothingToSend);
         }
+        clear_unsent(&mut entry.card);
         entry.card.sent = true;
         let card = entry.card.clone();
         let audit = audit_of(&card, AuditAction::Send, actor, "");
         self.record(&mut state, audit);
         drop(state);
         self.publish(parent, id);
-        let parent_id = parent.to_string();
+        let me = self.me.lock().clone();
+        let (parent_id, ids) = (parent.to_string(), vec![id.to_string()]);
         std::thread::spawn(move || {
             if let Err(error) = host.prompt(&parent_id, prompt::results(&[card])) {
-                eprintln!("delegation: sending to {parent_id} failed: {error}");
+                if let Some(this) = me.upgrade() {
+                    this.unsend(&parent_id, &ids, &error);
+                }
             }
         });
         Ok(())
+    }
+
+    /// C 批 (2026-11-08): results that did not reach the parent are not
+    /// sent after all; the card says why and can be sent again.
+    fn unsend(&self, parent: &str, ids: &[String], error: &str) {
+        let mut state = self.state.lock();
+        for id in ids {
+            if let Some(entry) = find_mut(&mut state, parent, id) {
+                mark_unsent(&mut entry.card, error);
+            }
+        }
+        drop(state);
+        for id in ids {
+            self.publish(parent, id);
+        }
     }
 
     /// Send the child back to work with `note`.
@@ -1023,6 +1042,7 @@ impl Delegations {
         for id in &ready {
             if let Some(entry) = find_mut(&mut state, parent, id) {
                 if !entry.card.sent && !entry.card.state.is_open() {
+                    clear_unsent(&mut entry.card);
                     entry.card.sent = true;
                     cards.push(entry.card.clone());
                 }
@@ -1039,10 +1059,14 @@ impl Delegations {
         for card in &cards {
             self.publish(parent, &card.delegation_id);
         }
+        let me = self.me.lock().clone();
         let parent_id = parent.to_string();
         std::thread::spawn(move || {
             if let Err(error) = host.prompt(&parent_id, prompt::results(&cards)) {
-                eprintln!("delegation: returning to {parent_id} failed: {error}");
+                if let Some(this) = me.upgrade() {
+                    let ids: Vec<String> = cards.iter().map(|c| c.delegation_id.clone()).collect();
+                    this.unsend(&parent_id, &ids, &error);
+                }
             }
         });
     }
@@ -1251,6 +1275,33 @@ impl Delegations {
             self.inner.update(&appended);
         }
     }
+}
+
+/// The line a card's error gets when its result did not reach the parent;
+/// it sits under any error of the card's own and goes when it is resent.
+const UNSENT: &str = "没送到父会话：";
+
+fn mark_unsent(card: &mut DelegationCard, error: &str) {
+    clear_unsent(card);
+    let note = format!("{UNSENT}{error}");
+    card.error = Some(match card.error.take() {
+        Some(own) => format!("{own}\n{note}"),
+        None => note,
+    });
+    card.sent = false;
+}
+
+fn clear_unsent(card: &mut DelegationCard) {
+    card.error = card
+        .error
+        .take()
+        .map(|e| {
+            e.lines()
+                .filter(|line| !line.starts_with(UNSENT))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|e| !e.is_empty());
 }
 
 fn find_mut<'a>(state: &'a mut State, parent: &str, id: &str) -> Option<&'a mut Entry> {

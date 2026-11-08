@@ -27,6 +27,12 @@ mod embedded {
 
 /// File inside a project copy that marks it as Aeroric's; holds the version.
 pub const MARKER: &str = ".aeroric-builtin";
+/// Beside the marker: the copy's files and their hashes when it was made,
+/// so an update can tell whether someone changed it since.
+pub const MANIFEST: &str = ".aeroric-builtin-files";
+/// Where a copy is built before it is swapped in, outside `.agents/skills`
+/// so a half-built one is never loaded as a skill.
+const STAGING: &str = ".agents/.aeroric-staging";
 const EXCLUDE_BEGIN: &str = "# >>> Aeroric built-in skills (managed) >>>";
 const EXCLUDE_END: &str = "# <<< Aeroric built-in skills <<<";
 const COMPLETE: &str = ".complete";
@@ -424,17 +430,7 @@ pub fn sync_offers(
         return Ok(());
     }
     for skill in skills {
-        let target = dir.join(&skill.id);
-        let marker = target.join(MARKER);
-        if target.exists() {
-            match std::fs::read_to_string(&marker) {
-                Ok(version) if version.trim() == skill.version => continue,
-                Ok(_) => std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?,
-                Err(_) => continue, // the user's own folder
-            }
-        }
-        copy_tree(&skill.dir, &target)?;
-        std::fs::write(&marker, &skill.version).map_err(|e| e.to_string())?;
+        place(cwd, skill, remove)?;
     }
     let wanted: BTreeSet<&str> = skills.iter().map(|s| s.id.as_str()).collect();
     for id in &existing {
@@ -466,17 +462,7 @@ pub fn sync_learned(
         return Ok(());
     }
     for skill in learned {
-        let target = dir.join(&skill.id);
-        let marker = target.join(MARKER);
-        if target.exists() {
-            match std::fs::read_to_string(&marker) {
-                Ok(version) if version.trim() == skill.version => continue,
-                Ok(_) => std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?,
-                Err(_) => continue, // the user's own folder
-            }
-        }
-        copy_tree(&skill.dir, &target)?;
-        std::fs::write(&marker, &skill.version).map_err(|e| e.to_string())?;
+        place(cwd, skill, remove)?;
     }
     for id in stale {
         remove(&dir.join(id))?;
@@ -495,6 +481,111 @@ pub fn remove_from_project(
     }
     write_exclude(cwd, &BTreeSet::new())?;
     Ok(copies.len())
+}
+
+/// Brings `skill`'s copy in `cwd` to its version: one at that version and a
+/// folder without the marker (the user's) are left alone.
+fn place(
+    cwd: &Path,
+    skill: &Offer,
+    remove: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let target = cwd.join(".agents/skills").join(&skill.id);
+    if target.exists() {
+        match std::fs::read_to_string(target.join(MARKER)) {
+            Ok(version) if version.trim() == skill.version => return Ok(()),
+            Ok(_) => {}
+            Err(_) => return Ok(()), // the user's own folder
+        }
+    }
+    install(cwd, &target, skill, remove)
+}
+
+/// Puts `skill` at `target` whole or not at all (C 批 2026-11-08): it is
+/// built in [`STAGING`], marked, then swapped in. It used to be deleted and
+/// copied in place: a copy that failed halfway was left without its marker,
+/// taken for the user's folder and never repaired, and edits made to the
+/// copy were silently gone. Now a failed build leaves the old copy as it
+/// was, and an old copy changed since it was made goes to `remove` (the
+/// Trash) rather than being deleted.
+fn install(
+    cwd: &Path,
+    target: &Path,
+    skill: &Offer,
+    remove: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let staging = cwd.join(STAGING);
+    let work = staging.join(uuid::Uuid::new_v4().simple().to_string());
+    let fresh = work.join("new").join(&skill.id);
+    let built = (|| {
+        copy_tree(&skill.dir, &fresh)?;
+        let manifest = manifest_of(&fresh)?;
+        std::fs::write(fresh.join(MANIFEST), manifest).map_err(|e| e.to_string())?;
+        std::fs::write(fresh.join(MARKER), &skill.version).map_err(|e| e.to_string())?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        if !target.exists() {
+            return std::fs::rename(&fresh, target).map_err(|e| e.to_string());
+        }
+        let old = work.join("old").join(&skill.id);
+        std::fs::create_dir_all(work.join("old")).map_err(|e| e.to_string())?;
+        std::fs::rename(target, &old).map_err(|e| e.to_string())?;
+        if let Err(error) = std::fs::rename(&fresh, target) {
+            let _ = std::fs::rename(&old, target);
+            return Err(error.to_string());
+        }
+        if changed_since_made(&old) {
+            remove(&old)
+        } else {
+            std::fs::remove_dir_all(&old).map_err(|e| e.to_string())
+        }
+    })();
+    let _ = std::fs::remove_dir_all(&work);
+    let _ = std::fs::remove_dir(&staging);
+    built
+}
+
+/// One `hash  path` line per file under `dir` (but the marker files),
+/// sorted.
+fn manifest_of(dir: &Path) -> Result<String, String> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) -> Result<(), String> {
+        let entries =
+            std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            if dir == base && (name == MARKER || name == MANIFEST) {
+                continue;
+            }
+            if path.is_dir() {
+                walk(&path, base, out)?;
+            } else {
+                let bytes = std::fs::read(&path)
+                    .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+                let hash: String = Sha256::digest(&bytes)
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                let relative = path.strip_prefix(base).unwrap_or(&path);
+                out.push(format!("{hash}  {}", relative.display()));
+            }
+        }
+        Ok(())
+    }
+    let mut lines = Vec::new();
+    walk(dir, dir, &mut lines)?;
+    lines.sort();
+    Ok(lines.join("\n") + "\n")
+}
+
+/// Whether a copy's files differ from its manifest. A copy made before
+/// manifests existed cannot tell, and counts as unchanged.
+fn changed_since_made(copy: &Path) -> bool {
+    match std::fs::read_to_string(copy.join(MANIFEST)) {
+        Ok(made) => manifest_of(copy).map_or(true, |now| now != made),
+        Err(_) => false,
+    }
 }
 
 fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {

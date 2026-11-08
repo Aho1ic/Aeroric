@@ -157,7 +157,8 @@ impl Deliveries {
     }
 
     /// Queue `text` for `task_id`. Something new also gives a failed item
-    /// of the same session one more try (Q-S8).
+    /// of the same session one more try (Q-S8). Fails when the item cannot
+    /// be written down: it is then not queued at all.
     pub fn enqueue(
         &self,
         task_id: &str,
@@ -166,7 +167,7 @@ impl Deliveries {
         label: &str,
         text: &str,
         source_ref: Option<&str>,
-    ) -> Delivery {
+    ) -> Result<Delivery, String> {
         let now = now_ms();
         let mut item = Delivery {
             id: format!("dv-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]),
@@ -187,21 +188,23 @@ impl Deliveries {
         let mut changed = Vec::new();
         {
             let mut store = self.store.lock();
+            item.created_ms = store.next_created(now);
+            store
+                .add(&item)
+                .map_err(|error| format!("没能排上队（写入投递队列失败：{error}）"))?;
             for mut failed in store.of_task(task_id) {
                 if step(&mut failed, Event::Retry, now) {
                     store.save(&failed);
                     changed.push(failed);
                 }
             }
-            item.created_ms = store.next_created(now);
-            store.save(&item);
         }
         changed.push(item.clone());
         for d in &changed {
             self.publish(d);
         }
         self.pump(task_id);
-        item
+        Ok(item)
     }
 
     /// This session's queue, oldest first.

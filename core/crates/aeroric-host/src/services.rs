@@ -4386,14 +4386,10 @@ fn session_history(
     let Some((record, project)) = find_task_record(&context, task_id) else {
         return failure(id, ErrorCode::NotFound, "no task with that id");
     };
-    let (recorded_id, recorded_path) = aeroric_core::tasks::session_owner::current_session(&record);
-    let Some(path) = recorded_path else {
-        return failure(
-            id,
-            ErrorCode::NotFound,
-            "this task has no session transcript on disk yet",
-        );
-    };
+    // C 批 (2026-11-08): no path yet (a new Codex session learns it when its
+    // thread starts) is an empty history, like a transcript not yet written;
+    // it was NotFound, a banner on every new Codex session.
+    let (recorded_id, path) = aeroric_core::tasks::session_owner::current_session(&record);
     // B4: a remote session's transcript lives on that machine; read its tail over SSH.
     let remote = match aeroric_core::tasks::launch_plan::working_directory(&record, &project) {
         Some(aeroric_core::tasks::WorkingDirectory::Ssh { connection_id, .. }) => {
@@ -4401,16 +4397,17 @@ fn session_history(
         }
         _ => None,
     };
-    let read = match &remote {
-        Some(connection_id) => crate::remote_sessions::read_remote_file(
+    let read = match (&path, &remote) {
+        (None, _) => Ok(String::new()),
+        (Some(path), Some(connection_id)) => crate::remote_sessions::read_remote_file(
             &context,
             connection_id,
-            &path,
+            path,
             REMOTE_HISTORY_MAX_BYTES,
         )
         .map(Option::unwrap_or_default)
         .map_err(std::io::Error::other),
-        None => std::fs::read_to_string(&path),
+        (Some(path), None) => std::fs::read_to_string(path),
     };
     let raw = match read {
         Ok(raw) => raw,

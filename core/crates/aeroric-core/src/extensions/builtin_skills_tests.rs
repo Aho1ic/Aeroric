@@ -322,3 +322,61 @@ fn a_configured_codex_gets_learned_skills_in_its_project_only() {
     assert!(!copy.exists());
     assert_eq!(project_copies(&project).len(), builtin - 1);
 }
+
+/// C 批 (2026-11-08): an update is swapped in whole; a copy someone edited
+/// goes to the Trash instead of being lost; a copy that fails halfway
+/// leaves the old one as it was, and the next sync finishes the job.
+#[test]
+fn copies_are_replaced_whole_and_edited_ones_go_to_the_trash() {
+    use std::os::unix::fs::PermissionsExt;
+    let project = temp();
+    git_init(&project);
+    let source = temp();
+    std::fs::write(source.join("SKILL.md"), "v1").unwrap();
+    let offer = |version: &str| Offer {
+        id: "probe".into(),
+        dir: source.clone(),
+        version: version.into(),
+    };
+    let trashed = std::sync::Mutex::new(Vec::new());
+    let trash = |path: &Path| {
+        trashed
+            .lock()
+            .unwrap()
+            .push(std::fs::read_to_string(path.join("SKILL.md")).unwrap());
+        std::fs::remove_dir_all(path).map_err(|e| e.to_string())
+    };
+    let copy = project.join(".agents/skills/probe");
+
+    sync_offers(&project, &[offer("v1")], &trash).unwrap();
+    sync_offers(&project, &[offer("v2")], &trash).unwrap();
+    assert!(
+        trashed.lock().unwrap().is_empty(),
+        "an untouched copy is just replaced"
+    );
+
+    std::fs::write(copy.join("SKILL.md"), "我改过").unwrap();
+    sync_offers(&project, &[offer("v3")], &trash).unwrap();
+    assert_eq!(*trashed.lock().unwrap(), vec!["我改过".to_string()]);
+    assert_eq!(
+        std::fs::read_to_string(copy.join("SKILL.md")).unwrap(),
+        "v1"
+    );
+    assert_eq!(std::fs::read_to_string(copy.join(MARKER)).unwrap(), "v3");
+
+    let locked = source.join("locked.md");
+    std::fs::write(&locked, "x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(sync_offers(&project, &[offer("v4")], &trash).is_err());
+    assert_eq!(
+        std::fs::read_to_string(copy.join(MARKER)).unwrap(),
+        "v3",
+        "the old copy stays"
+    );
+    assert!(!project.join(".agents/.aeroric-staging").exists());
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+    sync_offers(&project, &[offer("v4")], &trash).unwrap();
+    assert_eq!(std::fs::read_to_string(copy.join(MARKER)).unwrap(), "v4");
+    assert!(copy.join("locked.md").is_file());
+    assert!(project_copies(&project).contains("probe"));
+}

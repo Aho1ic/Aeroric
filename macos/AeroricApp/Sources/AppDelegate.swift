@@ -56,7 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// window-count assertion (measured 2026-10-02). Gated on the injected
     /// test environment; plain launches keep restoration. (.restorationBehavior
     /// would be the scene-level switch but needs macOS 15; target is 14.)
+    /// Text views read their substitution defaults when made, so plain
+    /// typing is set up before any window (and after a test reset).
     func applicationWillFinishLaunching(_ notification: Notification) {
+        defer { PlainTyping.apply(to: .standard, domain: Bundle.main.bundleIdentifier ?? "") }
         guard let environment = ProcessInfo.processInfo.environment["AERORIC_ENV"],
               !environment.isEmpty,
               let bundleIdentifier = Bundle.main.bundleIdentifier else { return }

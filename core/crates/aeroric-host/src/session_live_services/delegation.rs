@@ -382,8 +382,7 @@ impl DelegationHost for HostDelegations {
             task_id,
             aeroric_protocol::delivery::DeliveryKind::Delegation,
             text,
-        );
-        Ok(())
+        )
     }
 
     fn interrupt(&self, task_id: &str) {

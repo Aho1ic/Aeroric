@@ -222,8 +222,8 @@ async fn a_codex_task_runs_its_first_turn_on_the_structured_driver() {
     .expect("turn json");
     assert_eq!(turn["method"], "turn/start");
     assert_eq!(turn["params"]["input"][0]["text"], "hi");
-    assert_eq!(turn["params"]["approvalPolicy"], "on-request");
-    assert_eq!(turn["params"]["sandboxPolicy"]["type"], "readOnly");
+    assert_eq!(turn["params"]["approvalPolicy"], "untrusted");
+    assert_eq!(turn["params"]["sandboxPolicy"]["type"], "workspaceWrite");
     assert!(
         registry.child_for("task-1").is_none(),
         "no PTY was opened for this run"

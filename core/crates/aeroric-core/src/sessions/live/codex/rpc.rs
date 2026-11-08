@@ -390,12 +390,14 @@ mod tests {
         let (pid_file, mark) = (dir.join("pid"), dir.join("mark"));
         std::fs::write(
             dir.join("agent.sh"),
-            "trap 'echo term > \"$1\"; exit 0' TERM\nwhile :; do sleep 0.05; done\n",
+            // The pid is written once the trap is set: written by the
+            // wrapper, a busy machine let TERM arrive first (C 批).
+            "trap 'echo term > \"$1\"; exit 0' TERM\necho $$ > \"$2\"\nwhile :; do sleep 0.05; done\n",
         )
         .unwrap();
         let mut command = tokio::process::Command::new("sh");
         command.arg("-c").arg(format!(
-            "sh '{}' '{}' & echo $! > '{}'; wait",
+            "sh '{}' '{}' '{}' & wait",
             dir.join("agent.sh").display(),
             mark.display(),
             pid_file.display()

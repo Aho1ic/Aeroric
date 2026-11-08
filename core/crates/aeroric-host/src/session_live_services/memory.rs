@@ -724,7 +724,7 @@ fn extract_task(live: &Live, task_id: &str, forced: bool) -> Result<wire::Memory
         .unwrap_or_default()
         .to_string();
     let title = super::context_title(&record);
-    let messages = super::context_messages(live, &record);
+    let messages = super::context_messages(live, &record, false)?;
     // B5-3a: its acceptance criteria all passed — experiences start at 中.
     let verified = live.executor.checkpoints().get(task_id).is_some_and(|cp| {
         !cp.obligations.is_empty()

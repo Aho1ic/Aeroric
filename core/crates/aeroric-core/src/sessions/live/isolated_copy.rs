@@ -346,6 +346,9 @@ fn merge(
             .arg(&m)
             .arg(&b)
             .arg(&t)
+            // Run outside any repository: in a checkout git cannot resolve
+            // (a worktree made on another machine) it exits 128 (C 批).
+            .current_dir(&tmp)
             .stdin(Stdio::null())
             .stderr(Stdio::null())
             .output()

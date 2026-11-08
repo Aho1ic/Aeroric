@@ -1224,6 +1224,106 @@ async fn accepting_a_clarification_starts_the_work_with_its_criteria() {
     assert_eq!(got["checkpoint"]["constraints"][0]["text"], "不要推送");
 }
 
+/// C 批 (2026-11-08): a cut message says so and reads on to the whole text;
+/// tool calls are lines of their own; a transcript too big says why. It
+/// used to cut at 4000 chars silently, skip tools, and read as empty.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_session_reads_on_shows_tools_and_says_why_it_cannot() {
+    let mut host = Host::start(true).await;
+    let rollout = std::env::temp_dir().join(format!(
+        "ah-rollout-{}-{}.jsonl",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::SeqCst)
+    ));
+    let long = "长".repeat(5000);
+    let lines = [
+        json!({"type": "response_item", "payload": {"type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "查一下"}]}}),
+        json!({"type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
+            "arguments": "{\"cmd\":\"cargo test\"}", "call_id": "c1"}}),
+        json!({"type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1",
+            "output": "test result: ok"}}),
+        json!({"type": "response_item", "payload": {"type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": long}]}}),
+    ];
+    std::fs::write(
+        &rollout,
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    host.start_task("查一下");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th-1", "path": rollout.to_string_lossy()}}),
+    );
+    host.until("the rollout is recorded", |h| {
+        h.record().to_string().contains(&*rollout.to_string_lossy())
+    })
+    .await;
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+    let read = host
+        .call("context.readSession", json!({"token": token}))
+        .await
+        .unwrap();
+    let messages = read["messages"].as_array().unwrap();
+    assert_eq!(read["total"], 3, "{read}");
+    assert_eq!(
+        messages[1]["text"],
+        "[工具] exec_command：cargo test → test result: ok"
+    );
+    let last = &messages[2];
+    assert_eq!(last["chars"], 5000);
+    assert_eq!(last["truncated"], true);
+    assert_eq!(last["nextOffset"], 4000);
+    let rest = host
+        .call(
+            "context.readSession",
+            json!({"token": token, "from": 2, "offset": 4000, "limit": 1}),
+        )
+        .await
+        .unwrap();
+    let piece = &rest["messages"][0];
+    assert_eq!(piece["truncated"], false);
+    assert!(piece.get("nextOffset").is_none());
+    assert_eq!(
+        format!(
+            "{}{}",
+            last["text"].as_str().unwrap(),
+            piece["text"].as_str().unwrap()
+        ),
+        long,
+        "两段拼回原文"
+    );
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&rollout)
+        .unwrap()
+        .set_len(33 * 1024 * 1024)
+        .unwrap();
+    let too_big = host
+        .call("context.readSession", json!({"token": token}))
+        .await
+        .unwrap_err();
+    let _ = std::fs::remove_file(&rollout);
+    assert_eq!(too_big["code"], "IO_ERROR");
+    assert!(
+        too_big["message"].as_str().unwrap().contains("超过 32 MiB"),
+        "{too_big}"
+    );
+}
+
 /// B4′: the context server's host methods answer only a live token, and only
 /// for the token's own project.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

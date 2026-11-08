@@ -18,6 +18,8 @@ pub struct Context<'a> {
     pub acceptance: &'a [String],
     pub constraints: &'a [String],
     pub checks: Option<&'a str>,
+    /// What in the diff may weaken its checks ([`super::gates::flags`]).
+    pub gates: &'a [String],
     /// The diff text when it fits [`MAX_INLINE_DIFF`].
     pub diff_text: Option<&'a str>,
     /// The previous round, with the writer's answers.
@@ -33,6 +35,12 @@ pub fn reviewer(diff: &TurnDiff, cx: &Context<'_>) -> String {
     list(&mut out, "约束", cx.constraints);
     if let Some(checks) = cx.checks {
         out.push_str(&format!("\n## 自动检查\n{checks}\n"));
+    }
+    if !cx.gates.is_empty() {
+        out.push_str("\n## 门禁完整性（按规则自动标出）\n下面这些改动可能削弱了测试或检查。逐条判断：有正当理由的，在 summary 里说明理由；没有的，作为 blocker 报出来。\n");
+        for flag in cx.gates {
+            out.push_str(&format!("- {flag}\n"));
+        }
     }
     if let Some(previous) = cx.previous {
         out.push_str("\n## 上一轮你的意见与对方的答复\n");

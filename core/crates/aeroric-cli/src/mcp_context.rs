@@ -25,11 +25,12 @@ fn tools() -> Value {
         },
         {
             "name": "read_session",
-            "description": "读取本项目某个会话的文字消息（默认当前会话的最近 40 条）。taskId 来自 search_sessions 的结果。",
+            "description": "读取本项目某个会话的消息（默认当前会话的最近 40 条），工具调用以“[工具] 名称：参数 → 结果开头”一行出现。每条最多 4000 字，被截断的带 truncated 和 nextOffset，用 from=该条 index、offset=nextOffset 续读。taskId 来自 search_sessions 的结果。",
             "inputSchema": {"type": "object", "properties": {
                 "taskId": {"type": "string"},
                 "from": {"type": "integer", "minimum": 0, "description": "从第几条消息开始"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 200}
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                "offset": {"type": "integer", "minimum": 0, "description": "第 from 条从第几个字开始（续读被截断的消息）"}
             }}
         },
         {
