@@ -250,7 +250,7 @@ fn copy_remove(live: &Live, request: &Request) -> Frame {
         return invalid(request, "没有副本记录");
     };
     match isolated_copy::remove(&dir, &p.task_id) {
-        Ok(()) => ok(request, json!({})),
+        Ok(stopped) => ok(request, json!({ "stopped": stopped })),
         Err(reason) => invalid(request, &reason),
     }
 }

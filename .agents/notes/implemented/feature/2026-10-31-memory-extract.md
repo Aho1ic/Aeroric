@@ -30,6 +30,7 @@ B5-1 之后，记忆只有两个来源：用户 `/记住`，和 Agent 主动 `me
 
 - 发出去的内容：
   - 对话只取文字部分，复用 `context_messages`，按"用户：/Agent："拼接；不含工具输出；
+  - 用户消息里 `<private>…</private>` 包住的部分先去掉（没闭合的隐藏到结尾），整条都是私密的回合连同 Agent 的回复一起不留（2026-11-08 E 批，参照 claude-mem）；只影响记忆，发给 Agent 的原文不变，Agent 回复不处理；
   - 保留最近 24000 字，再用诊断报告的脱敏规则遮掉密钥和 home 路径；
   - 附上本项目和全局已生效的 profile、fact，最多 40 条，带 id。
 - 要求模型只输出一个 JSON：`sessionFact` 加 `candidates`。

@@ -763,14 +763,14 @@ final class AppServices {
         let alert = NSAlert()
         alert.messageText = pending > 0 ? "副本里还有 \(pending) 处改动没带回" : "会话的独立副本会一起删掉"
         if removing {
-            alert.informativeText = "删掉会话会一起删掉它的独立副本，副本里没带回的改动就没了。"
+            alert.informativeText = "删掉会话会一起删掉它的独立副本，副本里没带回的改动就没了；副本里还在运行的程序（比如开发服务器）也会一并结束。"
             alert.addButton(withTitle: "删掉会话和副本")
             alert.addButton(withTitle: "取消")
             guard alert.runModal() == .alertFirstButtonReturn else { return false }
-            try? await client.removeCopy(taskId: taskID)
+            if let stopped = try? await client.removeCopy(taskId: taskID) { tellStopped(stopped) }
             return true
         }
-        alert.informativeText = "保留副本的话，取消归档后仍可在“改动 · 相对原目录”里带回。"
+        alert.informativeText = "保留副本的话，取消归档后仍可在“改动 · 相对原目录”里带回。删掉副本时，副本里还在运行的程序（比如开发服务器）会一并结束。"
         alert.addButton(withTitle: "保留副本并归档")
         alert.addButton(withTitle: "删掉副本并归档")
         alert.addButton(withTitle: "取消")
@@ -779,7 +779,7 @@ final class AppServices {
             return true
         case .alertSecondButtonReturn:
             do {
-                try await client.removeCopy(taskId: taskID)
+                tellStopped(try await client.removeCopy(taskId: taskID))
             } catch {
                 showActionError("删副本失败：\(error)")
                 return false
@@ -1314,6 +1314,17 @@ extension AppServices: WorkspaceStateProviding {
         let catalogID = "agent-config:\(configID)"
         return projectConfigurations.values.lazy.flatMap { $0 }
             .first { $0.id == catalogID || $0.id == configID }?.title
+    }
+
+    /// E 批: processes the removed copy still had running were stopped.
+    private func tellStopped(_ count: Int) {
+        guard count > 0 else { return }
+        let alert = NSAlert()
+        alert.messageText = "已结束副本里 \(count) 个还在运行的程序"
+        alert.informativeText = "它们的工作目录在删掉的副本里（比如开发服务器）。"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "好")
+        alert.runModal()
     }
 
     /// A menu action the host refused, told plainly instead of dropped.

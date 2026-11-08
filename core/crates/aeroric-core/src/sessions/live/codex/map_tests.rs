@@ -248,54 +248,59 @@ fn policies_and_version_gate() {
     assert!(version_supported("garbage").is_err());
 }
 
+/// The oldest supported Codex and the newest checked (E 批 2026-11-08) both
+/// have every method the driver calls, takes and listens for.
 #[test]
 fn codex_methods_exist_in_the_snapshot() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../contracts/codex/app-server-0.162.1");
-    let methods = |file: &str| -> Vec<String> {
-        let schema: Value =
-            serde_json::from_slice(&std::fs::read(dir.join(file)).expect(file)).unwrap();
-        schema["oneOf"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|v| {
-                v.pointer("/properties/method/enum/0")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .collect()
-    };
-    let client = methods("ClientRequest.json");
-    for method in CLIENT_METHODS {
-        assert!(
-            client.iter().any(|m| m == method),
-            "{method} missing from snapshot"
-        );
-    }
-    let server = methods("ServerRequest.json");
-    for method in SERVER_REQUESTS {
-        assert!(
-            server.iter().any(|m| m == method),
-            "{method} missing from snapshot"
-        );
-    }
-    let notifications = methods("ServerNotification.json");
-    for method in [
-        "turn/started",
-        "turn/completed",
-        "item/started",
-        "item/completed",
-        "item/agentMessage/delta",
-        "item/commandExecution/outputDelta",
-        "turn/plan/updated",
-        "thread/tokenUsage/updated",
-        "error",
-    ] {
-        assert!(
-            notifications.iter().any(|m| m == method),
-            "{method} missing from snapshot"
-        );
+    for snapshot in ["app-server-0.162.1", "app-server-0.167.0"] {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../contracts/codex")
+            .join(snapshot);
+        let methods = |file: &str| -> Vec<String> {
+            let schema: Value =
+                serde_json::from_slice(&std::fs::read(dir.join(file)).expect(file)).unwrap();
+            schema["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|v| {
+                    v.pointer("/properties/method/enum/0")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        };
+        let client = methods("ClientRequest.json");
+        for method in CLIENT_METHODS {
+            assert!(
+                client.iter().any(|m| m == method),
+                "{method} missing from {snapshot}"
+            );
+        }
+        let server = methods("ServerRequest.json");
+        for method in SERVER_REQUESTS {
+            assert!(
+                server.iter().any(|m| m == method),
+                "{method} missing from {snapshot}"
+            );
+        }
+        let notifications = methods("ServerNotification.json");
+        for method in [
+            "turn/started",
+            "turn/completed",
+            "item/started",
+            "item/completed",
+            "item/agentMessage/delta",
+            "item/commandExecution/outputDelta",
+            "turn/plan/updated",
+            "thread/tokenUsage/updated",
+            "error",
+        ] {
+            assert!(
+                notifications.iter().any(|m| m == method),
+                "{method} missing from {snapshot}"
+            );
+        }
     }
 }
 

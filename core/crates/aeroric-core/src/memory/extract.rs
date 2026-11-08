@@ -27,14 +27,26 @@ pub struct Transcript {
 pub fn transcript(messages: &[(String, String)], home: Option<&std::path::Path>) -> Transcript {
     let mut whole = String::new();
     let mut user_turns = 0;
+    // A turn whose message was all private is left out, the reply with it.
+    let mut private_turn = false;
     for (role, text) in messages {
+        let kept;
         let who = if role == "user" {
+            kept = without_private(text);
+            private_turn = kept.trim().is_empty() && text.contains(PRIVATE_OPEN);
+            if private_turn {
+                continue;
+            }
             user_turns += 1;
             "用户"
         } else {
+            if private_turn {
+                continue;
+            }
+            kept = text.clone();
             "Agent"
         };
-        whole.push_str(&format!("{who}：{}\n\n", text.trim()));
+        whole.push_str(&format!("{who}：{}\n\n", kept.trim()));
     }
     let digest = Sha256::digest(whole.as_bytes());
     let hash = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
@@ -50,6 +62,27 @@ pub fn transcript(messages: &[(String, String)], home: Option<&std::path::Path>)
         user_turns,
         hash,
     }
+}
+
+const PRIVATE_OPEN: &str = "<private>";
+const PRIVATE_CLOSE: &str = "</private>";
+
+/// E 批 (2026-11-08, claude-mem's `<private>`): what the person wraps in
+/// `<private>…</private>` is not remembered. Only memory sees this; the
+/// agent got the message as typed. An unclosed tag hides the rest.
+pub fn without_private(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(PRIVATE_OPEN) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + PRIVATE_OPEN.len()..];
+        match after.find(PRIVATE_CLOSE) {
+            Some(end) => rest = &after[end + PRIVATE_CLOSE.len()..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 pub const SYSTEM: &str = "你是 Aeroric 的记忆整理员。你读一段已经结束的编码会话，只输出一个 JSON 对象，不要任何别的文字。\

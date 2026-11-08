@@ -427,8 +427,11 @@ extension SessionsClient {
         return LiveCopyInfo.decode(frame.result)
     }
 
-    public func removeCopy(taskId: String) async throws {
-        _ = try await connection.request("copies.remove", params: .object(["taskId": .string(taskId)]))
+    /// Returns how many processes still running in the copy were stopped.
+    @discardableResult
+    public func removeCopy(taskId: String) async throws -> Int {
+        let frame = try await connection.request("copies.remove", params: .object(["taskId": .string(taskId)]))
+        return frame.result["stopped"]?.numberText.flatMap { Int($0) } ?? 0
     }
 
     public func bringAll(taskId: String) async throws -> (applied: Int, conflicts: Int) {

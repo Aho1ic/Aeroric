@@ -12,7 +12,7 @@ Status: implemented
   - **创建**：第一次创建前，往仓库的 `.git/info/exclude` 加一行 `/.aeroric/`。然后执行 `git worktree add --detach <repo>/.aeroric/worktrees/<task> HEAD`，不新建分支。原目录的快照树（含未提交的改动和新文件）作为起点：用 `git diff --binary HEAD <起点>` 生成补丁，在副本里 `git apply`。起点钉在 `refs/aeroric/copies/<task>/base`，记录写在 `<data>/copies/<task>.json`。启动时任务记录里的 `worktreePath` 指向副本，现有的启动逻辑不用改。
   - **带回**：`ChangeScope::Origin` 比较的是“起点”和“副本现在”。在这个范围下接受一段 = 把这一段补丁正向 `git apply` 到原目录，只改工作区，不碰 index。成功标 `Applied`，套不上标 `Conflict`。丢弃 = 在副本里反向应用这一段（沿用 R2-2 的拒绝）。还有一个“全部带回”。
   - **冲突转新一轮**：先列出原目录在起点之后改过的每个文件，逐个处理：副本没动过的，直接用原目录的版本；原目录没动过的，跳过；两边都改了的，用 `git merge-file` 合并，冲突处留下标记。处理完把起点前移到原目录当前的快照，再返回预填文字。客户端把这段文字放进这个会话的输入框，不自动发送。
-  - **清理**：删除用 `worktree remove --force`，同时删掉对应的 ref 和记录。全部处理完（没有待带回、也没有冲突）满 30 天的副本，在宿主启动时清理。
+  - **清理**：删除用 `worktree remove --force`，同时删掉对应的 ref 和记录。删之前先停掉工作目录在副本里的进程（2026-11-08 E 批，参照 worktrunk 的 `--reap`）：先 TERM，3 秒后仍在的 KILL，`copies.remove` 回 `stopped` 个数，界面删完提示一次。宿主自己、它的父进程和它直接起的子进程不碰：会话的 Agent 由驱动结束，从背后杀掉会被当成异常退出；Agent 的 shell 再起的程序（开发服务器）照停。全部处理完（没有待带回、也没有冲突）满 30 天的副本，在宿主启动时清理。
 - 宿主：
   - `task.run` 新增 `isolated`。只有设了它才写进指纹（追加一个字节 2，和 `clarify` 的 1 区分开），回执里也只在这时多报一项 `isolated`，所以旧的提交照样能匹配。远程项目、不是 git 仓库、还没有任何提交的仓库，都在产生任何副作用之前就拒绝。
   - 新增 RPC：`changes.bringAll`、`changes.resolveConflicts`、`copies.get`、`copies.remove`。

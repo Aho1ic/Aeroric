@@ -1,6 +1,8 @@
 //! `codex app-server` → [`SessionUpdateKind`] (ADR-043). Pure functions: the
 //! driver feeds them every notification / server request and appends the
-//! result. Field names follow the snapshot in `contracts/codex/app-server-0.162.1`.
+//! result. Field names follow the snapshots in `contracts/codex/`:
+//! `app-server-0.162.1` (the oldest supported) and `app-server-0.167.0` (the
+//! newest checked).
 
 use serde_json::{json, Value};
 

@@ -152,3 +152,41 @@ fn a_repository_without_a_commit_cannot_have_a_copy() {
     run(&dir, &["init", "-q"]);
     assert!(check(&dir).unwrap_err().contains("没有任何提交"));
 }
+
+/// E 批 (2026-11-08): a process running in the copy (a dev server an
+/// agent's shell started) is stopped when the copy goes; one elsewhere, and
+/// this process's own children (the session's agent), are left alone.
+#[cfg(unix)]
+#[test]
+fn removing_a_copy_stops_what_runs_in_it_and_nothing_else() {
+    let dir = repo();
+    let (_, copies) = review(&dir);
+    let (record, _) = create(&copies, &dir, "task-1").unwrap();
+    // The shell stands for the agent (our child); its `sleep` for the server.
+    let start = |cwd: &Path| {
+        Command::new("sh")
+            .args(["-c", "sleep 30 & wait"])
+            .current_dir(cwd)
+            .spawn()
+            .unwrap()
+    };
+    let mut server = start(Path::new(&record.path));
+    let mut elsewhere = start(&dir);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(remove(&copies, "task-1").unwrap(), 1);
+    // Its server stopped, so its `wait` returns (well before the 30 s).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while server.try_wait().unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the copy's server still runs"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        elsewhere.try_wait().unwrap().is_none(),
+        "the original's process runs on"
+    );
+    let _ = elsewhere.kill();
+    let _ = elsewhere.wait();
+}

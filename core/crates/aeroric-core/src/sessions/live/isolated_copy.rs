@@ -206,10 +206,14 @@ pub fn prompt(record: &CopyRecord, resolved: &Resolved) -> String {
 }
 
 /// Remove the copy and everything kept for it.
-pub fn remove(dir: &Path, task_id: &str) -> Result<(), String> {
+/// Removes the copy; returns how many processes still running in it were
+/// stopped first.
+pub fn remove(dir: &Path, task_id: &str) -> Result<usize, String> {
     let record = load(dir, task_id).ok_or("这个会话不在独立副本里")?;
     let origin = PathBuf::from(&record.origin);
+    let mut stopped = 0;
     if Path::new(&record.path).exists() {
+        stopped = stop_processes_in(Path::new(&record.path));
         git(
             &origin,
             &["worktree", "remove", "--force", &record.path],
@@ -219,7 +223,99 @@ pub fn remove(dir: &Path, task_id: &str) -> Result<(), String> {
     }
     let _ = git(&origin, &["update-ref", "-d", &base_ref(task_id)], None);
     let _ = std::fs::remove_file(file(dir, task_id));
-    Ok(())
+    Ok(stopped)
+}
+
+/// E 批 (2026-11-08, worktrunk's `--reap`): a process whose working
+/// directory is inside the copy (a dev server started there) outlived it.
+/// Each gets TERM, and KILL after 3 s if still there. Never this process,
+/// its parent, its own children (the session's agent, which its driver
+/// ends), or pid 1 and below (the broadcast shapes `runtime::kill` guards
+/// against).
+fn stop_processes_in(path: &Path) -> usize {
+    let Ok(path) = path.canonicalize() else {
+        return 0;
+    };
+    let me = std::process::id() as i32;
+    #[cfg(unix)]
+    let parent = unsafe { libc::getppid() };
+    #[cfg(not(unix))]
+    let parent = 0;
+    let pids: Vec<i32> = working_directories()
+        .into_iter()
+        .filter(|p| p.pid > 1 && p.pid != me && p.pid != parent && p.parent != me)
+        .filter(|p| p.cwd.starts_with(&path))
+        .map(|p| p.pid)
+        .collect();
+    #[cfg(unix)]
+    {
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) == 0 };
+        for &pid in &pids {
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while pids.iter().any(|&pid| alive(pid)) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        for &pid in pids.iter().filter(|&&pid| alive(pid)) {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+    pids.len()
+}
+
+struct Running {
+    pid: i32,
+    parent: i32,
+    cwd: PathBuf,
+}
+
+/// Every process this user can see, with its parent and working directory.
+fn working_directories() -> Vec<Running> {
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        return entries
+            .flatten()
+            .filter_map(|e| {
+                let pid = e.file_name().to_str()?.parse().ok()?;
+                // `stat` is `pid (comm) state ppid …`; comm may hold spaces.
+                let stat = std::fs::read_to_string(e.path().join("stat")).ok()?;
+                let parent = stat
+                    .rsplit_once(')')?
+                    .1
+                    .split_whitespace()
+                    .nth(1)?
+                    .parse()
+                    .ok()?;
+                let cwd = std::fs::read_link(e.path().join("cwd")).ok()?;
+                Some(Running { pid, parent, cwd })
+            })
+            .collect();
+    }
+    // macOS: lsof's field output is `p<pid>`, `R<ppid>`, then `n<cwd>`.
+    let Ok(out) = Command::new("lsof")
+        .args(["-n", "-d", "cwd", "-F", "pRn"])
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    let (mut pid, mut parent) = (None, 0);
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if let Some(p) = line.strip_prefix('p') {
+            pid = p.parse().ok();
+            parent = 0;
+        } else if let Some(r) = line.strip_prefix('R') {
+            parent = r.parse().unwrap_or(0);
+        } else if let (Some(n), Some(pid)) = (line.strip_prefix('n'), pid) {
+            found.push(Running {
+                pid,
+                parent,
+                cwd: PathBuf::from(n),
+            });
+        }
+    }
+    found
 }
 
 /// Remove copies with nothing left to bring back for [`KEEP_CLEARED_MS`].

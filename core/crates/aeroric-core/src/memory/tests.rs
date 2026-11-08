@@ -553,3 +553,33 @@ fn search_filters_by_project_before_ranking() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].project_id.as_deref(), Some("mine"));
 }
+
+/// E 批 (2026-11-08): `<private>` parts of the person's messages are not
+/// remembered; a turn that was all private is left out with its reply.
+#[test]
+fn private_parts_never_reach_the_extraction() {
+    let talk = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(r, t)| (r.to_string(), t.to_string()))
+            .collect()
+    };
+    let messages = talk(&[
+        ("user", "用 pnpm <private>我的工号是 9527</private>来装依赖"),
+        ("assistant", "好的"),
+        ("user", "<private>别记这一轮</private>"),
+        ("assistant", "这一轮的回复"),
+        ("user", "再跑一遍测试 <private>没关上的标签"),
+    ]);
+    let transcript = super::extract::transcript(&messages, None);
+    assert!(!transcript.text.contains("9527"), "{}", transcript.text);
+    assert!(
+        transcript.text.contains("用 pnpm 来装依赖"),
+        "{}",
+        transcript.text
+    );
+    assert!(!transcript.text.contains("这一轮的回复"));
+    assert!(!transcript.text.contains("没关上的标签"));
+    assert!(transcript.text.contains("再跑一遍测试"));
+    assert_eq!(transcript.user_turns, 2);
+}
