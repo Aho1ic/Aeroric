@@ -1321,16 +1321,21 @@ async fn git_remove_task_worktree(request: Request) -> Frame {
     ) {
         return error;
     }
+    // E 批 #14: discarding uncommitted work or an unmerged branch is asked for.
+    let force = params
+        .get("force")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let p_path = project_path.to_string();
     let wt_path = worktree_path.to_string();
     let br = branch.to_string();
     let result = tokio::task::spawn_blocking(move || {
         let svc = aeroric_core::git::worktree::WorktreeService::new();
-        svc.remove(std::path::Path::new(&p_path), &wt_path, &br)
+        svc.remove(std::path::Path::new(&p_path), &wt_path, &br, force)
     })
     .await;
     match result {
-        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Ok(removed)) => ok(&request, serde_json::to_value(removed).unwrap_or_default()),
         Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
         Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
     }
@@ -1648,7 +1653,7 @@ async fn git_stage(request: Request) -> Frame {
     let p_path = project_path.to_string();
     let f_path = file_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::stage(std::path::Path::new(&p_path), &f_path, &locks)
     })
     .await;
@@ -1690,7 +1695,7 @@ async fn git_unstage(request: Request) -> Frame {
     let p_path = project_path.to_string();
     let f_path = file_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::unstage(std::path::Path::new(&p_path), &f_path, &locks)
     })
     .await;
@@ -1732,7 +1737,7 @@ async fn git_commit(request: Request) -> Frame {
     let p_path = project_path.to_string();
     let msg = message.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::commit(std::path::Path::new(&p_path), &msg, &locks)
     })
     .await;
@@ -1940,7 +1945,7 @@ async fn git_discard_file(request: Request) -> Frame {
     let p_path = project_path.to_string();
     let f_path = file_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::discard_file(
             std::path::Path::new(&p_path),
             &f_path,
@@ -2004,7 +2009,7 @@ async fn git_discard_files(request: Request) -> Frame {
     }
     let p_path = project_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::discard_files_at(
             std::path::Path::new(&p_path),
             &paths,
@@ -2043,7 +2048,7 @@ async fn git_discard_all(request: Request) -> Frame {
     }
     let p_path = project_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::discard_all(std::path::Path::new(&p_path), &locks)
     })
     .await;
@@ -2141,7 +2146,7 @@ async fn git_resolve_conflict(request: Request) -> Frame {
     let p_path = project_path.to_string();
     let f_path = file_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::resolve_conflict_with_resolution(
             std::path::Path::new(&p_path),
             &f_path,
@@ -2428,7 +2433,7 @@ where
     }
     let p_path = project_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         run(std::path::Path::new(&p_path), paths, &locks)
     })
     .await;
@@ -2462,7 +2467,7 @@ async fn git_stage_all(request: Request) -> Frame {
     }
     let p_path = project_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::stage_all(std::path::Path::new(&p_path), &locks)
     })
     .await;
@@ -2598,7 +2603,7 @@ async fn git_stash_push(request: Request) -> Frame {
     }
     let p_path = project_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::stash_push(
             std::path::Path::new(&p_path),
             message.as_deref(),
@@ -2807,7 +2812,7 @@ async fn git_create_branch(request: Request) -> Frame {
     let b_name = branch_name.to_string();
     let f_branch = from_branch.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::create_branch_at(
             std::path::Path::new(&p_path),
             &b_name,
@@ -2862,7 +2867,7 @@ async fn git_checkout_branch(request: Request) -> Frame {
     let p_path = project_path.to_string();
     let b_name = branch_name.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::checkout_branch_tracking(
             std::path::Path::new(&p_path),
             &b_name,
@@ -2920,7 +2925,7 @@ where
     let p_path = project_path.to_string();
     let s_ref = stash_ref.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         run(std::path::Path::new(&p_path), &s_ref, &locks)
     })
     .await;
@@ -2979,7 +2984,7 @@ async fn git_init(request: Request) -> Frame {
     }
     let p_path = project_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::init(
             std::path::Path::new(&p_path),
             initial_branch.as_deref(),
@@ -3053,7 +3058,7 @@ async fn git_unstage_all(request: Request) -> Frame {
     }
     let p_path = project_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        let locks = aeroric_core::git::transport::RepoLocks::default();
+        let locks = aeroric_core::git::transport::RepoLocks::shared();
         aeroric_core::git::service::unstage_all(std::path::Path::new(&p_path), &locks)
     })
     .await;

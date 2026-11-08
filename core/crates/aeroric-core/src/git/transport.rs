@@ -62,6 +62,13 @@ impl RepoLocks {
         Self::default()
     }
 
+    /// 进程内共用的一张锁表（2026-11-09 E 批 #14）：宿主原先每个请求
+    /// `default()` 一张新表，同一仓库的两个写请求互不排队，锁形同虚设。
+    pub fn shared() -> Arc<RepoLocks> {
+        static SHARED: std::sync::OnceLock<Arc<RepoLocks>> = std::sync::OnceLock::new();
+        SHARED.get_or_init(Default::default).clone()
+    }
+
     /// 同一 repo 根的 mutating 操作共用一把锁（路径 canonicalize 后为键）。
     pub fn lock_for(&self, repo_root: &str) -> Arc<Mutex<()>> {
         let mut map = self.locks.lock().expect("repo locks");

@@ -15,6 +15,17 @@ pub struct WorktreeCreated {
     pub base_branch: String,
 }
 
+/// 删除结果：工作区一定删了；分支没合并时保留（[`WorktreeService::remove`]）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeRemoved {
+    pub branch: Option<String>,
+    pub branch_deleted: bool,
+    /// 分支为什么留下。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_kept: Option<String>,
+}
+
 /// diff 统计。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -68,8 +79,12 @@ pub struct WorktreeService {
 }
 
 impl WorktreeService {
+    /// 用进程内共用的锁表（[`RepoLocks::shared`]），和宿主的其他 Git 写操作
+    /// 同一仓库互相排队。
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            locks: RepoLocks::shared(),
+        }
     }
 
     /// create（mutating；**同名目录已存在拒绝**——不能在按「继续」时重新
@@ -185,39 +200,120 @@ impl WorktreeService {
         Ok(format!("Fast-forwarded '{base_branch}' to '{branch}'"))
     }
 
-    /// remove（mutating；`--force` 清理元数据＋`-D` 删除未合并分支；移除需要
-    /// 确认——由调用方 UI 承载）。
+    /// remove（mutating；2026-11-09 E 批 #14，参照 worktrunk `remove.rs`）：
+    /// - 按路径定位：从 `git worktree list` 找到这个路径和它真正检出的分支；
+    ///   传入的分支对不上就拒绝（防止同名分支、多个 worktree 时删错）；
+    /// - 有未提交的改动时拒绝，`force` 才丢弃；
+    /// - 分支用 `-d` 删（只删已合并的），没合并的保留并说明，`force` 才 `-D`。
     pub fn remove(
         &self,
         project_root: &Path,
         worktree_path: &str,
         branch: &str,
-    ) -> Result<(), String> {
+        force: bool,
+    ) -> Result<WorktreeRemoved, String> {
         let canonical = ensure_path_under_worktrees_root(project_root, worktree_path)?;
         let wt_path_str = path_to_string(&canonical)?;
+        let checked_out = self.branch_at(project_root, &canonical)?;
+        let wanted = branch.trim();
+        if !wanted.is_empty() && checked_out.as_deref() != Some(wanted) {
+            return Err(format!(
+                "分支 {wanted} 不是这个 worktree 检出的分支（它是 {}）",
+                checked_out.as_deref().unwrap_or("游离 HEAD")
+            ));
+        }
+        if !force {
+            let status = transport::run_git(
+                &canonical,
+                &["status", "--porcelain"],
+                transport::READ_TIMEOUT,
+                None,
+            )?;
+            if !status.success {
+                return Err(status.combined());
+            }
+            if !status.stdout.trim().is_empty() {
+                return Err("worktree 里有未提交的改动；确认丢弃时再带 force 删除".into());
+            }
+        }
         let lock = self.locks.lock_for(&path_to_string(project_root)?);
-        let remove_out = transport::run_git(
-            project_root,
-            &["worktree", "remove", "--force", &wt_path_str],
-            transport::READ_TIMEOUT,
-            Some(&lock),
-        )?;
+        let mut args = vec!["worktree", "remove"];
+        if force {
+            args.push("--force");
+        }
+        args.push(&wt_path_str);
+        let remove_out =
+            transport::run_git(project_root, &args, transport::READ_TIMEOUT, Some(&lock))?;
         if !remove_out.success {
             return Err(remove_out.combined());
         }
-        if !branch.trim().is_empty() {
-            // -D 允许删除未合并分支（丢弃语义）。
-            let branch_out = transport::run_git(
+        let Some(branch) = checked_out else {
+            return Ok(WorktreeRemoved {
+                branch: None,
+                branch_deleted: false,
+                branch_kept: None,
+            });
+        };
+        let delete = |flag: &str| {
+            transport::run_git(
                 project_root,
-                &["branch", "-D", branch],
+                &["branch", flag, "--end-of-options", &branch],
                 transport::READ_TIMEOUT,
                 Some(&lock),
-            )?;
-            if !branch_out.success {
-                return Err(branch_out.combined());
-            }
+            )
+        };
+        let safe = delete("-d")?;
+        if safe.success {
+            return Ok(WorktreeRemoved {
+                branch: Some(branch),
+                branch_deleted: true,
+                branch_kept: None,
+            });
         }
-        Ok(())
+        if force {
+            let forced = delete("-D")?;
+            if !forced.success {
+                return Err(forced.combined());
+            }
+            return Ok(WorktreeRemoved {
+                branch: Some(branch),
+                branch_deleted: true,
+                branch_kept: None,
+            });
+        }
+        Ok(WorktreeRemoved {
+            branch_kept: Some(format!(
+                "分支 {branch} 还没合并，保留了；确认不要时再带 force 删除"
+            )),
+            branch: Some(branch),
+            branch_deleted: false,
+        })
+    }
+
+    /// `path` 这个 worktree 检出的分支；不是本仓库的 worktree 时报错。
+    fn branch_at(&self, project_root: &Path, path: &Path) -> Result<Option<String>, String> {
+        let list = transport::run_git(
+            project_root,
+            &["worktree", "list", "--porcelain"],
+            transport::READ_TIMEOUT,
+            None,
+        )?;
+        if !list.success {
+            return Err(list.combined());
+        }
+        for entry in list.stdout.split("\n\n") {
+            let mut lines = entry.lines();
+            let Some(listed) = lines.next().and_then(|l| l.strip_prefix("worktree ")) else {
+                continue;
+            };
+            if Path::new(listed).canonicalize().ok().as_deref() != Some(path) {
+                continue;
+            }
+            return Ok(lines
+                .find_map(|l| l.strip_prefix("branch refs/heads/"))
+                .map(str::to_string));
+        }
+        Err("这个路径不是本仓库的 worktree".into())
     }
 
     /// diffstats（+/− 行数；merge-base 而非 base_branch 本身——避免主仓 base
