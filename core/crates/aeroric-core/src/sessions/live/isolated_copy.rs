@@ -63,6 +63,7 @@ pub fn create(dir: &Path, project: &Path, task_id: &str) -> Result<(CopyRecord, 
         let _ = git(&top, &["worktree", "remove", "--force", &path_text], None);
         return Err("把未提交的改动复制进副本失败".into());
     }
+    copy_included(&top, &path);
     let _ = git(&top, &["update-ref", &base_ref(task_id), &base], None);
     let record = CopyRecord {
         task_id: task_id.to_string(),
@@ -80,6 +81,75 @@ pub fn create(dir: &Path, project: &Path, task_id: &str) -> Result<(CopyRecord, 
         .and_then(|(p, t)| p.strip_prefix(t).ok().map(Path::to_path_buf))
         .unwrap_or_default();
     Ok((record, path.join(inside)))
+}
+
+/// E 批 #12 (2026-11-09, worktrunk `copy-ignored`, Claude Code desktop's
+/// `.worktreeinclude`): ignored files the copy should start with — installed
+/// dependencies, build caches — are those both ignored and listed in the
+/// original's `.worktreeinclude` (gitignore syntax). Never every ignored
+/// file: that would carry `.env` along. Copies are clones on APFS
+/// (`fs::copy` uses `clonefile`), keep their mtime so a build tool does not
+/// rebuild, and links stay links. Best effort: a file that will not copy is
+/// left out, the copy still works.
+fn copy_included(top: &Path, copy: &Path) -> usize {
+    let include = top.join(".worktreeinclude");
+    if !include.is_file() {
+        return 0;
+    }
+    let list = |extra: &str| -> Vec<String> {
+        git(
+            top,
+            &["ls-files", "--others", "--ignored", "--directory", extra],
+            None,
+        )
+        .map(|out| out.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+    };
+    let ignored = list("--exclude-standard");
+    let wanted = list(&format!("--exclude-from={}", include.display()));
+    let mut copied = 0;
+    for path in wanted {
+        let inside_ignored = ignored
+            .iter()
+            .any(|i| *i == path || (i.ends_with('/') && path.starts_with(i.as_str())));
+        if !inside_ignored || path.starts_with(".aeroric/") || path.contains("..") {
+            continue;
+        }
+        let relative = path.trim_end_matches('/');
+        match copy_entry(&top.join(relative), &copy.join(relative)) {
+            Ok(()) => copied += 1,
+            Err(error) => eprintln!("isolated copy: {relative} not copied: {error}"),
+        }
+    }
+    copied
+}
+
+fn copy_entry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(from)?;
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if meta.file_type().is_symlink() {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(std::fs::read_link(from)?, to)?;
+        return Ok(());
+    }
+    if meta.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_entry(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    std::fs::copy(from, to)?;
+    if let Ok(modified) = meta.modified() {
+        std::fs::File::options()
+            .write(true)
+            .open(to)?
+            .set_modified(modified)?;
+    }
+    Ok(())
 }
 
 /// Apply a patch in `top`'s working tree (never the index); `reverse` undoes it.

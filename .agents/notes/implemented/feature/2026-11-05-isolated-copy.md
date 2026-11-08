@@ -9,7 +9,7 @@ Status: implemented
 ## Decision
 
 - core `sessions/live/isolated_copy.rs`：
-  - **创建**：第一次创建前，往仓库的 `.git/info/exclude` 加一行 `/.aeroric/`。然后执行 `git worktree add --detach <repo>/.aeroric/worktrees/<task> HEAD`，不新建分支。原目录的快照树（含未提交的改动和新文件）作为起点：用 `git diff --binary HEAD <起点>` 生成补丁，在副本里 `git apply`。起点钉在 `refs/aeroric/copies/<task>/base`，记录写在 `<data>/copies/<task>.json`。启动时任务记录里的 `worktreePath` 指向副本，现有的启动逻辑不用改。
+  - **创建**：第一次创建前，往仓库的 `.git/info/exclude` 加一行 `/.aeroric/`。然后执行 `git worktree add --detach <repo>/.aeroric/worktrees/<task> HEAD`，不新建分支。原目录的快照树（含未提交的改动和新文件）作为起点：用 `git diff --binary HEAD <起点>` 生成补丁，在副本里 `git apply`。起点钉在 `refs/aeroric/copies/<task>/base`，记录写在 `<data>/copies/<task>.json`。被 git 忽略的文件默认不进副本；2026-11-09 起，既被忽略、又列在原目录 `.worktreeinclude`（gitignore 语法，和 Claude Code 桌面版同名）里的，会复制过去：APFS 上是 `clonefile` 克隆，保留修改时间（构建工具不会因此重编译），链接照旧是链接；复制不了的跳过并记日志（参照 worktrunk 的 copy-ignored；只认白名单，不复制全部 ignored 文件，免得带出 `.env`）。启动时任务记录里的 `worktreePath` 指向副本，现有的启动逻辑不用改。
   - **带回**：`ChangeScope::Origin` 比较的是“起点”和“副本现在”。在这个范围下接受一段 = 把这一段补丁正向 `git apply` 到原目录，只改工作区，不碰 index。成功标 `Applied`，套不上标 `Conflict`。丢弃 = 在副本里反向应用这一段（沿用 R2-2 的拒绝）。还有一个“全部带回”。
   - **冲突转新一轮**：先列出原目录在起点之后改过的每个文件，逐个处理：副本没动过的，直接用原目录的版本；原目录没动过的，跳过；两边都改了的，用 `git merge-file` 合并，冲突处留下标记。处理完把起点前移到原目录当前的快照，再返回预填文字。客户端把这段文字放进这个会话的输入框，不自动发送。
   - **清理**：删除用 `worktree remove --force`，同时删掉对应的 ref 和记录。删之前先停掉工作目录在副本里的进程（2026-11-08 E 批，参照 worktrunk 的 `--reap`）：先 TERM，3 秒后仍在的 KILL，`copies.remove` 回 `stopped` 个数，界面删完提示一次。宿主自己、它的父进程和它直接起的子进程不碰：会话的 Agent 由驱动结束，从背后杀掉会被当成异常退出；Agent 的 shell 再起的程序（开发服务器）照停。全部处理完（没有待带回、也没有冲突）满 30 天的副本，在宿主启动时清理。

@@ -13,8 +13,6 @@ New-addition-1102 复核研究（Mac `~/Documents/Aeroric-research/2026-11-07-Ne
 | # | 项 | 参照 | 前提 / 触发信号 |
 |---|---|---|---|
 | 11 | 推送按在场抑制：Mac 前台正看着就不推 iPhone | paseo `agent-attention-policy.ts` | Mac 和 iOS 客户端先上报前台与聚焦状态；用户抱怨在电脑前还收到推送 |
-| 12 | 独立副本复制 ignored 依赖：只认 `.worktreeinclude` 白名单，APFS CoW | worktrunk `copy.rs` | 用户反映副本里要重装依赖、重编译太慢；不复制全部 ignored（会带出 `.env`） |
-| 14 | `git.*_task_worktree` 按路径定位、脏检查、SafeDelete、共享锁 | worktrunk `remove.rs` | 接上界面之前必须先做（现在没有调用方） |
 | 15 | 回合结束后的后台写入单独归属 | dsh-superagent `dsh.ts:601-672` | 用户发现改动被算进了下一个回合 |
 | 16 | 宿主重启后续跑（默认关，列进"需要我处理"给"继续"） | paseo `agent-lifecycle.md:15-33` | 无人值守的委派或定时任务上线 |
 | 17 | 瞬时失败退避后续跑（只限无人值守） | dsh-superagent `dsh.ts:555-584` | 同上 |
@@ -30,7 +28,7 @@ New-addition-1102 复核研究（Mac `~/Documents/Aeroric-research/2026-11-07-Ne
 | 28 | 外部写调用门 | Mikka | 做 Forge 时 |
 | 29 | 终端观察唤醒 | MonoLight | Context MCP 要能等终端输出 |
 
-已做的不在表里：#1–#3（A、B 批）、#4–#7 与 #10（C 批）、#8–#9（D 批）、#13、#26、#30（E 批）。
+已做的不在表里：#1–#3（A、B 批）、#4–#7 与 #10（C 批）、#8–#9（D 批）、#13、#26、#30（E 批）、#12（2026-11-09 夜间，见 [独立副本](../../implemented/feature/2026-11-05-isolated-copy.md)）、#14（2026-11-09 夜间，见 [Git 锁与 worktree 安全删除](../../implemented/bug-fix/2026-11-09-git-locks-and-safe-worktree-removal.md)）。
 
 ## Alternatives considered
 

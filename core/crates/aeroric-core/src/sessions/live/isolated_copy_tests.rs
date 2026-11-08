@@ -190,3 +190,41 @@ fn removing_a_copy_stops_what_runs_in_it_and_nothing_else() {
     let _ = elsewhere.kill();
     let _ = elsewhere.wait();
 }
+
+/// E 批 #12 (2026-11-09): ignored files listed in `.worktreeinclude` start
+/// in the copy, with their mtime; other ignored files (`.env`) do not.
+#[test]
+fn a_copy_starts_with_the_ignored_files_worktreeinclude_names() {
+    let dir = repo();
+    std::fs::write(dir.join(".gitignore"), "node_modules/\n.env\ntarget/\n").unwrap();
+    run(&dir, &["add", ".gitignore"]);
+    run(&dir, &["commit", "-q", "-m", "ignore"]);
+    std::fs::write(dir.join(".worktreeinclude"), "node_modules/\n").unwrap();
+    std::fs::create_dir_all(dir.join("node_modules/pkg")).unwrap();
+    std::fs::write(
+        dir.join("node_modules/pkg/index.js"),
+        "module.exports = 1\n",
+    )
+    .unwrap();
+    let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(dir.join("node_modules/pkg/index.js"))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    std::fs::write(dir.join(".env"), "SECRET=1\n").unwrap();
+    std::fs::create_dir_all(dir.join("target")).unwrap();
+    std::fs::write(dir.join("target/big.bin"), "x").unwrap();
+    let (_, copies) = review(&dir);
+    let (record, _) = create(&copies, &dir, "task-1").unwrap();
+    let copy = PathBuf::from(&record.path);
+    let copied = copy.join("node_modules/pkg/index.js");
+    assert_eq!(read(&copied), "module.exports = 1\n");
+    assert_eq!(std::fs::metadata(&copied).unwrap().modified().unwrap(), old);
+    assert!(
+        !copy.join(".env").exists(),
+        "only what the include file names"
+    );
+    assert!(!copy.join("target").exists());
+}
