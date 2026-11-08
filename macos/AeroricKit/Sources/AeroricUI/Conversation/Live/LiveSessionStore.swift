@@ -230,10 +230,13 @@ public final class LiveSessionStore {
         let cards = (model?.items ?? []).compactMap { item -> LiveDelegationCard? in
             if case let .delegation(_, card) = item { return card } else { return nil }
         }
+        let key = "\(history.count)|\(history.last?.messageId ?? "")"
+        if runawayTurns?.key != key { runawayTurns = (key, LiveRunaway.turns(history)) }
         return LiveRunaway.alerts(stats: transcriptStats, history: history, delegations: cards, nowMs: nowMs,
-                                  limits: .current())
+                                  limits: .current(), judged: runawayTurns?.turns)
             .filter { !dismissedRunaway.contains($0.id) }
     }
+    @ObservationIgnored private var runawayTurns: (key: String, turns: [LiveRunaway.Turn])?
     public func dismissRunaway(_ id: String) {
         dismissedRunaway.insert(id)
         UserDefaults.standard.set(Array(dismissedRunaway), forKey: runawayKey)

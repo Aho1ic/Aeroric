@@ -61,15 +61,18 @@ public enum LiveRunaway {
     static let saysNothing = 200
 
     /// Most telling first.
+    /// `judged`: the history's turns when already worked out (the page
+    /// keeps them between renders; reading every message each time was
+    /// wasted while a turn polls).
     public static func alerts(stats: SessionTranscriptStats?, history: [SessionMessage],
                               delegations: [LiveDelegationCard], nowMs: UInt64,
-                              limits: Limits = Limits()) -> [LiveRunawayAlert] {
+                              limits: Limits = Limits(), judged: [Turn]? = nil) -> [LiveRunawayAlert] {
         var out: [LiveRunawayAlert] = []
-        let turns = Self.turns(history).suffix(limits.window)
-        let judged = turns.filter { $0 != .unknown }
-        let idle = judged.filter { $0 == .idle }.count
-        if judged.count >= limits.minTurns, Double(idle) / Double(judged.count) > limits.idleShare {
-            let share = Int((Double(idle) / Double(judged.count) * 100).rounded())
+        let turns = (judged ?? Self.turns(history)).suffix(limits.window)
+        let known = turns.filter { $0 != .unknown }
+        let idle = known.filter { $0 == .idle }.count
+        if known.count >= limits.minTurns, Double(idle) / Double(known.count) > limits.idleShare {
+            let share = Int((Double(idle) / Double(known.count) * 100).rounded())
             out.append(LiveRunawayAlert(
                 id: "idle",
                 text: "最近 \(turns.count) 个回合里有 \(idle) 个空转（\(share)%，提醒线 \(Int(limits.idleShare * 100))%）"))
