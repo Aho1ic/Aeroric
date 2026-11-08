@@ -224,6 +224,26 @@ public final class LiveSessionStore {
         if let writer = sharedWriter { dismissedWriters.insert(writer.taskId) }
     }
 
+    /// D 批: runaway reminders not yet dismissed, most telling first. A
+    /// dismissal is kept per session and per kind, across launches.
+    public func runawayAlerts(nowMs: UInt64 = UInt64(Date().timeIntervalSince1970 * 1000)) -> [LiveRunawayAlert] {
+        let cards = (model?.items ?? []).compactMap { item -> LiveDelegationCard? in
+            if case let .delegation(_, card) = item { return card } else { return nil }
+        }
+        return LiveRunaway.alerts(stats: transcriptStats, history: history, delegations: cards, nowMs: nowMs,
+                                  limits: .current())
+            .filter { !dismissedRunaway.contains($0.id) }
+    }
+    public func dismissRunaway(_ id: String) {
+        dismissedRunaway.insert(id)
+        UserDefaults.standard.set(Array(dismissedRunaway), forKey: runawayKey)
+    }
+    public func askForSummary() async {
+        do { _ = try await send(LiveRunaway.summaryRequest) } catch { errorText = "发送失败：\(error)" }
+    }
+    private var runawayKey: String { "aeroric.session.runawayDismissed.\(taskID)" }
+    private var dismissedRunaway: Set<String> = []
+
     @ObservationIgnored private let actions: any LiveSessionActions
     @ObservationIgnored private var baseline = 0
 
@@ -234,6 +254,7 @@ public final class LiveSessionStore {
     public init(taskID: String, actions: any LiveSessionActions) {
         self.taskID = taskID
         self.actions = actions
+        dismissedRunaway = Set(UserDefaults.standard.stringArray(forKey: runawayKey) ?? [])
     }
 
     public var family: String? { state?.family }

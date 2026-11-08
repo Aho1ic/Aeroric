@@ -585,6 +585,9 @@ public struct LiveSessionView: View {
                     .background(Capsule(style: .continuous).fill(AeroricColor.warning.opacity(0.12)))
                     .accessibilityIdentifier("session.live.shared-writer")
                 }
+                LiveRunawayBar(alerts: store.runawayAlerts(),
+                               summarize: { Task { await store.askForSummary() } },
+                               dismiss: { store.dismissRunaway($0) })
                 if let blocked = store.state?.resumeBlocked, store.state?.live == false {
                     Label(blocked, systemImage: "lock")
                         .font(.system(size: AeroricType.secondary))
