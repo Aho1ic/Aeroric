@@ -199,7 +199,15 @@ fn a_copy_starts_with_the_ignored_files_worktreeinclude_names() {
     std::fs::write(dir.join(".gitignore"), "node_modules/\n.env\ntarget/\n").unwrap();
     run(&dir, &["add", ".gitignore"]);
     run(&dir, &["commit", "-q", "-m", "ignore"]);
-    std::fs::write(dir.join(".worktreeinclude"), "node_modules/\n").unwrap();
+    std::fs::write(dir.join(".worktreeinclude"), "node_modules/\n缓存/\n").unwrap();
+    std::fs::create_dir_all(dir.join("缓存")).unwrap();
+    std::fs::write(dir.join("缓存/数据.bin"), "cached").unwrap();
+    std::fs::write(
+        dir.join(".gitignore"),
+        "node_modules/\n.env\ntarget/\n缓存/\n",
+    )
+    .unwrap();
+    run(&dir, &["commit", "-qam", "ignore cache"]);
     std::fs::create_dir_all(dir.join("node_modules/pkg")).unwrap();
     std::fs::write(
         dir.join("node_modules/pkg/index.js"),
@@ -222,6 +230,11 @@ fn a_copy_starts_with_the_ignored_files_worktreeinclude_names() {
     let copied = copy.join("node_modules/pkg/index.js");
     assert_eq!(read(&copied), "module.exports = 1\n");
     assert_eq!(std::fs::metadata(&copied).unwrap().modified().unwrap(), old);
+    assert_eq!(
+        read(&copy.join("缓存/数据.bin")),
+        "cached",
+        "non-ASCII names too"
+    );
     assert!(
         !copy.join(".env").exists(),
         "only what the include file names"

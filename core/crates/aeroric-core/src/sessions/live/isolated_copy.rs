@@ -96,13 +96,26 @@ fn copy_included(top: &Path, copy: &Path) -> usize {
     if !include.is_file() {
         return 0;
     }
+    // `-z`: names as they are; without it git quotes non-ASCII ones.
     let list = |extra: &str| -> Vec<String> {
         git(
             top,
-            &["ls-files", "--others", "--ignored", "--directory", extra],
+            &[
+                "ls-files",
+                "-z",
+                "--others",
+                "--ignored",
+                "--directory",
+                extra,
+            ],
             None,
         )
-        .map(|out| out.lines().map(str::to_string).collect())
+        .map(|out| {
+            out.split('\0')
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default()
     };
     let ignored = list("--exclude-standard");
