@@ -33,4 +33,22 @@ import XCTest
         gate.update(taskID: nil, visible: false)
         XCTAssertFalse(gate.permits("a"))
     }
+
+    func testTerminalFocusRequiresAnAlreadyActiveKeyWindowAndMatchingLease() {
+        XCTAssertTrue(TaskTerminalFocusPolicy.shouldFocus(
+            appIsActive: true, windowIsKey: true, taskMatches: true, holdsLease: true
+        ))
+        XCTAssertFalse(TaskTerminalFocusPolicy.shouldFocus(
+            appIsActive: false, windowIsKey: true, taskMatches: true, holdsLease: true
+        ))
+        XCTAssertFalse(TaskTerminalFocusPolicy.shouldFocus(
+            appIsActive: true, windowIsKey: false, taskMatches: true, holdsLease: true
+        ))
+        XCTAssertFalse(TaskTerminalFocusPolicy.shouldFocus(
+            appIsActive: true, windowIsKey: true, taskMatches: false, holdsLease: true
+        ))
+        XCTAssertFalse(TaskTerminalFocusPolicy.shouldFocus(
+            appIsActive: true, windowIsKey: true, taskMatches: true, holdsLease: false
+        ))
+    }
 }

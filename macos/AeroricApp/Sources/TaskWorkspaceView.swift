@@ -1,6 +1,7 @@
 import AeroricClient
 import AeroricProtocol
 import AeroricUI
+import AppKit
 import SwiftUI
 
 /// P5-03 App 场景接线：宿主 ready 后，详情列从 shell 占位切到任务工作区
@@ -314,15 +315,31 @@ struct TaskWorkspaceView: View {
             Task { await loadDirectory("", in: project) }
         }
         .onChange(of: selectedTask?.status) { _, status in
-            // Q25: a hook-reported wait expands the dock and gives the
-            // terminal focus. It never answers or confirms anything.
+            // Q25: a hook-reported wait expands the dock. Only retain focus
+            // when the user was already looking at this active key window;
+            // background status updates must not take over the keyboard.
             guard status == "input_required", taskSurfaceVisible else { return }
             terminalExpanded = true
+            let coordinator = services.terminalCoordinator
+            let taskMatches = coordinator?.taskID == selectedTaskID
+            let holdsLease = coordinator?.holdsLease == true
+            let appWasActive = NSApp.isActive
+            let targetWindowWasKey = coordinator?.renderer.window?.isKeyWindow == true
+            guard TaskTerminalFocusPolicy.shouldFocus(
+                appIsActive: appWasActive,
+                windowIsKey: targetWindowWasKey,
+                taskMatches: taskMatches,
+                holdsLease: holdsLease
+            ), let coordinator else { return }
             DispatchQueue.main.async {
-                if let coordinator = services.terminalCoordinator, coordinator.holdsLease,
-                   coordinator.taskID == selectedTaskID {
-                    coordinator.renderer.window?.makeFirstResponder(coordinator.renderer)
-                }
+                guard let window = coordinator.renderer.window,
+                      TaskTerminalFocusPolicy.shouldFocus(
+                          appIsActive: appWasActive && NSApp.isActive,
+                          windowIsKey: window.isKeyWindow,
+                          taskMatches: coordinator.taskID == selectedTaskID,
+                          holdsLease: coordinator.holdsLease
+                      ) else { return }
+                window.makeFirstResponder(coordinator.renderer)
             }
         }
         .onChange(of: resourceProjectID, initial: true) { _, id in

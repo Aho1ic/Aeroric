@@ -18,3 +18,13 @@ public final class TaskPresentationInputGate {
         visibleTaskID == taskID && !relinquished.contains(taskID)
     }
 }
+
+/// Whether an automatic terminal-focus request is safe to perform for a
+/// status update. A background update may still expand the terminal, but it
+/// must never make a window key or take keyboard focus.
+public enum TaskTerminalFocusPolicy {
+    public static func shouldFocus(appIsActive: Bool, windowIsKey: Bool,
+                                   taskMatches: Bool, holdsLease: Bool) -> Bool {
+        appIsActive && windowIsKey && taskMatches && holdsLease
+    }
+}
