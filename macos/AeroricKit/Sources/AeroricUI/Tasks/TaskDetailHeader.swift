@@ -63,15 +63,15 @@ public struct TaskDetailHeader: View {
                     moreMenu
                 }
             }
-            .confirmationDialog(
-                Self.isRunning(task.status) ? "任务仍在运行，确定删除？" : "删除此会话记录？",
-                isPresented: $confirmingDelete
-            ) {
-                Button("确认删除", role: .destructive) { onDelete?() }
+            // Same wording and rule as the sidebar's 移除会话…: it removes the
+            // session on the host, and a session in an isolated copy is asked
+            // about its copy next.
+            .confirmationDialog("从 Aeroric 移除这个会话？", isPresented: $confirmingDelete) {
+                Button("移除", role: .destructive) { onDelete?() }
                     .accessibilityIdentifier("task.detail.delete-confirm-button")
-                Button("放弃", role: .cancel) {}
+                Button("取消", role: .cancel) {}
             } message: {
-                Text("只移除本地记录；不会替你停止或清理宿主上的其他资源。")
+                Text("“\(task.title)”会从 Aeroric 的会话列表里删除。Agent 自己的会话文件不会被删除。已置顶的会话需要先取消置顶。")
             }
             .accessibilityIdentifier("task.detail")
     }
@@ -84,7 +84,8 @@ public struct TaskDetailHeader: View {
             }
             if onDelete != nil {
                 Divider()
-                Button("删除…", role: .destructive) { confirmingDelete = true }
+                Button("移除会话…", role: .destructive) { confirmingDelete = true }
+                    .disabled(["pending", "running"].contains(task.status))
                     .accessibilityIdentifier("task.detail.delete")
             }
         } label: {

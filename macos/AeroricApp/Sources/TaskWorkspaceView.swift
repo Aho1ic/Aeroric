@@ -1391,7 +1391,7 @@ struct TaskWorkspaceView: View {
                     TaskDetailHeader(
                         task: task,
                         onCancel: { Task { await services.cancelTask(taskId: task.id) } },
-                        onDelete: { services.taskStore.removeTask(id: task.id) },
+                        onDelete: { services.sessionAction(SessionNavigation.task(task.id), .remove) },
                         onStar: { services.toggleStar(taskId: task.id) },
                         onArchive: { services.toggleArchived(taskId: task.id) }
                     )
