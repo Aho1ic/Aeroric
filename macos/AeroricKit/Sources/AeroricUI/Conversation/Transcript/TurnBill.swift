@@ -66,6 +66,39 @@ public enum TurnBillText {
         return ms < 1000 ? .fast : ms < 10_000 ? .medium : .slow
     }
 
+    /// R3-2: the names the bill gives each slice of the prompt.
+    public static func contextLabel(_ kind: String) -> String {
+        switch kind {
+        case "system": "系统提示"
+        case "tools": "工具定义"
+        case "skills": "技能清单"
+        case "instructions": "项目说明"
+        case "memory": "记忆"
+        case "environment": "环境与模式"
+        case "history": "历史对话"
+        case "new": "本轮新增"
+        default: "其他说明"
+        }
+    }
+
+    public static func contextTotal(_ stat: SessionTranscriptStats.TurnStat) -> UInt64 {
+        stat.context.reduce(0) { $0 + $1.tokens }
+    }
+
+    /// `≈4.7K tok · 27%`.
+    public static func contextShare(_ part: SessionTranscriptStats.ContextPart, total: UInt64) -> String {
+        let share = total > 0 ? Int((Double(part.tokens) / Double(total) * 100).rounded()) : 0
+        return "≈\(SessionStatsText.compact(part.tokens)) tok · \(share)%"
+    }
+
+    /// Why the figures are estimates; Claude's transcripts never write the
+    /// tool definitions, so their share lands on the other slices.
+    public static func contextNote(_ stat: SessionTranscriptStats.TurnStat) -> String {
+        stat.context.contains { $0.kind == "tools" }
+            ? "按字符数折算到这次调用的实际输入，是约数"
+            : "会话文件没记工具定义，这部分摊进了其他各项；按字符数折算，是约数"
+    }
+
     /// Where a span's bar sits in the turn, as fractions of its length.
     /// A span without an end runs to the turn's end.
     public static func bar(_ span: SessionTranscriptStats.ToolSpan, turnStart: UInt64,
@@ -132,6 +165,10 @@ struct TurnBillCard: View {
                  : "金额按价目表估算，以服务商账单为准")
                 .font(.system(size: AeroricType.caption))
                 .foregroundStyle(AeroricColor.textTertiary)
+            if !stat.context.isEmpty {
+                Divider()
+                context
+            }
             if !stat.tools.isEmpty {
                 Divider()
                 HStack {
@@ -146,6 +183,66 @@ struct TurnBillCard: View {
         }
         .padding(AeroricSpace.xl)
         .frame(width: 380)
+    }
+
+    /// R3-2: what the turn's last call carried.
+    private var context: some View {
+        let total = TurnBillText.contextTotal(stat)
+        return VStack(alignment: .leading, spacing: AeroricSpace.xs) {
+            HStack {
+                Text("带入的上下文").fontWeight(.medium)
+                Spacer(minLength: AeroricSpace.l)
+                Text("≈\(SessionStatsText.compact(total)) tok · 最后一次调用")
+                    .foregroundStyle(AeroricColor.textSecondary).monospacedDigit()
+            }
+            .font(.system(size: AeroricType.secondary))
+            GeometryReader { proxy in
+                HStack(spacing: 1) {
+                    ForEach(stat.context, id: \.kind) { part in
+                        Rectangle().fill(contextColor(part.kind))
+                            .frame(width: max(2, (proxy.size.width - CGFloat(stat.context.count))
+                                * CGFloat(part.tokens) / CGFloat(max(total, 1))))
+                    }
+                }
+                .clipShape(Capsule(style: .continuous))
+            }
+            .frame(height: 8)
+            .accessibilityHidden(true)
+            ForEach(stat.context, id: \.kind) { part in
+                HStack(spacing: AeroricSpace.s) {
+                    Capsule().fill(contextColor(part.kind)).frame(width: 10, height: 6)
+                    Text(TurnBillText.contextLabel(part.kind)).foregroundStyle(AeroricColor.textSecondary)
+                    if let first = part.sources.first {
+                        Text((first as NSString).lastPathComponent + (part.sources.count > 1 ? " 等 \(part.sources.count) 个" : ""))
+                            .foregroundStyle(AeroricColor.textTertiary).lineLimit(1).truncationMode(.middle)
+                    }
+                    Spacer(minLength: AeroricSpace.l)
+                    Text(TurnBillText.contextShare(part, total: total)).monospacedDigit()
+                }
+                .font(.system(size: AeroricType.caption))
+                .help(part.sources.joined(separator: "\n"))
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("session.turn.bill.context.\(part.kind)")
+            }
+            Text(TurnBillText.contextNote(stat))
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func contextColor(_ kind: String) -> Color {
+        switch kind {
+        case "system": AeroricColor.accent
+        case "tools": AeroricColor.violet
+        case "skills": AeroricColor.teal
+        case "instructions": AeroricColor.accent.opacity(0.5)
+        case "memory": AeroricColor.violet.opacity(0.5)
+        case "environment": AeroricColor.teal.opacity(0.5)
+        case "history": AeroricColor.textTertiary.opacity(0.6)
+        case "new": AeroricColor.warning
+        default: AeroricColor.textTertiary
+        }
     }
 
     private var waterfall: some View {

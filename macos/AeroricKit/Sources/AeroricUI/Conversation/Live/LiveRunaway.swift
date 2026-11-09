@@ -6,8 +6,8 @@ import AeroricProtocol
 /// are gstack's (`lib/runaway.ts`); like `LiveLoop`, it only reminds — no
 /// stop, no rotation.
 public struct LiveRunawayAlert: Identifiable, Equatable, Sendable {
-    /// What it is about (`tokens`, `active`, `idle`, `delegation:<id>`): the
-    /// key a dismissal is kept under.
+    /// What it is about (`retry:<call>`, `tokens`, `active`, `idle`,
+    /// `delegation:<id>`): the key a dismissal is kept under.
     public var id: String
     public var text: String
 }
@@ -68,6 +68,9 @@ public enum LiveRunaway {
                               delegations: [LiveDelegationCard], nowMs: UInt64,
                               limits: Limits = Limits(), judged: [Turn]? = nil) -> [LiveRunawayAlert] {
         var out: [LiveRunawayAlert] = []
+        if let retry = stats?.retry {
+            out.append(LiveRunawayAlert(id: "retry:\(retry.name)|\(retry.detail ?? "")", text: retryText(retry)))
+        }
         let turns = (judged ?? Self.turns(history)).suffix(limits.window)
         let known = turns.filter { $0 != .unknown }
         let idle = known.filter { $0 == .idle }.count
@@ -140,6 +143,11 @@ public enum LiveRunaway {
             return waiting.contains(tool)
         }
         return onlyWaiting && said < saysNothing ? .idle : .busy
+    }
+
+    /// R3-2: the same failure again with nothing new to go on.
+    public static func retryText(_ retry: SessionTranscriptStats.RetryStreak) -> String {
+        "「\(retry.detail ?? retry.name)」连续 \(retry.count) 次失败，报错都一样，中间没改过文件"
     }
 
     /// 4.1 亿, 21.8 万, 900.

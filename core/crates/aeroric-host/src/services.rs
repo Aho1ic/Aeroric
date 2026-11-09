@@ -4287,6 +4287,27 @@ pub fn register_session_services(
         );
     }
     {
+        let context = std::sync::Arc::clone(&context);
+        let families = std::sync::Arc::clone(&families);
+        set.register(
+            "session.retryAttention",
+            std::sync::Arc::new(move |request, _call| {
+                let context = std::sync::Arc::clone(&context);
+                let families = std::sync::Arc::clone(&families);
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        session_retry_attention(&request, &context, families.as_ref())
+                    })
+                    .await
+                    .unwrap_or_else(|e| {
+                        failure(id, ErrorCode::IoError, &format!("retry scan failed: {e}"))
+                    })
+                })
+            }),
+        );
+    }
+    {
         let service = std::sync::Arc::clone(&service);
         let context = std::sync::Arc::clone(&context);
         set.register(
@@ -4364,6 +4385,99 @@ fn session_list(
         }
     }
     ok(&request, json!({ "sessions": sessions }))
+}
+
+/// R3-2: only transcripts written to this recently are looked at.
+const RETRY_WINDOW: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// A streak ends in the latest turn, so the tail is enough.
+const RETRY_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+type RetryCache = std::collections::HashMap<String, (u64, std::time::SystemTime, Option<Value>)>;
+
+/// `session.retryAttention {}` (R3-2): local sessions whose agent keeps
+/// failing the same call the same way, for "需要我处理". Each transcript is
+/// parsed again only when it changed.
+fn session_retry_attention(
+    request: &Request,
+    context: &std::sync::Arc<aeroric_core::context::CoreContext>,
+    families: &dyn aeroric_core::tasks::AgentFamilies,
+) -> Frame {
+    static CACHE: std::sync::LazyLock<std::sync::Mutex<RetryCache>> =
+        std::sync::LazyLock::new(Default::default);
+    let projects = ProjectService::new(std::sync::Arc::clone(context))
+        .list()
+        .unwrap_or_default();
+    let now = std::time::SystemTime::now();
+    let mut items = Vec::new();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    for project in &projects {
+        let Some(project_id) = mutations::id_of(project) else {
+            continue;
+        };
+        let Ok(stamped) = load_stamped(context, project_id) else {
+            continue;
+        };
+        for record in &stamped.records {
+            if record.get("archivedAt").is_some_and(|v| !v.is_null()) {
+                continue;
+            }
+            if matches!(
+                aeroric_core::tasks::launch_plan::working_directory(record, project),
+                Some(aeroric_core::tasks::WorkingDirectory::Ssh { .. })
+            ) {
+                continue;
+            }
+            let (_, Some(path)) = aeroric_core::tasks::session_owner::current_session(record)
+            else {
+                continue;
+            };
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let Ok(modified) = meta.modified() else {
+                continue;
+            };
+            if now.duration_since(modified).unwrap_or_default() > RETRY_WINDOW {
+                continue;
+            }
+            let fresh = cache
+                .get(&path)
+                .is_some_and(|(len, at, _)| *len == meta.len() && *at == modified);
+            if !fresh {
+                let agent = mutations::text(record, "agent").unwrap_or_default();
+                let retry = retry_of(&path, meta.len(), families.session_family(agent));
+                cache.insert(path.clone(), (meta.len(), modified, retry));
+            }
+            if let Some((_, _, Some(retry))) = cache.get(&path) {
+                let mut item = retry.clone();
+                item["taskId"] = json!(mutations::text(record, "id"));
+                items.push(item);
+            }
+        }
+    }
+    ok(request, json!({ "retries": items }))
+}
+
+fn retry_of(path: &str, len: u64, family: ProtocolFamily) -> Option<Value> {
+    use aeroric_core::sessions::transcript_stats;
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    file.seek(SeekFrom::Start(len.saturating_sub(RETRY_TAIL_BYTES)))
+        .ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    // The first line of a tail is cut; it fails to parse and is skipped.
+    let lines: Vec<String> = String::from_utf8_lossy(&bytes)
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let stats = match family {
+        ProtocolFamily::Codex => transcript_stats::codex(&lines),
+        ProtocolFamily::Claude => transcript_stats::claude(&lines),
+        ProtocolFamily::Omp => transcript_stats::omp(&lines),
+        ProtocolFamily::Dsh => transcript_stats::dsh(&lines),
+    }?;
+    serde_json::to_value(stats.retry?).ok()
 }
 
 /// B4: at most this much of a remote transcript is read (its tail).

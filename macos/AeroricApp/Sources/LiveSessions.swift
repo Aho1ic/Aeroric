@@ -335,6 +335,14 @@ extension AppServices {
             }
             if next != deliveryNeeds { deliveryNeeds = next }
         }
+        // R3-2: agents failing the same call the same way.
+        if let retries = try? await client.retryAttention() {
+            var next: [String: AttentionQueue.CheckFailure] = [:]
+            for (taskId, retry) in retries where next[taskId] == nil {
+                next[taskId] = AttentionQueue.CheckFailure(summary: LiveRunaway.retryText(retry), atMs: retry.at)
+            }
+            if next != retryNeeds { retryNeeds = next }
+        }
         // R1-3a: logins the agents refused, and (once) each family's table.
         if let expired = try? await client.loginState(), expired != expiredLogins { expiredLogins = expired }
         if capabilityTables.isEmpty {

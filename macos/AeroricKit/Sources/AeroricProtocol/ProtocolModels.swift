@@ -238,6 +238,8 @@ public struct SessionTranscriptStats: Equatable, Sendable {
     public var firstTokenSamples: Int
     /// Oldest first: each turn's start, end and tokens (2026-10-29).
     public var turns: [TurnStat] = []
+    /// R3-2: the agent failing the same call the same way in the latest turn.
+    public var retry: RetryStreak?
 
     public struct TurnStat: Equatable, Sendable {
         public var startedAt: UInt64
@@ -261,6 +263,9 @@ public struct SessionTranscriptStats: Equatable, Sendable {
         /// Tool calls in start order, at most 100; `moreTools` counts the rest.
         public var tools: [ToolSpan] = []
         public var moreTools: Int = 0
+        /// R3-2: what the turn's last call carried, base first; empty when
+        /// the transcript records no base.
+        public var context: [ContextPart] = []
 
         public init(startedAt: UInt64, endedAt: UInt64?, tokens: UInt64, interrupted: Bool = false,
                     failed: Bool = false, messages: Int = 1) {
@@ -288,6 +293,44 @@ public struct SessionTranscriptStats: Equatable, Sendable {
             self.startedAt = startedAt
             self.endedAt = endedAt
             self.failed = failed
+        }
+    }
+
+    /// R3-2: one slice of a call's prompt. `kind`: system, tools, skills,
+    /// instructions, memory, environment, other, history or new.
+    public struct ContextPart: Equatable, Sendable {
+        public var kind: String
+        /// Estimated: characters scaled to the call's real prompt tokens.
+        public var tokens: UInt64
+        public var sources: [String]
+
+        public init(kind: String, tokens: UInt64, sources: [String] = []) {
+            self.kind = kind
+            self.tokens = tokens
+            self.sources = sources
+        }
+    }
+
+    /// R3-2: the same call failed `count` times with the same output and no
+    /// file changed between.
+    public struct RetryStreak: Equatable, Sendable {
+        public var name: String
+        public var detail: String?
+        public var count: Int
+        public var at: UInt64
+
+        public init(name: String, detail: String? = nil, count: Int, at: UInt64) {
+            self.name = name
+            self.detail = detail
+            self.count = count
+            self.at = at
+        }
+
+        public static func decode(_ value: JSONValue?) -> RetryStreak? {
+            guard let row = value?.objectValue, let name = row["name"]?.stringValue,
+                  let count = row["count"]?.numberText.flatMap({ Int($0) }) else { return nil }
+            return RetryStreak(name: name, detail: row["detail"]?.stringValue, count: count,
+                               at: row["at"]?.numberText.flatMap { UInt64($0) } ?? 0)
         }
     }
 
@@ -335,8 +378,16 @@ public struct SessionTranscriptStats: Equatable, Sendable {
                 return ToolSpan(name: span["name"]?.stringValue ?? "工具", detail: span["detail"]?.stringValue,
                                 startedAt: at, endedAt: m("endedAt"), failed: span["failed"]?.boolValue ?? false)
             }
+            stat.context = (row["context"]?.arrayValue ?? []).compactMap { item in
+                let part = item.objectValue ?? [:]
+                guard let kind = part["kind"]?.stringValue,
+                      let tokens = part["tokens"]?.numberText.flatMap({ UInt64($0) }) else { return nil }
+                return ContextPart(kind: kind, tokens: tokens,
+                                   sources: (part["sources"]?.arrayValue ?? []).compactMap(\.stringValue))
+            }
             return stat
         }
+        stats.retry = RetryStreak.decode(fields["retry"])
         return stats
     }
 }

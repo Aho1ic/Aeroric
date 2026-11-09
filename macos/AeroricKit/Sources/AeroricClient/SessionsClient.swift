@@ -452,6 +452,16 @@ extension SessionsClient {
         ]))
     }
 
+    /// R3-2: task id → its agent's retry streak, for sessions on this Mac.
+    public func retryAttention() async throws -> [(String, SessionTranscriptStats.RetryStreak)] {
+        let frame = try await connection.request("session.retryAttention", params: .object([:]))
+        return (frame.result["retries"]?.arrayValue ?? []).compactMap { item in
+            guard let taskId = item.objectValue?["taskId"]?.stringValue,
+                  let retry = SessionTranscriptStats.RetryStreak.decode(item) else { return nil }
+            return (taskId, retry)
+        }
+    }
+
     public func deliveryAttention() async throws -> [LiveDelivery] {
         let frame = try await connection.request("delivery.attention", params: .object([:]))
         return (frame.result["deliveries"]?.arrayValue ?? []).compactMap { LiveDelivery.decode($0) }

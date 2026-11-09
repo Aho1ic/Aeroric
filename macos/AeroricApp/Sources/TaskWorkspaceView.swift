@@ -863,6 +863,7 @@ struct TaskWorkspaceView: View {
                                                 memories: services.memoryNeeds,
                                                 skills: services.skillNeeds,
                                                 deliveries: services.deliveryNeeds,
+                                                retries: services.retryNeeds,
                                                 nowMs: UInt64(Date().timeIntervalSince1970 * 1000)),
                     projectName: { id in services.taskStore.projects.first { $0.id == id }?.name },
                     onOpen: { selection = SessionNavigation.task($0) },

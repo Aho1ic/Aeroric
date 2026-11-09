@@ -24,6 +24,8 @@ public enum AttentionQueue {
         case skillProposalNeedsYou
         /// R1-2: a message may or may not have reached the session.
         case deliveryNeedsYou
+        /// R3-2: the agent keeps failing the same call the same way.
+        case retryNeedsYou
 
         public var text: String {
             switch self {
@@ -37,6 +39,7 @@ public enum AttentionQueue {
             case .memoryNeedsYou: "记忆待确认"
             case .skillProposalNeedsYou: "技能提案待审"
             case .deliveryNeedsYou: "投递待确认"
+            case .retryNeedsYou: "在重试"
             }
         }
     }
@@ -65,6 +68,7 @@ public enum AttentionQueue {
             case .memoryNeedsYou: "\(task.id)#memory"
             case .skillProposalNeedsYou: "\(task.id)#skill"
             case .deliveryNeedsYou: "\(task.id)#delivery"
+            case .retryNeedsYou: "\(task.id)#retry"
             default: task.id
             }
         }
@@ -81,7 +85,7 @@ public enum AttentionQueue {
                              reviews: [String: CheckFailure] = [:], delegations: [String: CheckFailure] = [:],
                              boards: [String: CheckFailure] = [:], memories: [String: CheckFailure] = [:],
                              skills: [String: CheckFailure] = [:], deliveries: [String: CheckFailure] = [:],
-                             nowMs: UInt64) -> [Item] {
+                             retries: [String: CheckFailure] = [:], nowMs: UInt64) -> [Item] {
         tasks.flatMap { task -> [Item] in
             guard !task.archived else { return [] }
             var rows: [Item] = []
@@ -97,6 +101,9 @@ public enum AttentionQueue {
             }
             if let delivery = deliveries[task.id] {
                 rows.append(Item(task: task, reason: .deliveryNeedsYou, detail: delivery.summary, atMs: delivery.atMs))
+            }
+            if let retry = retries[task.id] {
+                rows.append(Item(task: task, reason: .retryNeedsYou, detail: retry.summary, atMs: retry.atMs))
             }
             return rows
         }

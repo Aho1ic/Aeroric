@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::turn_context::{ContextPart, Ledger, Retries, RetryStreak};
+
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptStats {
@@ -36,6 +38,9 @@ pub struct TranscriptStats {
     /// reply's 用量 line).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub turns: Vec<TurnStat>,
+    /// R3-2: the agent failing the same call the same way in the latest turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryStreak>,
 }
 
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
@@ -80,6 +85,10 @@ pub struct TurnStat {
     pub tools: Vec<ToolSpan>,
     #[serde(skip_serializing_if = "is_zero")]
     pub more_tools: u32,
+    /// R3-2: what the turn's last call carried, base first; empty when the
+    /// transcript records no base.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<ContextPart>,
 }
 
 /// R3-1: one tool call of a turn, for the bill's waterfall.
@@ -203,6 +212,11 @@ struct Clock {
     tool_starts: HashMap<String, u64>,
     /// call id → (turn index, span index) of its waterfall row.
     spans: HashMap<String, (usize, usize)>,
+    /// call id → (tool name, signature, detail), for the retry check.
+    calls: HashMap<String, (String, String, Option<String>)>,
+    /// Calls reported failed before their result arrived.
+    failed_open: std::collections::HashSet<String>,
+    retries: Retries,
     last_at: Option<u64>,
 }
 
@@ -241,6 +255,14 @@ impl Clock {
     ) {
         self.tool_starts.insert(id.to_string(), at);
         self.last_at = Some(at);
+        self.calls.insert(
+            id.to_string(),
+            (
+                name.to_string(),
+                format!("{name}|{input}"),
+                tool_detail(input),
+            ),
+        );
         let index = stats.turns.len().saturating_sub(1);
         if let Some(turn) = stats.turns.last_mut() {
             if turn.tools.len() >= MAX_TOOL_SPANS {
@@ -262,7 +284,27 @@ impl Clock {
         }
     }
 
-    fn tool_end(&mut self, stats: &mut TranscriptStats, id: &str, at: u64, failed: bool) {
+    fn tool_end(
+        &mut self,
+        stats: &mut TranscriptStats,
+        id: &str,
+        at: u64,
+        failed: bool,
+        output: &str,
+    ) {
+        let failed = failed || self.failed_open.remove(id);
+        if let Some((name, signature, detail)) = self.calls.remove(id) {
+            let turn = stats.turns.len().saturating_sub(1);
+            self.retries.record(
+                &signature,
+                &name,
+                detail.as_deref(),
+                failed,
+                output,
+                at,
+                turn,
+            );
+        }
         if let Some(start) = self.tool_starts.remove(id) {
             let spent = at.saturating_sub(start);
             stats.tool_ms += spent;
@@ -283,7 +325,16 @@ impl Clock {
 
     /// A failure reported apart from the call it belongs to marks the
     /// latest call still waiting for its result.
-    fn fail_open_tool(&self, stats: &mut TranscriptStats) {
+    fn fail_open_tool(&mut self, stats: &mut TranscriptStats) {
+        let latest = self
+            .calls
+            .keys()
+            .filter_map(|id| Some((self.tool_starts.get(id)?, id)))
+            .max()
+            .map(|(_, id)| id.clone());
+        if let Some(id) = latest {
+            self.failed_open.insert(id);
+        }
         if let Some(&(turn, span)) = self.spans.values().max() {
             if let Some(span) = stats
                 .turns
@@ -306,6 +357,8 @@ impl Clock {
         self.awaiting_first = false;
         self.tool_starts.clear();
         self.spans.clear();
+        self.calls.clear();
+        self.failed_open.clear();
         self.last_at = Some(at);
     }
 
@@ -335,18 +388,51 @@ fn typed_by_person(payload: &Value) -> bool {
         .is_some_and(|text| !super::codex::is_injected_context(text))
 }
 
-/// A Codex tool result that reports failure: a script that failed, a
-/// command that exited non-zero, or a call the person stopped or rejected.
-fn codex_failed(output: &Value) -> bool {
-    let text = match output {
+/// A message or tool result's text: a string, or the `text` of its parts.
+fn text_of(value: &Value) -> String {
+    match value {
         Value::String(s) => s.clone(),
         Value::Array(parts) => parts
             .iter()
-            .filter_map(|p| p["text"].as_str())
+            .filter_map(|p| p["text"].as_str().or(p["content"].as_str()))
             .collect::<Vec<_>>()
             .join("\n"),
-        _ => return false,
-    };
+        _ => String::new(),
+    }
+}
+
+fn chars(text: &str) -> usize {
+    text.chars().count()
+}
+
+/// What a Codex developer message or injected user message is, by how it
+/// starts (`base` is the session's own system prompt).
+fn codex_base_kind(text: &str, base: Option<&str>) -> &'static str {
+    let start = text.trim_start();
+    if base.is_some_and(|b| b == text) {
+        "system"
+    } else if start.starts_with("<skills_instructions>") {
+        "skills"
+    } else if start.starts_with("# AGENTS.md instructions") {
+        "instructions"
+    } else if start.starts_with("<permissions instructions>")
+        || start.starts_with("<environment_context>")
+        || start.starts_with("<collaboration_mode>")
+    {
+        "environment"
+    } else if start.starts_with("<tools>") {
+        "tools"
+    } else if start.starts_with("# Aeroric 记忆") || start.starts_with("<memory") {
+        "memory"
+    } else {
+        "other"
+    }
+}
+
+/// A Codex tool result that reports failure: a script that failed, a
+/// command that exited non-zero, or a call the person stopped or rejected.
+fn codex_failed(output: &Value) -> bool {
+    let text = text_of(output);
     if text.starts_with("Script failed")
         || text.contains("aborted by user")
         || text.contains("user rejected")
@@ -386,6 +472,9 @@ fn codex_exec(script: &str) -> (String, Value) {
 pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
     let mut stats = TranscriptStats::default();
     let mut clock = Clock::default();
+    let mut ledger = Ledger::default();
+    // The system prompt, also sent as the first developer message.
+    let mut base_instructions: Option<String> = None;
     // The person's messages since this turn started (a steer adds one).
     let mut typed = 0u32;
     for line in lines {
@@ -396,6 +485,22 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
         let payload = &value["payload"];
         let kind = payload["type"].as_str().unwrap_or_default();
         match value["type"].as_str().unwrap_or_default() {
+            "session_meta" => {
+                let base = &payload["base_instructions"];
+                let text = base["text"].as_str().or(base.as_str()).unwrap_or_default();
+                if !text.is_empty() {
+                    ledger.base("system", chars(text), None);
+                    base_instructions = Some(text.to_string());
+                }
+            }
+            "compacted" => {
+                let kept = &payload["replacement_history"];
+                ledger.compacted(if kept.is_array() {
+                    chars(&kept.to_string())
+                } else {
+                    chars(payload["message"].as_str().unwrap_or_default())
+                });
+            }
             "turn_context" => set_turn_model(&mut stats, payload["model"].as_str()),
             "event_msg" => match kind {
                 "task_started" => {
@@ -403,6 +508,7 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
                     // was killed) did not complete.
                     let unfinished = clock.turn_start.is_some();
                     clock.start_turn(&mut stats, at);
+                    ledger.start_turn();
                     if unfinished {
                         let n = stats.turns.len();
                         stats.turns[n - 2].interrupted = true;
@@ -444,6 +550,7 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
                         }
                         let last = |key: &str| u64_at(info, &["last_token_usage", key]);
                         if let Some(prompt) = last("input_tokens") {
+                            ledger.call(&stats, prompt);
                             add_turn_usage(
                                 &mut stats,
                                 prompt,
@@ -458,15 +565,40 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
             "response_item" => {
                 let call_id = payload["call_id"].as_str().unwrap_or_default();
                 match kind {
-                    "message" if payload["role"] == "assistant" => clock.output(&mut stats, at),
+                    "message" if payload["role"] == "assistant" => {
+                        clock.output(&mut stats, at);
+                        ledger.talk(chars(&text_of(&payload["content"])));
+                    }
                     "message" if payload["role"] == "user" && typed_by_person(payload) => {
+                        ledger.talk(chars(&text_of(&payload["content"])));
                         typed += 1;
                         if let Some(turn) = stats.turns.last_mut().filter(|t| t.ended_at.is_none())
                         {
                             turn.messages = typed.max(1);
                         }
                     }
-                    "reasoning" => clock.output(&mut stats, at),
+                    "message" => {
+                        for part in payload["content"].as_array().into_iter().flatten() {
+                            let text = part["text"].as_str().unwrap_or_default();
+                            let kind = codex_base_kind(text, base_instructions.as_deref());
+                            // The system prompt was counted from the session's meta.
+                            if kind == "system" {
+                                continue;
+                            }
+                            let source = text
+                                .lines()
+                                .next()
+                                .and_then(|l| l.strip_prefix("# AGENTS.md instructions for "));
+                            ledger.base(kind, chars(text), source);
+                        }
+                    }
+                    "additional_tools" => {
+                        ledger.base("tools", chars(&payload["tools"].to_string()), None);
+                    }
+                    "reasoning" => {
+                        clock.output(&mut stats, at);
+                        ledger.talk(chars(&text_of(&payload["summary"])));
+                    }
                     "function_call" | "custom_tool_call" | "local_shell_call" => {
                         clock.output(&mut stats, at);
                         let (name, input) = match kind {
@@ -474,6 +606,10 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
                             "custom_tool_call" => (payload["name"].as_str(), &payload["input"]),
                             _ => (Some("shell"), &payload["action"]),
                         };
+                        ledger.talk(chars(&match input {
+                            Value::String(text) => text.clone(),
+                            other => other.to_string(),
+                        }));
                         let (name, input) = match (name, input.as_str()) {
                             (Some("exec"), Some(script)) => codex_exec(script),
                             _ => (name.unwrap_or_default().to_string(), input.clone()),
@@ -484,7 +620,9 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
                     | "custom_tool_call_output"
                     | "local_shell_call_output" => {
                         let failed = codex_failed(&payload["output"]);
-                        clock.tool_end(&mut stats, call_id, at, failed);
+                        let output = text_of(&payload["output"]);
+                        ledger.talk(chars(&output));
+                        clock.tool_end(&mut stats, call_id, at, failed, &output);
                     }
                     _ => {}
                 }
@@ -493,6 +631,8 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
         }
     }
     clock.close(&mut stats);
+    std::mem::take(&mut clock.retries).finish(&mut stats);
+    ledger.finish(&mut stats);
     price_turns(&mut stats);
     (!stats.is_empty()).then_some(stats)
 }
@@ -503,35 +643,54 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
 pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
     let mut stats = TranscriptStats::default();
     let mut clock = Clock::default();
+    let mut ledger = Ledger::default();
     // (message id, turn index, its latest usage)
     let mut usage: Vec<(String, usize, Value)> = Vec::new();
     for line in lines {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if value["type"] == "attachment" {
+            claude_attachment(&mut ledger, &value["attachment"]);
+            continue;
+        }
+        if value["type"] == "system" && value["subtype"] == "compact_boundary" {
+            ledger.compacted(0);
+            continue;
+        }
         let Some(at) = at_ms(&value) else { continue };
         let message = &value["message"];
         let blocks = message["content"].as_array();
         match value["type"].as_str().unwrap_or_default() {
             "user" => {
-                let results: Vec<(&str, bool)> = blocks
+                let results: Vec<(&str, bool, String)> = blocks
                     .into_iter()
                     .flatten()
                     .filter(|b| b["type"] == "tool_result")
-                    .filter_map(|b| Some((b["tool_use_id"].as_str()?, b["is_error"] == true)))
+                    .filter_map(|b| {
+                        Some((
+                            b["tool_use_id"].as_str()?,
+                            b["is_error"] == true,
+                            text_of(&b["content"]),
+                        ))
+                    })
                     .collect();
                 if results.is_empty() {
                     if value["isMeta"] != true && !super::claude::is_interrupt_marker(message) {
                         clock.start_turn(&mut stats, at);
+                        ledger.start_turn();
                     }
+                    ledger.talk(chars(&message["content"].to_string()));
                 } else {
-                    for (id, failed) in results {
-                        clock.tool_end(&mut stats, id, at, failed);
+                    for (id, failed, output) in results {
+                        ledger.talk(chars(&output));
+                        clock.tool_end(&mut stats, id, at, failed, &output);
                     }
                 }
             }
             "assistant" => {
                 clock.output(&mut stats, at);
+                ledger.talk(chars(&message["content"].to_string()));
                 set_turn_model(&mut stats, message["model"].as_str());
                 if value["isApiErrorMessage"] == true {
                     if let Some(turn) = stats.turns.last_mut() {
@@ -547,6 +706,18 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
                     }
                 }
                 if message["usage"].is_object() {
+                    let u = &message["usage"];
+                    ledger.call(
+                        &stats,
+                        [
+                            "input_tokens",
+                            "cache_read_input_tokens",
+                            "cache_creation_input_tokens",
+                        ]
+                        .iter()
+                        .filter_map(|key| u[*key].as_u64())
+                        .sum(),
+                    );
                     let id = message["id"].as_str().unwrap_or_default().to_string();
                     let turn = stats.turns.len().saturating_sub(1);
                     match usage
@@ -562,6 +733,8 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
         }
     }
     clock.close(&mut stats);
+    std::mem::take(&mut clock.retries).finish(&mut stats);
+    ledger.finish(&mut stats);
     if !usage.is_empty() {
         let count = |u: &Value, key: &str| u[key].as_u64().unwrap_or(0);
         let (mut input, mut cached, mut output) = (0, 0, 0);
@@ -594,6 +767,52 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
     }
     price_turns(&mut stats);
     (!stats.is_empty()).then_some(stats)
+}
+
+/// What a Claude Code attachment adds to the prompt. Newer versions write
+/// the system prompt, instruction files and listings as attachments; the
+/// tool definitions are never written.
+fn claude_attachment(ledger: &mut Ledger, attachment: &Value) {
+    let size = chars(&attachment.to_string());
+    match attachment["type"].as_str().unwrap_or_default() {
+        "prompt_snapshot" => {
+            let prompt = &attachment["systemPrompt"];
+            let text = match prompt {
+                Value::Array(parts) => parts
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                other => other.as_str().unwrap_or_default().to_string(),
+            };
+            ledger.base("system", chars(&text), None);
+        }
+        "skill_listing" => ledger.base("skills", size, None),
+        "deferred_tools_delta" | "mcp_instructions_delta" | "agent_listing_delta" => {
+            ledger.base("tools", size, None)
+        }
+        "instructions" => {
+            for file in attachment["files"].as_array().into_iter().flatten() {
+                let path = file["path"].as_str();
+                let kind = file["type"].as_str().unwrap_or_default();
+                let memory = kind.contains("Mem") || path.is_some_and(|p| p.contains("/memory/"));
+                ledger.base(
+                    if memory { "memory" } else { "instructions" },
+                    chars(file["content"].as_str().unwrap_or_default()),
+                    path,
+                );
+            }
+        }
+        "environment"
+        | "session_context"
+        | "date"
+        | "model"
+        | "output_style"
+        | "output_style_instructions"
+        | "plan_mode" => ledger.base("environment", size, None),
+        // Files, hook output and the like are part of the conversation.
+        _ => ledger.talk(size),
+    }
 }
 
 /// Disjoint usage counts (Claude, OMP and DeepSeek Harness): the prompt is
@@ -690,13 +909,15 @@ pub fn omp(lines: &[String]) -> Option<TranscriptStats> {
             }
             "toolResult" => {
                 if let Some(id) = message["toolCallId"].as_str() {
-                    clock.tool_end(&mut stats, id, at, message["isError"] == true);
+                    let output = text_of(&message["content"]);
+                    clock.tool_end(&mut stats, id, at, message["isError"] == true, &output);
                 }
             }
             _ => {}
         }
     }
     clock.close(&mut stats);
+    std::mem::take(&mut clock.retries).finish(&mut stats);
     usage.finish(&mut stats);
     price_turns(&mut stats);
     (!stats.is_empty()).then_some(stats)
@@ -749,7 +970,8 @@ pub fn dsh(lines: &[String]) -> Option<TranscriptStats> {
             "tool/result" => {
                 if let Some(id) = data["message"]["source"]["callId"].as_str() {
                     let failed = data["isError"] == true || data["message"]["isError"] == true;
-                    clock.tool_end(&mut stats, id, at, failed);
+                    let output = text_of(&data["message"]["content"]);
+                    clock.tool_end(&mut stats, id, at, failed, &output);
                 }
             }
             "request/context" => {
@@ -761,6 +983,7 @@ pub fn dsh(lines: &[String]) -> Option<TranscriptStats> {
         }
     }
     clock.close(&mut stats);
+    std::mem::take(&mut clock.retries).finish(&mut stats);
     usage.finish(&mut stats);
     price_turns(&mut stats);
     (!stats.is_empty()).then_some(stats)
@@ -1113,5 +1336,144 @@ mod tests {
         assert_eq!(claude(&["not json".to_string()]), None);
         assert_eq!(omp(&[]), None);
         assert_eq!(dsh(&["{}".to_string()]), None);
+    }
+
+    #[test]
+    fn a_codex_turn_splits_its_prompt_into_base_history_and_new() {
+        let t = |s: &str| format!("2026-11-09T01:00:{s}Z");
+        let system = "s".repeat(400);
+        let usage = |input: u64| serde_json::json!({"last_token_usage": {"input_tokens": input, "total_tokens": input}});
+        let rollout = lines(&[
+            serde_json::json!({"timestamp": t("00.000"), "type": "session_meta", "payload": {"base_instructions": {"text": system}}}),
+            serde_json::json!({"timestamp": t("00.001"), "type": "event_msg", "payload": {"type": "task_started"}}),
+            serde_json::json!({"timestamp": t("00.002"), "type": "response_item", "payload": {"type": "additional_tools", "tools": ["t".repeat(96)]}}),
+            serde_json::json!({"timestamp": t("00.003"), "type": "response_item", "payload": {"type": "message", "role": "developer", "content": [
+                {"type": "input_text", "text": system},
+                {"type": "input_text", "text": format!("<skills_instructions>{}", "k".repeat(179))}]}}),
+            serde_json::json!({"timestamp": t("00.004"), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": format!("# AGENTS.md instructions for /p\n{}", "a".repeat(168))}]}}),
+            serde_json::json!({"timestamp": t("00.005"), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": "q".repeat(100)}]}}),
+            serde_json::json!({"timestamp": t("01.000"), "type": "event_msg", "payload": {"type": "token_count", "info": usage(1000)}}),
+            serde_json::json!({"timestamp": t("02.000"), "type": "event_msg", "payload": {"type": "task_complete"}}),
+            serde_json::json!({"timestamp": t("03.000"), "type": "event_msg", "payload": {"type": "task_started"}}),
+            serde_json::json!({"timestamp": t("03.001"), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": "r".repeat(100)}]}}),
+            serde_json::json!({"timestamp": t("04.000"), "type": "event_msg", "payload": {"type": "token_count", "info": usage(1100)}}),
+            serde_json::json!({"timestamp": t("05.000"), "type": "event_msg", "payload": {"type": "task_complete"}}),
+        ]);
+        let stats = codex(&rollout).unwrap();
+        let part = |turn: usize, kind: &str| {
+            stats.turns[turn]
+                .context
+                .iter()
+                .find(|p| p.kind == kind)
+                .map(|p| p.tokens)
+        };
+        // 400 + 100 (tools, quoted) + 200 + 200 + 100 characters scaled to 1000 tokens.
+        assert_eq!(part(0, "system"), Some(400));
+        assert_eq!(part(0, "skills"), Some(200));
+        assert_eq!(part(0, "instructions"), Some(200));
+        assert_eq!(part(0, "new"), Some(100));
+        assert_eq!(part(0, "history"), None);
+        let agents = stats.turns[0]
+            .context
+            .iter()
+            .find(|p| p.kind == "instructions")
+            .unwrap();
+        assert_eq!(agents.sources, vec!["/p".to_string()]);
+        // The first turn's message is history in the second.
+        assert_eq!(part(1, "history"), Some(100));
+        assert_eq!(part(1, "new"), Some(100));
+        let sum: u64 = stats.turns[1].context.iter().map(|p| p.tokens).sum();
+        assert_eq!(sum, 1100);
+    }
+
+    #[test]
+    fn a_transcript_without_its_base_gets_no_breakdown() {
+        let t = |s: &str| format!("2026-11-09T01:00:{s}Z");
+        let jsonl = lines(&[
+            serde_json::json!({"timestamp": t("00.000"), "type": "user", "message": {"role": "user", "content": "go"}}),
+            serde_json::json!({"timestamp": t("01.000"), "type": "assistant", "message": {
+                "id": "m1", "content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 100, "output_tokens": 5}}}),
+        ]);
+        assert!(claude(&jsonl).unwrap().turns[0].context.is_empty());
+    }
+
+    #[test]
+    fn claude_attachments_fill_the_base_with_their_files() {
+        let t = |s: &str| format!("2026-11-09T01:00:{s}Z");
+        let jsonl = lines(&[
+            serde_json::json!({"type": "attachment", "attachment": {"type": "prompt_snapshot", "systemPrompt": ["x".repeat(300)]}}),
+            serde_json::json!({"type": "attachment", "attachment": {"type": "instructions", "files": [
+                {"path": "/repo/CLAUDE.md", "type": "Project", "content": "c".repeat(100)},
+                {"path": "/home/.claude/projects/x/memory/MEMORY.md", "type": "AutoMem", "content": "m".repeat(100)}]}}),
+            serde_json::json!({"timestamp": t("00.000"), "type": "user", "message": {"role": "user", "content": "go"}}),
+            serde_json::json!({"timestamp": t("01.000"), "type": "assistant", "message": {
+                "id": "m1", "content": [], "usage": {"input_tokens": 1000, "output_tokens": 5}}}),
+        ]);
+        let stats = claude(&jsonl).unwrap();
+        let kinds: Vec<_> = stats.turns[0]
+            .context
+            .iter()
+            .map(|p| p.kind.as_str())
+            .collect();
+        assert_eq!(kinds, ["system", "instructions", "memory", "new"]);
+        assert_eq!(
+            stats.turns[0].context[1].sources,
+            vec!["/repo/CLAUDE.md".to_string()]
+        );
+        let sum: u64 = stats.turns[0].context.iter().map(|p| p.tokens).sum();
+        assert!((999..=1001).contains(&sum), "{sum}");
+    }
+
+    fn claude_calls(results: &[(&str, &str, bool, &str)]) -> Vec<String> {
+        let t = |i: usize| format!("2026-11-09T01:00:{:02}.000Z", i);
+        let mut raw = vec![
+            serde_json::json!({"timestamp": t(0), "type": "user", "message": {"role": "user", "content": "go"}}),
+        ];
+        for (i, (name, command, failed, output)) in results.iter().enumerate() {
+            let id = format!("t{i}");
+            raw.push(serde_json::json!({"timestamp": t(2 * i + 1), "type": "assistant", "message": {"id": id, "content": [
+                {"type": "tool_use", "id": id, "name": name, "input": {"command": command}}]}}));
+            raw.push(serde_json::json!({"timestamp": t(2 * i + 2), "type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": id, "is_error": failed, "content": output}]}}));
+        }
+        lines(&raw)
+    }
+
+    #[test]
+    fn the_same_failure_three_times_is_a_retry_with_nothing_new() {
+        let fail = ("Bash", "cargo test", true, "error after 12ms: E0425");
+        let other = ("Bash", "cargo test", true, "error after 3ms: E0425");
+        let stats = claude(&claude_calls(&[
+            fail,
+            ("Read", "src/lib.rs", false, "fn main"),
+            other,
+            fail,
+        ]))
+        .unwrap();
+        let retry = stats.retry.unwrap();
+        assert_eq!(
+            (retry.name.as_str(), retry.detail.as_deref(), retry.count),
+            ("Bash", Some("cargo test"), 3)
+        );
+        // A changed file is something new to try with.
+        let edited = claude(&claude_calls(&[
+            fail,
+            fail,
+            ("Edit", "src/lib.rs", false, "ok"),
+            fail,
+        ]))
+        .unwrap();
+        assert_eq!(edited.retry, None);
+        // A different error is new evidence.
+        let changed = claude(&claude_calls(&[
+            fail,
+            fail,
+            ("Bash", "cargo test", true, "error: E0599"),
+        ]))
+        .unwrap();
+        assert_eq!(changed.retry, None);
     }
 }

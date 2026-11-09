@@ -115,6 +115,8 @@ final class AppServices {
     var delegationNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// R1-2 → A19: task → a delivery not known to have arrived.
     var deliveryNeeds: [String: AttentionQueue.CheckFailure] = [:]
+    /// R3-2 → A19: task → its agent retrying the same failure.
+    var retryNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// R1-3a: each family's capability table (this Mac) and refused logins.
     var capabilityTables: [String: LiveCapabilities] = [:]
     var expiredLogins: [ExpiredLogin] = []
@@ -1271,7 +1273,7 @@ extension AppServices: WorkspaceStateProviding {
     var attentionCount: Int? {
         let count = AttentionQueue.items(taskStore.tasks, checkFailures: checkFailures, reviews: reviewNeeds,
                                          delegations: delegationNeeds, boards: boardNeeds, memories: memoryNeeds,
-                                         skills: skillNeeds, deliveries: deliveryNeeds, nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
+                                         skills: skillNeeds, deliveries: deliveryNeeds, retries: retryNeeds, nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
         return count > 0 ? count : nil
     }
 
