@@ -573,7 +573,18 @@ final class AppServices {
     }
 
     /// 2026-10-27：归档写到宿主（task.archive → 任务行的 archivedAt），不再只是窗口内镜像。
+    /// Every 归档 (sidebar, title bar ⋯, board) comes here, so a session in an
+    /// isolated copy is always asked about its copy first (2026-11-09: the
+    /// title bar and board used to archive without asking).
     func toggleArchived(taskId: String) {
+        guard let entry = taskStore.tasks.first(where: { $0.id == taskId }) else { return }
+        guard !entry.archived, entry.isCopy else { return setArchived(taskId: taskId) }
+        Task { @MainActor in
+            if await confirmCopy(taskId, removing: false) { setArchived(taskId: taskId) }
+        }
+    }
+
+    private func setArchived(taskId: String) {
         guard let index = taskStore.tasks.firstIndex(where: { $0.id == taskId }) else { return }
         var entry = taskStore.tasks[index]
         entry.archived.toggle()
@@ -620,13 +631,7 @@ final class AppServices {
             switch action {
             case .archive, .unarchive:
                 guard (action == .archive) != (entry?.archived ?? false) else { return }
-                if action == .archive, entry?.isCopy == true {
-                    Task { @MainActor in
-                        if await confirmCopy(taskID, removing: false) { toggleArchived(taskId: taskID) }
-                    }
-                } else {
-                    toggleArchived(taskId: taskID)
-                }
+                toggleArchived(taskId: taskID)
             default:
                 guard let client = workspaceClient else { return }
                 Task { @MainActor in
