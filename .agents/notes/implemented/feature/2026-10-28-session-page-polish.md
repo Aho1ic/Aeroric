@@ -34,7 +34,7 @@ Status: implemented
   - 深色文字调暗一档（全 App，背景不动）：正文 F2F3F5 → C2C5CA（先试过 D9DBDF / 13:1，用户仍嫌亮），次要 B8BCC2 → 94989E，提示 8B9097 → 7A7F85；对画布分别约 10.5:1、6.3:1、4.5:1（提示文字不低于小字的 4.5:1）；增强对比度变体不变。
   - 设置 › 外观 › 字体「会话中文字体」：苹方 / Mono（更纱黑体 Sarasa Mono SC）/ Maple Mono（CN 版）/ 自定义（输入字体名或从“已安装”里选含中文的字体）。只换中文：系统字体在前，所选字体放进它的 cascade list，英文与代码不变。字体不打进安装包（Maple Mono CN 全字重约 140 MB），改为 App 内下载：设置里先标下载与占用大小，点「下载并启用」后下固定版本（更纱 v1.0.43 Unhinted SC 7z 约 50 MB、Maple v7.9 CN unhinted zip 约 140 MB），校验 sha256，用系统 `tar`（libarchive，7z 与 zip 都能读）只解出要用的字重到 Application Support/<bundle id>/Fonts，按进程注册后立即生效；每次启动重新注册。没下载时按苹方显示。
   - 外观 / 材质 / 字体滑块原来不滑动：`@AppStorage` 的写入落在 `withAnimation` 之外。`SlidingCapsulePicker` 改为自己持有动画中的 `shown`，任何存储方式都会滑；切换外观在滑动结束后再应用。设置左栏改为胶囊行（`HoverCapsuleRow`），自定义字体名用 `CapsuleField`。这些作为所有者的固定偏好写进了 `.trellis/spec/aeroric-macos/frontend/index.md`。
-  - 会话排版改为用户给的参考样式：历史按轮分组（每条用户消息开始一轮），最后一条带文字的回复是答复，其余（思考、工具调用、中间回复）收进「已完成，用时 N 秒 ⌄」，点开才看；正在运行的一轮照旧展开。用户消息下方是时间与复制（悬停显示，最新一条常显），答复下方是复制 · 用量 · 时间。时间与用量来自 `session.history` 的 `stats.turns`（宿主从 rollout / jsonl 按轮算出起止与 token），App 从最新一轮往前对齐。点赞、点踩、分享不做：没有去处。正文行距约 1.75，段落间半行，列表项之间不空行、换行悬挂对齐（制表位），轮与轮之间 40 pt。
+  - 会话排版改为用户给的参考样式：历史按轮分组（每条用户消息开始一轮），最后一条带文字的回复是答复，其余（思考、工具调用、中间回复）收进「已完成，用时 N 秒 ⌄」，点开才看；正在运行的一轮照旧展开。用户消息下方是时间与复制（悬停显示，最新一条常显），答复下方是复制 · 用量 · 时间（2026-11-09 起用量换成本回合账单胶囊，见 [本回合账单](2026-11-09-turn-bill.md)）。时间与用量来自 `session.history` 的 `stats.turns`（宿主从 rollout / jsonl 按轮算出起止与 token），App 从最新一轮往前对齐。点赞、点踩、分享不做：没有去处。正文行距约 1.75，段落间半行，列表项之间不空行、换行悬挂对齐（制表位），轮与轮之间 40 pt。
   - 大屏上内容被压到底部：`defaultScrollAnchor(.bottom)` 也会把不满一屏的内容对齐到底部；改为 macOS 15 起只设 `.initialOffset` 为底、`.alignment` 为顶（`OpensAtLatest`），macOS 14 靠打开时的 scrollTo。
   - 列表序号每项只出一次，同一项后面的段落按序号宽度缩进，代码块不再带序号。
 

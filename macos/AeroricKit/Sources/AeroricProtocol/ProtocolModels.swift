@@ -250,6 +250,17 @@ public struct SessionTranscriptStats: Equatable, Sendable {
         /// The person's messages this turn took: more than one when they
         /// steered it (CU 2026-11-03).
         public var messages: Int
+        /// R3-1: this turn's own usage (prompt tokens include cache reads);
+        /// nil when the transcript records none.
+        public var inputTokens: UInt64?
+        public var cachedInputTokens: UInt64?
+        public var outputTokens: UInt64?
+        public var model: String?
+        /// Estimated USD; nil for a model the price list does not have.
+        public var costUsd: Double?
+        /// Tool calls in start order, at most 100; `moreTools` counts the rest.
+        public var tools: [ToolSpan] = []
+        public var moreTools: Int = 0
 
         public init(startedAt: UInt64, endedAt: UInt64?, tokens: UInt64, interrupted: Bool = false,
                     failed: Bool = false, messages: Int = 1) {
@@ -259,6 +270,24 @@ public struct SessionTranscriptStats: Equatable, Sendable {
             self.interrupted = interrupted
             self.failed = failed
             self.messages = messages
+        }
+    }
+
+    /// R3-1: one tool call of a turn, for the bill's waterfall.
+    public struct ToolSpan: Equatable, Sendable {
+        public var name: String
+        public var detail: String?
+        public var startedAt: UInt64
+        /// nil: the transcript never recorded its result.
+        public var endedAt: UInt64?
+        public var failed: Bool
+
+        public init(name: String, detail: String? = nil, startedAt: UInt64, endedAt: UInt64?, failed: Bool = false) {
+            self.name = name
+            self.detail = detail
+            self.startedAt = startedAt
+            self.endedAt = endedAt
+            self.failed = failed
         }
     }
 
@@ -289,10 +318,24 @@ public struct SessionTranscriptStats: Equatable, Sendable {
             let row = item.objectValue ?? [:]
             func n(_ key: String) -> UInt64? { row[key]?.numberText.flatMap { UInt64($0) } }
             guard let started = n("startedAt") else { return nil }
-            return TurnStat(startedAt: started, endedAt: n("endedAt"), tokens: n("tokens") ?? 0,
-                            interrupted: row["interrupted"]?.boolValue ?? false,
-                            failed: row["failed"]?.boolValue ?? false,
-                            messages: Int(n("messages") ?? 1))
+            var stat = TurnStat(startedAt: started, endedAt: n("endedAt"), tokens: n("tokens") ?? 0,
+                                interrupted: row["interrupted"]?.boolValue ?? false,
+                                failed: row["failed"]?.boolValue ?? false,
+                                messages: Int(n("messages") ?? 1))
+            stat.inputTokens = n("inputTokens")
+            stat.cachedInputTokens = n("cachedInputTokens")
+            stat.outputTokens = n("outputTokens")
+            stat.model = row["model"]?.stringValue
+            stat.costUsd = row["costUsd"]?.numberText.flatMap { Double($0) }
+            stat.moreTools = Int(n("moreTools") ?? 0)
+            stat.tools = (row["tools"]?.arrayValue ?? []).compactMap { item in
+                let span = item.objectValue ?? [:]
+                func m(_ key: String) -> UInt64? { span[key]?.numberText.flatMap { UInt64($0) } }
+                guard let at = m("startedAt") else { return nil }
+                return ToolSpan(name: span["name"]?.stringValue ?? "工具", detail: span["detail"]?.stringValue,
+                                startedAt: at, endedAt: m("endedAt"), failed: span["failed"]?.boolValue ?? false)
+            }
+            return stat
         }
         return stats
     }

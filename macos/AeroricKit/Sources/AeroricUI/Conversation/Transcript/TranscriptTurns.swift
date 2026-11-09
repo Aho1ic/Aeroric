@@ -138,7 +138,7 @@ private struct TurnLedgerLine: ViewModifier {
 /// A finished turn, drawn like the reference the owner chose (2026-10-29):
 /// the person's bubble with time and copy (on hover, always on the latest),
 /// "已完成，用时 N 秒 ⌄" over a hairline with the work folded inside, the
-/// reply, then copy · 用量 · time.
+/// reply, then copy · 本回合账单 · time.
 struct TranscriptTurnView<Row: View>: View {
     let turn: TranscriptTurn
     let column: CGFloat
@@ -219,10 +219,9 @@ struct TranscriptTurnView<Row: View>: View {
     private func actions(_ answer: TranscriptItem) -> some View {
         HStack(spacing: AeroricSpace.l) {
             copyButton(TranscriptTurns.text(of: answer))
-            if let tokens = turn.stat?.tokens, tokens > 0 {
-                Label("用量 \(SessionStatsText.compact(tokens)) tok", systemImage: "cylinder")
-                    .labelStyle(.titleAndIcon)
-                    .monospacedDigit()
+            // R3-1: the 用量 line became the turn's bill.
+            if let stat = turn.stat, TurnBillText.hasBill(stat) {
+                TurnBillChip(stat: stat)
             }
             if let ended = turn.stat?.endedAt { Text(TranscriptTurns.clock(ended)) }
         }

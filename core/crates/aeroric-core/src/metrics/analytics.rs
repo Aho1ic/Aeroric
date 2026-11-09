@@ -915,6 +915,32 @@ pub fn estimate_cost_usd(model: &str, input_tokens: u64, output_tokens: u64) -> 
     )
 }
 
+/// R3-1: a turn's cost in USD when its model is on the price list; `None`
+/// otherwise, so the bill shows tokens and never a guessed amount.
+/// `timestamp` is in seconds (DeepSeek's peak hours cost double).
+pub fn estimate_listed_cost_usd(
+    model: &str,
+    uncached_input: u64,
+    cached_input: u64,
+    output: u64,
+    timestamp: f64,
+) -> Option<f64> {
+    let request = UsageRequest {
+        timestamp,
+        date: chrono::NaiveDate::default(),
+        agent: UsageAgent::Codex,
+        model: model.to_string(),
+        input_tokens: uncached_input,
+        output_tokens: output,
+        cache_creation_tokens: 0,
+        cache_read_tokens: cached_input,
+    };
+    match estimated_request_cost(&request) {
+        (cost, PricingSource::Listed) => Some(cost),
+        _ => None,
+    }
+}
+
 fn estimated_request_cost(request: &UsageRequest) -> (f64, PricingSource) {
     let (pricing, source) = pricing_for_request(request);
     let cost = (request.input_tokens as f64 * pricing.input

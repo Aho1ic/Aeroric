@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptStats {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,7 +38,7 @@ pub struct TranscriptStats {
     pub turns: Vec<TurnStat>,
 }
 
-#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStat {
     pub started_at: u64,
@@ -58,10 +58,134 @@ pub struct TurnStat {
     /// so without this the timings of older turns slid by one.
     #[serde(skip_serializing_if = "one")]
     pub messages: u32,
+    /// R3-1 (2026-11-09): this turn's own usage — the prompt tokens of each
+    /// model call summed (cache reads included), the part read from the
+    /// cache, and output. `None` when the transcript records no usage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    /// The model the turn's last call used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Estimated USD from the price list; `None` for a model it does not
+    /// list (the bill then shows tokens only, never a guess).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// The turn's tool calls in the order they started, at most
+    /// [`MAX_TOOL_SPANS`]; `more_tools` counts the rest.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolSpan>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub more_tools: u32,
 }
+
+/// R3-1: one tool call of a turn, for the bill's waterfall.
+#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSpan {
+    pub name: String,
+    /// The command or input's first line, cut to [`DETAIL_CHARS`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub started_at: u64,
+    /// `None`: the transcript never recorded its result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<u64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub failed: bool,
+}
+
+pub const MAX_TOOL_SPANS: usize = 100;
+const DETAIL_CHARS: usize = 80;
 
 fn one(n: &u32) -> bool {
     *n == 1
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// A tool's input as one short line: a shell command when there is one,
+/// else the input's first non-empty line.
+fn tool_detail(input: &Value) -> Option<String> {
+    let parsed;
+    let input = match input.as_str().map(serde_json::from_str::<Value>) {
+        Some(Ok(value)) if value.is_object() => {
+            parsed = value;
+            &parsed
+        }
+        _ => input,
+    };
+    let text = [
+        "cmd",
+        "command",
+        "file_path",
+        "path",
+        "pattern",
+        "url",
+        "description",
+    ]
+    .iter()
+    .find_map(|key| match &input[*key] {
+        Value::String(s) => Some(s.clone()),
+        Value::Array(parts) => Some(
+            parts
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        _ => None,
+    })
+    .or_else(|| input.as_str().map(str::to_string))?;
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let mut cut: String = line.chars().take(DETAIL_CHARS).collect();
+    if line.chars().count() > DETAIL_CHARS {
+        cut.push('…');
+    }
+    Some(cut)
+}
+
+/// Adds one model call's usage to the current turn.
+fn add_turn_usage(stats: &mut TranscriptStats, prompt: u64, cached: u64, output: u64) {
+    if let Some(turn) = stats.turns.last_mut() {
+        turn.input_tokens = Some(turn.input_tokens.unwrap_or(0) + prompt);
+        turn.cached_input_tokens = Some(turn.cached_input_tokens.unwrap_or(0) + cached);
+        turn.output_tokens = Some(turn.output_tokens.unwrap_or(0) + output);
+    }
+}
+
+fn set_turn_model(stats: &mut TranscriptStats, model: Option<&str>) {
+    let model = model.filter(|m| !m.is_empty() && !m.starts_with('<'));
+    if let (Some(turn), Some(model)) = (stats.turns.last_mut(), model) {
+        turn.model = Some(model.to_string());
+    }
+}
+
+/// Prices each turn that names a listed model.
+fn price_turns(stats: &mut TranscriptStats) {
+    let mut last_model: Option<String> = None;
+    for turn in &mut stats.turns {
+        // A turn whose transcript names no model ran on the one before it.
+        match &turn.model {
+            Some(model) => last_model = Some(model.clone()),
+            None => turn.model = last_model.clone(),
+        }
+        if let (Some(model), Some(input)) = (&turn.model, turn.input_tokens) {
+            let cached = turn.cached_input_tokens.unwrap_or(0).min(input);
+            turn.cost_usd = crate::metrics::analytics::estimate_listed_cost_usd(
+                model,
+                input - cached,
+                cached,
+                turn.output_tokens.unwrap_or(0),
+                turn.started_at as f64 / 1000.0,
+            );
+        }
+    }
 }
 
 impl TranscriptStats {
@@ -77,6 +201,8 @@ struct Clock {
     turn_tool_ms: u64,
     awaiting_first: bool,
     tool_starts: HashMap<String, u64>,
+    /// call id → (turn index, span index) of its waterfall row.
+    spans: HashMap<String, (usize, usize)>,
     last_at: Option<u64>,
 }
 
@@ -85,11 +211,8 @@ impl Clock {
         self.close(stats);
         stats.turns.push(TurnStat {
             started_at: at,
-            ended_at: None,
-            tokens: 0,
-            interrupted: false,
-            failed: false,
             messages: 1,
+            ..TurnStat::default()
         });
         self.turn_start = Some(at);
         self.turn_tool_ms = 0;
@@ -108,18 +231,68 @@ impl Clock {
         self.last_at = Some(at);
     }
 
-    fn tool_start(&mut self, id: &str, at: u64) {
+    fn tool_start(
+        &mut self,
+        stats: &mut TranscriptStats,
+        id: &str,
+        name: &str,
+        input: &Value,
+        at: u64,
+    ) {
         self.tool_starts.insert(id.to_string(), at);
         self.last_at = Some(at);
+        let index = stats.turns.len().saturating_sub(1);
+        if let Some(turn) = stats.turns.last_mut() {
+            if turn.tools.len() >= MAX_TOOL_SPANS {
+                turn.more_tools += 1;
+                return;
+            }
+            self.spans.insert(id.to_string(), (index, turn.tools.len()));
+            turn.tools.push(ToolSpan {
+                name: if name.is_empty() {
+                    "工具".into()
+                } else {
+                    name.to_string()
+                },
+                detail: tool_detail(input),
+                started_at: at,
+                ended_at: None,
+                failed: false,
+            });
+        }
     }
 
-    fn tool_end(&mut self, stats: &mut TranscriptStats, id: &str, at: u64) {
+    fn tool_end(&mut self, stats: &mut TranscriptStats, id: &str, at: u64, failed: bool) {
         if let Some(start) = self.tool_starts.remove(id) {
             let spent = at.saturating_sub(start);
             stats.tool_ms += spent;
             self.turn_tool_ms += spent;
         }
+        if let Some((turn, span)) = self.spans.remove(id) {
+            if let Some(span) = stats
+                .turns
+                .get_mut(turn)
+                .and_then(|t| t.tools.get_mut(span))
+            {
+                span.ended_at = Some(at);
+                span.failed |= failed;
+            }
+        }
         self.last_at = Some(at);
+    }
+
+    /// A failure reported apart from the call it belongs to marks the
+    /// latest call still waiting for its result.
+    fn fail_open_tool(&self, stats: &mut TranscriptStats) {
+        if let Some(&(turn, span)) = self.spans.values().max() {
+            if let Some(span) = stats
+                .turns
+                .get_mut(turn)
+                .and_then(|t| t.tools.get_mut(span))
+            {
+                span.failed = true;
+            }
+        }
     }
 
     fn end_turn(&mut self, stats: &mut TranscriptStats, at: u64) {
@@ -132,6 +305,7 @@ impl Clock {
         }
         self.awaiting_first = false;
         self.tool_starts.clear();
+        self.spans.clear();
         self.last_at = Some(at);
     }
 
@@ -161,6 +335,51 @@ fn typed_by_person(payload: &Value) -> bool {
         .is_some_and(|text| !super::codex::is_injected_context(text))
 }
 
+/// A Codex tool result that reports failure: a script that failed, a
+/// command that exited non-zero, or a call the person stopped or rejected.
+fn codex_failed(output: &Value) -> bool {
+    let text = match output {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return false,
+    };
+    if text.starts_with("Script failed")
+        || text.contains("aborted by user")
+        || text.contains("user rejected")
+    {
+        return true;
+    }
+    text.lines()
+        .find_map(|l| l.strip_prefix("Process exited with code "))
+        .and_then(|code| code.trim().parse::<i64>().ok())
+        .is_some_and(|code| code != 0)
+}
+
+/// Codex wraps most tools in an `exec` script (`await
+/// tools.exec_command({cmd:"cargo test", …})`): the bill names the first tool
+/// the script calls and shows its command, not the script's first line.
+fn codex_exec(script: &str) -> (String, Value) {
+    static CALL: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"tools\.(\w+)\s*\(").unwrap());
+    static CMD: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"["']?\b(?:cmd|command)["']?\s*:\s*"((?:[^"\\]|\\.)*)""#).unwrap()
+    });
+    let name = CALL
+        .captures(script)
+        .map_or("exec".to_string(), |c| c[1].to_string());
+    let input = match CMD.captures(script) {
+        // The literal is a JS string; JSON's escapes are the same for commands.
+        Some(c) => serde_json::from_str::<String>(&format!("\"{}\"", &c[1]))
+            .map_or_else(|_| Value::String(c[1].to_string()), Value::String),
+        None => Value::String(script.to_string()),
+    };
+    (name, input)
+}
+
 /// A Codex rollout: `token_count` carries cumulative usage and the context
 /// window; `task_started` / `task_complete` bound turns; tool calls pair by
 /// `call_id`.
@@ -177,6 +396,7 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
         let payload = &value["payload"];
         let kind = payload["type"].as_str().unwrap_or_default();
         match value["type"].as_str().unwrap_or_default() {
+            "turn_context" => set_turn_model(&mut stats, payload["model"].as_str()),
             "event_msg" => match kind {
                 "task_started" => {
                     // R1-4 C17: a turn the rollout never closed (the process
@@ -190,6 +410,17 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
                     typed = 0;
                 }
                 "task_complete" => clock.end_turn(&mut stats, at),
+                // An `exec` script that prints only `r.output` hides the
+                // exit code; the command's own completion event has it, with
+                // no call id, between the script's call and its output.
+                "item_completed" if payload["item"]["type"] == "CommandExecution" => {
+                    let item = &payload["item"];
+                    if item["status"] == "failed"
+                        || item["exit_code"].as_i64().is_some_and(|code| code != 0)
+                    {
+                        clock.fail_open_tool(&mut stats);
+                    }
+                }
                 "turn_aborted" => {
                     clock.end_turn(&mut stats, at);
                     if let Some(turn) = stats.turns.last_mut() {
@@ -211,6 +442,15 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
                         ) {
                             turn.tokens += used;
                         }
+                        let last = |key: &str| u64_at(info, &["last_token_usage", key]);
+                        if let Some(prompt) = last("input_tokens") {
+                            add_turn_usage(
+                                &mut stats,
+                                prompt,
+                                last("cached_input_tokens").unwrap_or(0),
+                                last("output_tokens").unwrap_or(0),
+                            );
+                        }
                     }
                 }
                 _ => {}
@@ -229,11 +469,23 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
                     "reasoning" => clock.output(&mut stats, at),
                     "function_call" | "custom_tool_call" | "local_shell_call" => {
                         clock.output(&mut stats, at);
-                        clock.tool_start(call_id, at);
+                        let (name, input) = match kind {
+                            "function_call" => (payload["name"].as_str(), &payload["arguments"]),
+                            "custom_tool_call" => (payload["name"].as_str(), &payload["input"]),
+                            _ => (Some("shell"), &payload["action"]),
+                        };
+                        let (name, input) = match (name, input.as_str()) {
+                            (Some("exec"), Some(script)) => codex_exec(script),
+                            _ => (name.unwrap_or_default().to_string(), input.clone()),
+                        };
+                        clock.tool_start(&mut stats, call_id, &name, &input, at);
                     }
                     "function_call_output"
                     | "custom_tool_call_output"
-                    | "local_shell_call_output" => clock.tool_end(&mut stats, call_id, at),
+                    | "local_shell_call_output" => {
+                        let failed = codex_failed(&payload["output"]);
+                        clock.tool_end(&mut stats, call_id, at, failed);
+                    }
                     _ => {}
                 }
             }
@@ -241,6 +493,7 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
         }
     }
     clock.close(&mut stats);
+    price_turns(&mut stats);
     (!stats.is_empty()).then_some(stats)
 }
 
@@ -261,24 +514,25 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
         let blocks = message["content"].as_array();
         match value["type"].as_str().unwrap_or_default() {
             "user" => {
-                let results: Vec<&str> = blocks
+                let results: Vec<(&str, bool)> = blocks
                     .into_iter()
                     .flatten()
                     .filter(|b| b["type"] == "tool_result")
-                    .filter_map(|b| b["tool_use_id"].as_str())
+                    .filter_map(|b| Some((b["tool_use_id"].as_str()?, b["is_error"] == true)))
                     .collect();
                 if results.is_empty() {
                     if value["isMeta"] != true && !super::claude::is_interrupt_marker(message) {
                         clock.start_turn(&mut stats, at);
                     }
                 } else {
-                    for id in results {
-                        clock.tool_end(&mut stats, id, at);
+                    for (id, failed) in results {
+                        clock.tool_end(&mut stats, id, at, failed);
                     }
                 }
             }
             "assistant" => {
                 clock.output(&mut stats, at);
+                set_turn_model(&mut stats, message["model"].as_str());
                 if value["isApiErrorMessage"] == true {
                     if let Some(turn) = stats.turns.last_mut() {
                         turn.failed = true;
@@ -287,7 +541,8 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
                 for block in blocks.into_iter().flatten() {
                     if block["type"] == "tool_use" {
                         if let Some(id) = block["id"].as_str() {
-                            clock.tool_start(id, at);
+                            let name = block["name"].as_str().unwrap_or_default();
+                            clock.tool_start(&mut stats, id, name, &block["input"], at);
                         }
                     }
                 }
@@ -319,6 +574,12 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
             output += count(u, "output_tokens");
             if let Some(turn) = stats.turns.get_mut(*turn) {
                 turn.tokens += prompt + count(u, "output_tokens");
+                turn.input_tokens = Some(turn.input_tokens.unwrap_or(0) + prompt);
+                turn.cached_input_tokens = Some(
+                    turn.cached_input_tokens.unwrap_or(0) + count(u, "cache_read_input_tokens"),
+                );
+                turn.output_tokens =
+                    Some(turn.output_tokens.unwrap_or(0) + count(u, "output_tokens"));
             }
         }
         stats.input_tokens = Some(input);
@@ -331,6 +592,7 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
                 + count(u, "output_tokens")
         });
     }
+    price_turns(&mut stats);
     (!stats.is_empty()).then_some(stats)
 }
 
@@ -367,6 +629,7 @@ impl Disjoint {
         if let Some(turn) = stats.turns.last_mut() {
             turn.tokens += prompt + output;
         }
+        add_turn_usage(stats, prompt, read, output);
     }
 
     fn finish(self, stats: &mut TranscriptStats) {
@@ -406,10 +669,12 @@ pub fn omp(lines: &[String]) -> Option<TranscriptStats> {
                 };
                 clock.output(&mut stats, first);
                 clock.last_at = Some(at);
+                set_turn_model(&mut stats, message["model"].as_str());
                 for block in message["content"].as_array().into_iter().flatten() {
                     if block["type"] == "toolCall" {
                         if let Some(id) = block["id"].as_str() {
-                            clock.tool_start(id, at);
+                            let name = block["name"].as_str().unwrap_or_default();
+                            clock.tool_start(&mut stats, id, name, &block["arguments"], at);
                         }
                     }
                 }
@@ -425,7 +690,7 @@ pub fn omp(lines: &[String]) -> Option<TranscriptStats> {
             }
             "toolResult" => {
                 if let Some(id) = message["toolCallId"].as_str() {
-                    clock.tool_end(&mut stats, id, at);
+                    clock.tool_end(&mut stats, id, at, message["isError"] == true);
                 }
             }
             _ => {}
@@ -433,6 +698,7 @@ pub fn omp(lines: &[String]) -> Option<TranscriptStats> {
     }
     clock.close(&mut stats);
     usage.finish(&mut stats);
+    price_turns(&mut stats);
     (!stats.is_empty()).then_some(stats)
 }
 
@@ -458,6 +724,7 @@ pub fn dsh(lines: &[String]) -> Option<TranscriptStats> {
             "assistant/chunk" => clock.output(&mut stats, at),
             "assistant/message" => {
                 clock.output(&mut stats, at);
+                set_turn_model(&mut stats, data["model"].as_str());
                 let u = &data["usage"];
                 let count = |key: &str| u[key].as_u64().unwrap_or(0);
                 usage.add(
@@ -470,12 +737,19 @@ pub fn dsh(lines: &[String]) -> Option<TranscriptStats> {
             }
             "tool/call" => {
                 if let Some(id) = data["callId"].as_str() {
-                    clock.tool_start(id, at);
+                    let name = data["name"].as_str().or(data["tool"].as_str());
+                    let input = if data["arguments"].is_null() {
+                        &data["input"]
+                    } else {
+                        &data["arguments"]
+                    };
+                    clock.tool_start(&mut stats, id, name.unwrap_or_default(), input, at);
                 }
             }
             "tool/result" => {
                 if let Some(id) = data["message"]["source"]["callId"].as_str() {
-                    clock.tool_end(&mut stats, id, at);
+                    let failed = data["isError"] == true || data["message"]["isError"] == true;
+                    clock.tool_end(&mut stats, id, at, failed);
                 }
             }
             "request/context" => {
@@ -488,6 +762,7 @@ pub fn dsh(lines: &[String]) -> Option<TranscriptStats> {
     }
     clock.close(&mut stats);
     usage.finish(&mut stats);
+    price_turns(&mut stats);
     (!stats.is_empty()).then_some(stats)
 }
 
@@ -725,6 +1000,111 @@ mod tests {
         assert_eq!(stats.turns.len(), 1);
         assert_eq!(stats.turns[0].tokens, 2590);
         assert_eq!(stats.turns[0].ended_at, Some(at(6500)));
+    }
+
+    #[test]
+    fn a_codex_turn_bill_has_its_own_usage_model_and_tool_rows() {
+        let t = |s: &str| format!("2026-11-09T01:00:{s}Z");
+        let usage = |input: u64, cached: u64, output: u64| {
+            serde_json::json!({
+            "total_token_usage": {"input_tokens": input, "cached_input_tokens": cached, "output_tokens": output},
+            "last_token_usage": {"input_tokens": input, "cached_input_tokens": cached,
+                                 "output_tokens": output, "total_tokens": input + output}})
+        };
+        let rollout = lines(&[
+            serde_json::json!({"timestamp": t("00.000"), "type": "event_msg", "payload": {"type": "task_started"}}),
+            serde_json::json!({"timestamp": t("00.100"), "type": "turn_context", "payload": {"model": "gpt-5.4"}}),
+            serde_json::json!({"timestamp": t("01.000"), "type": "response_item", "payload": {
+                "type": "function_call", "call_id": "a", "name": "exec_command",
+                "arguments": "{\"cmd\":\"cargo test\\nmore\"}"}}),
+            serde_json::json!({"timestamp": t("04.000"), "type": "response_item", "payload": {
+                "type": "function_call_output", "call_id": "a",
+                "output": "Chunk ID: 1\nProcess exited with code 101\nOutput:"}}),
+            serde_json::json!({"timestamp": t("05.000"), "type": "response_item", "payload": {
+                "type": "custom_tool_call", "call_id": "b", "name": "exec", "input": "await tools.exec_command({cmd:\"ls\"})"}}),
+            serde_json::json!({"timestamp": t("05.500"), "type": "response_item", "payload": {
+                "type": "custom_tool_call_output", "call_id": "b",
+                "output": [{"type": "input_text", "text": "Script completed\nWall time 0.3 seconds"}]}}),
+            serde_json::json!({"timestamp": t("05.600"), "type": "response_item", "payload": {
+                "type": "custom_tool_call", "call_id": "c", "name": "exec",
+                "input": "const r = await tools.exec_command({cmd:\"cat missing.txt\"}); text(r.output);"}}),
+            serde_json::json!({"timestamp": t("05.700"), "type": "event_msg", "payload": {"type": "item_completed",
+                "item": {"type": "CommandExecution", "status": "failed", "exit_code": 1}}}),
+            serde_json::json!({"timestamp": t("05.800"), "type": "response_item", "payload": {
+                "type": "custom_tool_call_output", "call_id": "c",
+                "output": [{"type": "input_text", "text": "Script completed\nOutput:\n"},
+                           {"type": "input_text", "text": "cat: missing.txt: No such file or directory\n"}]}}),
+            serde_json::json!({"timestamp": t("06.000"), "type": "event_msg", "payload": {"type": "token_count", "info": usage(1000, 600, 40)}}),
+            serde_json::json!({"timestamp": t("07.000"), "type": "event_msg", "payload": {"type": "token_count", "info": usage(1200, 1000, 60)}}),
+            serde_json::json!({"timestamp": t("08.000"), "type": "event_msg", "payload": {"type": "task_complete"}}),
+            serde_json::json!({"timestamp": t("09.000"), "type": "event_msg", "payload": {"type": "task_started"}}),
+            serde_json::json!({"timestamp": t("10.000"), "type": "event_msg", "payload": {"type": "task_complete"}}),
+        ]);
+        let stats = codex(&rollout).unwrap();
+        let turn = &stats.turns[0];
+        assert_eq!(turn.input_tokens, Some(2200));
+        assert_eq!(turn.cached_input_tokens, Some(1600));
+        assert_eq!(turn.output_tokens, Some(100));
+        assert_eq!(turn.model.as_deref(), Some("gpt-5.4"));
+        // 600 uncached × 2.5 + 1600 cached × 0.25 + 100 output × 15, per million.
+        let cost = turn.cost_usd.unwrap();
+        assert!((cost - 0.0034).abs() < 1e-9, "{cost}");
+        assert_eq!(turn.tools.len(), 3);
+        assert!(
+            turn.tools[2].failed,
+            "the exit code came only in the command's own event"
+        );
+        assert_eq!(turn.tools[1].name, "exec_command");
+        assert_eq!(turn.tools[1].detail.as_deref(), Some("ls"));
+        let (name, input) = codex_exec(r#"await tools.exec_command({cmd:"printf '%s\\n' a b"})"#);
+        assert_eq!(name, "exec_command");
+        assert_eq!(tool_detail(&input).as_deref(), Some(r"printf '%s\n' a b"));
+        assert_eq!(turn.tools[0].name, "exec_command");
+        assert_eq!(turn.tools[0].detail.as_deref(), Some("cargo test"));
+        assert_eq!(
+            turn.tools[0].ended_at.unwrap() - turn.tools[0].started_at,
+            3000
+        );
+        assert!(turn.tools[0].failed);
+        assert!(!turn.tools[1].failed);
+        // A turn with no usage of its own says nothing, and keeps the model.
+        assert_eq!(stats.turns[1].input_tokens, None);
+        assert_eq!(stats.turns[1].model.as_deref(), Some("gpt-5.4"));
+    }
+
+    #[test]
+    fn a_claude_turn_bill_marks_failed_tools_and_leaves_unlisted_models_unpriced() {
+        let t = |s: &str| format!("2026-11-09T01:00:{s}Z");
+        let jsonl = lines(&[
+            serde_json::json!({"timestamp": t("00.000"), "type": "user", "message": {"role": "user", "content": "go"}}),
+            serde_json::json!({"timestamp": t("01.000"), "type": "assistant", "message": {
+                "id": "m1", "model": "some-new-model", "content": [
+                    {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "false"}}],
+                "usage": {"input_tokens": 10, "cache_read_input_tokens": 90, "output_tokens": 5}}}),
+            serde_json::json!({"timestamp": t("02.000"), "type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "is_error": true}]}}),
+        ]);
+        let stats = claude(&jsonl).unwrap();
+        let turn = &stats.turns[0];
+        assert_eq!(turn.input_tokens, Some(100));
+        assert_eq!(turn.cached_input_tokens, Some(90));
+        assert_eq!(turn.output_tokens, Some(5));
+        assert_eq!(turn.cost_usd, None);
+        assert_eq!(turn.tools[0].name, "Bash");
+        assert_eq!(turn.tools[0].detail.as_deref(), Some("false"));
+        assert!(turn.tools[0].failed);
+    }
+
+    #[test]
+    fn a_turn_keeps_at_most_the_span_limit_and_counts_the_rest() {
+        let mut stats = TranscriptStats::default();
+        let mut clock = Clock::default();
+        clock.start_turn(&mut stats, 0);
+        for i in 0..MAX_TOOL_SPANS + 3 {
+            clock.tool_start(&mut stats, &i.to_string(), "Read", &Value::Null, i as u64);
+        }
+        assert_eq!(stats.turns[0].tools.len(), MAX_TOOL_SPANS);
+        assert_eq!(stats.turns[0].more_tools, 3);
     }
 
     #[test]
