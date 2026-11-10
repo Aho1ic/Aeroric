@@ -462,6 +462,63 @@ extension SessionsClient {
         }
     }
 
+    /// R3-3a (`session.changeCost`): one agent configuration and model's
+    /// turns, summed by what became of their changes.
+    public struct ChangeCostBucket: Sendable, Equatable, Decodable {
+        public var turns: Int
+        public var tokens: Int
+        /// nil once any of its turns is unpriced: no partial sums.
+        public var costUsd: Double?
+
+        public init(turns: Int = 0, tokens: Int = 0, costUsd: Double? = nil) {
+            self.turns = turns
+            self.tokens = tokens
+            self.costUsd = costUsd
+        }
+    }
+
+    public struct ChangeCostRow: Sendable, Equatable, Decodable {
+        public var agent: String
+        public var configId: String?
+        public var config: String?
+        public var model: String
+        public var accepted: ChangeCostBucket
+        public var undone: ChangeCostBucket
+        public var pending: ChangeCostBucket
+        public var noChange: ChangeCostBucket
+
+        public init(agent: String, configId: String? = nil, config: String? = nil, model: String,
+                    accepted: ChangeCostBucket = .init(), undone: ChangeCostBucket = .init(),
+                    pending: ChangeCostBucket = .init(), noChange: ChangeCostBucket = .init()) {
+            self.agent = agent
+            self.configId = configId
+            self.config = config
+            self.model = model
+            self.accepted = accepted
+            self.undone = undone
+            self.pending = pending
+            self.noChange = noChange
+        }
+    }
+
+    /// Rows of `session.changeCost`; a row that does not decode is dropped.
+    public static func changeCostRows(_ result: JSONValue) -> [ChangeCostRow] {
+        (result["rows"]?.arrayValue ?? []).compactMap { row in
+            let object = row.foundationObject
+            guard JSONSerialization.isValidJSONObject(object),
+                  let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
+            return try? JSONDecoder().decode(ChangeCostRow.self, from: data)
+        }
+    }
+
+    public func changeCost(rangeDays: Int) async throws -> [ChangeCostRow] {
+        let frame = try await connection.request(
+            "session.changeCost",
+            params: .object(["rangeDays": .number(String(rangeDays)), "agent": .string("all")])
+        )
+        return Self.changeCostRows(frame.result)
+    }
+
     public func deliveryAttention() async throws -> [LiveDelivery] {
         let frame = try await connection.request("delivery.attention", params: .object([:]))
         return (frame.result["deliveries"]?.arrayValue ?? []).compactMap { LiveDelivery.decode($0) }

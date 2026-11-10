@@ -4290,6 +4290,27 @@ pub fn register_session_services(
         let context = std::sync::Arc::clone(&context);
         let families = std::sync::Arc::clone(&families);
         set.register(
+            "session.changeCost",
+            std::sync::Arc::new(move |request, _call| {
+                let context = std::sync::Arc::clone(&context);
+                let families = std::sync::Arc::clone(&families);
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        session_change_cost(&request, &context, families.as_ref())
+                    })
+                    .await
+                    .unwrap_or_else(|e| {
+                        failure(id, ErrorCode::IoError, &format!("change cost failed: {e}"))
+                    })
+                })
+            }),
+        );
+    }
+    {
+        let context = std::sync::Arc::clone(&context);
+        let families = std::sync::Arc::clone(&families);
+        set.register(
             "session.retryAttention",
             std::sync::Arc::new(move |request, _call| {
                 let context = std::sync::Arc::clone(&context);
@@ -4459,10 +4480,20 @@ fn session_retry_attention(
 }
 
 fn retry_of(path: &str, len: u64, family: ProtocolFamily) -> Option<Value> {
+    let stats = stats_of_tail(path, len, RETRY_TAIL_BYTES, family)?;
+    serde_json::to_value(stats.retry?).ok()
+}
+
+fn stats_of_tail(
+    path: &str,
+    len: u64,
+    max_bytes: u64,
+    family: ProtocolFamily,
+) -> Option<aeroric_core::sessions::transcript_stats::TranscriptStats> {
     use aeroric_core::sessions::transcript_stats;
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path).ok()?;
-    file.seek(SeekFrom::Start(len.saturating_sub(RETRY_TAIL_BYTES)))
+    file.seek(SeekFrom::Start(len.saturating_sub(max_bytes)))
         .ok()?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
@@ -4471,13 +4502,144 @@ fn retry_of(path: &str, len: u64, family: ProtocolFamily) -> Option<Value> {
         .lines()
         .map(str::to_string)
         .collect();
-    let stats = match family {
+    match family {
         ProtocolFamily::Codex => transcript_stats::codex(&lines),
         ProtocolFamily::Claude => transcript_stats::claude(&lines),
         ProtocolFamily::Omp => transcript_stats::omp(&lines),
         ProtocolFamily::Dsh => transcript_stats::dsh(&lines),
-    }?;
-    serde_json::to_value(stats.retry?).ok()
+    }
+}
+
+/// R3-3a: at most this much of a transcript is costed (its tail).
+const COST_TAIL_BYTES: u64 = 32 * 1024 * 1024;
+
+type CostCache = std::collections::HashMap<
+    String,
+    (
+        u64,
+        std::time::SystemTime,
+        Vec<aeroric_core::sessions::transcript_stats::TurnStat>,
+    ),
+>;
+
+fn family_name(family: ProtocolFamily) -> &'static str {
+    match family {
+        ProtocolFamily::Codex => "codex",
+        ProtocolFamily::Claude => "claude",
+        ProtocolFamily::Omp => "omp",
+        ProtocolFamily::Dsh => "dsh",
+    }
+}
+
+/// `session.changeCost {rangeDays, agent}` (R3-3a): each local session's
+/// turns since `rangeDays` ago, archived ones too, summed per agent
+/// configuration and model by whether their changes were kept.
+fn session_change_cost(
+    request: &Request,
+    context: &std::sync::Arc<aeroric_core::context::CoreContext>,
+    families: &dyn aeroric_core::tasks::AgentFamilies,
+) -> Frame {
+    use aeroric_core::sessions::{change_cost::ChangeCost, live::turn_ledger};
+    static CACHE: std::sync::LazyLock<std::sync::Mutex<CostCache>> =
+        std::sync::LazyLock::new(Default::default);
+    let range_days = request
+        .params
+        .get("rangeDays")
+        .and_then(Value::as_u64)
+        .unwrap_or(7);
+    let filter = request
+        .params
+        .get("agent")
+        .and_then(Value::as_str)
+        .unwrap_or("all");
+    let now = std::time::SystemTime::now();
+    let since = now
+        .checked_sub(std::time::Duration::from_secs(range_days * 24 * 3600))
+        .unwrap_or(std::time::UNIX_EPOCH);
+    let since_ms = since
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let data_dir = context.paths.data_dir();
+    let turns_dir = data_dir.join("turns");
+    let projects = ProjectService::new(std::sync::Arc::clone(context))
+        .list()
+        .unwrap_or_default();
+    let mut cost = ChangeCost::default();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    for project in &projects {
+        let Some(project_id) = mutations::id_of(project) else {
+            continue;
+        };
+        let Ok(stamped) = load_stamped(context, project_id) else {
+            continue;
+        };
+        for record in &stamped.records {
+            let family =
+                families.session_family(mutations::text(record, "agent").unwrap_or_default());
+            let agent = family_name(family);
+            if filter != "all" && filter != agent {
+                continue;
+            }
+            if matches!(
+                aeroric_core::tasks::launch_plan::working_directory(record, project),
+                Some(aeroric_core::tasks::WorkingDirectory::Ssh { .. })
+            ) {
+                continue;
+            }
+            let (_, Some(path)) = aeroric_core::tasks::session_owner::current_session(record)
+            else {
+                continue;
+            };
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let Ok(modified) = meta.modified() else {
+                continue;
+            };
+            if modified < since {
+                continue;
+            }
+            let fresh = cache
+                .get(&path)
+                .is_some_and(|(len, at, _)| *len == meta.len() && *at == modified);
+            if !fresh {
+                let turns = stats_of_tail(&path, meta.len(), COST_TAIL_BYTES, family)
+                    .map(|s| s.turns)
+                    .unwrap_or_default();
+                cache.insert(path.clone(), (meta.len(), modified, turns));
+            }
+            let Some((_, _, turns)) = cache.get(&path) else {
+                continue;
+            };
+            let task_id = mutations::text(record, "id").unwrap_or_default();
+            let records = turn_ledger::read_at(&turns_dir, task_id);
+            cost.add(
+                agent,
+                mutations::text(record, "agentConfigId"),
+                turns,
+                &records,
+                since_ms,
+            );
+        }
+    }
+    let document = aeroric_core::agent_connections::store::load_effective(
+        &aeroric_core::agent_connections::store::document_path(data_dir),
+    )
+    .ok();
+    let rows: Vec<_> = cost
+        .rows()
+        .into_iter()
+        .map(|mut row| {
+            row.config = row
+                .config_id
+                .as_deref()
+                .and_then(|id| document.as_ref()?.config(id))
+                .map(|config| config.label);
+            row
+        })
+        .collect();
+    ok(request, json!({ "rows": rows }))
 }
 
 /// B4: at most this much of a remote transcript is read (its tail).

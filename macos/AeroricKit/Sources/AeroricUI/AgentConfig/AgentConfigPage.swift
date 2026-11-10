@@ -8,6 +8,7 @@ public struct AgentConfigPage: View {
     @Environment(BuiltinSkillBook.self) private var skillBook: BuiltinSkillBook?
     @Bindable var store: AgentConfigStore
     @Environment(AgentUpgradeBook.self) private var upgrades: AgentUpgradeBook?
+    @Environment(ChangeCostBook.self) private var changeCost: ChangeCostBook?
 
     public init(store: AgentConfigStore) { self.store = store }
 
@@ -21,6 +22,7 @@ public struct AgentConfigPage: View {
                     .init(value: .configs, title: "Agent 预设", systemImage: "slider.horizontal.3"),
                     .init(value: .skills, title: "技能", systemImage: "sparkles"),
                     .init(value: .upgrades, title: "Agent 升级", systemImage: "arrow.up.circle"),
+                    .init(value: .changeCost, title: "改动成本", systemImage: "chart.bar"),
                 ])
                 .fixedSize()
                 Spacer(minLength: 0)
@@ -41,6 +43,8 @@ public struct AgentConfigPage: View {
                 case .skills:
                     if let skillBook { BuiltinSkillsPane(book: skillBook) }
                 case .upgrades: AgentUpgradePane(book: upgrades)
+                case .changeCost:
+                    if let changeCost { ChangeCostPane(book: changeCost) }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

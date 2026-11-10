@@ -15,6 +15,7 @@
 //! **显式 import**，不写 `use super::*;`——宿主旧代码靠隐式继承父模块类型，迁移时
 //! 必须让每个依赖显形（补记一百七十三 查出的正是这种隐式依赖）。
 
+pub mod change_cost;
 pub mod claude;
 pub mod codex;
 pub mod discovery;

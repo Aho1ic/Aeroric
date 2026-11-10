@@ -56,6 +56,7 @@ final class AppServices {
     /// Imported Claude/Codex sessions (M4); gated on the host's `imports` capability.
     let importBook = ImportBook()
     let agentUpgradeBook = AgentUpgradeBook()
+    let changeCostBook = ChangeCostBook()
     /// Project and session tags (2026-10-29).
     let tagBook = TagBook()
     /// Linked folders (2026-10-29).
@@ -258,6 +259,7 @@ final class AppServices {
                     self.sshHostsStore.attach(client: SshClient(connection: connection))
                     self.tagBook.attach(client: WorkspaceClient(connection: connection))
                     self.linkedFolderBook.attach(client: WorkspaceClient(connection: connection))
+                    self.changeCostBook.attach(client: SessionsClient(connection: connection))
                     self.agentUpgradeBook.attach(
                         client: AgentUpgradeClient(connection: connection),
                         capabilityEnabled: advertised[AgentUpgradeClient.capability] == true

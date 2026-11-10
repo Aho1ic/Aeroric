@@ -343,6 +343,15 @@ impl TurnLedger {
     }
 }
 
+/// A task's ledger as kept under `dir`, read without a live executor (R3-3a
+/// costs every session's turns, live or not).
+pub fn read_at(dir: &Path, task_id: &str) -> Vec<TurnRecord> {
+    std::fs::read(dir.join(format!("{}.json", safe(task_id))))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
 /// The note for the agent's next message after an undo (or taking it back).
 pub fn note(action: TurnAction, plan: &TurnPlan) -> String {
     let files: Vec<&str> = plan
