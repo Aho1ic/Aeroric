@@ -29,6 +29,8 @@ pub enum WikiPageKind {
     Index,
     Decision,
     Runbook,
+    /// R4-1: a module of the project's code, read structurally.
+    Module,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +39,8 @@ pub enum SourceKind {
     Note,
     Memory,
     Skill,
+    /// R4-1: a file of the project's code.
+    Code,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +51,9 @@ pub struct SourceRef {
     /// a skill name.
     pub target: String,
     pub label: String,
+    /// R4-1: the version read — a code file's git blob hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// One paragraph (a `##` section) of a page.
@@ -60,6 +67,10 @@ pub struct WikiBlock {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceRef>,
+    /// R4-1: every source that contributed, when more than `source` did
+    /// (a module page's files).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<SourceRef>,
     /// The user changed (or removed: empty text) it; compiles keep it.
     #[serde(default)]
     pub user_edited: bool,
@@ -89,6 +100,9 @@ pub struct WikiPage {
     /// The title the compiler last produced, to notice when its source changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compiled_title: Option<String>,
+    /// R4-1: the commit a module page's code was read at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_commit: Option<String>,
 }
 
 /// An issue about a page's title rather than a block.

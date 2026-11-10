@@ -134,7 +134,7 @@ public struct WikiPage: View {
                         HStack(spacing: AeroricSpace.s) {
                             Image(systemName: collapsed.contains(group.category) ? "chevron.right" : "chevron.down")
                                 .font(.system(size: 9, weight: .semibold))
-                            Text("决策 · \(group.category) \(group.pages.count)").lineLimit(1)
+                            Text("\(group.category) \(group.pages.count)").lineLimit(1)
                         }
                         .font(.system(size: AeroricType.caption, weight: .medium))
                         .foregroundStyle(AeroricColor.textTertiary)
@@ -234,6 +234,10 @@ public struct WikiPage: View {
             if let category = page.category {
                 CheckpointBadge(text: category, tint: AeroricColor.textSecondary)
             }
+            if let commit = page.sourceCommit {
+                CheckpointBadge(text: "读自提交 \(commit.prefix(7))", tint: AeroricColor.textSecondary)
+                    .help("本页的代码在提交 \(commit) 时读出")
+            }
             CapsulePicker(title: "修订 v\(page.revision)", systemImage: "clock.arrow.circlepath") {
                 ForEach(store.revisions) { revision in
                     Button("v\(revision.n) · \(WikiText.reason(revision.reason)) · "
@@ -274,17 +278,21 @@ public struct WikiPage: View {
                 .padding(.top, AeroricSpace.s)
             }
             // The sidebar's size (owner, 2026-11-02).
-            SelectableMarkdown(text: block.text, size: AeroricType.body, reading: true)
+            SelectableMarkdown(text: block.text, size: AeroricType.body, reading: true) { url in
+                guard let slug = WikiText.linkedSlug(url) else { return false }
+                Task { await store.open(slug) }
+                return true
+            }
             HStack(spacing: AeroricSpace.s) {
                 if let source = block.source, let scope = store.scope {
                     Button { onOpenSource(scope, source) } label: {
-                        Label(source.label, systemImage: source.kind == "note" ? "doc.text" : "brain")
+                        Label(WikiText.sourceLabel(source, all: block.sources), systemImage: WikiText.sourceSymbol(source))
                             .font(.system(size: AeroricType.caption))
                             .lineLimit(1)
                     }
                     .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
                     .fixedSize()
-                    .help("打开来源")
+                    .help(WikiText.sourceHelp(source, all: block.sources))
                 }
                 if block.userEdited {
                     Text(store.openIssues.contains { $0.blockKey == block.key }

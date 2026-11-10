@@ -16,6 +16,9 @@ struct SelectableMarkdown: NSViewRepresentable {
     /// and what follows a link on its line (` · implemented`) in the
     /// tertiary color. Maple Mono and 宋体 were tried and dropped.
     var reading = false
+    /// R4-1: a link the caller handles itself (the Wiki's `page.md`); true
+    /// when it did.
+    var onLink: ((URL) -> Bool)?
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(ConversationCJKFont.storageKey) private var cjkChoice = ConversationCJKFont.pingFang.rawValue
     @AppStorage(ConversationCJKFont.customKey) private var cjkCustom = ""
@@ -51,6 +54,7 @@ struct SelectableMarkdown: NSViewRepresentable {
     }
 
     func updateNSView(_ view: NSTextView, context: Context) {
+        context.coordinator.onLink = onLink
         let family = cjkFamily
         let key = "\(size)|\(reading)|\(colorScheme)|\(family ?? "")|\(FontDownloads.shared.revision)|\(text)"
         guard context.coordinator.renderedKey != key else { return }
@@ -94,9 +98,11 @@ struct SelectableMarkdown: NSViewRepresentable {
         let storage = NSTextStorage()
         var renderedKey = ""
         var measured: (key: String, size: CGSize)?
+        var onLink: ((URL) -> Bool)?
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
+            if let url, let onLink, onLink(url) { return true }
             if let url, ContentBlock.isAllowedLinkScheme(url) { NSWorkspace.shared.open(url) }
             return true // handled either way: a refused scheme does nothing
         }

@@ -9,6 +9,7 @@ use aeroric_protocol::wiki::{
 };
 use sha2::{Digest, Sha256};
 
+use super::code_index::{CodeIndex, Module};
 use super::notes::Note;
 
 pub fn hash(text: &str) -> String {
@@ -26,6 +27,9 @@ pub struct Sources {
     pub experiences: Vec<MemoryItem>,
     /// Accepted learned skills of the project and global ones.
     pub skills: Vec<SkillProposal>,
+    /// R4-1: the project's code, read structurally; `None` when it was not
+    /// read (a remote project, or no folder).
+    pub code: Option<CodeIndex>,
 }
 
 fn block(
@@ -40,6 +44,7 @@ fn block(
         heading,
         text,
         source,
+        sources: Vec::new(),
         user_edited: false,
     }
 }
@@ -56,6 +61,7 @@ fn page(slug: String, kind: WikiPageKind, title: String, blocks: Vec<WikiBlock>)
         updated_ms: 0,
         title_edited: false,
         compiled_title: None,
+        source_commit: None,
     }
 }
 
@@ -133,6 +139,7 @@ pub fn target_keeping(sources: &Sources, kept: &[WikiPage]) -> Vec<WikiPage> {
                         kind: SourceKind::Note,
                         target: format!("{}#{heading}", note.path),
                         label: format!("{file}#{heading}"),
+                        version: None,
                     }),
                 )
             })
@@ -179,6 +186,7 @@ pub fn target_keeping(sources: &Sources, kept: &[WikiPage]) -> Vec<WikiPage> {
                     kind: SourceKind::Memory,
                     target: e.id.clone(),
                     label: "经验".into(),
+                    version: None,
                 }),
             ));
         }
@@ -195,6 +203,7 @@ pub fn target_keeping(sources: &Sources, kept: &[WikiPage]) -> Vec<WikiPage> {
                     kind: SourceKind::Skill,
                     target: s.name.clone(),
                     label: "技能".into(),
+                    version: None,
                 }),
             ));
         }
@@ -205,8 +214,259 @@ pub fn target_keeping(sources: &Sources, kept: &[WikiPage]) -> Vec<WikiPage> {
             blocks,
         ));
     }
+    if let Some(code) = sources.code.as_ref().filter(|c| c.available) {
+        pages.extend(module_pages(code));
+    }
     let listed: Vec<WikiPage> = pages.iter().chain(kept).cloned().collect();
     pages.push(index(&listed));
+    pages
+}
+
+/// `core/crates/x::sessions` → `module-core-crates-x-sessions`.
+pub fn module_slug(id: &str) -> String {
+    let mut out = String::from("module-");
+    let mut dash = true;
+    for c in id.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            dash = false;
+        } else if !dash {
+            out.push('-');
+            dash = true;
+        }
+    }
+    let out = out.trim_end_matches('-').to_string();
+    if out == "module" {
+        "module-root".into()
+    } else {
+        out
+    }
+}
+
+fn code_ref(path: &str, blob: &str) -> SourceRef {
+    SourceRef {
+        kind: SourceKind::Code,
+        target: path.to_string(),
+        label: path.rsplit('/').next().unwrap_or(path).to_string(),
+        version: Some(blob.to_string()),
+    }
+}
+
+/// `3.4K`, `820`.
+fn about(lines: u32) -> String {
+    if lines >= 10_000 {
+        format!("{}K", lines / 1000)
+    } else if lines >= 1000 {
+        format!("{:.1}K", lines as f64 / 1000.0)
+    } else {
+        format!("{}", lines / 10 * 10)
+    }
+}
+
+/// R4-1: one page per module, everything on it read from the code — files,
+/// entry points, public symbols, and the dependencies its imports state.
+/// The text leaves out what changes with every edit (line counts beyond a
+/// rough size, file versions), so editing code does not make revisions;
+/// the versions are on the blocks' sources.
+fn module_pages(code: &CodeIndex) -> Vec<WikiPage> {
+    let mut slugs: HashMap<&str, String> = HashMap::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for m in &code.modules {
+        let mut slug = module_slug(&m.id);
+        let n = seen.entry(slug.clone()).or_insert(0);
+        *n += 1;
+        if *n > 1 {
+            slug = format!("{slug}-{n}");
+        }
+        slugs.insert(m.id.as_str(), slug);
+    }
+    let titles: HashMap<&str, String> = code
+        .modules
+        .iter()
+        .map(|m| (m.id.as_str(), m.title()))
+        .collect();
+    let mut dependents: HashMap<&str, Vec<(&Module, &super::code_index::Edge)>> = HashMap::new();
+    for m in &code.modules {
+        for e in &m.deps {
+            dependents.entry(e.to.as_str()).or_default().push((m, e));
+        }
+    }
+    let link = |id: &str| match (titles.get(id), slugs.get(id)) {
+        (Some(title), Some(slug)) => format!("[{title}]({slug}.md)"),
+        _ => format!("`{id}`"),
+    };
+    let mut pages = Vec::new();
+    for m in &code.modules {
+        let key = |section: &str| format!("module:{}#{section}", m.id);
+        let all: Vec<SourceRef> = m.files.iter().map(|f| code_ref(&f.path, &f.blob)).collect();
+        let first = m
+            .entries
+            .first()
+            .and_then(|e| all.iter().find(|s| &s.target == e))
+            .or(all.first())
+            .cloned();
+        let blob = |path: &str| {
+            m.files
+                .iter()
+                .find(|f| f.path == path)
+                .map(|f| f.blob.as_str())
+                .unwrap_or("")
+        };
+        let langs: Vec<&str> = m.langs().iter().map(|l| l.label()).collect();
+        let mut overview = format!(
+            "`{}` · {} · {} 个文件 · 约 {} 行\n\n所属包：{}（`{}`）",
+            if m.dir.is_empty() { "." } else { &m.dir },
+            langs.join("、"),
+            m.files.len(),
+            about(m.lines()),
+            m.package_name,
+            if m.package.is_empty() {
+                "."
+            } else {
+                &m.package
+            },
+        );
+        // The commit is on the page (`source_commit`), not in the text: a
+        // new commit would otherwise rewrite every module page.
+        overview.push_str("\n\n本页从代码直接读出；依赖只列 import 里直接读到的。");
+        let mut b = block(
+            key("overview"),
+            Some("概览".into()),
+            overview,
+            first.clone(),
+        );
+        b.sources = all.clone();
+        let mut blocks = vec![b];
+        if !m.entries.is_empty() {
+            let mut b = block(
+                key("entries"),
+                Some("入口".into()),
+                m.entries
+                    .iter()
+                    .map(|e| format!("- `{e}`"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                first.clone(),
+            );
+            b.sources = m.entries.iter().map(|e| code_ref(e, blob(e))).collect();
+            blocks.push(b);
+        }
+        let symbols_text = if m.symbols.is_empty() {
+            if m.langs()
+                .iter()
+                .all(|l| *l == super::code_index::Lang::Other)
+            {
+                "这类文件不解析符号。".to_string()
+            } else {
+                "没有读到公开的类型或函数。".to_string()
+            }
+        } else {
+            let mut lines: Vec<String> = m
+                .symbols
+                .iter()
+                .take(super::code_index::MAX_SYMBOLS)
+                .map(|s| format!("- `{}`（{}）— `{}:{}`", s.name, s.kind, s.path, s.line))
+                .collect();
+            if m.symbols.len() > super::code_index::MAX_SYMBOLS {
+                lines.push(format!(
+                    "- 另有 {} 个公开符号",
+                    m.symbols.len() - super::code_index::MAX_SYMBOLS
+                ));
+            }
+            lines.join("\n")
+        };
+        let mut b = block(
+            key("symbols"),
+            Some("关键类型与函数".into()),
+            symbols_text,
+            first.clone(),
+        );
+        let mut symbol_files: Vec<&str> = m
+            .symbols
+            .iter()
+            .take(super::code_index::MAX_SYMBOLS)
+            .map(|s| s.path.as_str())
+            .collect();
+        symbol_files.dedup();
+        b.sources = symbol_files.iter().map(|p| code_ref(p, blob(p))).collect();
+        blocks.push(b);
+        let deps_text = if m.deps.is_empty() {
+            "import 里没有读到本项目其他模块。".to_string()
+        } else {
+            m.deps
+                .iter()
+                .map(|e| {
+                    format!(
+                        "- {} — `{}:{}` 引入 `{}`",
+                        link(&e.to),
+                        e.path,
+                        e.line,
+                        e.text
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut b = block(
+            key("deps"),
+            Some("依赖（直接读到）".into()),
+            deps_text,
+            first.clone(),
+        );
+        b.sources = m
+            .deps
+            .iter()
+            .map(|e| code_ref(&e.path, blob(&e.path)))
+            .collect();
+        blocks.push(b);
+        let users = dependents.get(m.id.as_str()).cloned().unwrap_or_default();
+        let mut b = block(
+            key("dependents"),
+            Some("被谁依赖（直接读到）".into()),
+            if users.is_empty() {
+                "没有读到本项目其他模块 import 它。".to_string()
+            } else {
+                users
+                    .iter()
+                    .map(|(from, e)| format!("- {} — `{}:{}`", link(&from.id), e.path, e.line))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            },
+            None,
+        );
+        b.sources = users
+            .iter()
+            .filter_map(|(from, e)| {
+                from.files
+                    .iter()
+                    .find(|f| f.path == e.path)
+                    .map(|f| code_ref(&f.path, &f.blob))
+            })
+            .collect();
+        blocks.push(b);
+        const LISTED_FILES: usize = 40;
+        let mut files: Vec<String> = m
+            .files
+            .iter()
+            .take(LISTED_FILES)
+            .map(|f| format!("- `{}`", f.path))
+            .collect();
+        if m.files.len() > LISTED_FILES {
+            files.push(format!("- 另有 {} 个文件", m.files.len() - LISTED_FILES));
+        }
+        let mut b = block(key("files"), Some("文件".into()), files.join("\n"), first);
+        b.sources = all;
+        blocks.push(b);
+        let mut p = page(
+            slugs[m.id.as_str()].clone(),
+            WikiPageKind::Module,
+            m.title(),
+            blocks,
+        );
+        p.category = Some(m.package_name.clone());
+        p.source_commit = code.commit.clone();
+        pages.push(p);
+    }
     pages
 }
 
@@ -215,7 +475,7 @@ fn index(pages: &[WikiPage]) -> WikiPage {
         "index:intro".into(),
         None,
         format!(
-            "本项目 Wiki 共 {} 页，由 Aeroric 从项目笔记、经验与技能编译。",
+            "本项目 Wiki 共 {} 页，由 Aeroric 从项目代码、笔记、经验与技能编译。",
             pages.len() + 1
         ),
         None,
@@ -225,6 +485,25 @@ fn index(pages: &[WikiPage]) -> WikiPage {
             "index:runbook".into(),
             Some("操作手册".into()),
             "- [操作手册](runbook.md)：构建、测试、排障时可复用的做法".into(),
+            None,
+        ));
+    }
+    let mut modules: BTreeMap<String, Vec<&WikiPage>> = BTreeMap::new();
+    for p in pages.iter().filter(|p| p.kind == WikiPageKind::Module) {
+        modules
+            .entry(p.category.clone().unwrap_or_else(|| "其他".into()))
+            .or_default()
+            .push(p);
+    }
+    for (package, list) in modules {
+        let lines: Vec<String> = list
+            .iter()
+            .map(|p| format!("- [{}]({}.md)", p.title, p.slug))
+            .collect();
+        blocks.push(block(
+            format!("index:module:{package}"),
+            Some(format!("模块 · {package}")),
+            lines.join("\n"),
             None,
         ));
     }
@@ -335,6 +614,7 @@ pub fn merge(current: Option<&WikiPage>, target: WikiPage, now: u64) -> Merged {
                     kept.compiled_hash = t.compiled_hash.clone();
                 }
                 kept.source = t.source.clone();
+                kept.sources = t.sources.clone();
                 blocks.push(kept);
             }
             _ => blocks.push(t.clone()),

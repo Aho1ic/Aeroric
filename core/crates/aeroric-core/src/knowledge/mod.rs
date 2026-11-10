@@ -7,10 +7,13 @@
 //! `<data>/knowledge/<project>/wiki.db`, SQLite with an FTS5 index over the
 //! CJK-segmented text.
 
+pub mod code_index;
 pub mod compile;
 pub mod notes;
 mod store;
 
+#[cfg(test)]
+mod code_index_tests;
 #[cfg(test)]
 mod tests;
 
@@ -142,6 +145,7 @@ pub fn apply_edit(page: &WikiPage, markdown: &str) -> WikiPage {
             compiled_hash: hash(&text),
             text,
             source: None,
+            sources: Vec::new(),
             user_edited: true,
         });
     }
@@ -261,7 +265,11 @@ impl Wikis {
             .pages()?
             .into_iter()
             .filter(|p| {
-                p.kind == WikiPageKind::Decision && (gaps.all || gaps.slugs.contains(&p.slug))
+                (p.kind == WikiPageKind::Decision
+                    && (gaps.all || gaps.slugs.contains(&p.slug)))
+                    // R4-1: the project folder could not be read; its module
+                    // pages stay as they are.
+                    || (p.kind == WikiPageKind::Module && gaps.all)
             })
             .collect();
         let targets = compile::target_keeping(sources, &kept);
@@ -277,13 +285,35 @@ impl Wikis {
                 store.put_issue(issue)?;
                 report.issues += 1;
             }
+            let said = |p: &WikiPage| -> Vec<(String, String, bool, String)> {
+                p.blocks
+                    .iter()
+                    .map(|b| {
+                        (
+                            b.key.clone(),
+                            b.text.clone(),
+                            b.user_edited,
+                            b.compiled_hash.clone(),
+                        )
+                    })
+                    .collect()
+            };
             let changed = current.as_ref().is_none_or(|c| {
                 render(c) != render(&merged.page)
-                    || c.blocks != merged.page.blocks
+                    || said(c) != said(&merged.page)
                     || c.title != merged.page.title
                     || c.status != merged.page.status
                     || c.category != merged.page.category
             });
+            if !changed {
+                if let Some(c) = &current {
+                    if c.blocks != merged.page.blocks
+                        || c.source_commit != merged.page.source_commit
+                    {
+                        store.refresh(&merged.page)?;
+                    }
+                }
+            }
             if changed {
                 if current.is_some() {
                     report.updated += 1;

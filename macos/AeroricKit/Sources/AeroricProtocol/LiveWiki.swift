@@ -3,16 +3,19 @@ import Foundation
 /// B5.5-1 (2026-10-31): a project Wiki page as the host reports it.
 public struct LiveWikiPage: Equatable, Sendable {
     public var slug: String
-    /// `index` `decision` `runbook`.
+    /// `index` `decision` `runbook` `module`.
     public var kind: String
     public var title: String
     public var status: String?
     public var category: String?
     public var blocks: [LiveWikiBlock]
     public var revision: Int
+    /// R4-1: the commit a module page's code was read at.
+    public var sourceCommit: String?
 
     public init(slug: String, kind: String = "decision", title: String, status: String? = nil,
-                category: String? = nil, blocks: [LiveWikiBlock] = [], revision: Int = 1) {
+                category: String? = nil, blocks: [LiveWikiBlock] = [], revision: Int = 1,
+                sourceCommit: String? = nil) {
         self.slug = slug
         self.kind = kind
         self.title = title
@@ -20,6 +23,7 @@ public struct LiveWikiPage: Equatable, Sendable {
         self.category = category
         self.blocks = blocks
         self.revision = revision
+        self.sourceCommit = sourceCommit
     }
 
     public static func decode(_ value: JSONValue?) -> LiveWikiPage? {
@@ -28,7 +32,8 @@ public struct LiveWikiPage: Equatable, Sendable {
                             title: f["title"]?.stringValue ?? slug, status: f["status"]?.stringValue,
                             category: f["category"]?.stringValue,
                             blocks: (f["blocks"]?.arrayValue ?? []).compactMap(LiveWikiBlock.decode),
-                            revision: f["revision"]?.numberText.flatMap { Int($0) } ?? 1)
+                            revision: f["revision"]?.numberText.flatMap { Int($0) } ?? 1,
+                            sourceCommit: f["sourceCommit"]?.stringValue)
     }
 
     /// The page as Markdown (what 编辑 starts from); emptied blocks left out.
@@ -48,15 +53,18 @@ public struct LiveWikiBlock: Equatable, Sendable, Identifiable {
     public var heading: String?
     public var text: String
     public var source: LiveWikiSource?
+    /// R4-1: every source that contributed (a module page's files).
+    public var sources: [LiveWikiSource]
     public var userEdited: Bool
     public var id: String { key }
 
     public init(key: String, heading: String? = nil, text: String, source: LiveWikiSource? = nil,
-                userEdited: Bool = false) {
+                sources: [LiveWikiSource] = [], userEdited: Bool = false) {
         self.key = key
         self.heading = heading
         self.text = text
         self.source = source
+        self.sources = sources
         self.userEdited = userEdited
     }
 
@@ -65,32 +73,42 @@ public struct LiveWikiBlock: Equatable, Sendable, Identifiable {
         guard let key = f["key"]?.stringValue else { return nil }
         return LiveWikiBlock(key: key, heading: f["heading"]?.stringValue, text: f["text"]?.stringValue ?? "",
                              source: f["source"].flatMap(LiveWikiSource.decode),
+                             sources: (f["sources"]?.arrayValue ?? []).compactMap(LiveWikiSource.decode),
                              userEdited: f["userEdited"]?.boolValue ?? false)
     }
 }
 
 public struct LiveWikiSource: Equatable, Sendable {
-    /// `note` `memory` `skill`.
+    /// `note` `memory` `skill` `code`.
     public var kind: String
-    /// A note's project-relative path `#` section; a memory id; a skill name.
+    /// A note's project-relative path `#` section; a memory id; a skill
+    /// name; a code file's project-relative path.
     public var target: String
     public var label: String
+    /// R4-1: a code file's git blob hash when it was read.
+    public var version: String?
 
-    public init(kind: String, target: String, label: String) {
+    public init(kind: String, target: String, label: String, version: String? = nil) {
         self.kind = kind
         self.target = target
         self.label = label
+        self.version = version
     }
 
     public static func decode(_ value: JSONValue) -> LiveWikiSource? {
         let f = value.fields
         guard let kind = f["kind"]?.stringValue, let target = f["target"]?.stringValue else { return nil }
-        return LiveWikiSource(kind: kind, target: target, label: f["label"]?.stringValue ?? target)
+        return LiveWikiSource(kind: kind, target: target, label: f["label"]?.stringValue ?? target,
+                              version: f["version"]?.stringValue)
     }
 
-    /// A note's path without the `#section`.
+    /// A note's path without the `#section`; a code file's path.
     public var notePath: String? {
-        kind == "note" ? String(target.split(separator: "#", maxSplits: 1).first ?? "") : nil
+        switch kind {
+        case "note": String(target.split(separator: "#", maxSplits: 1).first ?? "")
+        case "code": target
+        default: nil
+        }
     }
 }
 

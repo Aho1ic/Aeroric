@@ -17,6 +17,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 zstd = "0.13" # 与宿主 src-tauri 同 crate 同版本——手写约束 8：不得引入第二个 zstd 实现
 sha2 = "0.10.9"
+sha1 = "0.10" # R4-1：Wiki 模块页的来源版本记 git blob hash（锁文件里已有同版本）
+# R4-1（2026-11-10）：Wiki 模块页的结构解析，边只记直接读到的 import。
+tree-sitter = "0.27"
+tree-sitter-rust = "0.24"
+tree-sitter-swift = "0.7"
+tree-sitter-python = "0.25"
+tree-sitter-typescript = "0.23"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 parking_lot = { workspace = true }

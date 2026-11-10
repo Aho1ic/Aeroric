@@ -63,6 +63,46 @@ final class WikiTests: XCTestCase {
         XCTAssertNil(LiveWikiSource(kind: "memory", target: "mem-1", label: "经验").notePath)
     }
 
+    /// R4-1: module pages — grouped by package before the decisions, their
+    /// code sources open the file and say the versions read, and a link to
+    /// another page names its slug.
+    func testModulePagesGroupByPackageAndTheirSourcesAreFiles() async {
+        let service = FakeWikiService()
+        service.summaries = [
+            LiveWikiPageSummary(slug: "index", kind: "index", title: "索引"),
+            LiveWikiPageSummary(slug: "decision-a", kind: "decision", title: "A", category: "feature"),
+            LiveWikiPageSummary(slug: "module-b", kind: "module", title: "b-cli", category: "b-cli"),
+            LiveWikiPageSummary(slug: "module-a-x", kind: "module", title: "a-core · x", category: "a-core"),
+        ]
+        let store = WikiStore(service: service)
+        store.show(scope: "p1")
+        await store.reload()
+        XCTAssertEqual(store.tree.top.map(\.slug), ["index"])
+        XCTAssertEqual(store.tree.decisions.map(\.category), ["模块 · a-core", "模块 · b-cli", "决策 · feature"])
+        XCTAssertEqual(WikiText.kind("module"), "模块")
+
+        let block = LiveWikiBlock.decode(.object([
+            "key": .string("module:core/b#overview"), "heading": .string("概览"), "text": .string("x"),
+            "source": .object(["kind": .string("code"), "target": .string("core/b/src/main.rs"),
+                               "label": .string("main.rs"), "version": .string("ce013625030ba8db")]),
+            "sources": .array([
+                .object(["kind": .string("code"), "target": .string("core/b/src/main.rs"),
+                         "label": .string("main.rs"), "version": .string("ce013625030ba8db")]),
+                .object(["kind": .string("code"), "target": .string("core/b/src/cli.rs"), "label": .string("cli.rs")]),
+            ]),
+        ]))!
+        let source = block.source!
+        XCTAssertEqual(source.notePath, "core/b/src/main.rs", "a code source opens its file")
+        XCTAssertEqual(WikiText.sourceLabel(source, all: block.sources), "main.rs 等 2 个文件")
+        XCTAssertEqual(WikiText.sourceHelp(source, all: block.sources),
+                       "打开来源\ncore/b/src/main.rs @ ce01362\ncore/b/src/cli.rs")
+        XCTAssertEqual(WikiText.linkedSlug(URL(string: "module-a-x.md")!), "module-a-x")
+        XCTAssertNil(WikiText.linkedSlug(URL(string: "https://example.com/a.md")!))
+        let page = LiveWikiPage.decode(.object(["slug": .string("module-b"), "kind": .string("module"),
+                                               "title": .string("b-cli"), "sourceCommit": .string("beec1c6a4bb6")]))
+        XCTAssertEqual(page?.sourceCommit, "beec1c6a4bb6")
+    }
+
     func testTheTreeGroupsDecisionsAndTheStoreActs() async {
         let service = FakeWikiService()
         service.summaries = [
@@ -82,7 +122,7 @@ final class WikiTests: XCTestCase {
         XCTAssertEqual(store.page?.title, "索引")
         let tree = store.tree
         XCTAssertEqual(tree.top.map(\.slug), ["index", "runbook"])
-        XCTAssertEqual(tree.decisions.map(\.category), ["feature", "testing"])
+        XCTAssertEqual(tree.decisions.map(\.category), ["决策 · feature", "决策 · testing"])
         XCTAssertEqual(store.openIssues.map(\.id), ["w1"])
         XCTAssertEqual(store.revisions.map(\.n), [2, 1])
         await store.compile()

@@ -61,7 +61,8 @@ impl Store {
         let rank = |p: &WikiPage| match p.kind {
             WikiPageKind::Index => 0,
             WikiPageKind::Runbook => 1,
-            WikiPageKind::Decision => 2,
+            WikiPageKind::Module => 2,
+            WikiPageKind::Decision => 3,
         };
         pages.sort_by(|a, b| {
             (rank(a), a.category.clone(), a.title.clone()).cmp(&(
@@ -116,6 +117,18 @@ impl Store {
     }
 
     /// A page whose sources are gone; its revisions stay.
+    /// R4-1: a page whose sources moved on (new file versions) while what it
+    /// says did not: kept without a revision, so editing code does not
+    /// grow the history.
+    pub(super) fn refresh(&mut self, page: &WikiPage) -> Result<(), WikiError> {
+        let body = serde_json::to_string(page).map_err(|e| WikiError::Storage(e.to_string()))?;
+        self.conn.execute(
+            "UPDATE pages SET body = ?2 WHERE slug = ?1",
+            params![page.slug, body],
+        )?;
+        Ok(())
+    }
+
     pub(super) fn remove(&mut self, slug: &str) -> Result<(), WikiError> {
         self.conn
             .execute("DELETE FROM pages WHERE slug = ?1", [slug])?;

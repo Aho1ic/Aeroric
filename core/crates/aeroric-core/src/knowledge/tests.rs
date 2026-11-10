@@ -77,6 +77,7 @@ fn compiling_builds_decisions_a_runbook_and_an_index_and_is_searchable() {
         notes: notes::scan(&dir),
         experiences: vec![experience()],
         skills: vec![],
+        code: None,
     };
     let report = wikis.compile("p", &sources, 10).unwrap();
     assert_eq!((report.added, report.pages), (3, 3));
@@ -312,6 +313,7 @@ fn an_unreadable_source_keeps_its_page_and_a_confirmed_removal_does_not() {
         notes,
         experiences: vec![],
         skills: vec![],
+        code: None,
     };
     wikis.compile("p", &sources(notes::scan(&dir)), 1).unwrap();
     let slug = "decision-delegation";
@@ -418,6 +420,7 @@ fn a_status_only_change_updates_the_page() {
                     notes: notes::scan(&dir),
                     experiences: vec![],
                     skills: vec![],
+                    code: None,
                 },
                 at,
             )
@@ -455,6 +458,7 @@ fn exports_refuse_links_and_report_overwrites() {
                 notes: notes::scan(&dir),
                 experiences: vec![],
                 skills: vec![],
+                code: None,
             },
             1,
         )
@@ -505,6 +509,7 @@ fn a_renamed_title_is_kept_and_a_source_rename_is_an_issue() {
                     notes: notes::scan(&dir),
                     experiences: vec![],
                     skills: vec![],
+                    code: None,
                 },
                 at,
             )

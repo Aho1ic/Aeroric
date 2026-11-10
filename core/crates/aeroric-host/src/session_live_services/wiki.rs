@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use aeroric_core::knowledge::{compile::Sources, notes, WikiError};
+use aeroric_core::knowledge::{code_index, compile::Sources, notes, WikiError};
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
 use aeroric_protocol::memory::{MemoryKind, MemoryState, SkillProposalState};
@@ -80,17 +80,32 @@ fn project_dir(live: &Live, project_id: &str) -> Option<PathBuf> {
 }
 
 /// Bumped when compiling itself changes, so every Wiki is compiled again.
-const COMPILER_VERSION: u32 = 2;
+const COMPILER_VERSION: u32 = 4;
 
 /// What a project's Wiki compiles from: its notes, its and global
-/// experiences, its and global accepted skills; what could not be read; and
-/// the fingerprint. A store error is an error, never an empty source.
-fn sources(live: &Live, project_id: &str) -> Result<(Sources, WikiSourceGaps, String), WikiError> {
+/// experiences, its and global accepted skills, its code (R4-1; read only
+/// when `read_code`, the fingerprint needs just its file list); what could
+/// not be read; and the fingerprint. A store error is an error, never an
+/// empty source.
+fn sources(
+    live: &Live,
+    project_id: &str,
+    read_code: bool,
+) -> Result<(Sources, WikiSourceGaps, String), WikiError> {
     let memory = live.executor.memory();
     let unavailable = |e: aeroric_core::memory::MemoryError| WikiError::Unavailable(e.to_string());
-    let (scan, notes_print) = match project_dir(live, project_id) {
-        Some(dir) => (notes::scan_checked(&dir), notes::fingerprint(&dir)),
+    let dir = project_dir(live, project_id);
+    let (scan, notes_print) = match &dir {
+        Some(dir) => (notes::scan_checked(dir), notes::fingerprint(dir)),
         None => (notes::Scan::default(), "unavailable".to_string()),
+    };
+    let code_print = dir
+        .as_deref()
+        .map(code_index::fingerprint)
+        .unwrap_or_default();
+    let code = match (&dir, read_code) {
+        (Some(dir), true) => Some(code_index::scan(dir)),
+        _ => None,
     };
     let gaps = WikiSourceGaps {
         all: !scan.available,
@@ -122,7 +137,7 @@ fn sources(live: &Live, project_id: &str) -> Result<(Sources, WikiSourceGaps, St
         .max()
         .unwrap_or(0);
     let fingerprint = format!(
-        "{COMPILER_VERSION}|{notes_print}|{}|{}|{latest}",
+        "{COMPILER_VERSION}|{notes_print}|{code_print}|{}|{}|{latest}",
         experiences.len(),
         skills.len()
     );
@@ -131,6 +146,7 @@ fn sources(live: &Live, project_id: &str) -> Result<(Sources, WikiSourceGaps, St
             notes: scan.notes,
             experiences,
             skills,
+            code,
         },
         gaps,
         fingerprint,
@@ -138,7 +154,7 @@ fn sources(live: &Live, project_id: &str) -> Result<(Sources, WikiSourceGaps, St
 }
 
 fn compile(live: &Live, project_id: &str) -> Result<CompileReport, WikiError> {
-    let (sources, gaps, fingerprint) = sources(live, project_id)?;
+    let (sources, gaps, fingerprint) = sources(live, project_id, true)?;
     let wikis = live.executor.wikis();
     let report = wikis.compile_checked(project_id, &sources, &gaps, now_ms())?;
     wikis.set_fingerprint(project_id, &fingerprint)?;
@@ -381,7 +397,7 @@ fn sweep(live: &Live) -> usize {
         if !memory.project_enabled(id) && !wikis.has_pages(id) {
             continue;
         }
-        let Ok((_, _, fingerprint)) = sources(live, id) else {
+        let Ok((_, _, fingerprint)) = sources(live, id, false) else {
             continue;
         };
         if wikis.fingerprint(id).as_deref() == Some(fingerprint.as_str()) {

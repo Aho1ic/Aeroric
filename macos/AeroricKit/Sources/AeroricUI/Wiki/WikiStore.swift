@@ -47,13 +47,18 @@ public final class WikiStore {
 
     public var openIssues: [LiveWikiIssue] { issues.filter(\.open) }
 
-    /// The tree: index, runbook, then decisions grouped by category.
+    /// The tree: index, runbook, then modules grouped by package (R4-1),
+    /// then decisions grouped by category.
     public var tree: (top: [LiveWikiPageSummary], decisions: [(category: String, pages: [LiveWikiPageSummary])]) {
-        let top = pages.filter { $0.kind != "decision" }
+        let top = pages.filter { $0.kind != "decision" && $0.kind != "module" }
+        var modules: [String: [LiveWikiPageSummary]] = [:]
+        for p in pages where p.kind == "module" { modules[p.category ?? "其他", default: []].append(p) }
         var groups: [String: [LiveWikiPageSummary]] = [:]
         for p in pages where p.kind == "decision" { groups[p.category ?? "其他", default: []].append(p) }
-        return (top, groups.keys.sorted().map { ($0, groups[$0] ?? []) })
+        return (top, modules.keys.sorted().map { ("模块 · \($0)", modules[$0] ?? []) }
+                    + groups.keys.sorted().map { ("决策 · \($0)", groups[$0] ?? []) })
     }
+
 
     public func show(scope: String?, slug: String = "index") {
         self.scope = scope
@@ -184,6 +189,12 @@ public enum WikiText {
         case "consequences", "影响与代价": ("影响与代价", "scalemass", AeroricColor.warning)
         case "acceptance criteria", "验收": ("验收", "checklist", AeroricColor.success)
         case "risks", "风险": ("风险", "exclamationmark.triangle", AeroricColor.warning)
+        case "概览": ("概览", "info.circle", AeroricColor.accent)
+        case "入口": ("入口", "arrow.right.circle", AeroricColor.success)
+        case "关键类型与函数": ("关键类型与函数", "curlybraces", Color.purple)
+        case "依赖（直接读到）": ("依赖（直接读到）", "arrow.up.right.circle", AeroricColor.accent)
+        case "被谁依赖（直接读到）": ("被谁依赖（直接读到）", "arrow.down.left.circle", AeroricColor.accent)
+        case "文件": ("文件", "doc.on.doc", AeroricColor.textSecondary)
         default: (heading, "text.alignleft", AeroricColor.accent)
         }
     }
@@ -210,10 +221,41 @@ public enum WikiText {
         return plan.overwrites.isEmpty ? total : "\(total)，其中 \(plan.overwrites.count) 个会覆盖已有文件"
     }
 
+    /// R4-1: `module-x.md` in a page's text → the page it names.
+    public static func linkedSlug(_ url: URL) -> String? {
+        guard url.scheme == nil else { return nil }
+        let last = url.relativeString.split(separator: "/").last.map(String.init) ?? ""
+        guard last.hasSuffix(".md"), last.count > 3 else { return nil }
+        return String(last.dropLast(3))
+    }
+
+    /// `store.rs`, `store.rs 等 12 个文件`.
+    public static func sourceLabel(_ source: LiveWikiSource, all: [LiveWikiSource]) -> String {
+        all.count > 1 ? "\(source.label) 等 \(all.count) 个文件" : source.label
+    }
+
+    public static func sourceSymbol(_ source: LiveWikiSource) -> String {
+        switch source.kind {
+        case "note": "doc.text"
+        case "code": "chevron.left.forwardslash.chevron.right"
+        default: "brain"
+        }
+    }
+
+    /// The files and the versions they were read at.
+    public static func sourceHelp(_ source: LiveWikiSource, all: [LiveWikiSource]) -> String {
+        let list = (all.isEmpty ? [source] : all).prefix(12).map { s in
+            s.version.map { "\(s.target) @ \($0.prefix(7))" } ?? s.target
+        }
+        let more = all.count > 12 ? ["另有 \(all.count - 12) 个"] : []
+        return (["打开来源"] + list + more).joined(separator: "\n")
+    }
+
     public static func kind(_ kind: String) -> String {
         switch kind {
         case "index": "索引"
         case "runbook": "操作手册"
+        case "module": "模块"
         default: "决策"
         }
     }
@@ -222,6 +264,7 @@ public enum WikiText {
         switch kind {
         case "index": "list.bullet.indent"
         case "runbook": "wrench.and.screwdriver"
+        case "module": "shippingbox"
         default: "checkmark.seal"
         }
     }
