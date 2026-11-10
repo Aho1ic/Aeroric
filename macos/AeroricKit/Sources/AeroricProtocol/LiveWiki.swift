@@ -195,6 +195,43 @@ public struct LiveWikiIssue: Equatable, Sendable, Identifiable {
     }
 }
 
+/// R4-2: a project's module explanations — the background "全部生成",
+/// what is still waiting, and this month's cost.
+public struct LiveWikiExplainState: Equatable, Sendable {
+    public var running: Bool
+    public var done: Int
+    public var total: Int
+    public var error: String?
+    /// Module pages with no explanation or a stale one.
+    public var pending: Int
+    public var monthRuns: Int
+    public var monthInputTokens: Int
+    public var monthOutputTokens: Int
+    public var model: String?
+
+    public init(running: Bool = false, done: Int = 0, total: Int = 0, error: String? = nil, pending: Int = 0,
+                monthRuns: Int = 0, monthInputTokens: Int = 0, monthOutputTokens: Int = 0, model: String? = nil) {
+        self.running = running
+        self.done = done
+        self.total = total
+        self.error = error
+        self.pending = pending
+        self.monthRuns = monthRuns
+        self.monthInputTokens = monthInputTokens
+        self.monthOutputTokens = monthOutputTokens
+        self.model = model
+    }
+
+    public static func decode(_ value: JSONValue?) -> LiveWikiExplainState {
+        let f = value?.fields ?? [:]
+        let int = { (key: String) in f[key]?.numberText.flatMap { Int($0) } ?? 0 }
+        return LiveWikiExplainState(running: f["running"]?.boolValue ?? false, done: int("done"), total: int("total"),
+                                    error: f["error"]?.stringValue, pending: int("pending"),
+                                    monthRuns: int("monthRuns"), monthInputTokens: int("monthInputTokens"),
+                                    monthOutputTokens: int("monthOutputTokens"), model: f["model"]?.stringValue)
+    }
+}
+
 public struct LiveWikiReport: Equatable, Sendable {
     public var added: Int
     public var updated: Int

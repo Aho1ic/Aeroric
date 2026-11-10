@@ -107,6 +107,24 @@ public struct WikiPage: View {
                 .buttonStyle(AeroricCapsuleButtonStyle(store.openIssues.isEmpty ? .ghost : .tinted, compact: true))
                 .fixedSize()
                 .accessibilityIdentifier("wiki.issues")
+                if store.pages.contains(where: { $0.kind == "module" }) {
+                    Button { Task { await store.explainAll() } } label: {
+                        Label("全部生成说明", systemImage: "sparkles")
+                    }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .disabled(store.explainState.running || store.explainState.model == nil)
+                    .fixedSize()
+                    .help("给缺说明或说明过时的模块页生成职责和常见坑；用记忆页里选的分析模型")
+                    .accessibilityIdentifier("wiki.explainAll")
+                    let line = WikiText.explainLine(store.explainState)
+                    if !line.isEmpty {
+                        Text(line)
+                            .font(.system(size: AeroricType.caption))
+                            .foregroundStyle(AeroricColor.textTertiary)
+                            .lineLimit(1)
+                            .accessibilityIdentifier("wiki.explainState")
+                    }
+                }
             }
             Spacer(minLength: 0)
         }
@@ -237,6 +255,22 @@ public struct WikiPage: View {
             if let commit = page.sourceCommit {
                 CheckpointBadge(text: "读自提交 \(commit.prefix(7))", tint: AeroricColor.textSecondary)
                     .help("本页的代码在提交 \(commit) 时读出")
+            }
+            if page.kind == "module" {
+                let has = page.blocks.contains { $0.key.hasSuffix("#duties") }
+                Button { Task { await store.explain() } } label: {
+                    if store.explaining {
+                        HStack(spacing: AeroricSpace.xs) { ProgressView().controlSize(.mini); Text("生成中…") }
+                    } else {
+                        Label(has ? "重新生成说明" : "生成说明", systemImage: "sparkles")
+                    }
+                }
+                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                .disabled(store.explaining || store.explainState.running || store.explainState.model == nil)
+                .fixedSize()
+                .help(store.explainState.model.map { "用 \($0) 根据这个模块的代码写职责和常见坑，每条都要有出处" }
+                      ?? "先在记忆页里选分析模型")
+                .accessibilityIdentifier("wiki.explain")
             }
             CapsulePicker(title: "修订 v\(page.revision)", systemImage: "clock.arrow.circlepath") {
                 ForEach(store.revisions) { revision in

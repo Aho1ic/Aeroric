@@ -30,7 +30,10 @@ impl Store {
              CREATE TABLE IF NOT EXISTS issues(id TEXT PRIMARY KEY, slug TEXT NOT NULL, body TEXT NOT NULL,
                 open INTEGER NOT NULL, at_ms INTEGER NOT NULL);
              CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(slug UNINDEXED, body, tokenize = '{}');
-             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS explanations(module_id TEXT PRIMARY KEY, body TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS explain_runs(at_ms INTEGER NOT NULL, auto INTEGER NOT NULL,
+                body TEXT NOT NULL);",
             cjk::FTS_TOKENIZER
         ))?;
         Ok(Self {
@@ -127,6 +130,61 @@ impl Store {
             params![page.slug, body],
         )?;
         Ok(())
+    }
+
+    /// R4-2: the modules' generated duties and pitfalls, by module id.
+    pub(super) fn explanations(
+        &self,
+    ) -> Result<std::collections::HashMap<String, super::explain::Explanation>, WikiError> {
+        let mut statement = self.conn.prepare("SELECT body FROM explanations")?;
+        let bodies = statement
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(bodies
+            .iter()
+            .filter_map(|b| serde_json::from_str::<super::explain::Explanation>(b).ok())
+            .map(|e| (e.module_id.clone(), e))
+            .collect())
+    }
+
+    pub(super) fn put_explanation(
+        &self,
+        explanation: &super::explain::Explanation,
+    ) -> Result<(), WikiError> {
+        let body =
+            serde_json::to_string(explanation).map_err(|e| WikiError::Storage(e.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO explanations(module_id, body) VALUES (?1, ?2)
+             ON CONFLICT(module_id) DO UPDATE SET body = excluded.body",
+            params![explanation.module_id, body],
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn log_explain(&self, run: &super::explain::ExplainRun) -> Result<(), WikiError> {
+        let body = serde_json::to_string(run).map_err(|e| WikiError::Storage(e.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO explain_runs(at_ms, auto, body) VALUES (?1, ?2, ?3)",
+            params![run.at_ms as i64, run.auto as i64, body],
+        )?;
+        Ok(())
+    }
+
+    /// Generations since `since_ms`.
+    pub(super) fn explain_runs(
+        &self,
+        since_ms: u64,
+    ) -> Result<Vec<super::explain::ExplainRun>, WikiError> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT body FROM explain_runs WHERE at_ms >= ?1 ORDER BY at_ms")?;
+        let bodies = statement
+            .query_map([since_ms as i64], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(bodies
+            .iter()
+            .filter_map(|b| serde_json::from_str(b).ok())
+            .collect())
     }
 
     pub(super) fn remove(&mut self, slug: &str) -> Result<(), WikiError> {

@@ -10,6 +10,7 @@ use aeroric_protocol::wiki::{
 use sha2::{Digest, Sha256};
 
 use super::code_index::{CodeIndex, Module};
+use super::explain::{self, Explanation};
 use super::notes::Note;
 
 pub fn hash(text: &str) -> String {
@@ -112,6 +113,15 @@ pub fn target(sources: &Sources) -> Vec<WikiPage> {
 /// `target`, with `kept` pages (their sources could not be read) still listed
 /// in the index.
 pub fn target_keeping(sources: &Sources, kept: &[WikiPage]) -> Vec<WikiPage> {
+    target_with(sources, kept, &HashMap::new())
+}
+
+/// `target_keeping`, with the modules' generated explanations (R4-2).
+pub fn target_with(
+    sources: &Sources,
+    kept: &[WikiPage],
+    explanations: &HashMap<String, Explanation>,
+) -> Vec<WikiPage> {
     let mut pages = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
     for note in &sources.notes {
@@ -215,7 +225,7 @@ pub fn target_keeping(sources: &Sources, kept: &[WikiPage]) -> Vec<WikiPage> {
         ));
     }
     if let Some(code) = sources.code.as_ref().filter(|c| c.available) {
-        pages.extend(module_pages(code));
+        pages.extend(module_pages(code, explanations));
     }
     let listed: Vec<WikiPage> = pages.iter().chain(kept).cloned().collect();
     pages.push(index(&listed));
@@ -268,7 +278,7 @@ fn about(lines: u32) -> String {
 /// The text leaves out what changes with every edit (line counts beyond a
 /// rough size, file versions), so editing code does not make revisions;
 /// the versions are on the blocks' sources.
-fn module_pages(code: &CodeIndex) -> Vec<WikiPage> {
+fn module_pages(code: &CodeIndex, explanations: &HashMap<String, Explanation>) -> Vec<WikiPage> {
     let mut slugs: HashMap<&str, String> = HashMap::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
     for m in &code.modules {
@@ -337,6 +347,9 @@ fn module_pages(code: &CodeIndex) -> Vec<WikiPage> {
         );
         b.sources = all.clone();
         let mut blocks = vec![b];
+        if let Some(e) = explanations.get(&m.id) {
+            blocks.extend(explained(e, m, &key));
+        }
         if !m.entries.is_empty() {
             let mut b = block(
                 key("entries"),
@@ -468,6 +481,53 @@ fn module_pages(code: &CodeIndex) -> Vec<WikiPage> {
         pages.push(p);
     }
     pages
+}
+
+/// R4-2: the "职责（推断）" and "常见坑（推断）" blocks: what the model
+/// wrote, each claim with its checked cites; marked possibly stale when a
+/// file it read has changed since. The sources are the files it read, at
+/// the versions it read.
+fn explained(e: &Explanation, m: &Module, key: &dyn Fn(&str) -> String) -> Vec<WikiBlock> {
+    let current: std::collections::BTreeMap<String, String> = m
+        .files
+        .iter()
+        .map(|f| (f.path.clone(), f.blob.clone()))
+        .collect();
+    let changed = e.changed(&current);
+    let stale = match changed.as_slice() {
+        [] => String::new(),
+        [one] => format!("> 可能过时：生成后 `{one}` 改过。\n\n"),
+        [one, ..] => format!(
+            "> 可能过时：生成后 `{one}` 等 {} 个文件改过。\n\n",
+            changed.len()
+        ),
+    };
+    let read: Vec<SourceRef> = e
+        .versions
+        .iter()
+        .map(|(path, blob)| code_ref(path, blob))
+        .collect();
+    let first = read.first().cloned();
+    let intro = format!("以下由 {} 根据代码推断，每条都核对过引用。\n\n", e.model);
+    let mut duties = block(
+        key("duties"),
+        Some("职责（推断）".into()),
+        format!("{stale}{intro}{}", explain::render(&e.duties)),
+        first.clone(),
+    );
+    duties.sources = read.clone();
+    let mut pitfalls = block(
+        key("pitfalls"),
+        Some("常见坑（推断）".into()),
+        if e.pitfalls.is_empty() {
+            format!("{stale}没有找到有出处的坑。")
+        } else {
+            format!("{stale}{}", explain::render(&e.pitfalls))
+        },
+        first,
+    );
+    pitfalls.sources = read;
+    vec![duties, pitfalls]
 }
 
 fn index(pages: &[WikiPage]) -> WikiPage {

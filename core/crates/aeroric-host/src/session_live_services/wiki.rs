@@ -33,11 +33,32 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     set.register(wire::EXPORT_METHOD, blocking(live, wiki_export));
     set.register(wire::SEARCH_METHOD, blocking(live, wiki_search));
     set.register("wiki.sweep", blocking(live, wiki_sweep));
+    set.register("wiki.explainState", blocking(live, wiki_explain_state));
+    set.register("wiki.explain", in_background(live, wiki_explain));
+    set.register("wiki.explainAll", in_background(live, wiki_explain_all));
     set.register("context.wikiAvailable", blocking(live, context_available));
     set.register("context.wikiRead", blocking(live, context_read));
     set.register("context.wikiSearch", blocking(live, context_search));
     set.register("context.wikiFlag", blocking(live, context_flag));
     start_sweeper(live);
+}
+
+/// A handler that needs the `Arc` (it starts work that outlives the call).
+fn in_background(
+    live: &Arc<Live>,
+    run: fn(Arc<Live>, &Request) -> Frame,
+) -> crate::dispatcher::Handler {
+    let live = Arc::clone(live);
+    Arc::new(move |request: Request, _call| {
+        let live = Arc::clone(&live);
+        Box::pin(async move {
+            let id = request.id.clone();
+            match tokio::task::spawn_blocking(move || run(live, &request)).await {
+                Ok(frame) => frame,
+                Err(e) => failure(id, ErrorCode::IoError, &e.to_string()),
+            }
+        })
+    })
 }
 
 fn now_ms() -> u64 {
@@ -390,6 +411,7 @@ fn sweep(live: &Live) -> usize {
     let wikis = live.executor.wikis();
     let memory = live.executor.memory();
     let mut done = 0;
+    let mut active = Vec::new();
     for project in projects {
         let Some(id) = project.get("id").and_then(Value::as_str) else {
             continue;
@@ -397,6 +419,7 @@ fn sweep(live: &Live) -> usize {
         if !memory.project_enabled(id) && !wikis.has_pages(id) {
             continue;
         }
+        active.push(id.to_string());
         let Ok((_, _, fingerprint)) = sources(live, id, false) else {
             continue;
         };
@@ -407,6 +430,7 @@ fn sweep(live: &Live) -> usize {
             done += 1;
         }
     }
+    explain_idle(live, &active);
     done
 }
 
@@ -429,6 +453,350 @@ fn start_sweeper(live: &Arc<Live>) {
             let _ = tokio::task::spawn_blocking(move || sweep(&live)).await;
         }
     });
+}
+
+// MARK: module explanations (R4-2)
+
+/// A project's "全部生成" in progress.
+#[derive(Clone, Default)]
+struct ExplainJob {
+    running: bool,
+    done: usize,
+    total: usize,
+    error: Option<String>,
+}
+
+static EXPLAIN_JOBS: std::sync::LazyLock<
+    parking_lot::Mutex<std::collections::HashMap<String, ExplainJob>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// `module:<id>#overview` → `<id>`.
+fn module_of(page: &aeroric_protocol::wiki::WikiPage) -> Option<String> {
+    page.blocks.iter().find_map(|b| {
+        b.key
+            .strip_prefix("module:")?
+            .strip_suffix("#overview")
+            .map(str::to_string)
+    })
+}
+
+/// The idle pass regenerates a stale module at most this often (目检
+/// 2026-11-10: a catch-all module whose files kept changing was generated
+/// four times in one afternoon, using up the day's limit). The page still
+/// says it may be stale; the buttons are not held back.
+const AUTO_REGENERATE_AFTER_MS: u64 = 24 * 3600 * 1000;
+
+/// Module ids whose explanation is missing or read a file that changed
+/// since (the page's overview sources carry the current versions), stale
+/// ones first; a stale one generated less than `cooldown_ms` ago is left
+/// out.
+fn wanted(live: &Live, project_id: &str, cooldown_ms: u64) -> Vec<String> {
+    let wikis = live.executor.wikis();
+    let Ok(explanations) = wikis.explanations(project_id) else {
+        return Vec::new();
+    };
+    let Ok(pages) = wikis.pages(project_id) else {
+        return Vec::new();
+    };
+    let mut stale = Vec::new();
+    let mut missing = Vec::new();
+    for summary in pages
+        .iter()
+        .filter(|p| p.kind == wire::WikiPageKind::Module)
+    {
+        let Ok(page) = wikis.page(project_id, &summary.slug) else {
+            continue;
+        };
+        let Some(id) = module_of(&page) else {
+            continue;
+        };
+        match explanations.get(&id) {
+            None => missing.push(id),
+            Some(e) => {
+                let current: std::collections::BTreeMap<String, String> = page
+                    .blocks
+                    .iter()
+                    .find(|b| b.key.ends_with("#overview"))
+                    .map(|b| {
+                        b.sources
+                            .iter()
+                            .filter_map(|s| Some((s.target.clone(), s.version.clone()?)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !e.changed(&current).is_empty()
+                    && now_ms().saturating_sub(e.at_ms) >= cooldown_ms
+                {
+                    stale.push(id);
+                }
+            }
+        }
+    }
+    stale.extend(missing);
+    stale
+}
+
+/// Generates the modules `ids` one by one, then compiles so the pages show
+/// them. Stops at the first failed call (no model, no key, unreachable),
+/// which is logged; an answer that is not the JSON asked for is logged and
+/// skipped.
+fn generate(
+    live: &Live,
+    project_id: &str,
+    ids: &[String],
+    auto: bool,
+    mut progress: impl FnMut(usize),
+) -> Result<usize, String> {
+    use aeroric_core::knowledge::explain::{self, ExplainRun, Explanation};
+    let model = live
+        .executor
+        .memory()
+        .settings()
+        .model
+        .clone()
+        .ok_or("还没有选分析模型（记忆页里设置）")?;
+    let dir = project_dir(live, project_id).ok_or("读不到项目目录")?;
+    let index = code_index::scan(&dir);
+    let notes = notes::scan_checked(&dir).notes;
+    let wikis = live.executor.wikis();
+    let mut written = 0;
+    for (n, id) in ids.iter().enumerate() {
+        let Some(module) = index.modules.iter().find(|m| &m.id == id) else {
+            progress(n + 1);
+            continue;
+        };
+        let input = explain::build(module, &index, &dir, &notes);
+        let mut run = ExplainRun {
+            module_id: id.clone(),
+            model: model.clone(),
+            input_tokens: 0,
+            output_tokens: 0,
+            at_ms: now_ms(),
+            auto,
+            error: None,
+        };
+        let call = super::memory::analysis_call(live, explain::MAX_OUTPUT_TOKENS);
+        match call(explain::SYSTEM, &explain::prompt(&input)) {
+            Ok(chat) => {
+                run.input_tokens = chat.input_tokens;
+                run.output_tokens = chat.output_tokens;
+                match explain::verify(&chat.text, &input) {
+                    Ok((duties, pitfalls, dropped)) => {
+                        wikis
+                            .save_explanation(
+                                project_id,
+                                &Explanation {
+                                    module_id: id.clone(),
+                                    duties,
+                                    pitfalls,
+                                    versions: input.versions.clone(),
+                                    model: model.clone(),
+                                    input_tokens: chat.input_tokens,
+                                    output_tokens: chat.output_tokens,
+                                    at_ms: run.at_ms,
+                                    dropped,
+                                },
+                            )
+                            .map_err(|e| e.to_string())?;
+                        written += 1;
+                    }
+                    Err(error) => run.error = Some(error),
+                }
+                let _ = wikis.log_explain(project_id, &run);
+            }
+            Err(error) => {
+                run.error = Some(error.clone());
+                let _ = wikis.log_explain(project_id, &run);
+                return Err(error);
+            }
+        }
+        progress(n + 1);
+    }
+    if written > 0 {
+        compile(live, project_id).map_err(|e| e.to_string())?;
+    }
+    Ok(written)
+}
+
+/// Starts generating `ids` in the background, unless the project already
+/// has a generation going (a button or the idle pass); `(queued, running)`.
+/// Generating one module can take longer than the app waits for an answer
+/// (目检 2026-11-10: "宿主没有及时回应", then the page had it), so even one
+/// page is a job the app follows through `wiki.explainState`.
+fn start_job(live: Arc<Live>, project: String, ids: Vec<String>) -> (usize, bool) {
+    {
+        let mut jobs = EXPLAIN_JOBS.lock();
+        if jobs.get(&project).is_some_and(|j| j.running) {
+            return (0, true);
+        }
+        jobs.insert(
+            project.clone(),
+            ExplainJob {
+                running: !ids.is_empty(),
+                done: 0,
+                total: ids.len(),
+                error: None,
+            },
+        );
+    }
+    let total = ids.len();
+    if total > 0 {
+        tokio::runtime::Handle::current().spawn_blocking(move || {
+            let result = generate(&live, &project, &ids, false, |done| {
+                if let Some(job) = EXPLAIN_JOBS.lock().get_mut(&project) {
+                    job.done = done;
+                }
+            });
+            if let Some(job) = EXPLAIN_JOBS.lock().get_mut(&project) {
+                job.running = false;
+                job.error = result.err();
+            }
+        });
+    }
+    (total, total > 0)
+}
+
+/// `wiki.explain {projectId, slug}`: one module page, in the background.
+fn wiki_explain(live: Arc<Live>, request: &Request) -> Frame {
+    let p = match project_params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let Some(slug) = p.slug else {
+        return missing(request, "slug");
+    };
+    let page = match live.executor.wikis().page(&p.project_id, &slug) {
+        Ok(page) => page,
+        Err(error) => return wiki_failure(request, error),
+    };
+    let Some(id) = module_of(&page) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "这一页不是模块页",
+        );
+    };
+    let (queued, running) = start_job(live, p.project_id, vec![id]);
+    ok(request, json!({ "queued": queued, "running": running }))
+}
+
+/// `wiki.explainAll {projectId}`: every module page missing an explanation
+/// or with a stale one, in the background.
+fn wiki_explain_all(live: Arc<Live>, request: &Request) -> Frame {
+    let p = match project_params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let ids = wanted(&live, &p.project_id, 0);
+    let (queued, running) = start_job(live, p.project_id, ids);
+    ok(request, json!({ "queued": queued, "running": running }))
+}
+
+/// Local midnight, in ms.
+fn today_start_ms() -> u64 {
+    use chrono::{Local, TimeZone};
+    let now = Local::now();
+    Local
+        .from_local_datetime(&now.date_naive().and_hms_opt(0, 0, 0).unwrap_or_default())
+        .single()
+        .map(|t| t.timestamp_millis().max(0) as u64)
+        .unwrap_or(0)
+}
+
+fn month_start_ms() -> u64 {
+    use chrono::{Datelike, Local, TimeZone};
+    let now = Local::now();
+    now.date_naive()
+        .with_day(1)
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .and_then(|t| Local.from_local_datetime(&t).single())
+        .map(|t| t.timestamp_millis().max(0) as u64)
+        .unwrap_or(0)
+}
+
+/// `wiki.explainState {projectId}`: the background job, what this month's
+/// generations cost, how many modules still want one, and the model.
+fn wiki_explain_state(live: &Live, request: &Request) -> Frame {
+    let p = match project_params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let job = EXPLAIN_JOBS
+        .lock()
+        .get(&p.project_id)
+        .cloned()
+        .unwrap_or_default();
+    let runs = live
+        .executor
+        .wikis()
+        .explain_runs(&p.project_id, month_start_ms())
+        .unwrap_or_default();
+    ok(
+        request,
+        json!({
+            "running": job.running,
+            "done": job.done,
+            "total": job.total,
+            "error": job.error,
+            "pending": wanted(live, &p.project_id, 0).len(),
+            "monthRuns": runs.len(),
+            "monthInputTokens": runs.iter().map(|r| r.input_tokens).sum::<u64>(),
+            "monthOutputTokens": runs.iter().map(|r| r.output_tokens).sum::<u64>(),
+            "model": live.executor.memory().settings().model,
+        }),
+    )
+}
+
+/// The idle pass's share: with no session running, one module a sweep, up
+/// to the day's limit across projects.
+fn explain_idle(live: &Live, projects: &[String]) {
+    use aeroric_core::knowledge::explain::DAILY_LIMIT;
+    if live.executor.memory().settings().model.is_none() {
+        return;
+    }
+    let busy = live
+        .executor
+        .registry()
+        .all()
+        .iter()
+        .any(|(_, driver)| driver.idle_since_ms().is_none());
+    if busy || EXPLAIN_JOBS.lock().values().any(|j| j.running) {
+        return;
+    }
+    let wikis = live.executor.wikis();
+    let since = today_start_ms();
+    let today: usize = projects
+        .iter()
+        .filter_map(|p| wikis.explain_runs(p, since).ok())
+        .map(|runs| runs.iter().filter(|r| r.auto).count())
+        .sum();
+    if today >= DAILY_LIMIT as usize {
+        return;
+    }
+    for project in projects {
+        if let Some(id) = wanted(live, project, AUTO_REGENERATE_AFTER_MS)
+            .into_iter()
+            .next()
+        {
+            // Seen as running, so a button does not start the same module.
+            EXPLAIN_JOBS.lock().insert(
+                project.clone(),
+                ExplainJob {
+                    running: true,
+                    done: 0,
+                    total: 1,
+                    error: None,
+                },
+            );
+            let result = generate(live, project, &[id], true, |_| {});
+            if let Some(job) = EXPLAIN_JOBS.lock().get_mut(project) {
+                job.running = false;
+                job.done = 1;
+                job.error = result.err();
+            }
+            return;
+        }
+    }
 }
 
 // MARK: context server

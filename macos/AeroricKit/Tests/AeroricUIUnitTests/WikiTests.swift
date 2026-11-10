@@ -37,6 +37,13 @@ private final class FakeWikiService: WikiService {
         return LiveWikiExportPlan(files: ["\(dir)/index.md"], overwrites: [])
     }
     func export(projectID: String, dir: String) async throws -> [String] { calls.append("export \(dir)"); return ["\(dir)/index.md"] }
+    var state = LiveWikiExplainState(model: "m")
+    var explainStates: [LiveWikiExplainState] = []
+    func explain(projectID: String, slug: String) async throws -> Int { calls.append("explain \(slug)"); return 1 }
+    func explainAll(projectID: String) async throws -> Int { calls.append("explainAll"); return 2 }
+    func explainState(projectID: String) async throws -> LiveWikiExplainState {
+        explainStates.isEmpty ? state : explainStates.removeFirst()
+    }
 }
 
 /// B5.5-1: the Wiki page's model and words.
@@ -101,6 +108,38 @@ final class WikiTests: XCTestCase {
         let page = LiveWikiPage.decode(.object(["slug": .string("module-b"), "kind": .string("module"),
                                                "title": .string("b-cli"), "sourceCommit": .string("beec1c6a4bb6")]))
         XCTAssertEqual(page?.sourceCommit, "beec1c6a4bb6")
+    }
+
+    /// R4-2: generating explanations, following the background job, and
+    /// the line that says what is left and what it cost.
+    func testExplanationsAreGeneratedAndFollowed() async {
+        let service = FakeWikiService()
+        service.summaries = [LiveWikiPageSummary(slug: "module-b", kind: "module", title: "b")]
+        let store = WikiStore(service: service)
+        store.show(scope: "p1", slug: "module-b")
+        await store.reload()
+        service.explainStates = [LiveWikiExplainState(running: true, total: 1, model: "m"),
+                                 LiveWikiExplainState(running: false, done: 1, total: 1, model: "m")]
+        await store.explain()
+        XCTAssertTrue(service.calls.contains("explain module-b"))
+        XCTAssertEqual(store.notice, "已生成说明", "followed to the end, not the request's answer")
+        XCTAssertNil(store.errorText)
+        service.explainStates = [LiveWikiExplainState(running: true, done: 1, total: 2, model: "m"),
+                                 LiveWikiExplainState(running: false, done: 2, total: 2, error: "没有选连接", model: "m")]
+        await store.explainAll()
+        XCTAssertTrue(service.calls.contains("explainAll"))
+        XCTAssertEqual(store.errorText, "生成说明中断：没有选连接")
+        XCTAssertEqual(WikiText.explainLine(LiveWikiExplainState(running: true, done: 3, total: 60)), "生成说明中 3/60")
+        XCTAssertEqual(WikiText.explainLine(LiveWikiExplainState(pending: 12, monthRuns: 3, monthInputTokens: 25_000,
+                                                                monthOutputTokens: 1_100, model: "m")),
+                       "12 个模块待生成说明 · 本月生成 3 次 · 26.1K tok")
+        XCTAssertEqual(WikiText.explainLine(LiveWikiExplainState()), "没有选分析模型")
+        let state = LiveWikiExplainState.decode(.object([
+            "running": .bool(true), "done": .number("1"), "total": .number("4"), "pending": .number("3"),
+            "monthInputTokens": .number("900"), "model": .string("gpt"),
+        ]))
+        XCTAssertEqual(state, LiveWikiExplainState(running: true, done: 1, total: 4, pending: 3,
+                                                   monthInputTokens: 900, model: "gpt"))
     }
 
     func testTheTreeGroupsDecisionsAndTheStoreActs() async {

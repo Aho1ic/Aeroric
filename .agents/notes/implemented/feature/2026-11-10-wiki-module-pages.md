@@ -12,7 +12,7 @@ Status: implemented
 - R4-2：模型写的职责和常见坑，标为推断，加过时检测；
 - R4-3：真实问题前后对照。
 
-本篇只覆盖 R4-1。
+本篇只覆盖 R4-1；R4-2 见 [职责与常见坑](2026-11-10-wiki-module-explanations.md)。
 
 ## Decision
 

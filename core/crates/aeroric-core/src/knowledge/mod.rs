@@ -9,11 +9,14 @@
 
 pub mod code_index;
 pub mod compile;
+pub mod explain;
 pub mod notes;
 mod store;
 
 #[cfg(test)]
 mod code_index_tests;
+#[cfg(test)]
+mod explain_tests;
 #[cfg(test)]
 mod tests;
 
@@ -272,7 +275,8 @@ impl Wikis {
                     || (p.kind == WikiPageKind::Module && gaps.all)
             })
             .collect();
-        let targets = compile::target_keeping(sources, &kept);
+        let explanations = store.explanations()?;
+        let targets = compile::target_with(sources, &kept, &explanations);
         let wanted: std::collections::HashSet<String> = targets
             .iter()
             .chain(&kept)
@@ -353,6 +357,35 @@ impl Wikis {
         report.pages = store.pages()?.len() as u32;
         store.set_gaps(gaps)?;
         Ok(report)
+    }
+
+    /// R4-2: the generated duties and pitfalls, by module id.
+    pub fn explanations(
+        &self,
+        project: &str,
+    ) -> Result<std::collections::HashMap<String, explain::Explanation>, WikiError> {
+        self.store(project)?.lock().explanations()
+    }
+
+    /// Keeps a generation; the next compile puts it on the module's page.
+    pub fn save_explanation(
+        &self,
+        project: &str,
+        explanation: &explain::Explanation,
+    ) -> Result<(), WikiError> {
+        self.store(project)?.lock().put_explanation(explanation)
+    }
+
+    pub fn log_explain(&self, project: &str, run: &explain::ExplainRun) -> Result<(), WikiError> {
+        self.store(project)?.lock().log_explain(run)
+    }
+
+    pub fn explain_runs(
+        &self,
+        project: &str,
+        since_ms: u64,
+    ) -> Result<Vec<explain::ExplainRun>, WikiError> {
+        self.store(project)?.lock().explain_runs(since_ms)
     }
 
     /// What the last compile could not read.

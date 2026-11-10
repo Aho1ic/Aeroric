@@ -654,6 +654,18 @@ struct HostWikiService: WikiService {
         LiveWikiReport.decode(try await call("wiki.compile", projectID)["report"])
     }
 
+    func explain(projectID: String, slug: String) async throws -> Int {
+        try await call("wiki.explain", projectID, ["slug": .string(slug)])["queued"]?.numberText.flatMap { Int($0) } ?? 0
+    }
+
+    func explainAll(projectID: String) async throws -> Int {
+        try await call("wiki.explainAll", projectID)["queued"]?.numberText.flatMap { Int($0) } ?? 0
+    }
+
+    func explainState(projectID: String) async throws -> LiveWikiExplainState {
+        LiveWikiExplainState.decode(try await call("wiki.explainState", projectID))
+    }
+
     func edit(projectID: String, slug: String, markdown: String) async throws -> LiveWikiPage? {
         LiveWikiPage.decode(try await call("wiki.edit", projectID,
                                            ["slug": .string(slug), "markdown": .string(markdown)])["page"])

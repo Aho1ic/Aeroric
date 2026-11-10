@@ -17,6 +17,12 @@ public protocol WikiService {
     func issueAction(projectID: String, id: String, accept: Bool) async throws
     func exportPlan(projectID: String, dir: String) async throws -> LiveWikiExportPlan
     func export(projectID: String, dir: String) async throws -> [String]
+    /// R4-2: one module page's duties and pitfalls, in the background (a
+    /// model call can outlast the host request); how many were queued.
+    func explain(projectID: String, slug: String) async throws -> Int
+    /// Every module page missing them or stale, in the background; how many.
+    func explainAll(projectID: String) async throws -> Int
+    func explainState(projectID: String) async throws -> LiveWikiExplainState
 }
 
 @MainActor
@@ -34,6 +40,9 @@ public final class WikiStore {
     public private(set) var issues: [LiveWikiIssue] = []
     public private(set) var lastReport: LiveWikiReport?
     public private(set) var busy = false
+    /// R4-2: generating the open page's explanation.
+    public private(set) var explaining = false
+    public private(set) var explainState = LiveWikiExplainState()
     public var errorText: String?
     /// Why the export sheet's directory was refused, shown inside the sheet.
     public var exportError: String?
@@ -77,6 +86,7 @@ public final class WikiStore {
             if !pages.contains(where: { $0.slug == selected }) { selected = pages.first?.slug ?? "index" }
             await loadPage()
             issues = try await service.issues(projectID: scope)
+            await refreshExplainState()
         } catch where AgentConfigStore.isCancelled(error) {
             return
         } catch {
@@ -131,6 +141,55 @@ public final class WikiStore {
             let report = try await service.compile(projectID: scope)
             self.lastReport = report
             self.notice = WikiText.report(report)
+        }
+    }
+
+    /// R4-2: generate the open module page's duties and pitfalls, and follow
+    /// it until it ends (目检 2026-11-10: waiting on the call itself ran past
+    /// the host's 30 s and said "宿主没有及时回应" while it succeeded).
+    public func explain() async {
+        guard let service, let scope else { return }
+        let slug = selected
+        explaining = true
+        defer { explaining = false }
+        do {
+            _ = try await service.explain(projectID: scope, slug: slug)
+        } catch {
+            errorText = "生成说明失败：\(AgentConfigStore.describe(error))"
+            return
+        }
+        await follow(scope)
+        if errorText == nil { notice = "已生成说明" }
+    }
+
+    /// Start "全部生成" and follow it until it ends.
+    public func explainAll() async {
+        guard let service, let scope else { return }
+        do {
+            let queued = try await service.explainAll(projectID: scope)
+            notice = queued == 0 ? "没有需要生成说明的模块" : "开始生成 \(queued) 个模块的说明"
+        } catch {
+            errorText = "生成说明失败：\(AgentConfigStore.describe(error))"
+            return
+        }
+        await follow(scope)
+    }
+
+    /// Poll the job until it ends, then show what it made.
+    private func follow(_ scope: String) async {
+        await refreshExplainState()
+        while explainState.running, self.scope == scope, !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(3))
+            await refreshExplainState()
+        }
+        if let error = explainState.error { errorText = "生成说明中断：\(error)" }
+        await reload()
+    }
+
+    public func refreshExplainState() async {
+        guard let service, let scope else { return }
+        if let state = try? await service.explainState(projectID: scope), self.scope == scope {
+            explainState = state
         }
     }
 
@@ -195,6 +254,8 @@ public enum WikiText {
         case "依赖（直接读到）": ("依赖（直接读到）", "arrow.up.right.circle", AeroricColor.accent)
         case "被谁依赖（直接读到）": ("被谁依赖（直接读到）", "arrow.down.left.circle", AeroricColor.accent)
         case "文件": ("文件", "doc.on.doc", AeroricColor.textSecondary)
+        case "职责（推断）": ("职责（推断）", "sparkles", Color.purple)
+        case "常见坑（推断）": ("常见坑（推断）", "exclamationmark.triangle", AeroricColor.warning)
         default: (heading, "text.alignleft", AeroricColor.accent)
         }
     }
@@ -249,6 +310,19 @@ public enum WikiText {
         }
         let more = all.count > 12 ? ["另有 \(all.count - 12) 个"] : []
         return (["打开来源"] + list + more).joined(separator: "\n")
+    }
+
+    /// `生成中 3/60`, `12 个模块待生成 · 本月 3 次 · 25.1K tok`.
+    public static func explainLine(_ s: LiveWikiExplainState) -> String {
+        if s.running { return "生成说明中 \(s.done)/\(s.total)" }
+        var parts: [String] = []
+        if s.pending > 0 { parts.append("\(s.pending) 个模块待生成说明") }
+        if s.monthRuns > 0 {
+            let tokens = UInt64(s.monthInputTokens + s.monthOutputTokens)
+            parts.append("本月生成 \(s.monthRuns) 次 · \(SessionStatsText.compact(tokens)) tok")
+        }
+        if s.model == nil { parts.append("没有选分析模型") }
+        return parts.joined(separator: " · ")
     }
 
     public static func kind(_ kind: String) -> String {

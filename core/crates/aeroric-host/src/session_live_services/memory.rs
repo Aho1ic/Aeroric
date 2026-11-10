@@ -744,14 +744,16 @@ fn extract_task(live: &Live, task_id: &str, forced: bool) -> Result<wire::Memory
             verified,
         },
         home.as_deref(),
-        analysis_call(live),
+        analysis_call(live, 1200),
         now_ms(),
     )
 }
 
-/// The analysis model over the chosen connection with its stored key.
-fn analysis_call(
+/// The analysis model over the chosen connection with its stored key (also
+/// the Wiki's module explanations, R4-2).
+pub(super) fn analysis_call(
     live: &Live,
+    max_tokens: u32,
 ) -> impl FnOnce(&str, &str) -> Result<aeroric_core::settings::model_detect::ChatOnce, String> {
     use aeroric_core::agent_connections::store;
     let settings = live.executor.memory().settings();
@@ -774,7 +776,7 @@ fn analysis_call(
             &model,
             system,
             user,
-            1200,
+            max_tokens,
         ))
     }
 }
@@ -868,7 +870,7 @@ fn memory_extract_imported(live: &Live, request: &Request) -> Frame {
                     verified: false,
                 },
                 home.as_deref(),
-                analysis_call(live),
+                analysis_call(live, 1200),
                 now_ms(),
             )
         });
