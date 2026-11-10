@@ -259,7 +259,8 @@ final class AppServices {
                     self.sshHostsStore.attach(client: SshClient(connection: connection))
                     self.tagBook.attach(client: WorkspaceClient(connection: connection))
                     self.linkedFolderBook.attach(client: WorkspaceClient(connection: connection))
-                    self.changeCostBook.attach(client: SessionsClient(connection: connection))
+                    self.changeCostBook.attach(client: SessionsClient(connection: connection),
+                                              maintenance: MaintenanceClient(connection: connection))
                     self.agentUpgradeBook.attach(
                         client: AgentUpgradeClient(connection: connection),
                         capabilityEnabled: advertised[AgentUpgradeClient.capability] == true

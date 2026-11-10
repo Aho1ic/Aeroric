@@ -182,6 +182,23 @@ pub fn register_usage_services(
             }),
         );
     }
+    #[cfg(not(test))]
+    start_quota_sampler(
+        context.paths.data_dir().to_path_buf(),
+        Arc::clone(&codex_rpc),
+    );
+    {
+        let context = Arc::clone(&context);
+        let codex_rpc = Arc::clone(&codex_rpc);
+        set.register(
+            "usage.quotaPace",
+            Arc::new(move |request: Request, _call| {
+                let slot = Arc::clone(&codex_rpc);
+                let data_dir = context.paths.data_dir().to_path_buf();
+                Box::pin(async move { quota_pace_reply(&request, data_dir, slot).await })
+            }),
+        );
+    }
     {
         set.register(
             "usage.read_usage_snapshot",
@@ -214,6 +231,82 @@ pub fn register_usage_services(
                 })
             }),
         );
+    }
+}
+
+/// R3-3b：每 10 分钟读一次 Codex 订阅额度存成读数，额度节奏要靠历史读数推近期速度。
+/// 只起一次；没有 `codex` 就不起。
+#[cfg(not(test))]
+fn start_quota_sampler(
+    data_dir: std::path::PathBuf,
+    codex_rpc: Arc<parking_lot::Mutex<Option<aeroric_core::metrics::usage::CodexRpcClient>>>,
+) {
+    use aeroric_core::metrics::quota_pace;
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    if !command_exists("codex") {
+        return;
+    }
+    STARTED.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("quota-sampler".into())
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(
+                    quota_pace::SAMPLE_EVERY_SECS,
+                ));
+                quota_pace::sample(
+                    Arc::clone(&codex_rpc),
+                    &data_dir.join(quota_pace::FILE),
+                    aeroric_core::clock::now_ms_i64(),
+                );
+            });
+    });
+}
+
+/// `usage.quotaPace {}`（R3-3b）：现读一次 Codex 订阅额度并记下，再按历史读数
+/// 给出两个窗口的节奏。读不到时给原因，不给数字。
+async fn quota_pace_reply(
+    request: &Request,
+    data_dir: std::path::PathBuf,
+    slot: Arc<parking_lot::Mutex<Option<aeroric_core::metrics::usage::CodexRpcClient>>>,
+) -> Frame {
+    use aeroric_core::metrics::{quota_pace, UsageSource};
+    if slot.lock().is_none() && !command_exists("codex") {
+        return ok(
+            request,
+            serde_json::json!({ "status": "unavailable", "reason": NO_CODEX_SLOT }),
+        );
+    }
+    let path = data_dir.join(quota_pace::FILE);
+    let now = aeroric_core::clock::now_ms_i64();
+    let read = {
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || quota_pace::sample(slot, &path, now)).await
+    };
+    match read {
+        Ok(UsageSource::Available { data }) => {
+            let readings = quota_pace::load(&path);
+            let windows: Vec<_> = ["primary", "secondary"]
+                .into_iter()
+                .filter_map(|w| quota_pace::pace(&readings, w, now))
+                .collect();
+            ok(
+                request,
+                serde_json::json!({
+                    "status": "available",
+                    "planType": data.plan_type,
+                    "windows": windows,
+                }),
+            )
+        }
+        Ok(UsageSource::Unavailable { reason }) => ok(
+            request,
+            serde_json::json!({ "status": "unavailable", "reason": reason }),
+        ),
+        Err(error) => failure(
+            request.id.clone(),
+            ErrorCode::IoError,
+            &format!("quota read failed: {error}"),
+        ),
     }
 }
 

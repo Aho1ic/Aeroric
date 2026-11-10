@@ -253,6 +253,14 @@ pub struct UsageWindow {
     pub remaining_percent: u8,
     #[serde(rename = "resetAt")]
     pub reset_at: Option<i64>,
+    /// R3-3b: the window's length (Codex `windowDurationMins`); without it
+    /// how far into the window we are is unknown.
+    #[serde(
+        rename = "windowMinutes",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub window_minutes: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -305,7 +313,7 @@ pub async fn read_usage_snapshot(
 // Codex usage — persistent client path
 // ---------------------------------------------------------------------------
 
-fn read_codex_usage_with_client(
+pub(crate) fn read_codex_usage_with_client(
     codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
 ) -> UsageSource<CodexUsageData> {
     let mut guard = codex_rpc.lock();
@@ -602,6 +610,10 @@ fn parse_codex_window(value: &Value) -> Option<UsageWindow> {
         used_percent,
         remaining_percent: 100_u8.saturating_sub(used_percent),
         reset_at: value.get("resetsAt").and_then(parse_reset_value),
+        window_minutes: value
+            .get("windowDurationMins")
+            .and_then(Value::as_u64)
+            .and_then(|m| u32::try_from(m).ok()),
     })
 }
 
@@ -611,6 +623,7 @@ fn parse_claude_window(value: &Value) -> Option<UsageWindow> {
         used_percent,
         remaining_percent: 100_u8.saturating_sub(used_percent),
         reset_at: value.get("resets_at").and_then(parse_reset_value),
+        window_minutes: None,
     })
 }
 

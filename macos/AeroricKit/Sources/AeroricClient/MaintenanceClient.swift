@@ -278,6 +278,43 @@ public struct MaintenanceClient: Sendable {
         }
     }
 
+    /// `usage.quotaPace` 的应答（R3-3b，core `metrics::quota_pace`）：本机 Codex
+    /// 订阅两个窗口的节奏。`status` 为 `unavailable` 时只有 `reason`。
+    public struct QuotaWindowPace: Sendable, Equatable, Decodable {
+        public var window: String
+        public var usedPercent: Int
+        /// 秒。
+        public var resetAt: Int
+        public var windowMinutes: Int
+        public var elapsedPercent: Int
+        public var recent: Bool
+        /// `fast`、`ok` 或 `unknown`。
+        public var verdict: String
+        public var exhaustAt: Int?
+        public var leftAtReset: Int?
+
+        public init(window: String, usedPercent: Int, resetAt: Int, windowMinutes: Int,
+                    elapsedPercent: Int, recent: Bool, verdict: String,
+                    exhaustAt: Int? = nil, leftAtReset: Int? = nil) {
+            self.window = window
+            self.usedPercent = usedPercent
+            self.resetAt = resetAt
+            self.windowMinutes = windowMinutes
+            self.elapsedPercent = elapsedPercent
+            self.recent = recent
+            self.verdict = verdict
+            self.exhaustAt = exhaustAt
+            self.leftAtReset = leftAtReset
+        }
+    }
+
+    public struct QuotaPace: Sendable, Equatable, Decodable {
+        public var status: String
+        public var reason: String?
+        public var planType: String?
+        public var windows: [QuotaWindowPace]?
+    }
+
     /// `usage.read_usage_snapshot` 的应答（订阅额度）。
     public struct UsageWindow: Sendable, Equatable, Decodable {
         public var usedPercent: Int
@@ -408,6 +445,10 @@ public struct MaintenanceClient: Sendable {
             params: .object(["agent": .string(agent)]),
             as: AgentUsageSnapshot.self
         )
+    }
+
+    public func quotaPace() async throws -> QuotaPace {
+        try await call("usage.quotaPace", params: .object([:]), as: QuotaPace.self)
     }
 
     public func loadAgentUsageSnapshot() async throws -> AgentUsageSnapshot {

@@ -18,6 +18,7 @@
 pub mod agent_usage;
 pub mod analytics;
 pub mod index;
+pub mod quota_pace;
 pub mod usage;
 
 use std::path::{Path, PathBuf};

@@ -22,7 +22,7 @@ public struct AgentConfigPage: View {
                     .init(value: .configs, title: "Agent 预设", systemImage: "slider.horizontal.3"),
                     .init(value: .skills, title: "技能", systemImage: "sparkles"),
                     .init(value: .upgrades, title: "Agent 升级", systemImage: "arrow.up.circle"),
-                    .init(value: .changeCost, title: "改动成本", systemImage: "chart.bar"),
+                    .init(value: .changeCost, title: "用量与成本", systemImage: "chart.bar"),
                 ])
                 .fixedSize()
                 Spacer(minLength: 0)
