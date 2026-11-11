@@ -10,43 +10,118 @@ use std::collections::BTreeMap;
 /// gateway model never saw the Aeroric context tools): each tool becomes one
 /// function named [`flat_tool_name`], and a call is split back with this map
 /// (flat name → namespace, name).
-pub type ToolNamespaces = std::collections::HashMap<String, (String, String)>;
+///
+/// Codex 0.167 moved the tool list out of `tools` into an `additional_tools`
+/// input item, and its code-mode `exec` is a custom (grammar) tool in the
+/// `functions` namespace, which Codex treats as top level. Both were dropped
+/// or returned as plain function calls, so a bridged model had no tools
+/// (R4-3 W2); a custom tool's call now goes back as `custom_tool_call`.
+#[derive(Clone, Debug, Default)]
+pub struct ToolNamespaces {
+    calls: std::collections::HashMap<String, ToolRef>,
+}
+
+#[derive(Clone, Debug)]
+struct ToolRef {
+    namespace: Option<String>,
+    name: String,
+    custom: bool,
+}
+
+impl ToolNamespaces {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.calls.is_empty()
+    }
+
+    fn get(&self, flat: &str) -> Option<&ToolRef> {
+        self.calls.get(flat)
+    }
+}
+
+/// The namespace Codex sends its own top-level tools in; calls to them carry
+/// no namespace.
+const TOP_LEVEL_NAMESPACE: &str = "functions";
 
 pub fn flat_tool_name(namespace: &str, name: &str) -> String {
-    if namespace.ends_with("__") {
+    if namespace == TOP_LEVEL_NAMESPACE {
+        name.to_string()
+    } else if namespace.ends_with("__") {
         format!("{namespace}{name}")
     } else {
         format!("{namespace}__{name}")
     }
 }
 
-/// The namespaced tools a Responses request offers.
-pub fn tool_namespaces(body: &Value) -> ToolNamespaces {
-    let mut map = ToolNamespaces::new();
-    for tool in body
+/// Every tool a Responses request offers: its `tools` plus those of any
+/// `additional_tools` input item.
+fn offered_tools(body: &Value) -> Vec<Value> {
+    let mut tools: Vec<Value> = body
         .get("tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for item in body
+        .get("input")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
     {
+        if item.get("type").and_then(Value::as_str) == Some("additional_tools") {
+            tools.extend(
+                item.get("tools")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .cloned(),
+            );
+        }
+    }
+    tools
+}
+
+/// The tools whose calls must go back split into namespace and name, or as
+/// custom tool calls.
+pub fn tool_namespaces(body: &Value) -> ToolNamespaces {
+    let mut map = ToolNamespaces::new();
+    let mut add = |namespace: Option<&str>, tool: &Value| {
+        let Some(name) = tool.get("name").and_then(Value::as_str) else {
+            return;
+        };
+        let custom = tool.get("type").and_then(Value::as_str) == Some("custom");
+        let namespace = namespace.filter(|namespace| *namespace != TOP_LEVEL_NAMESPACE);
+        if namespace.is_none() && !custom {
+            return;
+        }
+        let flat = match namespace {
+            Some(namespace) => flat_tool_name(namespace, name),
+            None => name.to_string(),
+        };
+        map.calls.insert(
+            flat,
+            ToolRef {
+                namespace: namespace.map(str::to_string),
+                name: name.to_string(),
+                custom,
+            },
+        );
+    };
+    for tool in offered_tools(body) {
         if tool.get("type").and_then(Value::as_str) != Some("namespace") {
+            add(None, &tool);
             continue;
         }
-        let Some(namespace) = tool.get("name").and_then(Value::as_str) else {
-            continue;
-        };
+        let namespace = tool.get("name").and_then(Value::as_str);
         for inner in tool
             .get("tools")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
         {
-            if let Some(name) = inner.get("name").and_then(Value::as_str) {
-                map.insert(
-                    flat_tool_name(namespace, name),
-                    (namespace.to_string(), name.to_string()),
-                );
-            }
+            add(Some(namespace.unwrap_or_default()), inner);
         }
     }
     map
@@ -71,7 +146,7 @@ fn split_call_name(item: &mut Value, namespaces: &ToolNamespaces) {
     if item.get("type").and_then(Value::as_str) != Some("function_call") {
         return;
     }
-    let Some((namespace, name)) = item
+    let Some(tool) = item
         .get("name")
         .and_then(Value::as_str)
         .and_then(|flat| namespaces.get(flat))
@@ -79,8 +154,38 @@ fn split_call_name(item: &mut Value, namespaces: &ToolNamespaces) {
     else {
         return;
     };
-    item["name"] = Value::String(name);
-    item["namespace"] = Value::String(namespace);
+    item["name"] = Value::String(tool.name);
+    if let Some(namespace) = tool.namespace {
+        item["namespace"] = Value::String(namespace);
+    }
+    if tool.custom {
+        let input = custom_input(
+            item.get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        );
+        let object = item
+            .as_object_mut()
+            .expect("a function_call item is an object");
+        object.remove("arguments");
+        object.insert("type".into(), Value::String("custom_tool_call".into()));
+        object.insert("input".into(), Value::String(input));
+    }
+}
+
+/// A custom tool is offered to Chat as a function taking `{"input": …}`; its
+/// raw input is that string, or the arguments as sent when the model did not
+/// wrap them.
+fn custom_input(arguments: &str) -> String {
+    serde_json::from_str::<Value>(arguments)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("input")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| arguments.to_string())
 }
 
 pub fn responses_to_chat(body: &Value) -> Value {
@@ -127,7 +232,7 @@ pub fn responses_to_chat(body: &Value) -> Value {
         );
     }
 
-    let tools = response_tools_to_chat(body.get("tools").unwrap_or(&Value::Null));
+    let tools = response_tools_to_chat(&Value::Array(offered_tools(body)));
     if !tools.is_empty() {
         result.insert("tools".to_string(), Value::Array(tools));
         if let Some(choice) = body.get("tool_choice") {
@@ -361,6 +466,9 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
             continue;
         };
         let item_type = item.get("type").and_then(Value::as_str);
+        if item_type == Some("additional_tools") {
+            continue;
+        }
         if !matches!(
             item_type,
             Some(
@@ -415,11 +523,15 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
                 .unwrap_or_else(|| {
                     format!("call_{}", &uuid::Uuid::new_v4().simple().to_string()[..12])
                 });
-            let arguments = item
-                .get("arguments")
-                .or_else(|| item.get("input"))
-                .map(canonical_json)
-                .unwrap_or_default();
+            let arguments = match (item_type, item.get("input").and_then(Value::as_str)) {
+                // Offered to Chat as a function taking `{"input": …}`.
+                (Some("custom_tool_call"), Some(input)) => json!({ "input": input }).to_string(),
+                _ => item
+                    .get("arguments")
+                    .or_else(|| item.get("input"))
+                    .map(canonical_json)
+                    .unwrap_or_default(),
+            };
             pending_tool_calls.push(json!({
                 "id":call_id,
                 "type":"function",
@@ -780,8 +892,49 @@ struct ToolState {
     call_id: String,
     name: String,
     namespace: Option<String>,
+    custom: bool,
     arguments: String,
     output_index: usize,
+}
+
+impl ToolState {
+    /// The call as a Responses output item: a custom tool's goes back as
+    /// `custom_tool_call` with its raw input.
+    fn item(&self, status: &str) -> Value {
+        let mut item = if self.custom {
+            let input = if status == "completed" {
+                custom_input(&self.arguments)
+            } else {
+                String::new()
+            };
+            json!({
+                "id":self.id,
+                "type":"custom_tool_call",
+                "status":status,
+                "call_id":self.call_id,
+                "name":self.name,
+                "input":input
+            })
+        } else {
+            let arguments = if status == "completed" {
+                self.arguments.as_str()
+            } else {
+                ""
+            };
+            json!({
+                "id":self.id,
+                "type":"function_call",
+                "status":status,
+                "call_id":self.call_id,
+                "name":self.name,
+                "arguments":arguments
+            })
+        };
+        if let Some(namespace) = &self.namespace {
+            item["namespace"] = Value::String(namespace.clone());
+        }
+        item
+    }
 }
 
 pub struct ChatSseTransformer {
@@ -914,9 +1067,9 @@ impl ChatSseTransformer {
                     .and_then(Value::as_str)
                     .unwrap_or("tool")
                     .to_string();
-                let (name, namespace) = match self.namespaces.get(&flat) {
-                    Some((namespace, name)) => (name.clone(), Some(namespace.clone())),
-                    None => (flat, None),
+                let (name, namespace, custom) = match self.namespaces.get(&flat) {
+                    Some(tool) => (tool.name.clone(), tool.namespace.clone(), tool.custom),
+                    None => (flat, None, false),
                 };
                 let state = self.tools.entry(index).or_insert_with(|| ToolState {
                     id: call
@@ -931,21 +1084,12 @@ impl ChatSseTransformer {
                         .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple())),
                     name,
                     namespace,
+                    custom,
                     arguments: String::new(),
                     output_index: index + usize::from(self.text_started),
                 });
                 if is_new {
-                    let mut item = json!({
-                        "id":state.id,
-                        "type":"function_call",
-                        "status":"in_progress",
-                        "call_id":state.call_id,
-                        "name":state.name,
-                        "arguments":""
-                    });
-                    if let Some(namespace) = &state.namespace {
-                        item["namespace"] = Value::String(namespace.clone());
-                    }
+                    let item = state.item("in_progress");
                     emit_event(
                         "response.output_item.added",
                         json!({
@@ -960,6 +1104,11 @@ impl ChatSseTransformer {
                     continue;
                 };
                 state.arguments.push_str(arguments);
+                // A custom tool's input is only known once its wrapping JSON
+                // is complete; it arrives whole with `output_item.done`.
+                if state.custom {
+                    continue;
+                }
                 emit_event(
                     "response.function_call_arguments.delta",
                     json!({
@@ -1125,27 +1274,19 @@ impl ChatSseTransformer {
             items.push(item);
         }
         for state in self.tools.values() {
-            let mut item = json!({
-                "id":state.id,
-                "type":"function_call",
-                "status":"completed",
-                "call_id":state.call_id,
-                "name":state.name,
-                "arguments":state.arguments
-            });
-            if let Some(namespace) = &state.namespace {
-                item["namespace"] = Value::String(namespace.clone());
+            let item = state.item("completed");
+            if !state.custom {
+                emit_event(
+                    "response.function_call_arguments.done",
+                    json!({
+                        "type":"response.function_call_arguments.done",
+                        "item_id":state.id,
+                        "output_index":state.output_index,
+                        "arguments":state.arguments
+                    }),
+                    output,
+                );
             }
-            emit_event(
-                "response.function_call_arguments.done",
-                json!({
-                    "type":"response.function_call_arguments.done",
-                    "item_id":state.id,
-                    "output_index":state.output_index,
-                    "arguments":state.arguments
-                }),
-                output,
-            );
             emit_event(
                 "response.output_item.done",
                 json!({
@@ -1503,5 +1644,84 @@ mod tests {
             !text.contains("\"name\":\"mcp__aeroric_context__board_read\""),
             "{text}"
         );
+    }
+
+    /// R4-3 W2 (2026-11-11): Codex 0.167 sends its tools in an
+    /// `additional_tools` input item, code-mode `exec` being a custom tool in
+    /// the top-level `functions` namespace. A Chat model must see them, and a
+    /// call to `exec` must come back as a namespace-less `custom_tool_call`.
+    #[test]
+    fn additional_tools_reach_chat_and_custom_calls_come_back_raw() {
+        let body = json!({
+            "model":"m",
+            "input":[
+                {"type":"additional_tools","id":"at","role":"developer","tools":[
+                    {"type":"namespace","name":"functions","description":"","tools":[
+                        {"type":"custom","name":"exec","description":"run code",
+                         "format":{"type":"grammar","syntax":"lark","definition":"start: /.+/"}},
+                        {"type":"function","name":"wait","parameters":{"type":"object"}}]},
+                    {"type":"namespace","name":"mcp__aeroric_context__","description":"Aeroric",
+                     "tools":[{"type":"function","name":"read_wiki","parameters":{"type":"object"}}]}]},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"读代码"}]},
+                {"type":"custom_tool_call","call_id":"c0","name":"exec","input":"text(\"a\")"},
+                {"type":"custom_tool_call_output","call_id":"c0","output":"a"}
+            ]
+        });
+        let chat = responses_to_chat(&body);
+        let names: Vec<&str> = chat["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["exec", "wait", "mcp__aeroric_context__read_wiki"]);
+        let messages = chat["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "user", "{messages:?}");
+        let history_call = &messages[1]["tool_calls"][0]["function"];
+        assert_eq!(history_call["name"], "exec");
+        assert_eq!(
+            serde_json::from_str::<Value>(history_call["arguments"].as_str().unwrap()).unwrap(),
+            json!({"input":"text(\"a\")"})
+        );
+
+        let namespaces = tool_namespaces(&body);
+        let payload = json!({"choices":[{"message":{"role":"assistant","content":null,
+            "tool_calls":[
+                {"id":"c1","type":"function","function":{"name":"exec","arguments":"{\"input\":\"text(1)\"}"}},
+                {"id":"c2","type":"function","function":{"name":"wait","arguments":"{}"}},
+                {"id":"c3","type":"function","function":{"name":"mcp__aeroric_context__read_wiki","arguments":"{}"}}]}}]});
+        let mut response = chat_response_to_responses(&payload, "m");
+        restore_tool_namespaces(&mut response, &namespaces);
+        let output = &response["output"];
+        assert_eq!(output[0]["type"], "custom_tool_call");
+        assert_eq!(output[0]["name"], "exec");
+        assert_eq!(output[0]["input"], "text(1)");
+        assert!(output[0].get("namespace").is_none() && output[0].get("arguments").is_none());
+        assert_eq!(output[1]["type"], "function_call");
+        assert!(output[1].get("namespace").is_none());
+        assert_eq!(output[2]["name"], "read_wiki");
+        assert_eq!(output[2]["namespace"], "mcp__aeroric_context__");
+
+        let mut transformer = ChatSseTransformer::new("m").with_namespaces(namespaces);
+        let mut events = transformer.push(
+            b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c4\",\"function\":{\"name\":\"exec\",\"arguments\":\"{\\\"input\\\":\"}}]}}]}\n\n",
+        );
+        events.extend(transformer.push(
+            b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"text(2)\\\"}\"}}]}}]}\n\ndata: [DONE]\n\n",
+        ));
+        let text: String = events
+            .iter()
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .collect();
+        assert!(!text.contains("function_call_arguments"), "{text}");
+        let done = text
+            .split("\n\n")
+            .filter_map(|event| event.lines().find_map(|line| line.strip_prefix("data: ")))
+            .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+            .find(|event| event["type"] == "response.output_item.done")
+            .expect("an output_item.done event");
+        assert_eq!(done["item"]["type"], "custom_tool_call");
+        assert_eq!(done["item"]["name"], "exec");
+        assert_eq!(done["item"]["input"], "text(2)");
     }
 }

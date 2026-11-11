@@ -100,6 +100,7 @@ owner 2026-10-31 睡前授权"尽可能多做"，当时没有人可以问，所�
       - 现在把命名空间里的工具展开成 `命名空间__工具名` 的 function；历史里带 `namespace` 的调用按同样规则展开；
       - 模型回调时，`restore_tool_namespaces` 和 `ChatSseTransformer::with_namespaces` 再拆回 `namespace` 加工具名；
       - Codex 转 Messages 的 pivot 路径同样适用。
+      - Codex 0.167 把工具清单挪进 `additional_tools` 输入条目、`exec` 改成 `functions` 命名空间里的自定义工具之后，桥接的补充处理见 [Codex 0.167 经路由转 Chat](../bug-fix/2026-11-11-codex-0167-bridged-tools.md)。
     - Codex 日志记有 "omitting pending optional MCP server aeroric_context"：可选的服务还在启动，新会话的第一回合就没有它的工具。
       - 现在 Codex 的配置给 `aeroric_context` 加上 `required = true`、`startup_timeout_sec = 20`；
       - Claude 的 `mcpServers` 不加，以免它的配置校验拒收。
