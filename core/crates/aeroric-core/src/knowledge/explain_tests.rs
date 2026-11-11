@@ -170,3 +170,18 @@ fn the_page_shows_the_explanation_and_says_when_a_file_read_changed() {
         .text
         .starts_with("> 可能过时：生成后 `c/src/store/mod.rs` 改过。\n\n以下由 m-1"));
 }
+
+/// R4-3 evaluation (2026-11-11): with the Wiki offered, agents used it in 2 of
+/// 8 questions, answered no better and spent more input tokens, so it is off
+/// until the user turns it on for a project.
+#[test]
+fn agents_read_the_wiki_only_once_the_user_turns_it_on() {
+    let wikis = Wikis::default();
+    wikis.set_dir(std::env::temp_dir().join(format!("aeroric-knowledge-{}", uuid::Uuid::new_v4())));
+    assert!(!wikis.agent_access("p"));
+    wikis.set_agent_access("p", true).unwrap();
+    assert!(wikis.agent_access("p"));
+    assert!(!wikis.agent_access("q"), "per project");
+    wikis.set_agent_access("p", false).unwrap();
+    assert!(!wikis.agent_access("p"));
+}

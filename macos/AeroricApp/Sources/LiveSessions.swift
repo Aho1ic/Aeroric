@@ -662,6 +662,11 @@ struct HostWikiService: WikiService {
         try await call("wiki.explainAll", projectID)["queued"]?.numberText.flatMap { Int($0) } ?? 0
     }
 
+    func agentAccess(projectID: String, set: Bool?) async throws -> Bool {
+        let extra: [String: JSONValue] = set.map { ["enabled": .bool($0)] } ?? [:]
+        return try await call("wiki.agentAccess", projectID, extra)["enabled"]?.boolValue ?? true
+    }
+
     func explainState(projectID: String) async throws -> LiveWikiExplainState {
         LiveWikiExplainState.decode(try await call("wiki.explainState", projectID))
     }

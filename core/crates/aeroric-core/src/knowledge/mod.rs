@@ -513,6 +513,20 @@ impl Wikis {
             .flatten()
     }
 
+    /// R4-3: whether agents on `project` get `read_wiki`, `search_wiki` and
+    /// `flag_wiki_issue`; off until the user turns it on, since the R4-3
+    /// evaluation found no net benefit. The pages stay for the user either way.
+    pub fn agent_access(&self, project: &str) -> bool {
+        self.store(project)
+            .ok()
+            .and_then(|s| s.lock().agent_access().ok())
+            .unwrap_or(false)
+    }
+
+    pub fn set_agent_access(&self, project: &str, on: bool) -> Result<(), WikiError> {
+        self.store(project)?.lock().set_agent_access(on)
+    }
+
     pub fn set_fingerprint(&self, project: &str, value: &str) -> Result<(), WikiError> {
         self.store(project)?.lock().set_fingerprint(value)
     }

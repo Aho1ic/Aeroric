@@ -101,6 +101,16 @@ public struct WikiPage: View {
                     .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
                     .disabled(store.pages.isEmpty)
                     .fixedSize()
+                Button { Task { await store.setAgentAccess(!store.agentAccess) } } label: {
+                    Label(store.agentAccess ? "Agent 可读" : "Agent 不读",
+                          systemImage: store.agentAccess ? "eye" : "eye.slash")
+                }
+                .buttonStyle(AeroricCapsuleButtonStyle(store.agentAccess ? .tinted : .ghost, compact: true))
+                .fixedSize()
+                .help(store.agentAccess
+                      ? "这个项目的会话可以用 read_wiki、search_wiki；点一下关掉（页面仍保留，新开的会话生效）"
+                      : "这个项目的会话不提供 Wiki 工具；点一下打开")
+                .accessibilityIdentifier("wiki.agentAccess")
                 Button { showIssues = true } label: {
                     Label("issue · \(store.openIssues.count)", systemImage: "exclamationmark.bubble")
                 }

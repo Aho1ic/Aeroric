@@ -34,6 +34,7 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     set.register(wire::SEARCH_METHOD, blocking(live, wiki_search));
     set.register("wiki.sweep", blocking(live, wiki_sweep));
     set.register("wiki.explainState", blocking(live, wiki_explain_state));
+    set.register("wiki.agentAccess", blocking(live, wiki_agent_access));
     set.register("wiki.explain", in_background(live, wiki_explain));
     set.register("wiki.explainAll", in_background(live, wiki_explain_all));
     set.register("context.wikiAvailable", blocking(live, context_available));
@@ -200,6 +201,8 @@ struct ProjectParams {
     dir: Option<String>,
     #[serde(default)]
     query: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
 }
 
 fn project_params(request: &Request) -> Result<ProjectParams, Box<Frame>> {
@@ -453,6 +456,25 @@ fn start_sweeper(live: &Arc<Live>) {
             let _ = tokio::task::spawn_blocking(move || sweep(&live)).await;
         }
     });
+}
+
+/// `wiki.agentAccess {projectId, enabled?}` (R4-3): read or set whether
+/// agents get the Wiki tools on the project.
+fn wiki_agent_access(live: &Live, request: &Request) -> Frame {
+    let p = match project_params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let wikis = live.executor.wikis();
+    if let Some(on) = p.enabled {
+        if let Err(error) = wikis.set_agent_access(&p.project_id, on) {
+            return wiki_failure(request, error);
+        }
+    }
+    ok(
+        request,
+        json!({ "enabled": wikis.agent_access(&p.project_id) }),
+    )
 }
 
 // MARK: module explanations (R4-2)
@@ -840,7 +862,10 @@ fn context_available(live: &Live, request: &Request) -> Frame {
         .executor
         .context_tokens()
         .resolve(&p.token)
-        .is_some_and(|(_, project)| live.executor.wikis().has_pages(&project));
+        .is_some_and(|(_, project)| {
+            let wikis = live.executor.wikis();
+            wikis.has_pages(&project) && wikis.agent_access(&project)
+        });
     ok(request, json!({ "available": available }))
 }
 
@@ -855,6 +880,13 @@ fn context_read(live: &Live, request: &Request) -> Frame {
         Ok(scope) => scope,
         Err(frame) => return *frame,
     };
+    if !live.executor.wikis().agent_access(&project) {
+        return failure(
+            request.id.clone(),
+            ErrorCode::UnsupportedCapability,
+            "这个项目关闭了 Agent 读 Wiki",
+        );
+    }
     let wikis = live.executor.wikis();
     let slug = p.slug.unwrap_or_else(|| "index".into());
     match wikis.page(&project, &slug) {
@@ -888,6 +920,13 @@ fn context_search(live: &Live, request: &Request) -> Frame {
         Ok(scope) => scope,
         Err(frame) => return *frame,
     };
+    if !live.executor.wikis().agent_access(&project) {
+        return failure(
+            request.id.clone(),
+            ErrorCode::UnsupportedCapability,
+            "这个项目关闭了 Agent 读 Wiki",
+        );
+    }
     match live
         .executor
         .wikis()
@@ -923,6 +962,13 @@ fn context_flag(live: &Live, request: &Request) -> Frame {
         Ok(scope) => scope,
         Err(frame) => return *frame,
     };
+    if !live.executor.wikis().agent_access(&project) {
+        return failure(
+            request.id.clone(),
+            ErrorCode::UnsupportedCapability,
+            "这个项目关闭了 Agent 读 Wiki",
+        );
+    }
     let (Some(slug), Some(text)) = (p.slug, p.text) else {
         return missing(request, "slug、text");
     };

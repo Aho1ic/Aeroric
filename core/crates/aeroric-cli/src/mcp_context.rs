@@ -161,12 +161,23 @@ async fn answer(
         .unwrap_or_default();
     let params = message.get("params").cloned().unwrap_or(Value::Null);
     let result = match method {
-        "initialize" => Ok(json!({
-            "protocolVersion": params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL),
-            "capabilities": {"tools": {}},
-            "serverInfo": {"name": "aeroric-context", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": "Aeroric 上下文工具：检索本项目的历史会话、读取当前任务的交接清单、把工作委派给子会话。"
-        })),
+        "initialize" => {
+            let memory = memory_enabled(client, data_dir, token).await;
+            let wiki = host_says(
+                client,
+                data_dir,
+                token,
+                "context.wikiAvailable",
+                "available",
+            )
+            .await;
+            Ok(json!({
+                "protocolVersion": params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL),
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "aeroric-context", "version": env!("CARGO_PKG_VERSION")},
+                "instructions": instructions(memory, wiki)
+            }))
+        }
         "ping" => Ok(json!({})),
         "tools/list" => {
             let mut list = tools().as_array().cloned().unwrap_or_default();
@@ -195,8 +206,24 @@ async fn answer(
     })
 }
 
-/// Whether the session's project uses memory; `false` when the host cannot
-/// be reached.
+/// R4-3: Codex defers this server's tools and shows the model only these
+/// instructions, so a tool family they leave out is never loaded. The first
+/// Wiki evaluation had all 16 sessions skip the Wiki for exactly that reason.
+fn instructions(memory: bool, wiki: bool) -> String {
+    let mut parts = vec![
+        "检索本项目的历史会话",
+        "读取当前任务的交接清单",
+        "把工作委派给子会话",
+    ];
+    if memory {
+        parts.push("查用户的长期记忆与本项目约定");
+    }
+    if wiki {
+        parts.push("读、搜本项目 Wiki（模块职责与常见坑、设计决定与理由；先读 Wiki 再翻代码更快）");
+    }
+    format!("Aeroric 上下文工具：{}。", parts.join("、"))
+}
+
 /// B5.5-1: offered when the session's project has Wiki pages (Q-W5).
 fn wiki_tools() -> Value {
     json!([
@@ -252,6 +279,8 @@ async fn host_says(
     }
 }
 
+/// Whether the session's project uses memory; `false` when the host cannot
+/// be reached.
 async fn memory_enabled(client: &mut Option<HostClient>, data_dir: &Path, token: &str) -> bool {
     if client.is_none() {
         match HostClient::connect(data_dir, &uuid::Uuid::new_v4().to_string()).await {
@@ -408,6 +437,14 @@ mod tests {
         )
         .await
         .is_none());
+    }
+
+    #[test]
+    fn the_instructions_name_every_offered_tool_family() {
+        let base = instructions(false, false);
+        assert!(base.contains("历史会话") && !base.contains("记忆") && !base.contains("Wiki"));
+        let all = instructions(true, true);
+        assert!(all.contains("长期记忆") && all.contains("Wiki"));
     }
 
     #[tokio::test]

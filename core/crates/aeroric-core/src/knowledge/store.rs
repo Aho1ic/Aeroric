@@ -317,6 +317,28 @@ impl Store {
         Ok(())
     }
 
+    /// R4-3: whether agents get the Wiki tools on this project (default off).
+    pub(super) fn agent_access(&self) -> Result<bool, WikiError> {
+        let value: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'agentAccess'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(value.as_deref() == Some("on"))
+    }
+
+    pub(super) fn set_agent_access(&self, on: bool) -> Result<(), WikiError> {
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES ('agentAccess', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [if on { "on" } else { "off" }],
+        )?;
+        Ok(())
+    }
+
     pub(super) fn set_fingerprint(&self, value: &str) -> Result<(), WikiError> {
         self.conn.execute(
             "INSERT INTO meta(key, value) VALUES ('fingerprint', ?1)

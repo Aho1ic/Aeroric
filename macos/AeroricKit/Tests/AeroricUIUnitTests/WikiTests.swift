@@ -37,6 +37,11 @@ private final class FakeWikiService: WikiService {
         return LiveWikiExportPlan(files: ["\(dir)/index.md"], overwrites: [])
     }
     func export(projectID: String, dir: String) async throws -> [String] { calls.append("export \(dir)"); return ["\(dir)/index.md"] }
+    var access = true
+    func agentAccess(projectID: String, set: Bool?) async throws -> Bool {
+        if let set { access = set; calls.append("access \(set)") }
+        return access
+    }
     var state = LiveWikiExplainState(model: "m")
     var explainStates: [LiveWikiExplainState] = []
     func explain(projectID: String, slug: String) async throws -> Int { calls.append("explain \(slug)"); return 1 }
@@ -140,6 +145,20 @@ final class WikiTests: XCTestCase {
         ]))
         XCTAssertEqual(state, LiveWikiExplainState(running: true, done: 1, total: 4, pending: 3,
                                                    monthInputTokens: 900, model: "gpt"))
+    }
+
+    /// R4-3: the per-project switch that keeps the Wiki tools from agents.
+    func testAgentAccessIsReadAndSwitched() async {
+        let service = FakeWikiService()
+        service.access = false
+        let store = WikiStore(service: service)
+        store.show(scope: "p1")
+        await store.reload()
+        XCTAssertFalse(store.agentAccess)
+        await store.setAgentAccess(true)
+        XCTAssertTrue(store.agentAccess)
+        XCTAssertTrue(service.calls.contains("access true"))
+        XCTAssertEqual(store.notice, "Agent 可以读这个项目的 Wiki")
     }
 
     func testTheTreeGroupsDecisionsAndTheStoreActs() async {

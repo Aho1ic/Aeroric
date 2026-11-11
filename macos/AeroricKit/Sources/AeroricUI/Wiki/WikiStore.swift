@@ -23,6 +23,8 @@ public protocol WikiService {
     /// Every module page missing them or stale, in the background; how many.
     func explainAll(projectID: String) async throws -> Int
     func explainState(projectID: String) async throws -> LiveWikiExplainState
+    /// R4-3: whether agents get the Wiki tools on the project; `set` changes it.
+    func agentAccess(projectID: String, set: Bool?) async throws -> Bool
 }
 
 @MainActor
@@ -43,6 +45,8 @@ public final class WikiStore {
     /// R4-2: generating the open page's explanation.
     public private(set) var explaining = false
     public private(set) var explainState = LiveWikiExplainState()
+    /// R4-3: agents on this project get `read_wiki` / `search_wiki`.
+    public private(set) var agentAccess = false
     public var errorText: String?
     /// Why the export sheet's directory was refused, shown inside the sheet.
     public var exportError: String?
@@ -86,6 +90,7 @@ public final class WikiStore {
             if !pages.contains(where: { $0.slug == selected }) { selected = pages.first?.slug ?? "index" }
             await loadPage()
             issues = try await service.issues(projectID: scope)
+            agentAccess = try await service.agentAccess(projectID: scope, set: nil)
             await refreshExplainState()
         } catch where AgentConfigStore.isCancelled(error) {
             return
@@ -184,6 +189,16 @@ public final class WikiStore {
         }
         if let error = explainState.error { errorText = "生成说明中断：\(error)" }
         await reload()
+    }
+
+    public func setAgentAccess(_ on: Bool) async {
+        guard let service, let scope else { return }
+        do {
+            agentAccess = try await service.agentAccess(projectID: scope, set: on)
+            notice = on ? "Agent 可以读这个项目的 Wiki" : "Agent 不再读这个项目的 Wiki（页面仍保留）"
+        } catch {
+            errorText = "设置失败：\(AgentConfigStore.describe(error))"
+        }
     }
 
     public func refreshExplainState() async {

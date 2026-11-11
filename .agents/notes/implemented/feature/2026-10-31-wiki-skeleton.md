@@ -57,7 +57,7 @@ Status: implemented
   - `read_wiki`：不给 slug 时读索引页，slug 不存在时列出所有页面；
   - `search_wiki`：用 bm25 检索，查询词之间是 OR，最多返回 8 条，每条带片段；
   - `flag_wiki_issue`：issue 类型为 agent，作者记为会话 id；
-  - 只在项目里有页面时出现在工具列表里（`context.wikiAvailable`）。CLI 把"问宿主一个是否问题"的逻辑抽成了 `host_says`。
+  - 只在项目里有页面、并且用户为这个项目打开了"Agent 可读"时出现在工具列表里（`context.wikiAvailable`）。开关默认关闭，依据见 [R4-3 评测](../testing/2026-11-10-wiki-agent-eval.md)。CLI 把"问宿主一个是否问题"的逻辑抽成了 `host_says`。
 
 **界面**
 

@@ -2242,6 +2242,20 @@ async fn a_projects_notes_become_its_wiki() {
         .structured
         .context_tokens()
         .issue("task-1", "project-1");
+    // R4-3: agents get the Wiki only once the user turns it on.
+    let available = host
+        .call("context.wikiAvailable", json!({"token": token}))
+        .await
+        .unwrap();
+    assert_eq!(available["available"], false);
+    let access = host
+        .call(
+            "wiki.agentAccess",
+            json!({"projectId": "project-1", "enabled": true}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(access["enabled"], true);
     let available = host
         .call("context.wikiAvailable", json!({"token": token}))
         .await
