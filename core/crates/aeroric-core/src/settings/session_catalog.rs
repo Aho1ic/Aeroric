@@ -136,11 +136,14 @@ pub fn catalog_with(
         .map_err(|_| "已存 Agent 设置格式无效；未回退默认配置。".to_string())?;
     // Includes private settings only inside a one-way digest; never return them.
     // A settings change invalidates the selection rather than silently upgrading it.
+    // The built-in Codex's model list is left out: it is re-read from Codex every
+    // ten minutes and may drift without the user changing anything (R4-3 W3);
+    // `validate` still rejects a model that left it, and a Codex that cannot
+    // answer is blocked with its reason.
     let bytes = serde_json::to_vec(&serde_json::json!({
         "schemaVersion": SCHEMA_VERSION, "settings": fields,
         "projectId": project_id, "projectPath": project_path,
         "connections": sources.connections, "migrated": sources.migrated,
-        "builtinCodex": sources.builtin_codex.as_ref().map(|answer| answer.as_ref().ok()),
         "builtinClaude": sources.builtin_claude
     }))
     .map_err(|_| "无法确定配置版本。".to_string())?;
@@ -888,6 +891,45 @@ mod tests {
         assert!(
             !claude.blocked_reasons.is_empty(),
             "only Codex is native in N4"
+        );
+    }
+
+    /// R4-3 W3 (2026-11-11): the built-in Codex's model list is re-read every
+    /// ten minutes, and a drift in it once rejected a fresh draft with
+    /// "Agent 配置版本已变化". The list stays out of the revision; a model that
+    /// left it is still caught by its own check.
+    #[test]
+    fn a_codex_model_list_refresh_keeps_the_draft_unless_its_model_left() {
+        use crate::sessions::live::codex::models::CodexModel;
+        let with = |models: &[&str]| AgentSources {
+            builtin_codex: Some(Ok(models
+                .iter()
+                .map(|model| CodexModel {
+                    model: model.to_string(),
+                    efforts: vec![],
+                    is_default: false,
+                })
+                .collect())),
+            ..AgentSources::default()
+        };
+        let drafted = catalog_with(&Map::new(), &with(&["a", "b"]), "p", "/synthetic", 1).unwrap();
+        let request = SubmissionRequest {
+            project_id: "p".into(),
+            configuration_id: "codex".into(),
+            configuration_version: drafted.revision.clone(),
+            agent: "codex".into(),
+            permission_mode: "auto_edit".into(),
+            selected_model: Some("b".into()),
+            reasoning_effort: None,
+            ..aeroric_protocol::submission::fixture_request()
+        };
+        let refreshed =
+            catalog_with(&Map::new(), &with(&["b", "c"]), "p", "/synthetic", 2).unwrap();
+        assert_eq!(validate(&refreshed, &request), Vec::<String>::new());
+        let dropped = catalog_with(&Map::new(), &with(&["c"]), "p", "/synthetic", 3).unwrap();
+        assert_eq!(
+            validate(&dropped, &request),
+            ["请明确选择此配置支持的模型。"]
         );
     }
 
