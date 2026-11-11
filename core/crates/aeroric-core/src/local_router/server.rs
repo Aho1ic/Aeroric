@@ -1107,6 +1107,8 @@ fn outbound_headers(
     let mut headers = original.clone();
     headers.remove(CONTENT_LENGTH);
     if bridge {
+        // Protocol conversion drops the Responses-only context required by Lite.
+        headers.remove("x-openai-internal-codex-responses-lite");
         headers.remove(ACCEPT_ENCODING);
         headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -2570,16 +2572,31 @@ mod tests {
         let upstream = Router::new().fallback(any(move |request: Request| {
             let state = mock_state.clone();
             async move {
+                let (parts, body) = request.into_parts();
+                assert_eq!(
+                    parts
+                        .headers
+                        .get("x-openai-internal-codex-responses-lite")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("true")
+                );
+                let body = to_bytes(body, MAX_REQUEST_BODY_BYTES).await.unwrap();
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(body["reasoning"]["context"], "all_turns");
+                assert_eq!(
+                    body["client_metadata"]
+                        ["ws_request_header_x_openai_internal_codex_responses_lite"],
+                    "true"
+                );
                 let mut captured = state.lock().await;
-                captured.uri = request.uri().to_string();
-                captured.authorization = request
-                    .headers()
+                captured.uri = parts.uri.to_string();
+                captured.authorization = parts
+                    .headers
                     .get("authorization")
                     .and_then(|value| value.to_str().ok())
                     .map(str::to_string);
-                captured.internal_marker_present =
-                    request.headers().contains_key(ROUTE_AGENT_HEADER);
-                captured.removed_header_present = request.headers().contains_key("x-remove");
+                captured.internal_marker_present = parts.headers.contains_key(ROUTE_AGENT_HEADER);
+                captured.removed_header_present = parts.headers.contains_key("x-remove");
                 Json(json!({
                     "id": "resp_json_1",
                     "model": "gpt-5.6",
@@ -2630,7 +2647,15 @@ mod tests {
             .header(ROUTE_AGENT_HEADER, "codex")
             .header("connection", "x-remove")
             .header("x-remove", "must-not-forward")
-            .json(&json!({"model": "gpt-5.6", "input": "private prompt"}))
+            .header("x-openai-internal-codex-responses-lite", "true")
+            .json(&json!({
+                "model": "gpt-5.6",
+                "input": "private prompt",
+                "reasoning": {"effort": "xhigh", "context": "all_turns"},
+                "client_metadata": {
+                    "ws_request_header_x_openai_internal_codex_responses_lite": "true"
+                }
+            }))
             .send()
             .await
             .unwrap();
@@ -3539,11 +3564,20 @@ mod tests {
     async fn bridges_codex_responses_to_chat_completions() {
         let upstream = Router::new().fallback(any(|request: Request| async move {
             assert_eq!(request.uri().path(), "/v1/chat/completions");
+            assert!(
+                !request
+                    .headers()
+                    .contains_key("x-openai-internal-codex-responses-lite"),
+                "Chat requests must not retain the Responses Lite header"
+            );
             let body = to_bytes(request.into_body(), MAX_REQUEST_BODY_BYTES)
                 .await
                 .unwrap();
             let json: Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(json["messages"][0]["role"], "user");
+            assert_eq!(json["reasoning_effort"], "xhigh");
+            assert!(json.get("reasoning").is_none());
+            assert!(json.get("client_metadata").is_none());
             Json(json!({
                 "id":"chat_1",
                 "model":"gpt-test",
@@ -3582,9 +3616,12 @@ mod tests {
             .unwrap();
         let response = test_client()
             .post(format!("{}/codex/v1/responses", info.base_url))
+            .header("X-OpenAI-Internal-Codex-Responses-Lite", "true")
             .json(&json!({
                 "model":"gpt-test",
                 "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}],
+                "reasoning":{"effort":"xhigh","context":"all_turns"},
+                "client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"},
                 "stream":false
             }))
             .send()
@@ -3687,6 +3724,12 @@ mod tests {
         );
         let upstream = Router::new().fallback(any(move |request: Request| async move {
             assert_eq!(request.uri().path(), "/v1/messages");
+            assert!(
+                !request
+                    .headers()
+                    .contains_key("x-openai-internal-codex-responses-lite"),
+                "Messages requests must not retain the Responses Lite header"
+            );
             assert_eq!(
                 request
                     .headers()
@@ -3704,6 +3747,8 @@ mod tests {
                 json.get("input").is_none(),
                 "upstream must receive a Messages body"
             );
+            assert!(json.get("reasoning").is_none());
+            assert!(json.get("client_metadata").is_none());
             let chunks = vec![
                 Ok::<Bytes, Infallible>(Bytes::copy_from_slice(&events.as_bytes()[..57])),
                 Ok::<Bytes, Infallible>(Bytes::copy_from_slice(&events.as_bytes()[57..])),
@@ -3746,9 +3791,12 @@ mod tests {
             .unwrap();
         let response = test_client()
             .post(format!("{}/codex/v1/responses", info.base_url))
+            .header("X-OpenAI-Internal-Codex-Responses-Lite", "true")
             .json(&json!({
                 "model":"claude-test",
                 "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Ping"}]}],
+                "reasoning":{"effort":"xhigh","context":"all_turns"},
+                "client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"},
                 "stream":true
             }))
             .send()
