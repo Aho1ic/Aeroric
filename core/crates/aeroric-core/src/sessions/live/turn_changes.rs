@@ -88,13 +88,15 @@ impl TurnChangeTracker {
             crate::platform::login_shell_env().to_vec(),
             super::auto_check::CHECK_TIMEOUT,
         );
+        let ledger: Arc<super::turn_ledger::TurnLedger> = Arc::default();
+        checks.record_into(Arc::clone(&ledger));
         Arc::new(Self {
             inner,
             registry,
             cwds: Mutex::default(),
             started: Mutex::default(),
             checks,
-            ledger: Arc::default(),
+            ledger,
             hook: Mutex::new(None),
         })
     }
@@ -176,6 +178,7 @@ impl TurnChangeTracker {
                             undone_ms: None,
                             undo_group: None,
                             state_before_undo: None,
+                            check: None,
                         },
                     );
                 }

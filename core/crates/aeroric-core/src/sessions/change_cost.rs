@@ -28,12 +28,18 @@ pub enum Outcome {
 }
 
 /// The ledger turn started nearest `started_at`, if one is close enough.
-pub fn outcome(started_at: u64, records: &[TurnRecord]) -> Outcome {
-    let nearest = records
+/// The ledger record of the turn that started at `started_at`: the nearest
+/// within [`MATCH_MS`], since the transcript and the ledger stamp a turn's
+/// start a little apart.
+pub fn nearest(started_at: u64, records: &[TurnRecord]) -> Option<&TurnRecord> {
+    records
         .iter()
         .filter(|r| r.started_ms.abs_diff(started_at) <= MATCH_MS)
-        .min_by_key(|r| r.started_ms.abs_diff(started_at));
-    match nearest.map(|r| r.state) {
+        .min_by_key(|r| r.started_ms.abs_diff(started_at))
+}
+
+pub fn outcome(started_at: u64, records: &[TurnRecord]) -> Outcome {
+    match nearest(started_at, records).map(|r| r.state) {
         Some(TurnState::Accepted) => Outcome::Accepted,
         Some(TurnState::Undone) => Outcome::Undone,
         Some(TurnState::Pending) => Outcome::Pending,
@@ -189,6 +195,7 @@ mod tests {
             undone_ms: None,
             undo_group: None,
             state_before_undo: None,
+            check: None,
         }
     }
 

@@ -62,6 +62,7 @@ fn a_turn(ledger: &TurnLedger, dir: &Path, turn: &str, ended_ms: u64) -> TurnRec
         undone_ms: None,
         undo_group: None,
         state_before_undo: None,
+        check: None,
     };
     ledger.record("task-1", record.clone());
     record
@@ -243,6 +244,7 @@ fn turn_writing(ledger: &TurnLedger, dir: &Path, id: &str, at: u64, writes: &[(&
             undone_ms: None,
             undo_group: None,
             state_before_undo: None,
+            check: None,
         },
     );
 }
@@ -353,9 +355,27 @@ fn a_commit_anywhere_in_the_batch_blocks_it() {
             undone_ms: None,
             undo_group: None,
             state_before_undo: None,
+            check: None,
         },
     );
     let plan = ledger.plan("task-1", "u1", TurnAction::UndoFrom, false);
     let reason = plan.blocked.unwrap();
     assert!(reason.starts_with("其中一轮提交了"), "{reason}");
+}
+
+/// R5-1: a finished check stays with its turn.
+#[test]
+fn a_turns_check_is_kept_with_it() {
+    let dir = repo();
+    let ledger = ledger();
+    a_turn(&ledger, &dir, "turn-1", now_ms());
+    let failed = aeroric_protocol::turn_ledger::TurnCheck {
+        passed: false,
+        summary: "测试 1 项失败".into(),
+    };
+    ledger.set_check("task-1", "turn-1", failed.clone());
+    ledger.set_check("task-1", "no-such-turn", failed.clone());
+    let list = ledger.list("task-1");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].check, Some(failed));
 }

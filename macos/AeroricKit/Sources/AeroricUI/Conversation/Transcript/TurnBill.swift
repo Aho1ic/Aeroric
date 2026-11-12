@@ -66,6 +66,44 @@ public enum TurnBillText {
         return ms < 1000 ? .fast : ms < 10_000 ? .medium : .slow
     }
 
+    /// R5-1: why a turn did not run, in a few words.
+    public static func notRunReason(_ reason: String) -> String {
+        switch reason {
+        case "quota": "额度或限流"
+        case "login": "登录失效"
+        case "model": "模型不可用"
+        case "service": "服务出错"
+        case "network": "连不上"
+        case "rejected": "请求被拒"
+        default: "出错"
+        }
+    }
+
+    public enum Tone: Equatable { case danger, warning, quiet }
+
+    /// R5-1: the turn's grade beside its bill, when there is one to tell:
+    /// it did not run, the user undid it, its checks failed, or it ran on
+    /// after API errors. A plain completed turn gets none.
+    public static func outcome(_ stat: SessionTranscriptStats.TurnStat)
+        -> (text: String, help: String, tone: Tone)? {
+        if let notRun = stat.notRun {
+            let status = notRun.status.map { "HTTP \($0) · " } ?? ""
+            return ("没跑成 · \(notRunReason(notRun.reason))",
+                    "Agent 的 API 调用出错，这一轮没有跑完，不算模型答错。\n\(status)\(notRun.message)", .danger)
+        }
+        if let failure = stat.productFailure {
+            let what = failure.undone ? "已撤销" : "检查没过"
+            var help = failure.undone ? "这一轮的改动被撤销了" : "这一轮之后，项目检查没过"
+            if let check = failure.check { help += "：\(check)" }
+            return ("产品失败 · \(what)", help, .warning)
+        }
+        if stat.apiErrors > 0, !stat.interrupted {
+            return ("途中 \(stat.apiErrors) 次 API 错误",
+                    "Agent 遇到 API 错误后重试成功，这一轮照常跑完", .quiet)
+        }
+        return nil
+    }
+
     /// R3-2: the names the bill gives each slice of the prompt.
     public static func contextLabel(_ kind: String) -> String {
         switch kind {
@@ -107,6 +145,30 @@ public enum TurnBillText {
         let from = Double(min(max(span.startedAt, turnStart), turnEnd) - turnStart)
         let to = Double(min(max(span.endedAt ?? turnEnd, span.startedAt), turnEnd) - turnStart)
         return (from / total, max(0, to - from) / total)
+    }
+}
+
+/// R5-1: the turn's grade, beside its bill.
+struct TurnOutcomeChip: View {
+    let outcome: (text: String, help: String, tone: TurnBillText.Tone)
+
+    var body: some View {
+        Text(outcome.text)
+            .foregroundStyle(color)
+            .padding(.horizontal, AeroricSpace.m)
+            .frame(height: 20)
+            .overlay(Capsule(style: .continuous).strokeBorder(color.opacity(0.5), lineWidth: 1))
+            .help(outcome.help)
+            .accessibilityLabel(outcome.text)
+            .accessibilityIdentifier("session.turn.outcome")
+    }
+
+    private var color: Color {
+        switch outcome.tone {
+        case .danger: AeroricColor.danger
+        case .warning: AeroricColor.warning
+        case .quiet: AeroricColor.textTertiary
+        }
     }
 }
 

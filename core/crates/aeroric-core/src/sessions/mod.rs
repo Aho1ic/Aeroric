@@ -31,6 +31,7 @@ pub mod parser;
 pub mod resume;
 pub mod transcript_stats;
 pub mod turn_context;
+pub mod turn_outcome;
 
 /// 一条已解析的会话消息。字段与宿主 `session.rs:671` 逐字对应。
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]

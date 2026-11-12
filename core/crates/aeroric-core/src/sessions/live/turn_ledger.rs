@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use aeroric_protocol::turn_ledger::{
-    PlannedFile, SkippedFile, TurnAction, TurnPlan, TurnRecord, TurnState,
+    PlannedFile, SkippedFile, TurnAction, TurnCheck, TurnPlan, TurnRecord, TurnState,
 };
 use parking_lot::Mutex;
 
@@ -61,6 +61,17 @@ impl TurnLedger {
         list.push(record.clone());
         self.store(task_id, list);
         self.prune(&top, now_ms());
+    }
+
+    /// R5-1: how the project's checks ended on `turn_id`; a turn the ledger
+    /// does not hold (it changed no files) is left alone.
+    pub fn set_check(&self, task_id: &str, turn_id: &str, check: TurnCheck) {
+        let mut list = self.load(task_id);
+        let Some(record) = list.iter_mut().find(|r| r.turn_id == turn_id) else {
+            return;
+        };
+        record.check = Some(check);
+        self.store(task_id, list);
     }
 
     pub fn accept(&self, task_id: &str, turn_id: &str) -> Result<TurnRecord, String> {

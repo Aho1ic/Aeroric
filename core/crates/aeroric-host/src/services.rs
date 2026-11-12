@@ -4727,7 +4727,16 @@ fn session_history(
             }
         })
         .flatten()
-        .map(|stats| serde_json::to_value(stats).unwrap_or_default())
+        .map(|mut stats| {
+            // R5-1: a turn the user undid, or whose checks failed, is a
+            // product failure; the ledger says which.
+            let records = aeroric_core::sessions::live::turn_ledger::read_at(
+                &context.paths.data_dir().join("turns"),
+                task_id,
+            );
+            aeroric_core::sessions::turn_outcome::grade(&mut stats.turns, &records);
+            serde_json::to_value(stats).unwrap_or_default()
+        })
         .and_then(|stats| {
             let size = serde_json::to_vec(&stats).map_or(0, |bytes| bytes.len());
             crate::imports_services::message_budget(size).map(|budget| (stats, budget))

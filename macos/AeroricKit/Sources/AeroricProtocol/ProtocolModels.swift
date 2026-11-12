@@ -266,6 +266,12 @@ public struct SessionTranscriptStats: Equatable, Sendable {
         /// R3-2: what the turn's last call carried, base first; empty when
         /// the transcript records no base.
         public var context: [ContextPart] = []
+        /// R5-1: why the turn did not run (set together with `failed`).
+        public var notRun: NotRun?
+        /// R5-1: the turn's API error lines, a final one included.
+        public var apiErrors: Int = 0
+        /// R5-1: the turn ran, but the user undid it or its checks failed.
+        public var productFailure: ProductFailure?
 
         public init(startedAt: UInt64, endedAt: UInt64?, tokens: UInt64, interrupted: Bool = false,
                     failed: Bool = false, messages: Int = 1) {
@@ -275,6 +281,32 @@ public struct SessionTranscriptStats: Equatable, Sendable {
             self.interrupted = interrupted
             self.failed = failed
             self.messages = messages
+        }
+    }
+
+    /// R5-1: the turn ended on the agent's API error.
+    public struct NotRun: Equatable, Sendable {
+        /// quota, login, model, service, network, rejected or other.
+        public var reason: String
+        public var status: Int?
+        public var message: String
+
+        public init(reason: String, status: Int? = nil, message: String) {
+            self.reason = reason
+            self.status = status
+            self.message = message
+        }
+    }
+
+    /// R5-1: the user undid the turn, or the project's checks failed on it.
+    public struct ProductFailure: Equatable, Sendable {
+        public var undone: Bool
+        /// The failed check's summary.
+        public var check: String?
+
+        public init(undone: Bool, check: String? = nil) {
+            self.undone = undone
+            self.check = check
         }
     }
 
@@ -371,6 +403,16 @@ public struct SessionTranscriptStats: Equatable, Sendable {
             stat.model = row["model"]?.stringValue
             stat.costUsd = row["costUsd"]?.numberText.flatMap { Double($0) }
             stat.moreTools = Int(n("moreTools") ?? 0)
+            stat.apiErrors = Int(n("apiErrors") ?? 0)
+            if let notRun = row["notRun"]?.objectValue, let reason = notRun["reason"]?.stringValue {
+                stat.notRun = NotRun(reason: reason,
+                                     status: notRun["status"]?.numberText.flatMap { Int($0) },
+                                     message: notRun["message"]?.stringValue ?? "")
+            }
+            if let failure = row["productFailure"]?.objectValue {
+                stat.productFailure = ProductFailure(undone: failure["undone"]?.boolValue ?? false,
+                                                     check: failure["check"]?.stringValue)
+            }
             stat.tools = (row["tools"]?.arrayValue ?? []).compactMap { item in
                 let span = item.objectValue ?? [:]
                 func m(_ key: String) -> UInt64? { span[key]?.numberText.flatMap { UInt64($0) } }

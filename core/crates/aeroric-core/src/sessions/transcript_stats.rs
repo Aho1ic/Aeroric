@@ -58,6 +58,17 @@ pub struct TurnStat {
     /// `isApiErrorMessage` line) — not a completed turn.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub failed: bool,
+    /// R5-1: why the turn did not run (`failed` is then set). An error the
+    /// agent retried past leaves this unset; `api_errors` counts every API
+    /// error line of the turn, the last one included.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_run: Option<super::turn_outcome::NotRun>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub api_errors: u32,
+    /// R5-1: the turn ran, but the user undid it or its checks failed; set
+    /// by the host from the turn ledger.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_failure: Option<super::turn_outcome::ProductFailure>,
     /// CU 2026-11-03 (R1-2b): the person's messages this turn took — more
     /// than one when they steered it. History shows each as its own turn,
     /// so without this the timings of older turns slid by one.
@@ -515,7 +526,16 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
                     }
                     typed = 0;
                 }
-                "task_complete" => clock.end_turn(&mut stats, at),
+                "task_complete" => {
+                    clock.end_turn(&mut stats, at);
+                    if payload["error"].is_object() {
+                        if let Some(turn) = stats.turns.last_mut() {
+                            turn.failed = true;
+                            turn.not_run =
+                                Some(super::turn_outcome::codex_not_run(&payload["error"]));
+                        }
+                    }
+                }
                 // An `exec` script that prints only `r.output` hides the
                 // exit code; the command's own completion event has it, with
                 // no call id, between the script's call and its output.
@@ -692,9 +712,14 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
                 clock.output(&mut stats, at);
                 ledger.talk(chars(&message["content"].to_string()));
                 set_turn_model(&mut stats, message["model"].as_str());
-                if value["isApiErrorMessage"] == true {
-                    if let Some(turn) = stats.turns.last_mut() {
+                if let Some(turn) = stats.turns.last_mut() {
+                    if value["isApiErrorMessage"] == true {
                         turn.failed = true;
+                        turn.api_errors += 1;
+                        turn.not_run = Some(super::turn_outcome::claude_not_run(&value));
+                    } else if turn.not_run.take().is_some() {
+                        // Claude retried past the error; the turn went on.
+                        turn.failed = false;
                     }
                 }
                 for block in blocks.into_iter().flatten() {

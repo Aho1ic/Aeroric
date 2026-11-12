@@ -398,6 +398,9 @@ pub struct AutoChecker {
     failures: Mutex<HashMap<String, CheckFailure>>,
     /// B4′: checks a task asks for itself (accepted criteria with a command).
     extra: Mutex<Option<ExtraChecks>>,
+    /// R5-1: where each finished run is kept with its turn, so a turn's
+    /// grade outlives the session's in-memory log.
+    ledger: Mutex<Option<Arc<super::turn_ledger::TurnLedger>>>,
 }
 
 /// B4′: a task's own checks, run after the project's (or alone when the
@@ -421,11 +424,16 @@ impl AutoChecker {
             next: AtomicU64::new(1),
             failures: Mutex::default(),
             extra: Mutex::new(None),
+            ledger: Mutex::new(None),
         })
     }
 
     pub fn set_extra(&self, extra: ExtraChecks) {
         *self.extra.lock() = Some(extra);
+    }
+
+    pub fn record_into(&self, ledger: Arc<super::turn_ledger::TurnLedger>) {
+        *self.ledger.lock() = Some(ledger);
     }
 
     pub fn set_policy(&self, policy: Arc<dyn AutoCheckPolicy>) {
@@ -435,6 +443,30 @@ impl AutoChecker {
     fn push(&self, task_id: &str, kind: SessionUpdateKind) {
         let now = now_ms();
         remember(&mut self.failures.lock(), task_id, &kind, now);
+        if let SessionUpdateKind::AutoCheck {
+            turn_id,
+            state,
+            items,
+        } = &kind
+        {
+            if let (Some(ledger), "passed" | "failed") =
+                (self.ledger.lock().clone(), state.as_str())
+            {
+                let passed = state == "passed";
+                ledger.set_check(
+                    task_id,
+                    turn_id,
+                    aeroric_protocol::turn_ledger::TurnCheck {
+                        passed,
+                        summary: if passed {
+                            String::new()
+                        } else {
+                            failure_summary(items)
+                        },
+                    },
+                );
+            }
+        }
         if let Some(log) = self.registry.log(task_id) {
             let update = log.push(kind, now);
             self.inner.update(&update);

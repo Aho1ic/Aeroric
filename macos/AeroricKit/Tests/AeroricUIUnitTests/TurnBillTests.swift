@@ -63,4 +63,36 @@ final class TurnBillTests: XCTestCase {
         let open = TurnBillText.bar(turn.tools[2], turnStart: 1000, turnEnd: 11000)
         XCTAssertEqual(open.start + open.width, 1, accuracy: 1e-9)
     }
+
+    /// R5-1: a turn that did not run, one the user undid, and one that ran on
+    /// after API errors, each told apart; a plain completed turn says nothing.
+    func testTheTurnsGradeIsDecodedAndWorded() throws {
+        let stats = try XCTUnwrap(SessionTranscriptStats.decode(.object([
+            "turns": .array([
+                .object(["startedAt": .number("1000"), "endedAt": .number("3700"), "tokens": .number("0"),
+                         "failed": .bool(true), "apiErrors": .number("1"),
+                         "notRun": .object(["reason": .string("rejected"), "status": .number("400"),
+                                            "message": .string("requires reasoning.context")])]),
+                .object(["startedAt": .number("5000"), "tokens": .number("10"),
+                         "productFailure": .object(["undone": .bool(true)])]),
+                .object(["startedAt": .number("9000"), "tokens": .number("10"),
+                         "productFailure": .object(["check": .string("测试 3 项失败")])]),
+                .object(["startedAt": .number("12000"), "tokens": .number("10"), "apiErrors": .number("2")]),
+                .object(["startedAt": .number("15000"), "tokens": .number("10")]),
+            ]),
+        ])))
+        let turns = stats.turns
+        XCTAssertEqual(turns[0].notRun, .init(reason: "rejected", status: 400, message: "requires reasoning.context"))
+        XCTAssertEqual(TranscriptTurns.header(turns[0]), "没跑成（请求被拒），用时 2.7 秒")
+        let notRun = try XCTUnwrap(TurnBillText.outcome(turns[0]))
+        XCTAssertEqual(notRun.text, "没跑成 · 请求被拒")
+        XCTAssertEqual(notRun.tone, .danger)
+        XCTAssertTrue(notRun.help.hasSuffix("HTTP 400 · requires reasoning.context"))
+        XCTAssertEqual(TurnBillText.outcome(turns[1])?.text, "产品失败 · 已撤销")
+        XCTAssertEqual(TurnBillText.outcome(turns[2])?.text, "产品失败 · 检查没过")
+        XCTAssertEqual(TurnBillText.outcome(turns[2])?.help, "这一轮之后，项目检查没过：测试 3 项失败")
+        XCTAssertEqual(TurnBillText.outcome(turns[3])?.text, "途中 2 次 API 错误")
+        XCTAssertNil(TurnBillText.outcome(turns[4]))
+        XCTAssertEqual(TranscriptTurns.header(turns[4]), "已完成")
+    }
 }

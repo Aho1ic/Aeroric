@@ -53,6 +53,18 @@ pub struct TurnRecord {
     /// R2-3a: the state an undo is taken back to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_before_undo: Option<TurnState>,
+    /// R5-1: how the project's checks ended on this turn; unset when none ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<TurnCheck>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnCheck {
+    pub passed: bool,
+    /// e.g. `测试 3 项失败，诊断 2 个错误`; empty when passed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -79,6 +79,7 @@ fn turn(ledger: &TurnLedger, dir: &Path, task: &str, id: &str, at: u64, writes: 
             undone_ms: None,
             undo_group: None,
             state_before_undo: None,
+            check: None,
         },
     );
 }

@@ -82,9 +82,18 @@ public enum TranscriptTurns {
     }
 
     /// `已完成，用时 13 秒`; `已完成` without timing; `已中断…` for a turn
-    /// the person stopped.
+    /// the person stopped; `没跑成（额度或限流）…` for one that ended on the
+    /// agent's API error (R5-1).
     public static func header(_ stat: SessionTranscriptStats.TurnStat?) -> String {
-        let state = stat?.interrupted == true ? "已中断" : stat?.failed == true ? "失败" : "已完成"
+        let state = if stat?.interrupted == true {
+            "已中断"
+        } else if let notRun = stat?.notRun {
+            "没跑成（\(TurnBillText.notRunReason(notRun.reason))）"
+        } else if stat?.failed == true {
+            "失败"
+        } else {
+            "已完成"
+        }
         guard let stat, let ended = stat.endedAt, ended >= stat.startedAt else { return state }
         return "\(state)，用时 \(SessionStatsText.duration(ended - stat.startedAt))"
     }
@@ -222,6 +231,9 @@ struct TranscriptTurnView<Row: View>: View {
             // R3-1: the 用量 line became the turn's bill.
             if let stat = turn.stat, TurnBillText.hasBill(stat) {
                 TurnBillChip(stat: stat)
+            }
+            if let stat = turn.stat, let outcome = TurnBillText.outcome(stat) {
+                TurnOutcomeChip(outcome: outcome)
             }
             if let ended = turn.stat?.endedAt { Text(TranscriptTurns.clock(ended)) }
         }
