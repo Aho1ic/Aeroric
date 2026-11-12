@@ -60,16 +60,8 @@ public struct StatusDot: View {
         if reduceMotion {
             ring.overlay(Circle().fill(state.color).frame(width: 4, height: 4))
         } else {
-            TimelineView(.animation) { context in
-                let angle = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1) * 360
-                ring.overlay(
-                    Circle()
-                        .trim(from: 0, to: 0.3)
-                        .stroke(state.color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                        .frame(width: 9, height: 9)
-                        .rotationEffect(.degrees(angle))
-                )
-            }
+            // Spun by Core Animation, not a per-frame SwiftUI timeline (see SpinningArc).
+            ring.overlay(SpinningArc(color: state.color, lineWidth: 1.5).frame(width: 10.5, height: 10.5))
         }
     }
 }

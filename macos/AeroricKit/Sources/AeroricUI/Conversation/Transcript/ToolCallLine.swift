@@ -160,18 +160,12 @@ private struct ShimmerText: View {
             .lineLimit(1)
             .fixedSize()
         if active && !reduceMotion {
-            TimelineView(.animation) { context in
-                let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
-                label.overlay {
-                    GeometryReader { proxy in
-                        LinearGradient(colors: [.clear, AeroricColor.canvas.opacity(0.75), .clear],
-                                       startPoint: .leading, endPoint: .trailing)
-                            .frame(width: proxy.size.width * 0.5)
-                            .offset(x: (phase * 1.5 - 0.5) * proxy.size.width)
-                    }
+            // Swept by Core Animation, not a per-frame SwiftUI timeline (see ShimmerBand).
+            label.overlay {
+                ShimmerBand(color: AeroricColor.canvas.opacity(0.75))
                     .mask(label)
                     .allowsHitTesting(false)
-                }
+                    .accessibilityHidden(true)
             }
         } else {
             label

@@ -51,6 +51,31 @@ final class ConversationModelTests: XCTestCase {
         XCTAssertEqual(read.summary, "a.rs")
     }
 
+    /// Prints what one derivation of a long session's turns costs (80 turns,
+    /// 6 tool calls each). Before 2026-11-12 the live page paid it N+3 times
+    /// per body for N turns, ~20 bodies a second while a turn ran.
+    func testLongHistoryTurnDerivationTime() {
+        var history: [AeroricUI.SessionMessage] = []
+        for turn in 0..<80 {
+            history.append(AeroricUI.SessionMessage(role: "user", content: [.text(text: "第 \(turn) 轮：改一下 a.rs")],
+                                                    messageId: "u\(turn)"))
+            var calls: [AeroricUI.SessionContent] = [.text(text: String(repeating: "说明。", count: 40))]
+            for call in 0..<6 {
+                calls.append(.toolUse(id: "t\(turn)-\(call)", name: call % 2 == 0 ? "Read" : "Edit",
+                                      input: #"{"file_path":"a.rs","old_string":"x\ny","new_string":"z"}"#))
+            }
+            history.append(AeroricUI.SessionMessage(role: "assistant", content: calls, messageId: "a\(turn)"))
+            history.append(AeroricUI.SessionMessage(
+                role: "user", content: (0..<6).map { .toolResult(id: "t\(turn)-\($0)", output: String(repeating: "ok\n", count: 50)) },
+                messageId: "r\(turn)"))
+            history.append(AeroricUI.SessionMessage(role: "assistant", content: [.text(text: "完成。")], messageId: "f\(turn)"))
+        }
+        measure {
+            let turns = TranscriptTurns.attach([], to: TranscriptTurns.group(TranscriptBuilder.items(from: history, taskRunning: false)))
+            XCTAssertEqual(turns.count, 80)
+        }
+    }
+
     func testMissingResultAfterTheTaskEndsIsUnfinished() {
         let items = TranscriptBuilder.items(from: messages(), taskRunning: false)
         guard case let .tool(edit) = items[3] else { return XCTFail("tool") }

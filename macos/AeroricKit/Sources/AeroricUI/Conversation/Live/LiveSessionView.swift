@@ -46,14 +46,11 @@ public struct LiveSessionView: View {
         _infoCollapsed = State(initialValue: UserDefaults.standard.bool(forKey: Self.infoCollapsedKey))
     }
 
-    private var historyItems: [TranscriptItem] {
-        TranscriptBuilder.items(from: store.history, taskRunning: false)
-    }
+    private var historyItems: [TranscriptItem] { store.historyItems }
 
     /// 2026-10-29: history as turns, each with its timing from the transcript.
-    private var historyTurns: [TranscriptTurn] {
-        TranscriptTurns.attach(store.transcriptStats?.turns ?? [], to: TranscriptTurns.group(historyItems))
-    }
+    /// Built by the store once per history read, never per body.
+    private var historyTurns: [TranscriptTurn] { store.historyTurns }
 
     /// 2026-10-29: Codex's "no metadata for this model" notice is dropped —
     /// it fires for every third-party model and asks nothing of the user.

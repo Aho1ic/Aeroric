@@ -98,6 +98,43 @@ final class LiveSessionStoreTests: XCTestCase {
         XCTAssertTrue(actions.calls.contains("prompt hi"))
     }
 
+    /// 2026-11-12 (perf): the page reads turns the store grouped once per
+    /// history read, not ones it rebuilds per body.
+    func testHistoryIsGroupedIntoTurnsOncePerRead() async {
+        let actions = FakeLiveActions(state: state(seq: 1))
+        actions.historyValue = [user, reply]
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        let items = TranscriptBuilder.items(from: [user, reply], taskRunning: false)
+        XCTAssertEqual(store.historyItems, items)
+        XCTAssertEqual(store.historyTurns, TranscriptTurns.group(items))
+        XCTAssertEqual(store.historyTurns.count, 1)
+    }
+
+    /// 2026-11-12 (perf): a poll that brings nothing writes nothing the page
+    /// observes — @Observable notifies on every assignment, equal or not, and
+    /// the page polls every 50–500ms.
+    func testAQuietPollNotifiesNoObserver() async {
+        let actions = FakeLiveActions(state: state(seq: 3))
+        actions.historyValue = [user, reply]
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        final class Fired: @unchecked Sendable { var value = false }
+        let fired = Fired()
+        withObservationTracking {
+            _ = store.model
+            _ = store.approvals
+            _ = store.connectionProblem
+            _ = store.history
+            _ = store.historyTurns
+            _ = store.historyError
+        } onChange: { fired.value = true }
+        await store.poll()
+        await store.poll()
+        XCTAssertFalse(fired.value)
+        XCTAssertEqual(store.model?.cursor, 3)
+    }
+
     /// B4-1: a failed history read is shown with 重试, never a silent blank page.
     func testAFailedHistoryReadIsShownAndCanBeRetried() async {
         let actions = FakeLiveActions(state: state(seq: 1))
