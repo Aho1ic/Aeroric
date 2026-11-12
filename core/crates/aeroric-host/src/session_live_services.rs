@@ -383,7 +383,11 @@ fn context_messages(
     let Some(path) = path else {
         return Ok(Vec::new());
     };
-    let size = match std::fs::metadata(&path) {
+    let Some(file) = aeroric_core::sessions::transcript_file::resolve(std::path::Path::new(&path))
+    else {
+        return Ok(Vec::new());
+    };
+    let size = match std::fs::metadata(&file) {
         Ok(meta) => meta.len(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(format!("会话记录读不出来：{e}")),
@@ -395,7 +399,8 @@ fn context_messages(
             CONTEXT_MAX_FILE / (1024 * 1024)
         ));
     }
-    let raw = std::fs::read_to_string(&path).map_err(|e| format!("会话记录读不出来：{e}"))?;
+    let raw = aeroric_core::sessions::transcript_file::read_to_string(std::path::Path::new(&path))
+        .map_err(|e| format!("会话记录读不出来：{e}"))?;
     let lines: Vec<String> = raw.lines().map(str::to_string).collect();
     let family = launch_family_of(record, live.families.as_ref());
     let messages = crate::services::parse_messages(&lines, family);
@@ -1132,7 +1137,9 @@ impl Live {
             return record;
         };
         let path = std::path::PathBuf::from(path);
-        if path.starts_with(&target) || !path.exists() {
+        if path.starts_with(&target)
+            || aeroric_core::sessions::transcript_file::resolve(&path).is_none()
+        {
             return record;
         }
         let from = home_of(data, None, family)
@@ -1666,7 +1673,10 @@ fn plan_switch(live: &Live, request: &Request) -> Frame {
         let (_, path) = aeroric_core::tasks::session_owner::current_session(&record);
         let lines: Vec<String> = path
             .as_deref()
-            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|p| {
+                aeroric_core::sessions::transcript_file::read_to_string(std::path::Path::new(p))
+                    .ok()
+            })
             .map(|raw| raw.lines().map(str::to_string).collect())
             .unwrap_or_default();
         let used = context_used(&lines, family, path.as_deref());
@@ -1754,7 +1764,9 @@ fn move_source(live: &Live, request: &Request) -> Frame {
     let (session, path) = aeroric_core::tasks::session_owner::current_session(&record);
     let lines: Vec<String> = path
         .as_deref()
-        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|p| {
+            aeroric_core::sessions::transcript_file::read_to_string(std::path::Path::new(p)).ok()
+        })
         .map(|raw| raw.lines().map(str::to_string).collect())
         .unwrap_or_default();
     let used = context_used(&lines, family, path.as_deref());
@@ -2021,7 +2033,8 @@ fn copy_transcript(
     }
     if !target.exists() {
         std::fs::create_dir_all(target.parent()?).ok()?;
-        std::fs::copy(path, &target).ok()?;
+        // Codex may have compressed the source to `.zst`; the copy is plain.
+        aeroric_core::sessions::transcript_file::copy_plain(path, &target).ok()?;
     }
     Some(target)
 }

@@ -14,8 +14,7 @@
 use crate::sessions::parser::{line_is_codex_format, SESSION_FORMAT_DETECTION_LINES};
 use crate::sessions::SessionMessage;
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::Path;
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -36,8 +35,8 @@ pub fn read_session_page_lines(
     cursor: Option<u64>,
     limit: usize,
 ) -> Result<(Vec<String>, Option<u64>, bool), String> {
-    let mut file = File::open(path).map_err(|error| error.to_string())?;
-    let file_len = file.metadata().map_err(|error| error.to_string())?.len();
+    let (mut file, file_len) =
+        super::transcript_file::seekable(path).map_err(|error| error.to_string())?;
     let end = cursor.unwrap_or(file_len).min(file_len);
     if end == 0 || limit == 0 {
         return Ok((Vec::new(), None, false));
@@ -122,8 +121,7 @@ pub const MAX_SESSION_LINES: usize = 20_000;
 /// 所以这里在流式扫描时顺便对前 `SESSION_FORMAT_DETECTION_LINES` 行做探测,
 /// 把结论单独返回,避免为了探测而全量驻留。
 pub fn read_session_tail(path: &Path) -> Result<(Vec<String>, bool), String> {
-    let file = File::open(path).map_err(|e| e.to_string())?;
-    let reader = BufReader::new(file);
+    let reader = super::transcript_file::open(path).map_err(|e| e.to_string())?;
     // VecDeque 做固定容量环形窗口,超出容量时从头部弹出,保证尾部 N 行。
     let mut tail: VecDeque<String> = VecDeque::with_capacity(MAX_SESSION_LINES.min(1024));
     let mut scanned = 0usize;

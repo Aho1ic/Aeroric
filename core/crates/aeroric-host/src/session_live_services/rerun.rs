@@ -74,7 +74,9 @@ fn ledger(live: &Live, task_id: &str) -> Vec<TurnRecord> {
 fn turns(live: &Live, record: &Record) -> Vec<TurnStat> {
     use aeroric_core::sessions::transcript_stats;
     let (_, path) = aeroric_core::tasks::session_owner::current_session(record);
-    let Some(raw) = path.and_then(|p| std::fs::read_to_string(p).ok()) else {
+    let Some(raw) = path.and_then(|p| {
+        aeroric_core::sessions::transcript_file::read_to_string(std::path::Path::new(&p)).ok()
+    }) else {
         return Vec::new();
     };
     let lines: Vec<String> = raw.lines().map(str::to_string).collect();

@@ -30,6 +30,7 @@ pub mod omp;
 pub mod parser;
 pub mod rerun;
 pub mod resume;
+pub mod transcript_file;
 pub mod transcript_stats;
 pub mod turn_context;
 pub mod turn_outcome;

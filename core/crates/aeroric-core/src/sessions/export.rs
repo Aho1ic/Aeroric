@@ -15,7 +15,7 @@ use crate::sessions::omp::parse_omp_session_lines;
 use crate::sessions::parser::is_codex_format;
 use crate::sessions::{SessionContent, SessionMessage};
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 /// Maximum session size accepted by the explicit export flow (200 MiB).
@@ -53,6 +53,9 @@ pub fn export_session_markdown(
     meta: &ExportTaskMeta,
 ) -> Result<(), String> {
     let canonical_out = validate_export_output_path(output_path)?;
+    // 2026-11-12: a Codex rollout compressed since reads from its `.zst`.
+    let resolved = super::transcript_file::resolve(canonical);
+    let canonical = resolved.as_deref().unwrap_or(canonical);
     let metadata = std::fs::metadata(canonical)
         .map_err(|error| format!("Cannot read session metadata: {}", error))?;
     if metadata.len() > MAX_SESSION_BYTES_FOR_EXPORT {
@@ -67,9 +70,9 @@ pub fn export_session_markdown(
     let mut lines = match read_compressed_dsh_lines(canonical)? {
         Some(decoded) => decoded,
         None => {
-            let session_file = File::open(canonical)
+            let session_file = super::transcript_file::open(canonical)
                 .map_err(|error| format!("Cannot open session file: {}", error))?;
-            BufReader::new(session_file)
+            session_file
                 .lines()
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| format!("Cannot read session file: {}", error))?

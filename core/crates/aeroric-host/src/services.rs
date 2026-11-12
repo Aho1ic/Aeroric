@@ -956,6 +956,26 @@ fn project_read_task_terminal_history(request: Request, context: Arc<CoreContext
         ),
     }
 }
+/// The session file's canonical path under the name it was recorded with:
+/// a Codex rollout compressed since to `.jsonl.zst` still answers to its
+/// `.jsonl` name, and the readers find the `.zst` beside it.
+fn canonical_session_path(session_path: &str) -> std::io::Result<std::path::PathBuf> {
+    use aeroric_core::sessions::transcript_file;
+    let path = std::path::Path::new(session_path);
+    let Some(file) = transcript_file::resolve(path) else {
+        return std::fs::canonicalize(path);
+    };
+    let canonical = std::fs::canonicalize(file)?;
+    let name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| transcript_file::plain_name(name).to_string());
+    Ok(match name {
+        Some(name) => canonical.with_file_name(name),
+        None => canonical,
+    })
+}
+
 fn session_read_session_id(request: Request, _context: Arc<CoreContext>) -> Frame {
     let id = request.id.clone();
     let Some(params) = request.params.as_object() else {
@@ -974,7 +994,7 @@ fn session_read_session_id(request: Request, _context: Arc<CoreContext>) -> Fram
         );
     };
 
-    let canonical = match std::fs::canonicalize(session_path) {
+    let canonical = match canonical_session_path(session_path) {
         Ok(c) => c,
         Err(e) => {
             return failure(
@@ -985,7 +1005,7 @@ fn session_read_session_id(request: Request, _context: Arc<CoreContext>) -> Fram
         }
     };
 
-    if !canonical.is_file() {
+    if aeroric_core::sessions::transcript_file::resolve(&canonical).is_none() {
         return failure(
             id,
             ErrorCode::InvalidArgument,
@@ -1031,7 +1051,7 @@ fn session_supports_native_resume(request: Request, _context: Arc<CoreContext>) 
         );
     };
 
-    let canonical = match std::fs::canonicalize(session_path) {
+    let canonical = match canonical_session_path(session_path) {
         Ok(c) => c,
         Err(e) => {
             return failure(
@@ -1042,7 +1062,7 @@ fn session_supports_native_resume(request: Request, _context: Arc<CoreContext>) 
         }
     };
 
-    if !canonical.is_file() {
+    if aeroric_core::sessions::transcript_file::resolve(&canonical).is_none() {
         return failure(
             id,
             ErrorCode::InvalidArgument,
@@ -1101,7 +1121,7 @@ fn session_read_session_message_page(request: Request, _context: Arc<CoreContext
         );
     }
 
-    let canonical = match std::fs::canonicalize(session_path) {
+    let canonical = match canonical_session_path(session_path) {
         Ok(c) => c,
         Err(e) => {
             return failure(
@@ -1111,7 +1131,7 @@ fn session_read_session_message_page(request: Request, _context: Arc<CoreContext
             )
         }
     };
-    if !canonical.is_file() {
+    if aeroric_core::sessions::transcript_file::resolve(&canonical).is_none() {
         return failure(
             id,
             ErrorCode::InvalidArgument,
@@ -4452,7 +4472,12 @@ fn session_retry_attention(
             else {
                 continue;
             };
-            let Ok(meta) = std::fs::metadata(&path) else {
+            let Some(file) =
+                aeroric_core::sessions::transcript_file::resolve(std::path::Path::new(&path))
+            else {
+                continue;
+            };
+            let Ok(meta) = std::fs::metadata(&file) else {
                 continue;
             };
             let Ok(modified) = meta.modified() else {
@@ -4491,12 +4516,11 @@ fn stats_of_tail(
     family: ProtocolFamily,
 ) -> Option<aeroric_core::sessions::transcript_stats::TranscriptStats> {
     use aeroric_core::sessions::transcript_stats;
-    use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).ok()?;
-    file.seek(SeekFrom::Start(len.saturating_sub(max_bytes)))
-        .ok()?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).ok()?;
+    let _ = len;
+    // A Codex rollout compressed since is read from its `.zst`.
+    let bytes =
+        aeroric_core::sessions::transcript_file::tail(std::path::Path::new(path), max_bytes)
+            .ok()?;
     // The first line of a tail is cut; it fails to parse and is skipped.
     let lines: Vec<String> = String::from_utf8_lossy(&bytes)
         .lines()
@@ -4591,7 +4615,12 @@ fn session_change_cost(
             else {
                 continue;
             };
-            let Ok(meta) = std::fs::metadata(&path) else {
+            let Some(file) =
+                aeroric_core::sessions::transcript_file::resolve(std::path::Path::new(&path))
+            else {
+                continue;
+            };
+            let Ok(meta) = std::fs::metadata(&file) else {
                 continue;
             };
             let Ok(modified) = meta.modified() else {
@@ -4688,7 +4717,10 @@ fn session_history(
         )
         .map(Option::unwrap_or_default)
         .map_err(std::io::Error::other),
-        (Some(path), None) => std::fs::read_to_string(path),
+        // A Codex rollout compressed since is read from its `.zst`.
+        (Some(path), None) => {
+            aeroric_core::sessions::transcript_file::read_to_string(std::path::Path::new(path))
+        }
     };
     let raw = match read {
         Ok(raw) => raw,

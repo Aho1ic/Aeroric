@@ -10,8 +10,8 @@
 //! - 增量：marker（mtime + size）未变的条目不再读取。
 //! - home 由宿主注入（`core-discovers-no-real-home`）；默认根 = `<home>/.claude`、`<home>/.codex`。
 
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read};
+use std::fs;
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -484,7 +484,9 @@ impl ImportStore {
             .map_err(ImportError::Io)?;
             return Ok((session, messages));
         }
-        let size = fs::metadata(&session.source_path)
+        let on_disk = super::transcript_file::resolve(&session.source_path)
+            .unwrap_or_else(|| session.source_path.clone());
+        let size = fs::metadata(on_disk)
             .map_err(|e| ImportError::Io(e.to_string()))?
             .len();
         // 2026-10-28: an oversized session is read from its tail (the newest
@@ -494,9 +496,7 @@ impl ImportStore {
                 .map_err(ImportError::Io)?
                 .0
         } else {
-            let mut text = String::new();
-            File::open(&session.source_path)
-                .and_then(|mut file| file.read_to_string(&mut text))
+            let text = super::transcript_file::read_to_string(&session.source_path)
                 .map_err(|e| ImportError::Io(e.to_string()))?;
             text.lines().map(str::to_string).collect()
         };
@@ -625,7 +625,7 @@ pub fn assign_project(cwd: Option<&str>, projects: &[(String, String)]) -> Optio
 }
 
 fn marker_of(path: &Path) -> Option<SourceMarker> {
-    let metadata = fs::metadata(path).ok()?;
+    let metadata = fs::metadata(super::transcript_file::resolve(path)?).ok()?;
     let mtime_ms = metadata
         .modified()
         .ok()?
@@ -700,8 +700,7 @@ struct Head {
 /// 的行，但每行读完整（≤ `HEAD_LINE_BYTES`）——首条提示词里贴了截图时，这一行
 /// 常有几 MB，截断就解析不了（2026-10-27）。
 fn read_head(agent: ImportAgent, path: &Path) -> Result<Head, String> {
-    let file = File::open(path).map_err(|e| e.to_string())?;
-    let mut reader = BufReader::new(file);
+    let mut reader = super::transcript_file::open(path).map_err(|e| e.to_string())?;
     let mut head = Head::default();
     let mut consumed: u64 = 0;
     let mut buf = Vec::new();

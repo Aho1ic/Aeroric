@@ -20,8 +20,8 @@ use crate::sessions::discovery::{
 };
 use crate::sessions::parser::{parse_session_messages, SESSION_FORMAT_DETECTION_LINES};
 use crate::sessions::SessionContent;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::fs;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -40,11 +40,8 @@ pub fn session_file_supports_native_resume(path: &Path, is_codex: bool) -> Resul
         return Ok(true);
     }
 
-    let file = File::open(path).map_err(|error| error.to_string())?;
-    for line in BufReader::new(file)
-        .lines()
-        .take(SESSION_FORMAT_DETECTION_LINES)
-    {
+    let file = super::transcript_file::open(path).map_err(|error| error.to_string())?;
+    for line in file.lines().take(SESSION_FORMAT_DETECTION_LINES) {
         let line = line.map_err(|error| error.to_string())?;
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
@@ -83,8 +80,8 @@ pub fn is_uuid_like(s: &str) -> bool {
 }
 
 pub fn resolve_session_id_from_file(path: &Path, is_codex: bool) -> Option<String> {
-    let file = File::open(path).ok()?;
-    for line in BufReader::new(file)
+    let file = super::transcript_file::open(path).ok()?;
+    for line in file
         .lines()
         .map_while(Result::ok)
         .take(SESSION_FORMAT_DETECTION_LINES)
@@ -136,8 +133,8 @@ pub fn resolve_session_id_from_file(path: &Path, is_codex: bool) -> Option<Strin
 }
 
 pub fn session_started_at_ms(path: &Path) -> Option<i64> {
-    let file = File::open(path).ok()?;
-    for line in BufReader::new(file)
+    let file = super::transcript_file::open(path).ok()?;
+    for line in file
         .lines()
         .map_while(Result::ok)
         .take(SESSION_FORMAT_DETECTION_LINES)
@@ -160,8 +157,8 @@ pub fn session_started_at_ms(path: &Path) -> Option<i64> {
         }
     }
 
-    fs::metadata(path)
-        .ok()
+    super::transcript_file::resolve(path)
+        .and_then(|path| fs::metadata(path).ok())
         .and_then(|metadata| metadata.created().or_else(|_| metadata.modified()).ok())
         .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
         .map(|duration| duration.as_millis() as i64)
@@ -174,11 +171,10 @@ pub fn session_matches_project(path: &Path, project_path: &str, is_codex: bool) 
     let expected = Path::new(project_path)
         .canonicalize()
         .unwrap_or_else(|_| PathBuf::from(project_path));
-    let Ok(file) = File::open(path) else {
+    let Ok(file) = super::transcript_file::open(path) else {
         return false;
     };
-    BufReader::new(file)
-        .lines()
+    file.lines()
         .map_while(Result::ok)
         .take(SESSION_FORMAT_DETECTION_LINES)
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
@@ -193,7 +189,8 @@ pub fn session_matches_project(path: &Path, project_path: &str, is_codex: bool) 
 }
 
 pub fn first_user_message(path: &Path, is_codex: bool) -> Option<String> {
-    let lines = BufReader::new(File::open(path).ok()?)
+    let lines = super::transcript_file::open(path)
+        .ok()?
         .lines()
         .map_while(Result::ok)
         .take(2_000)

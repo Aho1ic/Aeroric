@@ -70,7 +70,7 @@ pub fn collect_session_files_from_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
     files
 }
 
-/// Codex 侧收集：递归，但只收 `rollout-*.jsonl`。
+/// Codex 侧收集：递归，只收 `rollout-*.jsonl`（压缩的 `.jsonl.zst` 按原名列出）。
 pub fn collect_session_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -83,14 +83,18 @@ pub fn collect_session_files(dir: &Path, out: &mut Vec<PathBuf>) {
             continue;
         }
 
-        let is_rollout_jsonl = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
-            .unwrap_or(false);
-
-        if is_rollout_jsonl {
-            out.push(path);
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        // 2026-11-12: Codex compresses old rollouts to `.jsonl.zst`. The
+        // session is listed under its `.jsonl` name, so its id and source
+        // key stay what they were; readers find the `.zst` beside it.
+        if name.starts_with("rollout-") && super::transcript_file::is_session_log(name) {
+            let plain = path.with_file_name(super::transcript_file::plain_name(name));
+            // Both on disk: the plain file is listed on its own turn.
+            if plain == path || !plain.exists() {
+                out.push(plain);
+            }
         }
     }
 }
@@ -163,4 +167,28 @@ pub fn claude_sessions_dir_for_agent_in(
         None => home.join(".claude"),
     };
     Some(config_root.join("projects").join(encoded_project))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_compressed_rollout_is_listed_under_its_plain_name_once() {
+        let root = std::env::temp_dir().join(format!("aeroric-discovery-{}", uuid::Uuid::new_v4()));
+        let day = root.join("2026/11/11");
+        fs::create_dir_all(&day).unwrap();
+        fs::write(day.join("rollout-a.jsonl.zst"), b"").unwrap();
+        fs::write(day.join("rollout-b.jsonl"), b"").unwrap();
+        fs::write(day.join("rollout-b.jsonl.zst"), b"").unwrap();
+        fs::write(day.join("notes.jsonl.zst"), b"").unwrap();
+
+        let mut files = collect_session_files_from_roots(std::slice::from_ref(&root));
+        files.sort();
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(
+            files,
+            vec![day.join("rollout-a.jsonl"), day.join("rollout-b.jsonl")]
+        );
+    }
 }
