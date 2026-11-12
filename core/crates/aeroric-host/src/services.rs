@@ -4735,6 +4735,14 @@ fn session_history(
                 task_id,
             );
             aeroric_core::sessions::turn_outcome::grade(&mut stats.turns, &records);
+            aeroric_core::sessions::rerun::lift_replaced(
+                &mut stats.turns,
+                &records,
+                &aeroric_core::sessions::rerun::load(
+                    &context.paths.data_dir().join("reruns"),
+                    task_id,
+                ),
+            );
             serde_json::to_value(stats).unwrap_or_default()
         })
         .and_then(|stats| {

@@ -39,9 +39,29 @@ pub fn check(project: &Path) -> Result<PathBuf, String> {
 /// Make `task_id`'s copy of `project`; the record (kept under `dir`) and the
 /// working directory inside the copy matching `project`'s place in its repo.
 pub fn create(dir: &Path, project: &Path, task_id: &str) -> Result<(CopyRecord, PathBuf), String> {
+    create_from(dir, project, task_id, None)
+}
+
+/// R5-2: as [`create`], starting from snapshot tree `from` (a turn's
+/// `before`) instead of the directory as it is now. Bringing changes back
+/// then compares with `from`; where the original moved on since, the
+/// conflict flow takes over.
+pub fn create_from(
+    dir: &Path,
+    project: &Path,
+    task_id: &str,
+    from: Option<&str>,
+) -> Result<(CopyRecord, PathBuf), String> {
     let top = check(project)?;
     exclude(&top);
-    let (_, base) = snapshot_tree(&top).ok_or("读不到原目录")?;
+    let base = match from {
+        Some(tree) => {
+            git(&top, &["cat-file", "-e", &format!("{tree}^{{tree}}")], None)
+                .ok_or("找不到这一轮开始前的快照")?;
+            tree.to_string()
+        }
+        None => snapshot_tree(&top).ok_or("读不到原目录")?.1,
+    };
     let path = top.join(".aeroric").join("worktrees").join(safe(task_id));
     if path.exists() {
         return Err("这个会话的副本目录已经存在".into());

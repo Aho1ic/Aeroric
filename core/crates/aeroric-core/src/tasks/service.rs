@@ -580,6 +580,9 @@ impl TaskService {
         // R2-3b: an isolated copy needs a local git repository with a commit;
         // anything else is refused before any side effect.
         let mut reasons = reasons;
+        if request.copy_from.is_some() && !request.isolated {
+            reasons.push("指定副本起点时必须用独立副本。".into());
+        }
         let copy_root = match (&project, request.isolated) {
             (Some(project), true) => match crate::projects::mutations::resolve_location(project) {
                 aeroric_protocol::ProjectTarget::Local { path } => {
@@ -639,10 +642,11 @@ impl TaskService {
             )?;
             if let Some(root) = &copy_root {
                 let copies = self.context.paths.data_dir().join("copies");
-                let (_, cwd) = crate::sessions::live::isolated_copy::create(
+                let (_, cwd) = crate::sessions::live::isolated_copy::create_from(
                     &copies,
                     std::path::Path::new(root),
                     &request.submission_id,
+                    request.copy_from.as_deref(),
                 )
                 .map_err(TaskError::Launch)?;
                 let id = request.submission_id.clone();

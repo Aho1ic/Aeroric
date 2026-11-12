@@ -34,6 +34,8 @@ public struct LiveSessionFacts: Equatable, Sendable {
     /// R2-1 目检: the task failed, so its latest finished turn did not complete
     /// (Codex leaves no error in its rollout to tell from).
     public var lastTurnFailed = false
+    /// R5-2: every configuration of the project a turn can be run again with.
+    public var rerunTargets: [RerunTarget] = []
     /// R2-3b: the isolated copy the session runs in; nil in the original directory.
     public var copyPath: String?
 

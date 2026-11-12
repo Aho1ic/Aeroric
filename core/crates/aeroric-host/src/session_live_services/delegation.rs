@@ -81,7 +81,7 @@ pub(super) fn nested(record: &Record) -> bool {
         .any(|k| record.get(k).is_some())
 }
 
-fn title_of(record: &Record) -> String {
+pub(super) fn title_of(record: &Record) -> String {
     let agent = record.get("agent").and_then(Value::as_str).unwrap_or("");
     let title = ["name", "title"]
         .iter()
@@ -103,7 +103,7 @@ fn title_of(record: &Record) -> String {
     title.chars().take(40).collect()
 }
 
-fn field(record: &Record, key: &str) -> Option<String> {
+pub(super) fn field(record: &Record, key: &str) -> Option<String> {
     record
         .get(key)
         .and_then(Value::as_str)

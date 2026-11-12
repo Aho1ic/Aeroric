@@ -28,6 +28,8 @@ public struct LiveSessionView: View {
     @State private var loginHelp: ExpiredLogin?
     /// R2-1: an undo waiting for the user's yes; where the pending capsule scrolls to.
     @State private var turnRequest: TurnUndoRequest?
+    /// R5-2: the turn being run again with other models.
+    @State private var rerunRequest: RerunRequest?
     @State private var turnScroll: String?
     @State private var atBottom = true
     /// Finished turns whose work the person unfolded.
@@ -135,7 +137,11 @@ public struct LiveSessionView: View {
                                                 userInfo: ["taskID": store.taskID, "turnID": record.turnId])
             },
             onUndoFrom: later > 0 ? { ask("undoFrom", redo: false) } : nil,
-            later: later)
+            later: later,
+            onRerun: facts.rerunTargets.isEmpty ? nil : {
+                rerunRequest = RerunRequest(turnID: record.turnId, message: words ?? "",
+                                            originalKept: record.state != "undone")
+            })
     }
 
     public var body: some View {
@@ -186,6 +192,14 @@ public struct LiveSessionView: View {
         .onChange(of: infoCollapsed) { _, value in UserDefaults.standard.set(value, forKey: Self.infoCollapsedKey) }
         .task(id: store.taskID) { await store.run() }
         .sheet(item: $loginHelp) { LoginHelpSheet(login: $0) }
+        .sheet(item: $rerunRequest) { request in
+            RerunSheet(request: request, targets: facts.rerunTargets) { message, brief, choices in
+                await store.startRerun(turnID: request.turnID, message: message, brief: brief, choices: choices)
+            }
+            // 目检 2026-11-12: right after a restart the built-in Codex had not
+            // answered yet, so the catalog read then left it out of the list.
+            .task { await store.refreshConfigurations() }
+        }
         .sheet(item: $turnRequest) { request in
             TurnUndoSheet(request: request) {
                 Task {
@@ -321,6 +335,19 @@ public struct LiveSessionView: View {
                                 row: { item in historyRow(item, offset: 0, column: column) },
                                 ledger: ledgerControls(for: turn))
                             .id(turn.id)
+                            // R5-2: the turn's reruns, side by side under it.
+                            if let record = TurnLedgerText.record(for: turn.stat, in: store.turnRecords) {
+                                ForEach(store.rerunGroups.filter { $0.turnId == record.turnId }) { group in
+                                    RerunCompareCard(
+                                        group: group,
+                                        originalKept: record.state != "undone",
+                                        onOpen: { store.openTask($0) },
+                                        onBringBack: { run, undo in
+                                            Task { await store.bringBackRerun(run, undoOriginal: undo ? record.turnId : nil) }
+                                        },
+                                        onDrop: { runs in Task { await store.dropReruns(runs) } })
+                                }
+                            }
                         }
                         VStack(alignment: .leading, spacing: AeroricSpace.l) {
                         if let opening = openingPrompt {
@@ -485,6 +512,15 @@ public struct LiveSessionView: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            if let notice = store.rerunNotice {
+                Label(notice, systemImage: "arrow.triangle.branch")
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .lineLimit(2)
+                    .padding(.horizontal, AeroricSpace.l)
+                    .onTapGesture { store.rerunNotice = nil }
+                    .accessibilityIdentifier("session.live.rerun-notice")
+            }
             if let notice = moveNotice {
                 Label(notice, systemImage: "arrow.triangle.swap")
                     .font(.system(size: AeroricType.caption))

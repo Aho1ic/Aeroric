@@ -76,9 +76,31 @@ public protocol LiveSessionActions {
     func undoMemory(id: String) async throws
     /// Show another task (a reviewer, a parent).
     func openTask(_ taskID: String)
+    /// R5-2: run a turn again with other configurations; the reruns so far;
+    /// bring one run's copy back whole; drop a run's copy.
+    func startRerun(taskID: String, turnID: String, message: String, brief: Bool,
+                    choices: [LiveRerunChoice]) async throws -> LiveRerunStarted
+    func reruns(taskID: String) async throws -> [LiveRerunGroup]
+    func bringAll(taskID: String) async throws -> (applied: Int, conflicts: Int)
+    func removeCopy(taskID: String) async throws -> Int
+    /// R5-2: read the task's project configurations again (the rerun sheet
+    /// opens with what can start now, not what could when the App started).
+    func refreshConfigurations(taskID: String) async
 }
 
 extension LiveSessionActions {
+    public func startRerun(taskID: String, turnID: String, message: String, brief: Bool,
+                           choices: [LiveRerunChoice]) async throws -> LiveRerunStarted {
+        throw LiveSessionError.unsupported("这个宿主不支持换模型重跑")
+    }
+    public func reruns(taskID: String) async throws -> [LiveRerunGroup] { [] }
+    public func refreshConfigurations(taskID: String) async {}
+    public func bringAll(taskID: String) async throws -> (applied: Int, conflicts: Int) {
+        throw LiveSessionError.unsupported("这个宿主不支持带回")
+    }
+    public func removeCopy(taskID: String) async throws -> Int {
+        throw LiveSessionError.unsupported("这个宿主不支持删除副本")
+    }
     public func moveSource(taskID: String, configID: String?, model: String) async throws -> String {
         throw LiveSessionError.unsupported("这个宿主不支持换模型来源")
     }
@@ -205,6 +227,10 @@ public final class LiveSessionStore {
     public var expiredLogin: ExpiredLogin?
     /// R2-1: this session's turns that changed files.
     public private(set) var turnRecords: [LiveTurnRecord] = []
+    /// R5-2: this session's reruns, newest last.
+    public private(set) var rerunGroups: [LiveRerunGroup] = []
+    /// R5-2: a word after starting, bringing back or dropping a run.
+    public var rerunNotice: String?
     /// A05: nil until read, or when the host does not offer auto checks.
     public private(set) var autoCheck: LiveAutoCheckSelection?
     /// B4-1: findings wait for the user before going to the writer.
@@ -383,6 +409,7 @@ public final class LiveSessionStore {
         }
         expiredLogin = (try? await actions.expiredLogin(taskID: taskID)) ?? nil
         await refreshTurns()
+        Task { await refreshReruns() }
     }
 
     /// R2-1: the host records a turn once its snapshot is done, a moment
@@ -392,6 +419,63 @@ public final class LiveSessionStore {
         guard again else { return }
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         if let list = try? await actions.turns(taskID: taskID) { turnRecords = list }
+    }
+
+    /// R5-2: the sheet asks for a fresh catalog when it opens.
+    public func refreshConfigurations() async {
+        await actions.refreshConfigurations(taskID: taskID)
+    }
+
+    /// R5-2: read the reruns again; while one still runs, again in a while.
+    public func refreshReruns() async {
+        guard let groups = try? await actions.reruns(taskID: taskID) else { return }
+        rerunGroups = groups
+        if RerunText.anyRunning(groups) {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if !Task.isCancelled { await refreshReruns() }
+        }
+    }
+
+    /// R5-2: nil when the runs started (some may have been refused, said in
+    /// the notice); the reason when none did.
+    public func startRerun(turnID: String, message: String, brief: Bool,
+                           choices: [LiveRerunChoice]) async -> String? {
+        do {
+            let started = try await actions.startRerun(taskID: taskID, turnID: turnID, message: message,
+                                                       brief: brief, choices: choices)
+            rerunNotice = RerunText.started(started)
+            Task { await refreshReruns() }
+            return nil
+        } catch {
+            return "重跑没有开始：\(error.localizedDescription)"
+        }
+    }
+
+    /// R5-2: bring `run` back whole, first undoing the original turn when asked.
+    public func bringBackRerun(_ run: LiveRerunRun, undoOriginal turnID: String?) async {
+        if let turnID, !(await applyTurn(turnID, action: "undo")) { return }
+        do {
+            let result = try await actions.bringAll(taskID: run.taskId)
+            rerunNotice = RerunText.broughtBack(result, label: run.label)
+        } catch {
+            errorText = "带回失败：\(error.localizedDescription)"
+        }
+        await refreshTurns()
+    }
+
+    /// R5-2: drop the copies of the runs the user did not keep.
+    public func dropReruns(_ runs: [LiveRerunRun]) async {
+        var dropped = 0
+        for run in runs where !run.gone {
+            do {
+                _ = try await actions.removeCopy(taskID: run.taskId)
+                dropped += 1
+            } catch {
+                errorText = "删除副本失败：\(error.localizedDescription)"
+            }
+        }
+        if dropped > 0 { rerunNotice = "已丢弃 \(dropped) 个重跑的副本，会话仍在侧栏" }
+        await refreshReruns()
     }
 
     public func planTurn(_ turnID: String, action: String) async -> LiveTurnPlan {

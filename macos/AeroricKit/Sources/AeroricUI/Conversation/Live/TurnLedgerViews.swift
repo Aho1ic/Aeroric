@@ -62,6 +62,8 @@ struct TurnLedgerControls {
     var onUndoFrom: (() -> Void)?
     /// How many later turns go with it.
     var later = 0
+    /// R5-2: 换模型重跑…
+    var onRerun: (() -> Void)?
 }
 
 /// The badge, the summary and the buttons on a finished turn's header line.
@@ -98,8 +100,10 @@ struct TurnLedgerAccessory: View {
             default:
                 EmptyView()
             }
-            if let undoFrom = controls.onUndoFrom, controls.record.state != "undone" {
-                TurnMoreButton(later: controls.later, locked: controls.running, onUndoFrom: undoFrom)
+            let undoFrom = controls.record.state != "undone" ? controls.onUndoFrom : nil
+            if undoFrom != nil || controls.onRerun != nil {
+                TurnMoreButton(later: controls.later, locked: controls.running, onUndoFrom: undoFrom,
+                               onRerun: controls.onRerun)
             }
         }
     }
@@ -127,7 +131,9 @@ struct TurnLedgerAccessory: View {
 struct TurnMoreButton: View {
     let later: Int
     let locked: Bool
-    let onUndoFrom: () -> Void
+    let onUndoFrom: (() -> Void)?
+    /// R5-2: run this turn again with other models.
+    var onRerun: (() -> Void)?
     @State private var open = false
 
     var body: some View {
@@ -142,21 +148,36 @@ struct TurnMoreButton: View {
         .accessibilityIdentifier("session.turn.more")
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: AeroricSpace.xs) {
-                Button {
-                    open = false
-                    onUndoFrom()
-                } label: {
-                    Label("撤销到这一轮之前", systemImage: "arrow.uturn.backward")
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                if let onRerun {
+                    Button {
+                        open = false
+                        onRerun()
+                    } label: {
+                        Label("换模型重跑…", systemImage: "arrow.triangle.branch")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .disabled(locked)
+                    .help(locked ? TurnLedgerText.running : "从这一轮开始前的代码，换别的模型各跑一遍，并排比较")
+                    .accessibilityIdentifier("session.turn.rerun")
                 }
-                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
-                .disabled(locked)
-                .help(locked ? TurnLedgerText.running : "撤销这一轮和之后的轮次，一次确认")
-                .accessibilityIdentifier("session.turn.undoFrom")
-                Text("撤销这一轮和之后 \(later) 轮")
-                    .font(.system(size: AeroricType.caption))
-                    .foregroundStyle(AeroricColor.textTertiary)
-                    .padding(.horizontal, AeroricSpace.l)
+                if let onUndoFrom {
+                    Button {
+                        open = false
+                        onUndoFrom()
+                    } label: {
+                        Label("撤销到这一轮之前", systemImage: "arrow.uturn.backward")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .disabled(locked)
+                    .help(locked ? TurnLedgerText.running : "撤销这一轮和之后的轮次，一次确认")
+                    .accessibilityIdentifier("session.turn.undoFrom")
+                    Text("撤销这一轮和之后 \(later) 轮")
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .padding(.horizontal, AeroricSpace.l)
+                }
             }
             .padding(AeroricSpace.m)
             .frame(width: 220)

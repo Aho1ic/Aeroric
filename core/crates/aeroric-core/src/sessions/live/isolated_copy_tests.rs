@@ -241,3 +241,31 @@ fn a_copy_starts_with_the_ignored_files_worktreeinclude_names() {
     );
     assert!(!copy.join("target").exists());
 }
+
+/// R5-2: a rerun's copy starts from the snapshot the original turn started
+/// from, not from the directory as it is now.
+#[test]
+fn a_copy_can_start_from_an_earlier_snapshot() {
+    let dir = repo();
+    std::fs::write(dir.join("a.txt"), "one\nBEFORE\nthree\n").unwrap();
+    let (_, before) = crate::sessions::live::turn_changes::snapshot_tree(&dir).unwrap();
+    std::fs::write(dir.join("a.txt"), "one\nAFTER\nthree\n").unwrap();
+    std::fs::write(dir.join("later.txt"), "later\n").unwrap();
+    let (_, copies) = review(&dir);
+    let (record, cwd) = create_from(&copies, &dir, "task-rerun", Some(&before)).unwrap();
+    assert_eq!(record.base, before);
+    assert_eq!(read(&cwd.join("a.txt")), "one\nBEFORE\nthree\n");
+    assert!(!cwd.join("later.txt").exists());
+    assert_eq!(
+        read(&dir.join("a.txt")),
+        "one\nAFTER\nthree\n",
+        "the original is untouched"
+    );
+    assert!(create_from(
+        &copies,
+        &dir,
+        "task-bad",
+        Some("0123456789abcdef0123456789abcdef01234567")
+    )
+    .is_err());
+}

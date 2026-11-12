@@ -44,6 +44,7 @@ mod changes;
 mod delegation;
 mod delivery;
 mod memory;
+mod rerun;
 mod review;
 mod turns;
 mod wiki;
@@ -173,6 +174,7 @@ pub fn register_session_live_services(
     delivery::install(set, &live);
     capability::install(set, &live);
     turns::install(set, &live);
+    rerun::install(set, &live);
     changes::install(set, &live);
 }
 

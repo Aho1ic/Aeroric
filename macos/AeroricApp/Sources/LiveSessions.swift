@@ -160,6 +160,29 @@ struct HostLiveSessionActions: LiveSessionActions {
         try await client().turns(taskId: taskID)
     }
 
+    func startRerun(taskID: String, turnID: String, message: String, brief: Bool,
+                    choices: [LiveRerunChoice]) async throws -> LiveRerunStarted {
+        try await client().startRerun(taskId: taskID, turnId: turnID, message: message, brief: brief,
+                                      choices: choices)
+    }
+
+    func reruns(taskID: String) async throws -> [LiveRerunGroup] {
+        try await client().reruns(taskId: taskID)
+    }
+
+    func refreshConfigurations(taskID: String) async {
+        guard let project = services.taskStore.tasks.first(where: { $0.id == taskID })?.projectID else { return }
+        await services.loadSessionConfigurations(projectID: project)
+    }
+
+    func bringAll(taskID: String) async throws -> (applied: Int, conflicts: Int) {
+        try await client().bringAll(taskId: taskID)
+    }
+
+    func removeCopy(taskID: String) async throws -> Int {
+        try await client().removeCopy(taskId: taskID)
+    }
+
     func turnPlan(taskID: String, turnID: String, action: String, apply: Bool) async throws -> LiveTurnPlan {
         try await client().turnPlan(taskId: taskID, turnId: turnID, action: action, apply: apply)
     }
@@ -271,6 +294,12 @@ extension AppServices {
             initialPrompt: task.prompt
         )
         facts.linkedFolders = linkedFolderBook.folders(of: task.projectID).filter(\.exists).map(\.path)
+        // R5-2: a rerun may use any configuration of the project that can start.
+        facts.rerunTargets = RerunText.ordered(
+            sessionConfigurations(projectID: task.projectID)
+                .filter { $0.blockedReasons.isEmpty }
+                .map { RerunTarget(id: $0.id, title: $0.title, agent: $0.agent, models: $0.options.models) },
+            agent: task.agent)
         // 2026-10-29: other sources the session can move to.
         let login = configurations.first { !AgentConfigCatalog.isCatalogID($0.id) }
         let allThirdParty = configurations.first { $0.id == AgentConfigCatalog.catalogID("via-\(task.agent ?? "")-all") }

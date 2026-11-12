@@ -28,6 +28,7 @@ pub mod import_sources;
 pub mod live;
 pub mod omp;
 pub mod parser;
+pub mod rerun;
 pub mod resume;
 pub mod transcript_stats;
 pub mod turn_context;

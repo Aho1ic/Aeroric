@@ -103,6 +103,55 @@ public struct AeroricCapsuleButtonStyle: ButtonStyle {
     }
 }
 
+/// A flat 20 pt capsule for picking one of many short options (models, tags):
+/// tinted when off, filled with a check when on. Lower than the compact
+/// button so a wrapped set of them reads as a list, not a toolbar.
+public struct AeroricChipStyle: ButtonStyle {
+    let selected: Bool
+
+    public init(selected: Bool) {
+        self.selected = selected
+    }
+
+    public func makeBody(configuration: Configuration) -> some View {
+        ChipBody(configuration: configuration, selected: selected)
+    }
+
+    private struct ChipBody: View {
+        let configuration: Configuration
+        let selected: Bool
+        @State private var hovered = false
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            HStack(spacing: 3) {
+                if selected {
+                    Image(systemName: "checkmark").font(.system(size: AeroricType.caption - 2, weight: .bold))
+                }
+                configuration.label
+            }
+            .font(.system(size: AeroricType.caption, weight: .medium))
+            .foregroundStyle(selected ? AeroricColor.onPrimary : AeroricColor.text)
+            .padding(.horizontal, AeroricSpace.s)
+            .frame(height: 20)
+            .background(Capsule(style: .continuous).fill(fill))
+            .overlay {
+                if !selected {
+                    Capsule(style: .continuous).strokeBorder(AeroricColor.separator2, lineWidth: 0.5)
+                }
+            }
+            .opacity(isEnabled ? 1 : 0.4)
+            .contentShape(Capsule(style: .continuous))
+            .onHover { hovered = $0 }
+        }
+
+        private var fill: Color {
+            if selected { return AeroricColor.primary.opacity(configuration.isPressed ? 0.8 : 1) }
+            return isEnabled && (hovered || configuration.isPressed) ? AeroricColor.layer3 : AeroricColor.layer2
+        }
+    }
+}
+
 /// Picker whose closed state is a capsule "● 标题 ⌄" (Agents-Anywhere /
 /// codeg composer footer). The options are supplied by the caller; M2 fills in
 /// the composer's permission / model / effort menus.

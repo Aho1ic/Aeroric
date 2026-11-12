@@ -75,6 +75,11 @@ pub struct SubmissionRequest {
     /// R2-3b: run in an isolated copy of the project's directory.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub isolated: bool,
+    /// R5-2: the snapshot tree the isolated copy starts from, instead of the
+    /// directory as it is now (a rerun starts where the original turn did).
+    /// Requires `isolated`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_from: Option<String>,
 }
 
 impl SubmissionRequest {
@@ -125,6 +130,10 @@ impl SubmissionRequest {
         }
         if self.isolated {
             out.push(2);
+        }
+        if let Some(tree) = &self.copy_from {
+            out.push(3);
+            text(&mut out, tree);
         }
         out
     }
@@ -200,6 +209,7 @@ pub fn fixture_request() -> SubmissionRequest {
         evolution: false,
         clarify: false,
         isolated: false,
+        copy_from: None,
     }
 }
 
@@ -256,6 +266,8 @@ pub fn schema() -> serde_json::Value {
     let required_request: Vec<_> = request.keys().cloned().collect();
     // Optional (B4′): added after the required list.
     request.insert("clarify".into(), json!({"type":"boolean"}));
+    // Optional (R5-2): an isolated copy's starting snapshot.
+    request.insert("copyFrom".into(), json!({"type":"string"}));
     let required_receipt: Vec<_> = receipt.keys().cloned().collect();
     json!({
         "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -314,5 +326,25 @@ mod tests {
         let back: SubmissionRequest =
             serde_json::from_value(serde_json::to_value(&request).unwrap()).unwrap();
         assert!(back.clarify);
+    }
+
+    /// R5-2: a rerun's starting snapshot is part of what was asked.
+    #[test]
+    fn copy_from_changes_the_fingerprint_only_when_set() {
+        let mut request = fixture_request();
+        request.isolated = true;
+        let plain = request.fingerprint_material();
+        assert_eq!(
+            serde_json::to_value(&request).unwrap().get("copyFrom"),
+            None
+        );
+        request.copy_from = Some("abc".into());
+        let from_abc = request.fingerprint_material();
+        assert_eq!(&from_abc[..plain.len()], &plain[..]);
+        request.copy_from = Some("def".into());
+        assert_ne!(request.fingerprint_material(), from_abc);
+        let back: SubmissionRequest =
+            serde_json::from_value(serde_json::to_value(&request).unwrap()).unwrap();
+        assert_eq!(back.copy_from.as_deref(), Some("def"));
     }
 }

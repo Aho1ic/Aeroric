@@ -387,6 +387,27 @@ extension SessionsClient {
         return LiveTurnRecord.decodeList(frame.result["turns"])
     }
 
+    /// R5-2: run `turnId` again with each of `choices` in its own isolated copy.
+    public func startRerun(taskId: String, turnId: String, message: String, brief: Bool,
+                           choices: [LiveRerunChoice]) async throws -> LiveRerunStarted {
+        let targets: [JSONValue] = choices.map { choice in
+            var target: [String: JSONValue] = ["configurationId": .string(choice.configurationId)]
+            if let model = choice.model { target["model"] = .string(model) }
+            return .object(target)
+        }
+        let frame = try await connection.request("rerun.start", params: .object([
+            "taskId": .string(taskId), "turnId": .string(turnId), "message": .string(message),
+            "brief": .bool(brief), "targets": .array(targets),
+        ]))
+        return LiveRerunStarted.decode(frame.result)
+    }
+
+    /// R5-2: this session's reruns, each with its original turn beside the runs.
+    public func reruns(taskId: String) async throws -> [LiveRerunGroup] {
+        let frame = try await connection.request("rerun.list", params: .object(["taskId": .string(taskId)]))
+        return LiveRerunGroup.decodeList(frame.result["groups"])
+    }
+
     /// R2-1: what `action` (`undo` / `restore`) would do, or do it.
     public func turnPlan(taskId: String, turnId: String, action: String, apply: Bool) async throws -> LiveTurnPlan {
         let frame = try await connection.request(apply ? "turns.apply" : "turns.plan", params: .object([
