@@ -188,6 +188,10 @@ struct TranscriptTurnView<Row: View>: View {
             if let answer = turn.answer {
                 row(answer)
                 actions(answer)
+            } else if let notRun = turn.stat?.notRun {
+                // R5-1 目检 (2026-11-11): a turn that never answered had
+                // nowhere to show why; its status and error are spelled out.
+                TurnNotRunLine(notRun: notRun)
             }
         }
     }

@@ -111,6 +111,10 @@ public struct ProjectSidebar: View {
         .frame(width: collapsed ? Self.collapsedWidth : width)
         .frame(maxHeight: .infinity)
         .foregroundStyle(AeroricColor.text)
+        // R5-1 目检 (2026-11-11): when the window became key again, focus
+        // landed on 新会话 and macOS drew the system accent (purple) ring
+        // around it; the list below already went without one.
+        .focusEffectDisabled()
         .background(Color.clear.glassSurface(.sidebar).ignoresSafeArea())
         .confirmationDialog("从 Aeroric 移除这个会话？", isPresented: Binding(
             get: { removing != nil }, set: { if !$0 { removing = nil } }

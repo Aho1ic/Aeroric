@@ -79,6 +79,26 @@ public enum TurnBillText {
         }
     }
 
+    /// `HTTP 404 · ANY: 当前 API 不支持所选模型`: the status and the error's
+    /// first line, cut to [`notRunDetailChars`]; the full text is its help.
+    public static func notRunDetail(_ notRun: SessionTranscriptStats.NotRun) -> String {
+        let first = errorMessage(notRun.message).split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        let line = first.count > notRunDetailChars ? String(first.prefix(notRunDetailChars)) + "…" : first
+        return [notRun.status.map { "HTTP \($0)" }, line.isEmpty ? nil : line]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    public static let notRunDetailChars = 120
+
+    /// The sentence inside an API error body (`{"error":{"message":…}}`);
+    /// any other text as it is.
+    static func errorMessage(_ text: String) -> String {
+        guard text.hasPrefix("{"), let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return text }
+        let inner = (object["error"] as? [String: Any])?["message"] ?? object["message"]
+        return (inner as? String) ?? text
+    }
+
     public enum Tone: Equatable { case danger, warning, quiet }
 
     /// R5-1: the turn's grade beside its bill, when there is one to tell:
@@ -145,6 +165,27 @@ public enum TurnBillText {
         let from = Double(min(max(span.startedAt, turnStart), turnEnd) - turnStart)
         let to = Double(min(max(span.endedAt ?? turnEnd, span.startedAt), turnEnd) - turnStart)
         return (from / total, max(0, to - from) / total)
+    }
+}
+
+/// R5-1: a turn that did not run and never answered: why, under its header.
+struct TurnNotRunLine: View {
+    let notRun: SessionTranscriptStats.NotRun
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.s) {
+            TurnOutcomeChip(outcome: (text: "没跑成 · \(TurnBillText.notRunReason(notRun.reason))",
+                                      help: "Agent 的 API 调用出错，这一轮没有跑完，不算模型答错。", tone: .danger))
+                .fixedSize()
+            Text(TurnBillText.notRunDetail(notRun))
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .lineLimit(2)
+                .textSelection(.enabled)
+                .help(notRun.message)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("session.turn.notRun")
     }
 }
 

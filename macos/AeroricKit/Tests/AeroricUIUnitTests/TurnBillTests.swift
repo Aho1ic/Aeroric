@@ -95,4 +95,20 @@ final class TurnBillTests: XCTestCase {
         XCTAssertNil(TurnBillText.outcome(turns[4]))
         XCTAssertEqual(TranscriptTurns.header(turns[4]), "已完成")
     }
+
+    /// R5-1 目检: a turn without a reply shows its status and error inline.
+    func testANotRunTurnSpellsOutItsError() {
+        let notRun = SessionTranscriptStats.NotRun(
+            reason: "model", status: 404,
+            message: "unexpected status 404 Not Found: ANY: 当前 API 不支持所选模型 gpt-6.1-sol\nurl: http://x")
+        XCTAssertEqual(TurnBillText.notRunDetail(notRun),
+                       "HTTP 404 · unexpected status 404 Not Found: ANY: 当前 API 不支持所选模型 gpt-6.1-sol")
+        let long = SessionTranscriptStats.NotRun(reason: "other", message: String(repeating: "x", count: 200))
+        XCTAssertEqual(TurnBillText.notRunDetail(long), String(repeating: "x", count: 120) + "…")
+        XCTAssertEqual(TurnBillText.notRunDetail(.init(reason: "other", message: "")), "")
+        let body = SessionTranscriptStats.NotRun(
+            reason: "rejected",
+            message: #"{"error":{"message":"Codex: Lite requires `reasoning.context` to be `all_turns`.","type":"invalid_request_error"}}"#)
+        XCTAssertEqual(TurnBillText.notRunDetail(body), "Codex: Lite requires `reasoning.context` to be `all_turns`.")
+    }
 }
