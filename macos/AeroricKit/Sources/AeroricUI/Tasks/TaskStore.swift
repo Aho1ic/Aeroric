@@ -47,8 +47,10 @@ public final class TaskStore {
         public var model: String?
         /// B4-1: the task a reviewer reviews or a side branch came from.
         public var parentTaskID: String?
-        /// `review` | `branch` when `parentTaskID` is set.
+        /// `review` | `branch` | `delegate` | `discussion` when `parentTaskID` is set.
         public var childKind: String?
+        /// 2026-11-12: a discussion's own record; its page is the discussion.
+        public var isDiscussion = false
 
         public init(
             id: String,

@@ -24,6 +24,17 @@ public struct NewSessionHome: View {
     private let capabilities: [String: LiveCapabilities]
     private let expiredLogins: [ExpiredLogin]
     @State private var loginHelp: ExpiredLogin?
+    /// 2026-11-12: the configurations a discussion member can use, and how
+    /// to start one (topic, members, moderator, rounds → an error or nil).
+    private let discussionTargets: [RerunTarget]
+    private let onStartDiscussion: ((String, [LiveDiscussionChoice], Int, Int) async -> String?)?
+    @State private var discussing = false
+    @State private var members: [LiveDiscussionChoice] = []
+    @State private var moderator = 0
+    @State private var rounds = DiscussionText.defaultRounds
+    @State private var discussionError: String?
+    @State private var startingDiscussion = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public struct BranchList: Equatable, Sendable {
         public var current: String?
@@ -47,7 +58,9 @@ public struct NewSessionHome: View {
                 onSubmit: @escaping () -> Void, onCheckSubmission: @escaping () -> Void,
                 branches: BranchList? = nil, onSwitchBranch: @escaping (String) -> Void = { _ in },
                 preferredHarness: String = "codex",
-                capabilities: [String: LiveCapabilities] = [:], expiredLogins: [ExpiredLogin] = []) {
+                capabilities: [String: LiveCapabilities] = [:], expiredLogins: [ExpiredLogin] = [],
+                discussionTargets: [RerunTarget] = [],
+                onStartDiscussion: ((String, [LiveDiscussionChoice], Int, Int) async -> String?)? = nil) {
         _draft = draft
         self.projectID = projectID
         self.projects = projects
@@ -61,6 +74,8 @@ public struct NewSessionHome: View {
         self.preferredHarness = preferredHarness
         self.capabilities = capabilities
         self.expiredLogins = expiredLogins
+        self.discussionTargets = discussionTargets
+        self.onStartDiscussion = onStartDiscussion
     }
 
     /// R1-3a: the selected harness and Agent config on this Mac, when its
@@ -111,6 +126,13 @@ public struct NewSessionHome: View {
 
                     aboveComposer.padding(.bottom, AeroricSpace.s)
                     composer
+                    if discussing {
+                        DiscussionSetup(targets: discussionTargets, preferredHarness: harness, members: $members,
+                                        moderator: $moderator, rounds: $rounds,
+                                        isEditable: draft.isEditable && !startingDiscussion)
+                            .padding(.top, AeroricSpace.m)
+                            .transition(modeTransition(.offset(y: -AeroricSpace.l)))
+                    }
                     status.padding(.top, AeroricSpace.m)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -185,32 +207,96 @@ public struct NewSessionHome: View {
         }
         ComposerCard(
             text: $draft.task.prompt, attachments: $draft.task.attachmentPaths,
-            placeholder: "描述你想完成的事，或输入 / 使用命令", minLines: 3, isEditable: draft.isEditable,
-            acceptsAttachments: true,
-            sendState: blockingReasons.first.map(ComposerSendState.blocked) ?? .ready,
-            identifierPrefix: "new-session", focusRequest: focusRequest, onSend: onSubmit
+            placeholder: discussing ? "写下要讨论的问题" : "描述你想完成的事，或输入 / 使用命令",
+            minLines: 3, isEditable: draft.isEditable && !startingDiscussion,
+            acceptsAttachments: !discussing,
+            sendState: sendState,
+            identifierPrefix: "new-session", focusRequest: focusRequest,
+            onSend: discussing ? startDiscussion : onSubmit
         ) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: AeroricSpace.xxs) { addMenu; configurationPicker; modelPicker; permissionPicker; effortPicker }
-                HStack(spacing: AeroricSpace.xxs) { addMenu; configurationPicker; modelPicker; permissionPicker }
-                HStack(spacing: AeroricSpace.xxs) { addMenu; configurationPicker; modelPicker }
+            if discussing {
+                Label("只读讨论", systemImage: "bubble.left.and.bubble.right")
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .padding(.horizontal, AeroricSpace.s)
+                    .transition(.opacity)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: AeroricSpace.xxs) { addMenu; configurationPicker; modelPicker; permissionPicker; effortPicker }
+                    HStack(spacing: AeroricSpace.xxs) { addMenu; configurationPicker; modelPicker; permissionPicker }
+                    HStack(spacing: AeroricSpace.xxs) { addMenu; configurationPicker; modelPicker }
+                }
+                .disabled(!draft.isEditable)
+                .transition(.opacity)
             }
-            .disabled(!draft.isEditable)
         }
+    }
+
+    private var sendState: ComposerSendState {
+        guard discussing else { return blockingReasons.first.map(ComposerSendState.blocked) ?? .ready }
+        if startingDiscussion { return .running }
+        return DiscussionText.blocked(topic: draft.task.prompt, projectID: projectID, members: members)
+            .map(ComposerSendState.blocked) ?? .ready
+    }
+
+    /// 2026-11-12: start a discussion with the composer's text as its topic.
+    private func startDiscussion() {
+        guard let onStartDiscussion,
+              DiscussionText.blocked(topic: draft.task.prompt, projectID: projectID, members: members) == nil
+        else { return }
+        startingDiscussion = true
+        discussionError = nil
+        Task {
+            let error = await onStartDiscussion(draft.task.prompt, members, moderator, rounds)
+            startingDiscussion = false
+            discussionError = error
+            if error == nil {
+                members = []
+                moderator = 0
+                rounds = DiscussionText.defaultRounds
+            }
+        }
+    }
+
+    /// 单人 / 讨论; shown when the host can run discussions. The switch runs
+    /// in the slider's spring, so what appears, disappears and moves (the
+    /// whole centred group grows by the member setup) goes in one motion
+    /// instead of jumping in a single frame.
+    @ViewBuilder private var modeSlider: some View {
+        if onStartDiscussion != nil {
+            CapsuleSlider(selection: Binding(get: { discussing }, set: { value in
+                if reduceMotion { discussing = value } else {
+                    withAnimation(SlidingCapsulePicker<Bool>.slide) { discussing = value }
+                }
+            }), groupTitle: "会话方式", identifier: "new-session.mode",
+                          segments: [.init(value: false, title: "单人", systemImage: "bubble.left"),
+                                     .init(value: true, title: "讨论", systemImage: "bubble.left.and.bubble.right")])
+                .fixedSize()
+                .disabled(!draft.isEditable || startingDiscussion)
+        }
+    }
+
+    /// A fade, with `motion` unless Reduce Motion is on.
+    private func modeTransition(_ motion: AnyTransition) -> AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: motion)
     }
 
     /// D: project and branch on the left, the harness slider on the right.
     private var aboveComposer: some View {
         HStack(spacing: AeroricSpace.xs) {
+            modeSlider
             workspacePicker
-            copyToggle
+            if !discussing { copyToggle.transition(modeTransition(.scale(scale: 0.85, anchor: .leading))) }
             if let branches {
                 BranchPicker(current: branches.current, branches: branches.names, onSelect: onSwitchBranch)
                     .disabled(!draft.isEditable)
             }
             Spacer(minLength: AeroricSpace.l)
-            HarnessSlider(selection: harness, availability: availability, onSelect: selectHarness)
-                .disabled(!draft.isEditable)
+            if !discussing {
+                HarnessSlider(selection: harness, availability: availability, onSelect: selectHarness)
+                    .disabled(!draft.isEditable)
+                    .transition(modeTransition(.move(edge: .trailing)))
+            }
         }
     }
 
@@ -338,7 +424,13 @@ public struct NewSessionHome: View {
 
     @ViewBuilder private var status: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.xs) {
-            if let reason = shownReasons.first {
+            if discussing {
+                if startingDiscussion { ProgressView("正在开始讨论…").controlSize(.small) }
+                if let discussionError {
+                    Text(discussionError).foregroundStyle(AeroricColor.danger)
+                        .accessibilityIdentifier("new-session.discussion-error")
+                }
+            } else if let reason = shownReasons.first {
                 Label(shownReasons.count > 1 ? "\(reason)（另有 \(shownReasons.count - 1) 项）" : reason,
                       systemImage: "info.circle")
                     .foregroundStyle(AeroricColor.textSecondary)

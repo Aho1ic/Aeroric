@@ -152,6 +152,8 @@ pub struct StructuredExecutor {
     delegations: Arc<super::delegation::Delegations>,
     /// R1-2: the delivery queue, right above the host's sink.
     deliveries: Arc<super::delivery::Deliveries>,
+    /// 2026-11-12: discussions, above delegations.
+    discussions: Arc<super::discussion::Discussions>,
     logins: Arc<super::login::Logins>,
     change_review: Arc<super::change_review::ChangeReview>,
     /// B4-3: the shared boards.
@@ -196,6 +198,8 @@ impl StructuredExecutor {
         let delegations = super::delegation::Delegations::new(sink);
         delegations.set_registry(Arc::clone(&registry));
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&delegations) as Arc<dyn LiveStatusSink>;
+        let discussions = super::discussion::Discussions::new(sink);
+        let sink: Arc<dyn LiveStatusSink> = Arc::clone(&discussions) as Arc<dyn LiveStatusSink>;
         let reviews = super::review::ReviewLoop::new(sink);
         reviews.set_registry(Arc::clone(&registry));
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&reviews) as Arc<dyn LiveStatusSink>;
@@ -235,6 +239,7 @@ impl StructuredExecutor {
             reviews,
             delegations,
             deliveries,
+            discussions,
             logins,
             change_review,
             boards: Arc::default(),
@@ -391,6 +396,10 @@ impl StructuredExecutor {
     /// R2-2: hunk-by-hunk review of those changes.
     pub fn change_review(&self) -> &Arc<super::change_review::ChangeReview> {
         &self.change_review
+    }
+
+    pub fn discussions(&self) -> &Arc<super::discussion::Discussions> {
+        &self.discussions
     }
 
     pub fn delegations(&self) -> &Arc<super::delegation::Delegations> {

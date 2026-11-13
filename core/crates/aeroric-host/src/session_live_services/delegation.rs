@@ -76,9 +76,14 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>, probe_installed: b
 
 /// A child, reviewer or side branch: never a parent (depth 1).
 pub(super) fn nested(record: &Record) -> bool {
-    [DELEGATE_OF_FIELD, REVIEW_OF_FIELD, BRANCH_OF_FIELD]
-        .iter()
-        .any(|k| record.get(k).is_some())
+    [
+        DELEGATE_OF_FIELD,
+        REVIEW_OF_FIELD,
+        BRANCH_OF_FIELD,
+        super::discussion::DISCUSSION_OF_FIELD,
+    ]
+    .iter()
+    .any(|k| record.get(k).is_some())
 }
 
 pub(super) fn title_of(record: &Record) -> String {

@@ -43,6 +43,7 @@ mod capability;
 mod changes;
 mod delegation;
 mod delivery;
+mod discussion;
 mod memory;
 mod rerun;
 mod review;
@@ -168,6 +169,8 @@ pub fn register_session_live_services(
     delegation::install(set, &live, live.product);
     // B4-3: the shared boards.
     board::install(set, &live);
+    // 2026-11-12: discussions (round table).
+    discussion::install(set, &live);
     memory::install(set, &live);
     wiki::install(set, &live);
     // R1-2: the delivery queue (after the services whose messages it carries).

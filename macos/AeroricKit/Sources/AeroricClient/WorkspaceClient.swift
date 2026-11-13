@@ -137,8 +137,10 @@ public struct WorkspaceClient: Sendable {
         public var model: String? = nil
         /// B4-1: the task this one reviews (`reviewOf`) or branched from (`branchOf`).
         public var parentTaskID: String? = nil
-        /// `review` | `branch` | `delegate` when `parentTaskID` is set.
+        /// `review` | `branch` | `delegate` | `discussion` when `parentTaskID` is set.
         public var childKind: String? = nil
+        /// 2026-11-12: a discussion's own record (never started; its page lists the posts).
+        public var discussion: Bool = false
     }
 
     /// 展示标题：记录无 title 字段时取 prompt 首行（展示推导，非业务推断）。
@@ -195,9 +197,11 @@ public struct WorkspaceClient: Sendable {
             harness: harness(record),
             model: record["selectedModel"]?.stringValue,
             parentTaskID: record["reviewOf"]?.stringValue ?? record["branchOf"]?.stringValue
-                ?? record["delegateOf"]?.stringValue,
+                ?? record["delegateOf"]?.stringValue ?? record["discussionOf"]?.stringValue,
             childKind: record["reviewOf"] != nil ? "review"
-                : (record["branchOf"] != nil ? "branch" : (record["delegateOf"] != nil ? "delegate" : nil))
+                : (record["branchOf"] != nil ? "branch" : (record["delegateOf"] != nil ? "delegate"
+                    : (record["discussionOf"] != nil ? "discussion" : nil))),
+            discussion: record["discussion"]?.boolValue ?? false
         )
     }
 

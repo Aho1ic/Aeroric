@@ -421,7 +421,7 @@ final class AppServices {
             let tasks = try await client.listTasks()
             taskStore.removeTasks(ids: Set(taskStore.tasks.map(\.id)).subtracting(tasks.map(\.id)))
             for task in tasks {
-                taskStore.upsertTask(TaskStore.TaskEntry(
+                var entry = TaskStore.TaskEntry(
                     id: task.id,
                     projectID: task.projectID,
                     title: task.title,
@@ -442,7 +442,9 @@ final class AppServices {
                     model: task.model,
                     parentTaskID: task.parentTaskID,
                     childKind: task.childKind
-                ))
+                )
+                entry.isDiscussion = task.discussion
+                taskStore.upsertTask(entry)
                 if let generation = task.generation {
                     pendingGenerations[task.id] = generation
                 }
@@ -1297,6 +1299,7 @@ extension AppServices: WorkspaceStateProviding {
                                updatedAt: task.updatedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) },
                                harness: task.harness, sessionID: task.sessionID)
         item.childKind = task.parentTaskID == nil ? nil : task.childKind
+        item.discussion = task.isDiscussion
         item.projectID = task.projectID
         item.copy = task.isCopy
         return item

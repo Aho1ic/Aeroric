@@ -852,6 +852,27 @@ private struct ProjectRow<MenuContent: View>: View {
     }
 }
 
+/// The mark before a child session row.
+enum SidebarChildKind {
+    static func symbol(_ kind: String) -> String {
+        switch kind {
+        case "review": "eye"
+        case "delegate": "person.2"
+        case "discussion": "text.bubble"
+        default: "arrow.triangle.branch"
+        }
+    }
+
+    static func label(_ kind: String) -> String {
+        switch kind {
+        case "review": "审查会话"
+        case "delegate": "委派子会话"
+        case "discussion": "讨论成员"
+        default: "侧支"
+        }
+    }
+}
+
 /// Session row: agent glyph (who), title, relative time, status dot (what).
 private struct SessionRow: View {
     /// 2026-11-06: the 已导入 tag is optional (设置 → 通用 → 侧栏), off by default.
@@ -863,26 +884,34 @@ private struct SessionRow: View {
     var body: some View {
         HStack(spacing: AeroricSpace.s) {
             if let kind = item.childKind {
-                Image(systemName: kind == "review" ? "eye" : (kind == "delegate" ? "person.2" : "arrow.triangle.branch"))
+                Image(systemName: SidebarChildKind.symbol(kind))
                     .font(.system(size: 9))
                     .foregroundStyle(AeroricColor.textTertiary)
                     .padding(.leading, AeroricSpace.l)
-                    .accessibilityLabel(kind == "review" ? "审查会话" : (kind == "delegate" ? "委派子会话" : "侧支"))
+                    .accessibilityLabel(SidebarChildKind.label(kind))
             }
-            HarnessLogo(harness: item.harness, agent: item.agent, size: 14)
-                .overlay(alignment: .bottomTrailing) {
-                    // R2-3b: a session in an isolated copy.
-                    if item.copy {
-                        Image(systemName: "square.on.square")
-                            .font(.system(size: 7, weight: .bold))
-                            .foregroundStyle(AeroricColor.accent)
-                            .padding(1)
-                            .background(Circle().fill(AeroricColor.canvas))
-                            .offset(x: 4, y: 4)
-                            .help("在独立副本里运行")
-                            .accessibilityLabel("独立副本")
+            if item.discussion {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 11))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .frame(width: 14, height: 14)
+                    .accessibilityLabel("讨论")
+            } else {
+                HarnessLogo(harness: item.harness, agent: item.agent, size: 14)
+                    .overlay(alignment: .bottomTrailing) {
+                        // R2-3b: a session in an isolated copy.
+                        if item.copy {
+                            Image(systemName: "square.on.square")
+                                .font(.system(size: 7, weight: .bold))
+                                .foregroundStyle(AeroricColor.accent)
+                                .padding(1)
+                                .background(Circle().fill(AeroricColor.canvas))
+                                .offset(x: 4, y: 4)
+                                .help("在独立副本里运行")
+                                .accessibilityLabel("独立副本")
+                        }
                     }
-                }
+            }
             Text(item.title)
                 .font(.system(size: AeroricType.body))
                 .lineLimit(1)

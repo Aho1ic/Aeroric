@@ -1290,7 +1290,13 @@ struct TaskWorkspaceView: View {
             // S5: the project's 默认 Harness, else the global default.
             preferredHarness: projectHarness(scope.projectID) ?? defaultHarness,
             capabilities: services.capabilityTables,
-            expiredLogins: services.expiredLogins
+            expiredLogins: services.expiredLogins,
+            discussionTargets: configurations.filter { $0.blockedReasons.isEmpty }.map {
+                RerunTarget(id: $0.id, title: $0.title, agent: $0.agent, models: $0.options.models)
+            },
+            onStartDiscussion: { topic, members, moderator, rounds in
+                await startDiscussion(scope, topic: topic, members: members, moderator: moderator, rounds: rounds)
+            }
         )
         .task(id: [catalogProjectID ?? "", services.configurationEpoch.uuidString,
                    services.agentCatalogEpoch.uuidString]) {
@@ -1540,7 +1546,11 @@ struct TaskWorkspaceView: View {
     /// keeps the presentation below.
     @ViewBuilder
     private func taskBody(_ task: TaskStore.TaskEntry) -> some View {
-        if services.liveCapability {
+        if task.isDiscussion {
+            // 2026-11-12: a discussion's own record is never a session.
+            DiscussionView(taskID: task.id, actions: discussionActions)
+                .id("discussion.\(task.id)")
+        } else if services.liveCapability {
             switch services.liveStructured[task.id] {
             case true?:
                 LiveSessionView(store: services.liveStore(for: task.id), facts: services.liveFacts(for: task),
@@ -1557,6 +1567,46 @@ struct TaskWorkspaceView: View {
             }
         } else {
             legacyTaskBody(task)
+        }
+    }
+
+    /// 2026-11-12: what the discussion page asks of the host.
+    private var discussionActions: DiscussionActions {
+        DiscussionActions(
+            load: { id in try await services.sessionsClient?.discussion(taskId: id) },
+            act: { id, action in
+                let discussion = try await services.sessionsClient?.discussionAction(taskId: id, action: action)
+                await services.refreshWorkspace()
+                return discussion
+            },
+            open: { id in selection = SessionNavigation.task(id) },
+            newSession: { projectID, text in
+                let draft = SessionNavigation.draft(projectID: projectID)
+                if let scope = SessionNavigation.draftScope(draft) {
+                    draftBook.open(scope)
+                    draftBook.edit(scope) { $0.task.prompt = text }
+                }
+                selection = draft
+            },
+            changed: { await services.refreshWorkspace() }
+        )
+    }
+
+    /// 2026-11-12: start a discussion from the new-session page; an error or nil.
+    private func startDiscussion(_ scope: SessionDraftScope, topic: String, members: [LiveDiscussionChoice],
+                                 moderator: Int, rounds: Int) async -> String? {
+        guard let projectID = scope.projectID else { return "先选一个项目" }
+        guard let client = services.sessionsClient else { return "宿主没有连接" }
+        do {
+            guard let discussion = try await client.startDiscussion(
+                projectId: projectID, topic: topic, members: members, moderator: moderator, rounds: rounds)
+            else { return "宿主没有返回讨论" }
+            draftBook.edit(scope) { $0.task.prompt = "" }
+            await services.refreshWorkspace()
+            selection = SessionNavigation.task(discussion.id)
+            return nil
+        } catch {
+            return AgentConfigStore.describe(error)
         }
     }
 

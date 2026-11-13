@@ -141,6 +141,8 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
     /// B4-1: a reviewer (`review`) or side branch (`branch`) shown indented
     /// under its parent session; nil for a top-level row.
     public var childKind: String?
+    /// 2026-11-12: a discussion's own row.
+    public var discussion = false
     /// R2-3b: the session runs in an isolated copy.
     public var copy = false
     /// 2026-11-06: a project on an SSH host — its label (远程项目 · 名称 · 路径).

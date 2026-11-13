@@ -402,6 +402,36 @@ extension SessionsClient {
         return LiveRerunStarted.decode(frame.result)
     }
 
+    /// 2026-11-12: start a round-table discussion; the reply is the discussion.
+    public func startDiscussion(projectId: String, topic: String, members: [LiveDiscussionChoice],
+                                moderator: Int, rounds: Int) async throws -> LiveDiscussion? {
+        let list: [JSONValue] = members.map { choice in
+            var member: [String: JSONValue] = ["configurationId": .string(choice.configurationId)]
+            if let model = choice.model { member["model"] = .string(model) }
+            let angle = choice.angle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !angle.isEmpty { member["angle"] = .string(angle) }
+            return .object(member)
+        }
+        let frame = try await connection.request("discussion.start", params: .object([
+            "projectId": .string(projectId), "topic": .string(topic), "members": .array(list),
+            "moderator": .number(String(moderator)), "rounds": .number(String(rounds)),
+        ]))
+        return LiveDiscussion.decode(frame.result["discussion"])
+    }
+
+    /// 2026-11-12: a discussion as it stands.
+    public func discussion(taskId: String) async throws -> LiveDiscussion? {
+        let frame = try await connection.request("discussion.get", params: .object(["taskId": .string(taskId)]))
+        return LiveDiscussion.decode(frame.result["discussion"])
+    }
+
+    /// 2026-11-12: `pause` / `resume` / `summarize` / `stop`.
+    public func discussionAction(taskId: String, action: String) async throws -> LiveDiscussion? {
+        let frame = try await connection.request("discussion.\(action)",
+                                                  params: .object(["taskId": .string(taskId)]))
+        return LiveDiscussion.decode(frame.result["discussion"])
+    }
+
     /// R5-2: this session's reruns, each with its original turn beside the runs.
     public func reruns(taskId: String) async throws -> [LiveRerunGroup] {
         let frame = try await connection.request("rerun.list", params: .object(["taskId": .string(taskId)]))
