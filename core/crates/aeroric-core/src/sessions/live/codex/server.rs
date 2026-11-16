@@ -366,18 +366,101 @@ pub fn spawn_checked(
     args: &[String],
     label: &str,
 ) -> Result<(Transport, Option<ChildGuard>), String> {
+    let program = checked_program(spec, check, label)?;
+    let spec = ProcessSpec {
+        program,
+        ..spec.clone()
+    };
+    let mut command = spec.command();
+    command.args(args);
+    Transport::spawn(tokio::process::Command::from(command))
+        .map(|(transport, guard)| (transport, Some(guard)))
+        .map_err(|e| format!("无法启动 {label}（{}）：{e}", spec.program))
+}
+
+/// `spec.program`'s `--version` against `check`. A failure says the first
+/// line the program wrote to stderr: a broken install often says why there
+/// only (2026-11-14: "claude native binary not installed").
+fn version_passes(
+    spec: &ProcessSpec,
+    check: fn(&str) -> Result<(), String>,
+    label: &str,
+) -> Result<(), String> {
     let mut version = spec.command();
     version.current_dir(std::env::temp_dir());
     let output = version
         .arg("--version")
         .output()
         .map_err(|e| format!("无法启动 {label}（{}）：{e}", spec.program))?;
-    check(&String::from_utf8_lossy(&output.stdout))?;
-    let mut command = spec.command();
-    command.args(args);
-    Transport::spawn(tokio::process::Command::from(command))
-        .map(|(transport, guard)| (transport, Some(guard)))
-        .map_err(|e| format!("无法启动 {label}（{}）：{e}", spec.program))
+    check(&String::from_utf8_lossy(&output.stdout)).map_err(|error| {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        match stderr.lines().map(str::trim).find(|l| !l.is_empty()) {
+            Some(line) => format!("{error}（{} 报错：{line}）", spec.program),
+            None => error,
+        }
+    })
+}
+
+/// The program to run. A bare name whose first copy on the PATH fails the
+/// check is looked for further down the PATH, and the first copy that
+/// passes is used (2026-11-14: a broken `~/.local/bin/claude` in front of a
+/// working Homebrew one). A path the user set is never second-guessed.
+fn checked_program(
+    spec: &ProcessSpec,
+    check: fn(&str) -> Result<(), String>,
+    label: &str,
+) -> Result<String, String> {
+    let first = match version_passes(spec, check, label) {
+        Ok(()) => return Ok(spec.program.clone()),
+        Err(error) => error,
+    };
+    if spec.program.contains('/') {
+        return Err(first);
+    }
+    let path = spec
+        .env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "PATH")
+        .map(|(_, v)| v.clone())
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
+    for (i, candidate) in path_copies(&path, &spec.program).into_iter().enumerate() {
+        let real = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+        // The first copy on the PATH is the one that just failed.
+        if !seen.insert(real) || i == 0 {
+            continue;
+        }
+        let program = candidate.to_string_lossy().into_owned();
+        let other = ProcessSpec {
+            program: program.clone(),
+            ..spec.clone()
+        };
+        if version_passes(&other, check, label).is_ok() {
+            return Ok(program);
+        }
+    }
+    Err(first)
+}
+
+/// Every executable file called `name` on `path`, in order.
+fn path_copies(path: &str, name: &str) -> Vec<std::path::PathBuf> {
+    std::env::split_paths(path)
+        .map(|dir| dir.join(name))
+        .filter(|file| executable(file))
+        .collect()
+}
+
+#[cfg(unix)]
+fn executable(file: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(file).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable(file: &std::path::Path) -> bool {
+    file.is_file()
 }
 
 #[cfg(test)]
