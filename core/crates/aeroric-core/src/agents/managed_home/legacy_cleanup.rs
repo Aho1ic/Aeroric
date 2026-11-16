@@ -160,15 +160,11 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    // A uuid, not the clock: macOS time is in microseconds, and tests run
+    // in parallel got the same folder and saw each other's files.
     fn temp_home() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "aeroric-legacy-hooks-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-legacy-hooks-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

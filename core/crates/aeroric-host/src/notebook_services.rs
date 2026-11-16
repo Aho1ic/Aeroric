@@ -1300,7 +1300,7 @@ async fn nb_rag_context(request: Request, handle: &NotebookHandle, context: &Cor
 
 /// 用 CoreContext 的 SecretStore 解析 embedding key（Ollama 不查、已带不覆盖
 /// ——与宿主 `with_stored_key` 同语义）。
-fn resolve_key_with_secrets(
+pub(crate) fn resolve_key_with_secrets(
     mut config: aeroric_core::notebook::rag::embed::EmbedConfig,
     secrets: &dyn aeroric_core::context::SecretStore,
 ) -> Result<aeroric_core::notebook::rag::embed::EmbedConfig, String> {

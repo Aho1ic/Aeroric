@@ -48,6 +48,12 @@ public protocol SettingsStateProviding: AnyObject {
     var settingsKeepAwake: KeepAwakeStore? { get }
     /// Idle Agent release switch (A14b); nil or unavailable hides it.
     var settingsIdleRelease: IdleReleaseStore? { get }
+    /// 2026-11-14 宿主重启后自动继续; nil or unavailable hides the row.
+    var settingsResumeAfterRestart: ResumeAfterRestartStore? { get }
+    /// Q-R6 reference library; nil or unavailable hides the pane.
+    var settingsReferences: ReferenceLibraryStore? { get }
+    /// 2026-11-13 Smart Friend; nil or unavailable hides the card.
+    var settingsExpert: ExpertStore? { get }
     /// A13: fetch the host's redacted diagnostics report; nil hides the entry.
     var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? { get }
     /// G: bring the main window to the Agent configuration page; nil hides the button.
@@ -60,6 +66,9 @@ public extension SettingsStateProviding {
     var settingsImportBook: ImportBook? { nil }
     var settingsKeepAwake: KeepAwakeStore? { nil }
     var settingsIdleRelease: IdleReleaseStore? { nil }
+    var settingsResumeAfterRestart: ResumeAfterRestartStore? { nil }
+    var settingsReferences: ReferenceLibraryStore? { nil }
+    var settingsExpert: ExpertStore? { nil }
     var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? { nil }
     var settingsOpenAgentConfig: (@MainActor () -> Void)? { nil }
 }

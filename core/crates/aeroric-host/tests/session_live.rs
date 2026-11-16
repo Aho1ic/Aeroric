@@ -988,6 +988,52 @@ async fn a_restarted_host_settles_native_tasks_left_running() {
     assert_eq!(host.record_of("finished")["status"], "done");
     assert_eq!(host.record_of("finished")["completedAt"], 9);
 
+    // 2026-11-14 宿主重启后续跑: the restart says it cut them, and when;
+    // only those can be continued, and auto-continue is off until set.
+    assert_eq!(quiet["interruptedBy"], "hostRestart", "{quiet}");
+    assert_eq!(quiet["hostRestarts"].as_array().map(Vec::len), Some(1));
+    assert!(
+        failed.get("interruptedBy").is_none(),
+        "a failure is not a cut"
+    );
+    let not_cut = host
+        .call(
+            "session.continueAfterRestart",
+            json!({"taskId": "finished"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(not_cut["code"], "INVALID_ARGUMENT", "{not_cut}");
+    let unknown = host
+        .call("session.continueAfterRestart", json!({"taskId": "nope"}))
+        .await
+        .unwrap_err();
+    assert_eq!(unknown["code"], "NOT_FOUND");
+    // 2026-11-14 无人值守自动重试: nothing waiting, nothing to cancel.
+    let idle = host
+        .call("session.autoRetry.cancel", json!({"taskId": "finished"}))
+        .await
+        .unwrap_err();
+    assert_eq!(idle["code"], "INVALID_ARGUMENT", "{idle}");
+    let unknown = host
+        .call("session.autoRetry.cancel", json!({"taskId": "nope"}))
+        .await
+        .unwrap_err();
+    assert_eq!(unknown["code"], "NOT_FOUND");
+    let auto = host
+        .call("session.resumeAfterRestart.get", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(auto, json!({"enabled": false}));
+    host.call("session.resumeAfterRestart.set", json!({"enabled": true}))
+        .await
+        .unwrap();
+    let auto = host
+        .call("session.resumeAfterRestart.get", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(auto, json!({"enabled": true}));
+
     // Settled is settled: a second pass changes nothing.
     let again = aeroric_host::session_live_services::settle_orphaned_sessions(
         Arc::clone(&host.structured),
@@ -1815,7 +1861,8 @@ async fn a_delegation_runs_in_a_child_and_its_result_comes_back() {
         .collect();
     assert_eq!(actions, ["refuse", "start", "report", "send"], "{audit}");
     let roles = host.call("delegation.roles", json!({})).await.unwrap();
-    assert_eq!(roles["roles"].as_array().unwrap().len(), 5);
+    // Six built-ins since the expert (2026-11-13, Smart Friend).
+    assert_eq!(roles["roles"].as_array().unwrap().len(), 6);
     let stats = host.call("delegation.stats", json!({})).await.unwrap();
     assert_eq!(stats["rows"][0]["reported"], 1);
     let updates = host
@@ -2054,6 +2101,379 @@ async fn extraction_is_off_until_a_model_is_chosen_and_says_why_it_skips() {
         .await
         .unwrap_err();
     assert_eq!(outside["code"], "INVALID_ARGUMENT");
+}
+
+/// B6 (2026-11-13): 现在整理 needs a model; a scope with nothing alike is
+/// recorded as skipped without a call, and the proposal and undo methods
+/// refuse what does not exist.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dream_needs_a_model_and_a_scope_with_nothing_alike_costs_nothing() {
+    let host = Host::start(true).await;
+    let none = host
+        .call("memory.dream", json!({"projectId": "project-1"}))
+        .await
+        .unwrap_err();
+    assert!(
+        none["message"]
+            .as_str()
+            .unwrap()
+            .contains("还没有选分析模型"),
+        "{none}"
+    );
+    host.call(
+        "memory.settings",
+        json!({"settings": {"auto": false, "connectionId": "c1", "model": "flash"}}),
+    )
+    .await
+    .unwrap();
+    host.call(
+        "memory.remember",
+        json!({"draft": {"projectId": "project-1", "kind": "fact", "text": "数据集放在 /data/coco"}}),
+    )
+    .await
+    .unwrap();
+    let skipped = host
+        .call("memory.dream", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert_eq!(skipped["run"]["kind"], "dream");
+    assert_eq!(skipped["run"]["state"], "skipped");
+    assert_eq!(
+        skipped["run"]["reason"],
+        "没有字面相近的记忆，画像也没超出，不用整理"
+    );
+    // Second batch: nothing waits for 需要我处理, and only an accepted
+    // proposal can be taken back.
+    let pending = host.call("memory.dreamPending", json!({})).await.unwrap();
+    assert!(pending["proposals"].as_array().unwrap().is_empty());
+    let unknown = host
+        .call("memory.dreamRevert", json!({"id": "dream-x"}))
+        .await
+        .unwrap_err();
+    assert_eq!(unknown["code"], "NOT_FOUND");
+    let proposals = host
+        .call("memory.dreamProposals", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert!(proposals["proposals"].as_array().unwrap().is_empty());
+    let unknown = host
+        .call(
+            "memory.dreamDecide",
+            json!({"id": "dream-x", "accept": true}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(unknown["code"], "NOT_FOUND");
+    let skipped_id = skipped["run"]["id"].as_str().unwrap();
+    let not_undoable = host
+        .call("memory.dreamUndo", json!({"runId": skipped_id}))
+        .await;
+    assert!(not_undoable.is_ok(), "a skipped dream undoes nothing");
+    let again = host
+        .call("memory.dreamUndo", json!({"runId": skipped_id}))
+        .await
+        .unwrap_err();
+    assert_eq!(again["code"], "INVALID_ARGUMENT", "once");
+}
+
+/// B6 (2026-11-14): 按意思找相近的记忆 is saved with the settings; before a
+/// model has answered nothing is embedded, and recall still works by words.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_semantic_switch_is_saved_and_its_status_starts_empty() {
+    let host = Host::start(true).await;
+    let saved = host
+        .call("memory.settings", json!({"settings": {"semantic": true}}))
+        .await
+        .unwrap();
+    assert_eq!(saved["settings"]["semantic"], true);
+    let status = host.call("memory.semanticStatus", json!({})).await.unwrap();
+    assert_eq!(status["status"]["embedded"], 0);
+    assert_eq!(status["status"]["model"], "");
+    assert!(status["model"].is_string());
+}
+
+/// A12 (2026-11-14): 定时任务 — a rule is saved, listed with its next time,
+/// and 立即运行 with a failing pre-check wakes no model; bad rules and
+/// unknown ids are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_schedule_with_a_failing_check_opens_no_session() {
+    let host = Host::start(true).await;
+    let rule = json!({
+        "id": "", "name": "早上看新提交", "projectId": "project-1", "agent": "codex",
+        "prompt": "看看有什么新提交", "repeat": {"kind": "daily", "minute": 540},
+        "check": "echo 没有新提交; exit 1", "enabled": true
+    });
+    let saved = host
+        .call("schedule.save", json!({ "rule": rule }))
+        .await
+        .unwrap();
+    let id = saved["rule"]["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("sched-"));
+    let listed = host.call("schedule.list", json!({})).await.unwrap();
+    assert_eq!(listed["rules"][0]["id"], id.as_str());
+    assert!(listed["rules"][0]["nextMs"].as_u64().is_some());
+
+    // 2026-11-15 目检: the App's once and every rules (camelCase fields),
+    // with the second batch's options, are saved and read back.
+    let mut every = rule.clone();
+    every["repeat"] = json!({"kind": "every", "hours": 2, "fromMs": 1_800_000_000_000u64});
+    every["whenBusy"] = json!("after");
+    every["activeHours"] = json!({"startMinute": 540, "endMinute": 1080});
+    let saved_every = host
+        .call("schedule.save", json!({ "rule": every }))
+        .await
+        .unwrap();
+    assert_eq!(
+        saved_every["rule"]["repeat"]["fromMs"],
+        1_800_000_000_000u64
+    );
+    assert_eq!(saved_every["rule"]["whenBusy"], "after");
+    assert_eq!(saved_every["rule"]["activeHours"]["endMinute"], 1080);
+    let mut once = rule.clone();
+    once["repeat"] = json!({"kind": "once", "atMs": 4_000_000_000_000u64});
+    let saved_once = host
+        .call("schedule.save", json!({ "rule": once }))
+        .await
+        .unwrap();
+    assert_eq!(saved_once["rule"]["repeat"]["atMs"], 4_000_000_000_000u64);
+    for extra in [&saved_every, &saved_once] {
+        host.call("schedule.delete", json!({ "id": extra["rule"]["id"] }))
+            .await
+            .unwrap();
+    }
+
+    let run = host
+        .call("schedule.runNow", json!({ "id": id }))
+        .await
+        .unwrap();
+    assert_eq!(run["run"]["outcome"], "checkFailed", "{run}");
+    assert_eq!(run["run"]["detail"], "退出码 1：没有新提交");
+    assert!(run["run"]["taskId"].is_null());
+    let runs = host
+        .call("schedule.runs", json!({ "id": id }))
+        .await
+        .unwrap();
+    assert_eq!(runs["runs"].as_array().unwrap().len(), 1);
+
+    let mut nameless = rule.clone();
+    nameless["name"] = json!(" ");
+    let refused = host
+        .call("schedule.save", json!({ "rule": nameless }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused["code"], "INVALID_ARGUMENT");
+    let mut elsewhere = rule.clone();
+    elsewhere["projectId"] = json!("project-none");
+    let refused = host
+        .call("schedule.save", json!({ "rule": elsewhere }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused["code"], "INVALID_ARGUMENT");
+
+    host.call("schedule.delete", json!({ "id": id }))
+        .await
+        .unwrap();
+    let gone = host
+        .call("schedule.delete", json!({ "id": id }))
+        .await
+        .unwrap_err();
+    assert_eq!(gone["code"], "NOT_FOUND");
+}
+
+/// 2026-11-15 工作安排第一批: a todo is written, handed out (a session opens
+/// with the todo as its prompt), accepted only once handed out, and deleted;
+/// bad todos and unknown ids are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_todo_is_handed_out_and_accepted_by_the_user() {
+    let host = Host::start(true).await;
+    let saved = host
+        .call(
+            "todo.save",
+            json!({"todo": {"id": "", "projectId": "project-1", "title": "  给数据加载加单元测试 ", "notes": "先看 loader.py"}}),
+        )
+        .await
+        .unwrap();
+    let id = saved["todo"]["id"].as_str().unwrap().to_string();
+    assert_eq!(saved["todo"]["title"], "给数据加载加单元测试");
+    assert_eq!(saved["todo"]["state"], "open");
+    let early = host
+        .call("todo.decide", json!({"id": id, "decision": "accept"}))
+        .await
+        .unwrap_err();
+    assert_eq!(early["code"], "INVALID_ARGUMENT", "not handed out yet");
+
+    let assigned = host
+        .call("todo.assign", json!({"id": id, "agent": "codex"}))
+        .await
+        .unwrap();
+    let task = assigned["taskId"].as_str().unwrap().to_string();
+    assert_eq!(assigned["todo"]["state"], "assigned");
+    assert_eq!(assigned["todo"]["assignments"][0]["taskId"], task.as_str());
+    let record = host
+        .service
+        .load("project-1")
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|r| r.get("id").and_then(Value::as_str) == Some(task.as_str()))
+        .expect("the session is a task of the project");
+    assert!(record
+        .get("prompt")
+        .and_then(Value::as_str)
+        .unwrap()
+        .starts_with("给数据加载加单元测试\n\n先看 loader.py"));
+    let listed = host.call("todo.list", json!({})).await.unwrap();
+    assert_eq!(listed["todos"][0]["id"], id.as_str());
+    assert!(listed["todos"][0]["progress"].is_string(), "{listed}");
+
+    let done = host
+        .call("todo.decide", json!({"id": id, "decision": "accept"}))
+        .await
+        .unwrap();
+    assert_eq!(done["todo"]["state"], "done");
+    let elsewhere = host
+        .call(
+            "todo.save",
+            json!({"todo": {"id": "", "projectId": "project-none", "title": "x"}}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(elsewhere["code"], "INVALID_ARGUMENT");
+    host.call("todo.delete", json!({"id": id})).await.unwrap();
+    let gone = host
+        .call("todo.delete", json!({"id": id}))
+        .await
+        .unwrap_err();
+    assert_eq!(gone["code"], "NOT_FOUND");
+    let unknown = host
+        .call("todo.assign", json!({"id": "todo-none", "agent": "codex"}))
+        .await
+        .unwrap_err();
+    assert_eq!(unknown["code"], "NOT_FOUND");
+}
+
+/// 2026-11-15 待办第二批: an Agent's proposal waits until the user takes it;
+/// a 验收检查 is kept with the todo and runs only after the session's turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_proposes_a_todo_and_the_check_waits_for_the_turn() {
+    let host = Host::start(true).await;
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+    let proposed = host
+        .call(
+            "context.todoPropose",
+            json!({"token": token, "title": " 补 NMS 阈值的单测 ", "notes": "见 utils/nms.py"}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        proposed["text"].as_str().unwrap().starts_with("已提议"),
+        "{proposed}"
+    );
+    let todo = &proposed["todo"];
+    assert_eq!(
+        (&todo["state"], &todo["proposedBy"], &todo["projectId"]),
+        (&json!("proposed"), &json!("task-1"), &json!("project-1"))
+    );
+    let id = todo["id"].as_str().unwrap().to_string();
+    let twin = host
+        .call(
+            "context.todoPropose",
+            json!({"token": token, "title": "补 nms 阈值的单测"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(twin["code"], "INVALID_ARGUMENT");
+    assert!(twin["message"].as_str().unwrap().contains(&id), "{twin}");
+    let stranger = host
+        .call(
+            "context.todoPropose",
+            json!({"token": "made-up", "title": "x"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(stranger["code"], "UNAUTHENTICATED");
+
+    let early = host
+        .call("todo.assign", json!({"id": id, "agent": "codex"}))
+        .await
+        .unwrap_err();
+    assert_eq!(early["code"], "INVALID_ARGUMENT", "take it first");
+    let taken = host
+        .call("todo.decide", json!({"id": id, "decision": "take"}))
+        .await
+        .unwrap();
+    assert_eq!(taken["todo"]["state"], "open");
+
+    let saved = host
+        .call(
+            "todo.save",
+            json!({"todo": {"id": id, "projectId": "project-1", "title": "补 NMS 阈值的单测",
+                "check": " cargo test -p nms ", "fixOnFail": true}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (&saved["todo"]["check"], &saved["todo"]["fixOnFail"]),
+        (&json!("cargo test -p nms"), &json!(true))
+    );
+    let unassigned = host
+        .call("todo.check", json!({"id": id}))
+        .await
+        .unwrap_err();
+    assert_eq!(unassigned["code"], "INVALID_ARGUMENT");
+    let assigned = host
+        .call("todo.assign", json!({"id": id, "agent": "codex"}))
+        .await
+        .unwrap();
+    let task = assigned["taskId"].as_str().unwrap().to_string();
+    let record = host
+        .service
+        .load("project-1")
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|r| r.get("id").and_then(Value::as_str) == Some(task.as_str()))
+        .unwrap();
+    let prompt = record.get("prompt").and_then(Value::as_str).unwrap();
+    assert!(prompt.contains("验收检查：`cargo test -p nms`"), "{prompt}");
+    let running = host
+        .call("todo.check", json!({"id": id}))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        running["code"], "INVALID_ARGUMENT",
+        "the turn has not ended"
+    );
+    let unknown = host
+        .call("todo.check", json!({"id": "todo-none"}))
+        .await
+        .unwrap_err();
+    assert_eq!(unknown["code"], "NOT_FOUND");
+}
+
+/// B6 (2026-11-13): 代码版本链 hangs under a memory from a session; one the
+/// user typed has none, and an unknown item is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_memory_without_a_session_has_no_code_chain() {
+    let host = Host::start(true).await;
+    let kept = host
+        .call(
+            "memory.remember",
+            json!({"draft": {"projectId": "project-1", "kind": "fact", "text": "发布前跑 native:check"}}),
+        )
+        .await
+        .unwrap();
+    let id = kept["item"]["id"].as_str().unwrap();
+    let chain = host.call("memory.chain", json!({"id": id})).await.unwrap();
+    assert!(chain["changes"].as_array().unwrap().is_empty());
+    let unknown = host
+        .call("memory.chain", json!({"id": "mem-none"}))
+        .await
+        .unwrap_err();
+    assert_eq!(unknown["code"], "NOT_FOUND");
 }
 
 /// Q4 (2026-11-02): 整理历史会话 plans from the import index alone and
@@ -2470,4 +2890,141 @@ async fn a_missing_project_folder_keeps_the_wiki_and_says_so() {
         .await
         .unwrap();
     assert_eq!(pages["sourcesUnavailable"]["all"], false, "{pages}");
+}
+
+/// Q-R6 (2026-11-13): a folder in the reference library is indexed in the
+/// background and an agent searches and reads it through its context token;
+/// a path that leaves the folder is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_reference_library_is_searched_and_read_by_an_agent() {
+    let host = Host::start(true).await;
+    let folder = std::env::temp_dir().join(format!("aeroric-ref-host-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(folder.join("nn")).unwrap();
+    std::fs::write(
+        folder.join("nn/head.py"),
+        "class DetectHead:\n    def forward(self, x):\n        return x\n",
+    )
+    .unwrap();
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+    let none = host
+        .call("context.referencesAvailable", json!({"token": token}))
+        .await
+        .unwrap();
+    assert_eq!(none["available"], false);
+    let added = host
+        .call(
+            "references.add",
+            json!({"path": folder.to_str().unwrap(), "name": "yolo", "purpose": "检测头"}),
+        )
+        .await
+        .unwrap();
+    let id = added["reference"]["id"].as_str().unwrap().to_string();
+    assert_eq!(added["reference"]["name"], "yolo");
+    let mut files = 0;
+    for _ in 0..100 {
+        let list = host.call("references.list", json!({})).await.unwrap();
+        let row = &list["references"][0];
+        if row["indexing"] == false && row["files"].as_u64() == Some(1) {
+            files = 1;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(files, 1, "indexed in the background");
+    let available = host
+        .call("context.referencesAvailable", json!({"token": token}))
+        .await
+        .unwrap();
+    assert_eq!(available["available"], true);
+    let found = host
+        .call(
+            "context.referenceSearch",
+            json!({"token": token, "query": "DetectHead"}),
+        )
+        .await
+        .unwrap();
+    let text = found["text"].as_str().unwrap();
+    assert!(text.contains("yolo · nn/head.py:1（定义 class）"), "{text}");
+    let read = host
+        .call(
+            "context.referenceRead",
+            json!({"token": token, "repo": "yolo", "path": "nn/head.py", "start": 2}),
+        )
+        .await
+        .unwrap();
+    assert!(read["text"]
+        .as_str()
+        .unwrap()
+        .contains("2:     def forward"));
+    let outside = host
+        .call(
+            "context.referenceRead",
+            json!({"token": token, "repo": "yolo", "path": "../x"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(outside["code"], "INVALID_ARGUMENT");
+    let stranger = host
+        .call(
+            "context.referenceSearch",
+            json!({"token": "nope", "query": "DetectHead"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(stranger["code"], "UNAUTHENTICATED");
+    host.call("references.remove", json!({"id": id}))
+        .await
+        .unwrap();
+    let empty = host.call("references.list", json!({})).await.unwrap();
+    assert!(empty["references"].as_array().unwrap().is_empty());
+    assert!(
+        folder.join("nn/head.py").exists(),
+        "the folder is left alone"
+    );
+}
+
+/// 2026-11-13 Smart Friend: the expert is set from the app's choices; until
+/// then `ask_expert` is not offered and asking fails with where to set it.
+#[tokio::test]
+async fn the_expert_is_set_from_the_choices_before_an_agent_can_ask() {
+    let host = Host::start(true).await;
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+    let none = host
+        .call("context.expertAvailable", json!({"token": token}))
+        .await
+        .unwrap();
+    assert_eq!(none["available"], false);
+    let asked = host
+        .call(
+            "context.askExpert",
+            json!({"token": token, "question": "为什么慢"}),
+        )
+        .await;
+    assert!(
+        format!("{asked:?}").contains("设置 → Agents → 求助专家"),
+        "{asked:?}"
+    );
+    let shown = host.call("delegation.expert", json!({})).await.unwrap();
+    assert!(shown["expert"].is_null());
+    assert!(shown["choices"].is_array());
+    let refused = host
+        .call(
+            "delegation.expert",
+            json!({"set": {"configurationId": "agent-config:missing"}}),
+        )
+        .await;
+    assert!(
+        format!("{refused:?}").contains("不能用作专家"),
+        "{refused:?}"
+    );
+    let bad = host
+        .call("context.expertAvailable", json!({"token": "nope"}))
+        .await;
+    assert!(bad.is_err());
 }

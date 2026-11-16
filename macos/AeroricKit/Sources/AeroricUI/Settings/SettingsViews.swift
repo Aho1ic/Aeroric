@@ -1,4 +1,5 @@
 import AeroricClient
+import AeroricProtocol
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -8,7 +9,7 @@ import UniformTypeIdentifiers
 
 /// Settings window navigation.
 public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
-    case general, appearance, agents, imports, connection, legacyCleanup, about
+    case general, appearance, agents, references, imports, connection, legacyCleanup, about
 
     public var id: String { rawValue }
 
@@ -17,6 +18,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .general: "通用"
         case .appearance: "外观"
         case .agents: "Agents"
+        case .references: "参考代码库"
         case .imports: "导入"
         case .connection: "连接"
         case .legacyCleanup: "旧版 Agent 清理"
@@ -29,6 +31,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .general: "gearshape"
         case .appearance: "paintpalette"
         case .agents: "cpu"
+        case .references: "books.vertical"
         case .imports: "tray.and.arrow.down"
         case .connection: "bolt.horizontal"
         case .legacyCleanup: "trash"
@@ -229,6 +232,8 @@ struct KeepAwakeSettingsCard: View {
 /// (host-held; on by default). Never while it has background work.
 struct IdleReleaseSettingsCard: View {
     let store: IdleReleaseStore
+    /// 2026-11-14: 宿主重启后自动继续, beside it.
+    var resume: ResumeAfterRestartStore?
 
     var body: some View {
         SettingsCard("Agent 进程") {
@@ -241,8 +246,29 @@ struct IdleReleaseSettingsCard: View {
                 .labelsHidden()
                 .accessibilityIdentifier("settings.idle-release")
             }
+            if let resume, resume.isAvailable {
+                SettingsRow("无人值守的会话被打断或没跑成时自动继续", detail: Self.resumeDetail(resume)) {
+                    Toggle("", isOn: Binding(
+                        get: { resume.enabled },
+                        set: { on in Task { await resume.setEnabled(on) } }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .accessibilityIdentifier("settings.resume-after-restart")
+                }
+            }
         }
-        .task { await store.refresh() }
+        .task {
+            await store.refresh()
+            await resume?.refresh()
+        }
+    }
+
+    static func resumeDetail(_ resume: ResumeAfterRestartStore) -> String {
+        if let error = resume.lastError { return "没能保存：\(error)" }
+        return resume.enabled
+            ? "定时任务开的会话、委派出去的子会话和交办出去的待办：被 Aeroric 重启打断，启动几秒后接着做一次；某一轮因为网络或服务出错没跑成，1、5、15 分钟后各重试一次；额度用完，重置后（不知道重置时间就 30 分钟后）重试一次。你自己开的会话不自动继续。"
+            : "已关闭：被重启打断的会话等你点“继续”，没跑成的会话不自动重试。"
     }
 
     private var hours: String {
@@ -321,6 +347,8 @@ struct AppearanceSettingsPane: View {
 
 struct AgentsSettingsPane: View {
     var openAgentConfig: (@MainActor () -> Void)?
+    /// 2026-11-13 Smart Friend.
+    var expert: ExpertStore?
     @AppStorage(NewSessionLayout.defaultHarnessKey) private var defaultHarness = "codex"
 
     var body: some View {
@@ -344,6 +372,9 @@ struct AgentsSettingsPane: View {
                         .fixedSize()
                 }
             }
+            if let expert, expert.isAvailable {
+                ExpertSettingsCard(store: expert)
+            }
             SettingsCard {
                 SettingsRow("管理 Agent 配置", detail: "第三方 API 连接、号池、模型路由、Agent 预设与 Agent 升级，在主窗口侧栏的“Agent 配置”页。") {
                     if let openAgentConfig {
@@ -356,6 +387,68 @@ struct AgentsSettingsPane: View {
             }
         }
         .accessibilityIdentifier("settings.agents")
+    }
+}
+
+/// 2026-11-13 Smart Friend: pick a configuration, then a model; the model
+/// chip sets the expert at once.
+struct ExpertSettingsCard: View {
+    let store: ExpertStore
+    @State private var picked: String?
+
+    private var shown: LiveExpertChoice? {
+        let id = picked ?? store.expert?.configurationId
+        return store.choices.first { $0.configurationId == id } ?? store.choices.first
+    }
+
+    var body: some View {
+        SettingsCard("求助专家") {
+            SettingsRow("专家模型", detail: ExpertText.detail) {
+                HStack(spacing: AeroricSpace.s) {
+                    Text(ExpertText.current(store.expert))
+                        .foregroundStyle(store.expert == nil ? AeroricColor.textTertiary : AeroricColor.text)
+                        .accessibilityIdentifier("settings.expert.current")
+                    if store.expert != nil {
+                        Button("不用专家") { Task { await store.clear() } }
+                            .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                            .accessibilityIdentifier("settings.expert.clear")
+                    }
+                }
+            }
+            if store.choices.isEmpty {
+                Text("没有能用作专家的配置：需要一个能启动的 Claude Code 或 Codex 配置")
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
+            } else {
+                VStack(alignment: .leading, spacing: AeroricSpace.s) {
+                    FlowLayout(spacing: AeroricSpace.xs) {
+                        ForEach(store.choices) { choice in
+                            Button(choice.title) { picked = choice.configurationId }
+                                .buttonStyle(AeroricChipStyle(selected: choice.configurationId == shown?.configurationId))
+                                .accessibilityIdentifier("settings.expert.config.\(choice.configurationId)")
+                        }
+                    }
+                    if let shown {
+                        FlowLayout(spacing: AeroricSpace.xs) {
+                            ForEach(ExpertText.models(shown), id: \.self) { model in
+                                Button(model ?? "默认模型") {
+                                    Task { await store.set(shown.configurationId, model: model) }
+                                }
+                                .buttonStyle(AeroricChipStyle(selected: ExpertText.isCurrent(store.expert, shown, model: model)))
+                                .accessibilityIdentifier("settings.expert.model.\(model ?? "default")")
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, AeroricSpace.xs)
+            }
+            if let error = store.lastError {
+                Text(error)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.danger)
+            }
+        }
+        .accessibilityIdentifier("settings.expert")
     }
 }
 

@@ -41,6 +41,7 @@ Codex 会话选带前缀的模型（如 `codex/gpt-6.1-sol`）时，Aeroric 的�
 - **代价**：
   - 自定义工具的调用在流式回复里没有中间增量，界面要等整段生成完才显示代码。
   - 以后 Codex 再换工具清单的放法，这里还得跟着改；`additional_tools` 是从会话记录里看出来的，没有正式文档。
+  - 模型在 `exec` 代码里调 MCP 工具时，Codex 的会话记录只有一条 `exec`。读历史时（`sessions/codex.rs` 的 `code_mode_tools`），代码里出现 `tools.mcp__服务__工具(` 的，卡片按 `服务.工具` 命名，几个工具用逗号连起来，和运行中的卡片一致；只调 `exec_command` 等内置工具的仍叫 `exec`。2026-11-16 复测时，参考库的两次调用在历史里都只显示 exec。单测 `codex_code_mode_exec_cells_are_named_by_the_mcp_tools_they_call`。
 - **验证**：
   - 路由单测 `bridges_codex_responses_to_chat_completions`、`pivots_codex_responses_stream_to_a_messages_upstream`：转换后不带 Lite 头、不带 `reasoning` 和 `client_metadata`；直通时 Lite 头和 `reasoning.context` 原样保留。先在修复前的代码上确认这两个测试会失败。
   - 路由单测 `additional_tools_reach_chat_and_custom_calls_come_back_raw`，覆盖三条路径：请求、非流式回复、流式回复。先在修复前的代码上确认会失败。路由测试共 174 个，全部通过。

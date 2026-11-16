@@ -1,3 +1,5 @@
+import AeroricClient
+import AeroricProtocol
 import SwiftUI
 
 /// A19: "需要我处理" — the tasks waiting on the user, plus the ones that
@@ -26,6 +28,8 @@ public enum AttentionQueue {
         case deliveryNeedsYou
         /// R3-2: the agent keeps failing the same call the same way.
         case retryNeedsYou
+        /// 2026-11-14: an unattended session's automatic retries ran out.
+        case autoRetryGaveUp
 
         public var text: String {
             switch self {
@@ -40,6 +44,7 @@ public enum AttentionQueue {
             case .skillProposalNeedsYou: "技能提案待审"
             case .deliveryNeedsYou: "投递待确认"
             case .retryNeedsYou: "在重试"
+            case .autoRetryGaveUp: "没跑成"
             }
         }
     }
@@ -69,9 +74,39 @@ public enum AttentionQueue {
             case .skillProposalNeedsYou: "\(task.id)#skill"
             case .deliveryNeedsYou: "\(task.id)#delivery"
             case .retryNeedsYou: "\(task.id)#retry"
+            case .autoRetryGaveUp: "\(task.id)#autoRetry"
             default: task.id
             }
         }
+    }
+
+    /// B6 second batch: dream proposals waiting in one scope. They belong
+    /// to no session, so they get rows of their own above the tasks.
+    public struct DreamRow: Identifiable, Equatable, Sendable {
+        /// `nil` is global.
+        public var projectID: String?
+        public var count: Int
+        /// The newest one's kind, to open its tab.
+        public var kind: String
+        public var atMs: UInt64
+        public var id: String { "dream#\(projectID ?? "global")" }
+
+        public init(projectID: String?, count: Int, kind: String, atMs: UInt64) {
+            self.projectID = projectID
+            self.count = count
+            self.kind = kind
+            self.atMs = atMs
+        }
+    }
+
+    /// One row per scope with proposals waiting, newest first.
+    public static func dreamRows(_ proposals: [LiveDreamProposal]) -> [DreamRow] {
+        let pending = proposals.filter(\.isPending)
+        return Dictionary(grouping: pending, by: \.projectId).compactMap { scope, group -> DreamRow? in
+            guard let newest = group.max(by: { $0.createdMs < $1.createdMs }) else { return nil }
+            return DreamRow(projectID: scope, count: group.count, kind: newest.kind, atMs: newest.createdMs)
+        }
+        .sorted { ($0.atMs, $0.id) > ($1.atMs, $1.id) }
     }
 
     /// Failed and interrupted tasks stay listed this long, so old ones do not pile up.
@@ -105,6 +140,12 @@ public enum AttentionQueue {
             if let retry = retries[task.id] {
                 rows.append(Item(task: task, reason: .retryNeedsYou, detail: retry.summary, atMs: retry.atMs))
             }
+            if let auto = task.autoRetry, auto.state == "gaveUp" {
+                let at = task.updatedAtMs ?? task.createdAtMs ?? 0
+                if nowMs <= at + recentWindowMs {
+                    rows.append(Item(task: task, reason: .autoRetryGaveUp, detail: AutoRetryText.gaveUp(auto), atMs: at))
+                }
+            }
             return rows
         }
         .sorted { lhs, rhs in
@@ -128,8 +169,9 @@ public enum AttentionQueue {
         // A `where` binds only the pattern before it, so both share one guard.
         case "failed" where nowMs <= updated + recentWindowMs,
              "interrupted" where nowMs <= updated + recentWindowMs:
+            let cut = task.status == "interrupted" && task.restartCut
             return Item(task: task, reason: task.status == "failed" ? .failed : .interrupted,
-                        detail: check?.summary, atMs: updated)
+                        detail: check?.summary ?? (cut ? RestartCutText.attention : nil), atMs: updated)
         default:
             if let check {
                 return Item(task: task, reason: .checksFailed, detail: check.summary, atMs: check.atMs)
@@ -154,37 +196,121 @@ public struct AttentionListView: View {
     let onOpen: (String) -> Void
     /// B5-1: a memory proposal opens the memory page, not the task.
     let onOpenItem: ((AttentionQueue.Item) -> Bool)?
+    /// B6 second batch: 记忆整理待确认, one row per scope.
+    let dreams: [AttentionQueue.DreamRow]
+    let onOpenDreams: ((AttentionQueue.DreamRow) -> Void)?
+    /// 2026-11-14: 继续 a session an Aeroric restart cut.
+    let onContinue: ((String) async -> Void)?
+    /// 2026-11-15: todos waiting for acceptance, and (第二批) Agent
+    /// proposals: one row.
+    let todoReview: Int
+    let todoProposals: Int
+    let onOpenTodos: (() -> Void)?
 
     public init(items: [AttentionQueue.Item], projectName: @escaping (String) -> String?,
-                onOpen: @escaping (String) -> Void, onOpenItem: ((AttentionQueue.Item) -> Bool)? = nil) {
+                onOpen: @escaping (String) -> Void, onOpenItem: ((AttentionQueue.Item) -> Bool)? = nil,
+                dreams: [AttentionQueue.DreamRow] = [], onOpenDreams: ((AttentionQueue.DreamRow) -> Void)? = nil,
+                onContinue: ((String) async -> Void)? = nil, todoReview: Int = 0, todoProposals: Int = 0,
+                onOpenTodos: (() -> Void)? = nil) {
         self.items = items
         self.projectName = projectName
         self.onOpen = onOpen
         self.onOpenItem = onOpenItem
+        self.dreams = dreams
+        self.onOpenDreams = onOpenDreams
+        self.onContinue = onContinue
+        self.todoReview = todoReview
+        self.todoProposals = todoProposals
+        self.onOpenTodos = onOpenTodos
     }
+
+    private var todoCount: Int { todoReview + todoProposals }
+    private var total: Int { items.count + dreams.count + (todoCount > 0 ? 1 : 0) }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if items.isEmpty {
+            if total == 0 {
                 ContentUnavailableView("没有需要你处理的事", systemImage: "checkmark.circle",
                                        description: Text("等你回答的审批与问题，以及最近 24 小时失败、被中断或检查没通过的任务会出现在这里。"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(items) { item in
-                    Button {
-                        if onOpenItem?(item) != true { onOpen(item.task.id) }
-                    } label: { row(item) }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("attention.row.\(item.id)")
+                List {
+                    if todoCount > 0 {
+                        Button { onOpenTodos?() } label: { todoRow }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("attention.todos")
+                    }
+                    ForEach(dreams) { dream in
+                        Button { onOpenDreams?(dream) } label: { dreamRow(dream) }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("attention.\(dream.id)")
+                    }
+                    ForEach(items) { item in
+                        HStack(spacing: AeroricSpace.m) {
+                            Button {
+                                if onOpenItem?(item) != true { onOpen(item.task.id) }
+                            } label: { row(item) }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("attention.row.\(item.id)")
+                            if item.reason == .interrupted, item.task.restartCut, let onContinue {
+                                Button("继续") { Task { await onContinue(item.task.id) } }
+                                    .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
+                                    .fixedSize()
+                                    .help(RestartCutText.help)
+                                    .accessibilityIdentifier("attention.continue.\(item.task.id)")
+                            }
+                        }
+                    }
                 }
                 .listStyle(.inset)
             }
         }
         .frame(maxWidth: NativePanelGeometry.mainShell.readingColumnWidth, maxHeight: .infinity, alignment: .topLeading)
         .frame(maxWidth: .infinity)
-        .windowTitle(WindowTitle("需要我处理", subtitle: items.isEmpty ? nil : "\(items.count) 项",
+        .windowTitle(WindowTitle("需要我处理", subtitle: total == 0 ? nil : "\(total) 项",
                                  systemImage: "bell.badge"))
         .accessibilityIdentifier("attention.page")
+    }
+
+    private var todoRow: some View {
+        HStack(spacing: AeroricSpace.m) {
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.accent)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(TodoText.attention(review: todoReview, proposals: todoProposals)).lineLimit(1)
+                Text(TodoText.attentionDetail(review: todoReview, proposals: todoProposals))
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
+            }
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 2)
+    }
+
+    private func dreamRow(_ dream: AttentionQueue.DreamRow) -> some View {
+        HStack(spacing: AeroricSpace.m) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.warning)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(MemoryText.dreamAttention(dream.count)).lineLimit(1)
+                Text(dream.projectID.map { projectName($0) ?? $0 } ?? "全局")
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
+            }
+            Spacer()
+            if dream.atMs > 0 {
+                Text(RelativeTime.short(Date(timeIntervalSince1970: Double(dream.atMs) / 1000)))
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
+            }
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 2)
     }
 
     private func row(_ item: AttentionQueue.Item) -> some View {

@@ -416,7 +416,8 @@ async fn wsl_workspace_is_retired_and_ssh_workspace_executes_via_saved_connectio
         ))
         .expect("SSH launch with saved connection succeeds");
 
-    for _ in 0..50 {
+    // Up to 6 s: 1.5 s was not enough for the fake ssh to start on a busy Mac.
+    for _ in 0..200 {
         if ssh_log.exists() {
             break;
         }

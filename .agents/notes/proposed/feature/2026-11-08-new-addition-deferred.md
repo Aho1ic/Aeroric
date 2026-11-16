@@ -14,15 +14,15 @@ New-addition-1102 复核研究（Mac `~/Documents/Aeroric-research/2026-11-07-Ne
 |---|---|---|---|
 | 11 | 推送按在场抑制：Mac 前台正看着就不推 iPhone | paseo `agent-attention-policy.ts` | Mac 和 iOS 客户端先上报前台与聚焦状态；用户抱怨在电脑前还收到推送 |
 | 15 | 回合结束后的后台写入单独归属 | dsh-superagent `dsh.ts:601-672` | 用户发现改动被算进了下一个回合 |
-| 16 | 宿主重启后续跑（默认关，列进"需要我处理"给"继续"） | paseo `agent-lifecycle.md:15-33` | 无人值守的委派或定时任务上线 |
-| 17 | 瞬时失败退避后续跑（只限无人值守） | dsh-superagent `dsh.ts:555-584` | 同上 |
+| 16 | 宿主重启后续跑（默认关，列进"需要我处理"给"继续"） | paseo `agent-lifecycle.md:15-33` | 无人值守的委派或定时任务上线（2026-11-14 [定时任务第一批](../../implemented/feature/2026-11-14-scheduled-tasks.md)上线后，同日由[宿主重启后续跑](../../implemented/feature/2026-11-14-resume-after-restart.md)实现：默认关的自动续跑只对无人值守的会话，其余在"需要我处理"给"继续"） |
+| 17 | 瞬时失败退避后续跑（只限无人值守） | dsh-superagent `dsh.ts:555-584` | 同上（2026-11-14 由[无人值守自动重试](../../implemented/feature/2026-11-14-unattended-auto-retry.md)实现：网络和服务错误按 1、5、15 分钟退避，最多 3 次） |
 | 18 | 委派停止分"停止中 / 强制停止"两档 | paseo、Varin | 用户遇到停不下来的委派；要先出示意图 |
 | 19 | 审查发现项的跨轮稳定身份与覆盖率 | pr-agent `review_finding_state.py` | 审查循环的多轮意见对不上号 |
 | 20 | 委派批量计划加依赖排队（维持单写者） | pi-Coworkflow `dispatch/index.ts` | 用户要一次交多步计划 |
 | 21 | 会话到提交的映射 | mallard-app | Git 页要回答"这个提交是哪个会话写的" |
 | 22 | Codex 原生 Goal（`thread/goal/*`） | Codex 契约 | 能力表要开 Goal；0.167 快照里方法齐全 |
 | 23 | Claude 会话导入成 Codex 原生历史 | codex-plugin-cc `externalAgentConfig/import` | 交接需要保留原生历史 |
-| 24 | 配额感知调度、额度恢复后续跑 | antumi | A12 动工 |
+| 24 | 配额感知调度、额度恢复后续跑 | antumi | A12 动工（2026-11-14 已动工，见[定时任务第一批](../../implemented/feature/2026-11-14-scheduled-tasks.md)；调度这一侧 2026-11-14 已实现，见[配额感知调度](../../implemented/feature/2026-11-14-quota-aware-scheduling.md)；额度恢复后续跑同日由[无人值守自动重试](../../implemented/feature/2026-11-14-unattended-auto-retry.md)实现，只管无人值守的会话） |
 | 25 | 出机发送账本（只记哈希和字节数，写不进就拒发） | gstack `egress-receipt.ts` | 推送、relay、诊断报告需要隐私审计 |
 | 27 | 产物登记与预览租约 | VibeX | A05 动工 |
 | 28 | 外部写调用门 | Mikka | 做 Forge 时 |

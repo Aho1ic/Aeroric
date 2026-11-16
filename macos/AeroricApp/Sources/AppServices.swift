@@ -61,16 +61,29 @@ final class AppServices {
     let tagBook = TagBook()
     /// Linked folders (2026-10-29).
     let linkedFolderBook = LinkedFolderBook()
+    /// Q-R4: PDF excerpts waiting for a session's composer.
+    let composerInbox = ComposerInbox()
     /// SSH hosts (连接 page, open-remote-project sheet), 2026-10-27.
     let sshHostsStore = SshHostsStore()
     /// B5-1: the memory page (proposals feed its badge and 需要我处理).
     @ObservationIgnored lazy var memoryStore = MemoryStore(service: HostMemoryService(services: self))
     /// B5.5-1: the project Wiki page.
     @ObservationIgnored lazy var wikiStore = WikiStore(service: HostWikiService(services: self))
+    /// A12: the 定时任务 page.
+    @ObservationIgnored lazy var scheduleStore = ScheduleStore(service: HostScheduleService(services: self))
+    /// 2026-11-15 工作安排第一批.
+    @ObservationIgnored lazy var todoStore = TodoStore(service: HostTodoService(services: self))
     /// B5-1 → A19: proposing task id → a memory proposal waiting for the user.
     var memoryNeeds: [String: AttentionQueue.CheckFailure] = [:]
-    /// B5-1: proposals in every scope (the 记忆 row's badge).
+    /// B5-1: proposals in every scope (the 记忆 row's badge); B6 second
+    /// batch: dream proposals count too.
     var memoryPendingCount = 0
+    /// B6 second batch → A19: dream proposals waiting, one row per scope.
+    var dreamNeeds: [AttentionQueue.DreamRow] = []
+    /// 2026-11-15: todos whose session ended, waiting for the user's acceptance.
+    var todoReview = 0
+    /// 待办第二批: Agent proposals waiting for the user.
+    var todoProposals = 0
     /// B5-3b → A19: source task id → a skill proposal waiting for the user.
     var skillNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// The sidebar's "打开远程项目…" asks the workspace to show its sheet.
@@ -78,6 +91,11 @@ final class AppServices {
     let keepAwakeStore = KeepAwakeStore()
     /// A14b: 设置 → 通用 → Agent 进程.
     let idleReleaseStore = IdleReleaseStore()
+    let resumeAfterRestartStore = ResumeAfterRestartStore()
+    /// Q-R6: 设置 → 参考代码库.
+    let referenceLibraryStore = ReferenceLibraryStore()
+    /// 2026-11-13 Smart Friend: 设置 → Agents → 求助专家.
+    let expertStore = ExpertStore()
     /// Canvas boards and node layout (M5); gated on the host's `canvas` capability.
     let canvasBook = CanvasBook()
     /// P5-01/P5-02：模式控制器（迁移默认按旧客户端存在性）。
@@ -277,6 +295,15 @@ final class AppServices {
                     self.idleReleaseStore.attach(client: SessionsClient(connection: connection),
                                                  liveEnabled: self.liveCapability)
                     Task { @MainActor in await self.idleReleaseStore.refresh() }
+                    self.resumeAfterRestartStore.attach(client: SessionsClient(connection: connection),
+                                                        liveEnabled: self.liveCapability)
+                    Task { @MainActor in await self.resumeAfterRestartStore.refresh() }
+                    self.referenceLibraryStore.attach(
+                        client: self.liveCapability ? SessionsClient(connection: connection) : nil)
+                    Task { @MainActor in await self.referenceLibraryStore.refresh() }
+                    self.expertStore.attach(
+                        client: self.liveCapability ? SessionsClient(connection: connection) : nil)
+                    Task { @MainActor in await self.expertStore.refresh() }
                     self.liveStructured.removeAll()
                     self.liveStores.removeAll()
                     self.notifier.install()
@@ -444,6 +471,8 @@ final class AppServices {
                     childKind: task.childKind
                 )
                 entry.isDiscussion = task.discussion
+                entry.restartCut = task.status == "interrupted" && task.interruptedBy == "hostRestart"
+                entry.autoRetry = task.autoRetry
                 taskStore.upsertTask(entry)
                 if let generation = task.generation {
                     pendingGenerations[task.id] = generation
@@ -1279,6 +1308,7 @@ extension AppServices: WorkspaceStateProviding {
         let count = AttentionQueue.items(taskStore.tasks, checkFailures: checkFailures, reviews: reviewNeeds,
                                          delegations: delegationNeeds, boards: boardNeeds, memories: memoryNeeds,
                                          skills: skillNeeds, deliveries: deliveryNeeds, retries: retryNeeds, nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
+            + dreamNeeds.count + (todoReview + todoProposals > 0 ? 1 : 0)
         return count > 0 ? count : nil
     }
 
@@ -1341,6 +1371,28 @@ extension AppServices: WorkspaceStateProviding {
     }
 
     /// A menu action the host refused, told plainly instead of dropped.
+    /// 2026-11-14 宿主重启后续跑: 继续 a session an Aeroric restart cut.
+    func continueAfterRestart(taskID: String) async {
+        guard let client = sessionsClient else { return }
+        do {
+            try await client.continueAfterRestart(taskId: taskID)
+        } catch {
+            showActionError("继续失败：\(AgentConfigStore.describe(error))")
+        }
+        await refreshWorkspace()
+    }
+
+    /// 2026-11-14 无人值守自动重试: 取消 a waiting retry.
+    func cancelAutoRetry(taskID: String) async {
+        guard let client = sessionsClient else { return }
+        do {
+            try await client.cancelAutoRetry(taskId: taskID)
+        } catch {
+            showActionError("取消失败：\(AgentConfigStore.describe(error))")
+        }
+        await refreshWorkspace()
+    }
+
     func showActionError(_ message: String) {
         let alert = NSAlert()
         alert.messageText = message
@@ -1505,6 +1557,9 @@ extension AppServices: SettingsStateProviding {
     var settingsImportBook: ImportBook? { importBook }
     var settingsKeepAwake: KeepAwakeStore? { keepAwakeStore }
     var settingsIdleRelease: IdleReleaseStore? { idleReleaseStore }
+    var settingsResumeAfterRestart: ResumeAfterRestartStore? { resumeAfterRestartStore }
+    var settingsReferences: ReferenceLibraryStore? { referenceLibraryStore }
+    var settingsExpert: ExpertStore? { expertStore }
     var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? {
         guard let connection = attachedConnection else { return nil }
         return { try await DiagnosticsClient(connection: connection).exportReport() }

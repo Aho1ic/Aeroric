@@ -9,6 +9,7 @@ use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 
+use super::acp::driver::{AcpLauncher, AcpSession, AcpSessionSpec, TranscriptLocator};
 use super::claude::driver::{ClaudeLauncher, ClaudeSession, ClaudeSessionSpec};
 use super::codex::driver::{CodexSession, CodexSessionSpec};
 use super::codex::server::{CodexServer, Launcher};
@@ -70,11 +71,21 @@ pub struct OmpKey {
     pub config: Option<String>,
 }
 
+/// An agent that speaks ACP (Q-R5): its family picks the dialect.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AcpKey {
+    pub family: ProtocolFamily,
+    pub agent: String,
+    /// A pinned Agent configuration: the agent talks to the local gateway.
+    pub config: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Route {
     Codex(ServerKey),
     Claude(ClaudeKey),
     Omp(OmpKey),
+    Acp(AcpKey),
     RemoteClaude(RemoteKey),
     RemoteOmp(RemoteKey),
 }
@@ -85,7 +96,7 @@ impl Route {
     pub fn runs_locally(&self) -> bool {
         match self {
             Route::Codex(ServerKey::Remote(_)) => false,
-            Route::Codex(_) | Route::Claude(_) => true,
+            Route::Codex(_) | Route::Claude(_) | Route::Acp(_) => true,
             Route::Omp(_) | Route::RemoteClaude(_) | Route::RemoteOmp(_) => false,
         }
     }
@@ -112,6 +123,13 @@ pub trait Routing: Send + Sync {
     }
     fn omp_launcher(&self, _key: &OmpKey) -> OmpLauncher {
         std::sync::Arc::new(|_| Err("这个宿主不支持 omp 原生会话".to_string()))
+    }
+    fn acp_launcher(&self, _key: &AcpKey) -> AcpLauncher {
+        std::sync::Arc::new(|_| Err("这个宿主不支持 ACP 会话".to_string()))
+    }
+    /// Where an ACP agent started for `key` in `cwd` keeps its transcripts.
+    fn acp_transcript(&self, _key: &AcpKey, _cwd: &str) -> Option<TranscriptLocator> {
+        None
     }
     /// A session on an SSH workspace; `None` = the PTY executor.
     fn route_remote(
@@ -162,6 +180,8 @@ pub struct StructuredExecutor {
     memory: Arc<crate::memory::Memory>,
     /// B5.5-1: project Wikis.
     wikis: Arc<crate::knowledge::Wikis>,
+    /// Q-R6: the reference library (one for every project).
+    references: Arc<crate::knowledge::references::References>,
     /// B4′: how to start the context server (`program`, `data_dir`); unset
     /// gives sessions none (tests, and hosts that opt out).
     context_program: Mutex<Option<(String, String)>>,
@@ -217,9 +237,26 @@ impl StructuredExecutor {
         }));
         let weak = Arc::downgrade(&reviews);
         let weak_delegations = Arc::downgrade(&delegations);
+        let memory: Arc<crate::memory::Memory> = Arc::default();
+        let weak_memory = Arc::downgrade(&memory);
+        let weak_tracker = Arc::downgrade(&turn_changes);
         turn_changes.set_hook(Arc::new(move |settled| {
             if let Some(delegations) = weak_delegations.upgrade() {
                 delegations.turn_settled(settled.clone());
+            }
+            // B6 代码版本链: a turn that changed files, in a project that
+            // uses memory, is split into blocks.
+            if let (true, Some(memory), Some(tracker)) = (
+                settled.diff.is_some(),
+                weak_memory.upgrade(),
+                weak_tracker.upgrade(),
+            ) {
+                if let (Some(project), Some(record)) = (
+                    tracker.project_of(&settled.task_id),
+                    tracker.ledger.get(&settled.task_id, &settled.turn_id),
+                ) {
+                    crate::memory::chain::record_turn(&memory, &project, &settled.task_id, &record);
+                }
             }
             if let Some(reviews) = weak.upgrade() {
                 reviews.turn_settled(settled);
@@ -243,8 +280,9 @@ impl StructuredExecutor {
             logins,
             change_review,
             boards: Arc::default(),
-            memory: Arc::default(),
+            memory,
             wikis: Arc::default(),
+            references: Arc::default(),
             context_program: Mutex::new(None),
             context_tokens: Arc::default(),
             runtime: runtime.clone(),
@@ -418,6 +456,10 @@ impl StructuredExecutor {
         &self.wikis
     }
 
+    pub fn references(&self) -> &Arc<crate::knowledge::references::References> {
+        &self.references
+    }
+
     /// Tasks whose latest check run failed (the attention queue).
     pub fn check_failures(&self) -> Vec<super::auto_check::CheckFailure> {
         self.turn_changes.checks.failures()
@@ -467,18 +509,26 @@ impl StructuredExecutor {
     ) -> Option<Route> {
         if !matches!(
             family,
-            ProtocolFamily::Codex | ProtocolFamily::Claude | ProtocolFamily::Omp
+            ProtocolFamily::Codex
+                | ProtocolFamily::Claude
+                | ProtocolFamily::Omp
+                | ProtocolFamily::Dsh
         ) {
             return None;
         }
-        match cwd {
+        let route = match cwd {
             WorkingDirectory::Local { .. } => self.routing.route(family, agent, config),
             WorkingDirectory::Ssh { connection_id, .. } => {
                 self.routing
                     .route_remote(family, agent, config, connection_id)
             }
             WorkingDirectory::Wsl { .. } => None,
-        }
+        };
+        // An ACP route needs its family's dialect; without one it stays on the PTY.
+        route.filter(|route| match route {
+            Route::Acp(key) => super::acp::dialect::for_family(key.family).is_some(),
+            _ => true,
+        })
     }
 
     fn claude_launcher(&self, key: &ClaudeKey) -> ClaudeLauncher {
@@ -591,6 +641,28 @@ impl StructuredExecutor {
                 log.clone(),
                 &self.runtime,
             ),
+            Route::Acp(key) => match super::acp::dialect::for_family(key.family) {
+                Some(dialect) => AcpSession::start(
+                    AcpSessionSpec {
+                        task_id: spec.task_id.clone(),
+                        project_id: spec.project_id.clone(),
+                        generation: spec.generation,
+                        agent: spec.agent.clone(),
+                        cwd: spec.cwd.clone(),
+                        permission: spec.permission.clone(),
+                        model: spec.model.clone(),
+                        effort: spec.effort.clone(),
+                        session: spec.thread_id.clone(),
+                        dialect,
+                        transcript: self.routing.acp_transcript(key, &spec.cwd),
+                    },
+                    self.routing.acp_launcher(key),
+                    Arc::clone(&self.sink),
+                    log.clone(),
+                    &self.runtime,
+                ),
+                None => unreachable!("an ACP route is only made for a family with a dialect"),
+            },
             Route::Omp(key) => OmpSession::start(
                 OmpSessionSpec {
                     task_id: spec.task_id.clone(),

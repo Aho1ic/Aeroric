@@ -11,6 +11,12 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use crate::client::HostClient;
 
 const PROTOCOL: &str = "2025-06-18";
+/// CU 2026-11-13: DSH waits for `tools/list` before a turn starts. A host
+/// busy at startup (a Keychain prompt after an ad hoc re-sign) held the yes/no
+/// probes, and the turn never began. Past this, only the base tools are offered.
+const HOST_PROBE: std::time::Duration = std::time::Duration::from_secs(3);
+/// How often `ask_expert` looks for the expert's answer.
+const EXPERT_POLL: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// MCP tool → host method.
 fn tools() -> Value {
@@ -90,6 +96,14 @@ fn tools() -> Value {
                 "entryId": {"type": "string"},
                 "accept": {"type": "boolean"}
             }}
+        },
+        {
+            "name": "todo_propose",
+            "description": "把本轮范围以外、值得以后做的一件事提议成用户的待办，例如顺带发现的另一个 bug、该补的测试。只会进入待确认，由用户在 Aeroric 的待办页收下或丢掉。不要用它代替把当前的事做完，也不要提议你这一轮马上就会做的事。每个会话最多 5 条待确认的提议；同一项目里已有同名待办会被拒绝。",
+            "inputSchema": {"type": "object", "required": ["title"], "properties": {
+                "title": {"type": "string", "description": "要做什么，一句话，200 字以内"},
+                "notes": {"type": "string", "description": "背景、涉及的文件、怎么算做完"}
+            }}
         }
     ])
 }
@@ -137,12 +151,15 @@ fn method_of(tool: &str) -> Option<&'static str> {
         "board_read" => Some("context.boardRead"),
         "board_write" => Some("context.boardWrite"),
         "board_decide" => Some("context.boardDecide"),
+        "todo_propose" => Some(aeroric_protocol::todo::PROPOSE_METHOD),
         "memory_recall" => Some("context.memoryRecall"),
         "memory_propose" => Some("context.memoryPropose"),
         "memory_feedback" => Some("context.memoryFeedback"),
         "read_wiki" => Some("context.wikiRead"),
         "search_wiki" => Some("context.wikiSearch"),
         "flag_wiki_issue" => Some("context.wikiFlag"),
+        "search_references" => Some("context.referenceSearch"),
+        "read_reference" => Some("context.referenceRead"),
         _ => None,
     }
 }
@@ -171,11 +188,27 @@ async fn answer(
                 "available",
             )
             .await;
+            let references = host_says(
+                client,
+                data_dir,
+                token,
+                "context.referencesAvailable",
+                "available",
+            )
+            .await;
+            let expert = host_says(
+                client,
+                data_dir,
+                token,
+                "context.expertAvailable",
+                "available",
+            )
+            .await;
             Ok(json!({
                 "protocolVersion": params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL),
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "aeroric-context", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": instructions(memory, wiki)
+                "instructions": instructions(memory, wiki, references, expert)
             }))
         }
         "ping" => Ok(json!({})),
@@ -195,6 +228,28 @@ async fn answer(
             {
                 list.extend(wiki_tools().as_array().cloned().unwrap_or_default());
             }
+            if host_says(
+                client,
+                data_dir,
+                token,
+                "context.referencesAvailable",
+                "available",
+            )
+            .await
+            {
+                list.extend(reference_tools().as_array().cloned().unwrap_or_default());
+            }
+            if host_says(
+                client,
+                data_dir,
+                token,
+                "context.expertAvailable",
+                "available",
+            )
+            .await
+            {
+                list.extend(expert_tools().as_array().cloned().unwrap_or_default());
+            }
             Ok(json!({"tools": list}))
         }
         "tools/call" => Ok(call_tool(client, data_dir, token, &params).await),
@@ -209,11 +264,12 @@ async fn answer(
 /// R4-3: Codex defers this server's tools and shows the model only these
 /// instructions, so a tool family they leave out is never loaded. The first
 /// Wiki evaluation had all 16 sessions skip the Wiki for exactly that reason.
-fn instructions(memory: bool, wiki: bool) -> String {
+fn instructions(memory: bool, wiki: bool, references: bool, expert: bool) -> String {
     let mut parts = vec![
         "检索本项目的历史会话",
         "读取当前任务的交接清单",
         "把工作委派给子会话",
+        "把本轮范围以外、值得以后做的事提议成用户的待办（todo_propose）",
     ];
     if memory {
         parts.push("查用户的长期记忆与本项目约定");
@@ -221,7 +277,126 @@ fn instructions(memory: bool, wiki: bool) -> String {
     if wiki {
         parts.push("读、搜本项目 Wiki（模块职责与常见坑、设计决定与理由；先读 Wiki 再翻代码更快）");
     }
+    if references {
+        parts.push("搜、读用户收集的参考代码库（别的仓库怎么实现同类功能）");
+    }
+    if expert {
+        parts.push("遇到难点时请教一个更强的专家模型（ask_expert）");
+    }
     format!("Aeroric 上下文工具：{}。", parts.join("、"))
+}
+
+/// 2026-11-13 Smart Friend: offered once the user set an expert model.
+fn expert_tools() -> Value {
+    let minutes = aeroric_protocol::delegation::EXPERT_MINUTES;
+    let per_turn = aeroric_protocol::delegation::EXPERT_ASKS_PER_TURN;
+    json!([
+        {
+            "name": "ask_expert",
+            "description": format!("遇到难点时请教一个更强的专家模型：卡住了、连续失败、拿不准方案，或要改安全相关的代码。专家只读，能看到你的交接清单，需要时会自己读项目文件。把背景、已试过什么、具体卡在哪写进问题里。会等专家答完（最多 {minutes} 分钟）再返回答案；每回合最多问 {per_turn} 次。"),
+            "inputSchema": {"type": "object", "required": ["question"], "properties": {
+                "question": {"type": "string", "description": "要问的问题，带上背景、已试过的做法和具体卡点"}
+            }}
+        }
+    ])
+}
+
+/// Ask the expert and wait for the answer, looking every few seconds. Past
+/// the wait the answer comes back as a delegation result after the turn.
+async fn ask_expert(
+    client: &mut Option<HostClient>,
+    data_dir: &Path,
+    token: &str,
+    arguments: &serde_json::Map<String, Value>,
+) -> Value {
+    if client.is_none() {
+        match HostClient::connect(data_dir, &uuid::Uuid::new_v4().to_string()).await {
+            Ok(connected) => *client = Some(connected),
+            Err(error) => return tool_error(format!("连不上 Aeroric：{error}")),
+        }
+    }
+    let Some(host) = client.as_mut() else {
+        return tool_error("连不上 Aeroric".into());
+    };
+    let question = arguments.get("question").cloned().unwrap_or(Value::Null);
+    let started = match host
+        .call(
+            "context.askExpert",
+            json!({"token": token, "question": question}),
+        )
+        .await
+    {
+        Ok(started) => started,
+        Err(error) => {
+            *client = None;
+            return tool_error(error.to_string());
+        }
+    };
+    let id = started["delegationId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let label = started["label"].as_str().unwrap_or("专家").to_string();
+    let minutes = aeroric_protocol::delegation::EXPERT_MINUTES;
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(u64::from(minutes) * 60);
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(EXPERT_POLL).await;
+        let Some(host) = client.as_mut() else {
+            break;
+        };
+        match host
+            .call(
+                "context.expertAnswer",
+                json!({"token": token, "delegationId": id}),
+            )
+            .await
+        {
+            Ok(reply) => match reply["state"].as_str() {
+                Some("answered") => {
+                    let text = reply["text"].as_str().unwrap_or_default();
+                    return json!({"content": [{"type": "text",
+                        "text": format!("专家（{label}）的回答：\n\n{text}")}], "isError": false});
+                }
+                Some("failed") => {
+                    let why = reply["text"].as_str().unwrap_or("没有回答");
+                    return tool_error(format!("专家（{label}）没答出来：{why}"));
+                }
+                _ => {}
+            },
+            Err(error) => {
+                *client = None;
+                return tool_error(format!("等专家回答时和 Aeroric 断开了：{error}"));
+            }
+        }
+    }
+    json!({"content": [{"type": "text", "text": format!(
+        "专家（{label}）还在想，已经等了 {minutes} 分钟。它答完后，答案会作为委派结果在你这一回合结束后送回；现在可以先按已知信息继续，或结束这一回合等它。"
+    )}], "isError": false})
+}
+
+/// Q-R6: offered when the user registered at least one reference folder.
+fn reference_tools() -> Value {
+    json!([
+        {
+            "name": "search_references",
+            "description": "在用户收集的参考代码库（本机的其他仓库，只读）里检索：类名、函数名优先匹配定义，其余按全文相关度。返回 仓库 · 路径:行号 和那一行。动手实现前想看别人怎么写同类功能时用。",
+            "inputSchema": {"type": "object", "required": ["query"], "properties": {
+                "query": {"type": "string", "description": "关键词，空格分开，任一命中即可；中英文都行"},
+                "repo": {"type": "string", "description": "只搜这个参考库（名字或 id）；省略搜全部"}
+            }}
+        },
+        {
+            "name": "read_reference",
+            "description": "读参考代码库里的一个文件（带行号，一次最多 400 行）。路径相对于该参考库，不能跳出它。",
+            "inputSchema": {"type": "object", "required": ["repo", "path"], "properties": {
+                "repo": {"type": "string", "description": "参考库的名字或 id（search_references 结果里的仓库名）"},
+                "path": {"type": "string", "description": "相对路径，如 ultralytics/nn/modules/head.py"},
+                "start": {"type": "integer", "description": "起始行，默认 1"},
+                "end": {"type": "integer", "description": "结束行，默认起始行后 200 行"}
+            }}
+        }
+    ])
 }
 
 /// B5.5-1: offered when the session's project has Wiki pages (Q-W5).
@@ -270,9 +445,10 @@ async fn host_says(
     let Some(host) = client.as_mut() else {
         return false;
     };
-    match host.call(method, json!({ "token": token })).await {
-        Ok(result) => result[field].as_bool().unwrap_or(false),
-        Err(_) => {
+    match tokio::time::timeout(HOST_PROBE, host.call(method, json!({ "token": token }))).await {
+        Ok(Ok(result)) => result[field].as_bool().unwrap_or(false),
+        // A late answer would land on the next call: start that one afresh.
+        Ok(Err(_)) | Err(_) => {
             *client = None;
             false
         }
@@ -291,12 +467,10 @@ async fn memory_enabled(client: &mut Option<HostClient>, data_dir: &Path, token:
     let Some(host) = client.as_mut() else {
         return false;
     };
-    match host
-        .call("context.memoryEnabled", json!({ "token": token }))
-        .await
-    {
-        Ok(result) => result["enabled"].as_bool().unwrap_or(false),
-        Err(_) => {
+    let call = host.call("context.memoryEnabled", json!({ "token": token }));
+    match tokio::time::timeout(HOST_PROBE, call).await {
+        Ok(Ok(result)) => result["enabled"].as_bool().unwrap_or(false),
+        Ok(Err(_)) | Err(_) => {
             *client = None;
             false
         }
@@ -313,6 +487,14 @@ async fn call_tool(
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    if name == "ask_expert" {
+        let arguments = params
+            .get("arguments")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        return ask_expert(client, data_dir, token, &arguments).await;
+    }
     let Some(method) = method_of(name) else {
         return tool_error(format!("没有这个工具：{name}"));
     };
@@ -426,7 +608,8 @@ mod tests {
                 "list_roles",
                 "board_read",
                 "board_write",
-                "board_decide"
+                "board_decide",
+                "todo_propose"
             ]
         );
         assert!(answer(
@@ -441,10 +624,48 @@ mod tests {
 
     #[test]
     fn the_instructions_name_every_offered_tool_family() {
-        let base = instructions(false, false);
+        let base = instructions(false, false, false, false);
         assert!(base.contains("历史会话") && !base.contains("记忆") && !base.contains("Wiki"));
-        let all = instructions(true, true);
-        assert!(all.contains("长期记忆") && all.contains("Wiki"));
+        assert!(base.contains("todo_propose"));
+        assert!(!base.contains("参考代码库") && !base.contains("专家"));
+        let all = instructions(true, true, true, true);
+        assert!(all.contains("长期记忆") && all.contains("Wiki") && all.contains("参考代码库"));
+        assert!(all.contains("ask_expert"));
+    }
+
+    /// 2026-11-13 Smart Friend: one tool, waiting on the host, not a plain mapping.
+    #[test]
+    fn the_expert_tool_waits_instead_of_mapping_to_one_call() {
+        let tools = expert_tools();
+        let names: Vec<&str> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["ask_expert"]);
+        assert!(tools[0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("10 分钟"));
+        assert_eq!(method_of("ask_expert"), None);
+    }
+
+    #[test]
+    fn the_reference_tools_map_to_host_methods() {
+        assert_eq!(
+            method_of("search_references"),
+            Some("context.referenceSearch")
+        );
+        assert_eq!(method_of("read_reference"), Some("context.referenceRead"));
+        let tools = reference_tools();
+        let names: Vec<&str> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["search_references", "read_reference"]);
     }
 
     #[tokio::test]

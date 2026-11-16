@@ -128,6 +128,7 @@ impl Rig {
             task_id: task.into(),
             turn_id: turn.into(),
             reason: TurnEndReason::Completed,
+            error: None,
             diff: changed,
             checking,
         });

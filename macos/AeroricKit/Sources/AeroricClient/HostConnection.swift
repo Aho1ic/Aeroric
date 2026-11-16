@@ -371,3 +371,21 @@ extension SocketTransport {
         lock.unlock()
     }
 }
+
+/// 目检 2026-11-15: a panel that showed `error.localizedDescription` read
+/// "The operation couldn’t be completed. (AeroricClient.ConnectionError
+/// error 1.)"; these are the words instead.
+extension ConnectionError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .disconnected: "和 Aeroric 宿主的连接断了"
+        case .timedOut: "宿主没有及时回应"
+        case .cancelled: "操作已取消"
+        case let .authDenied(message): "宿主拒绝了连接：\(message)"
+        case .notConnected: "还没连上 Aeroric 宿主"
+        case let .refused(frame): frame.error.message
+        case let .io(message): message
+        case .transport: "和宿主之间的数据出错了"
+        }
+    }
+}
