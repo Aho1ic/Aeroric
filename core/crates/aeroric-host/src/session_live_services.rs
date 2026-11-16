@@ -44,9 +44,15 @@ mod changes;
 mod delegation;
 mod delivery;
 mod discussion;
+mod expert;
 mod memory;
+mod references;
 mod rerun;
+mod restart;
+mod retry;
 mod review;
+mod schedule;
+mod todo;
 mod turns;
 mod wiki;
 
@@ -57,7 +63,12 @@ struct Live {
     context: Arc<CoreContext>,
     /// This host is the product binary (`aeroric-cli`), not a test harness.
     product: bool,
+    /// The `codex app-server` slot `usage.*` reads the subscription with;
+    /// 配额感知调度 reads it too.
+    codex_rpc: CodexSlot,
 }
+
+type CodexSlot = Arc<parking_lot::Mutex<Option<aeroric_core::metrics::usage::CodexRpcClient>>>;
 
 type Run = fn(&Live, &Request) -> Frame;
 
@@ -76,6 +87,7 @@ pub fn settle_orphaned_sessions(
         service,
         context,
         product: false,
+        codex_rpc: CodexSlot::default(),
     }
     .settle_orphaned()
 }
@@ -86,6 +98,7 @@ pub fn register_session_live_services(
     families: Arc<dyn AgentFamilies>,
     service: Arc<TaskService>,
     context: Arc<CoreContext>,
+    codex_rpc: CodexSlot,
 ) {
     // B4′: sessions get the context server only from the product binary
     // (a test harness is not an `aeroric-cli` that can serve it).
@@ -100,6 +113,7 @@ pub fn register_session_live_services(
         service,
         context,
         product,
+        codex_rpc,
     });
     live.executor
         .set_auto_check_policy(Arc::new(SettingsAutoChecks(Arc::clone(&live.context))));
@@ -110,7 +124,7 @@ pub fn register_session_live_services(
         .checkpoints()
         .set_dir(live.context.paths.data_dir().join("checkpoints"));
     // Before any session method can answer: the previous host's drivers are gone.
-    live.settle_orphaned();
+    let settled = live.settle_orphaned();
     let methods: [(&str, Run); 10] = [
         (wire::PROMPT_METHOD, prompt),
         (wire::INTERRUPT_METHOD, interrupt),
@@ -173,12 +187,23 @@ pub fn register_session_live_services(
     discussion::install(set, &live);
     memory::install(set, &live);
     wiki::install(set, &live);
+    // Q-R6: the reference library.
+    references::install(set, &live);
+    expert::install(set, &live);
     // R1-2: the delivery queue (after the services whose messages it carries).
     delivery::install(set, &live);
     capability::install(set, &live);
     turns::install(set, &live);
     rerun::install(set, &live);
     changes::install(set, &live);
+    // A12: 定时任务.
+    schedule::install(set, &live);
+    // 2026-11-14: 宿主重启后续跑 (after the services a continued session uses).
+    restart::install(set, &live, settled);
+    // 2026-11-14: 无人值守自动重试.
+    retry::install(set, &live);
+    // 2026-11-15: 工作安排第一批（待办）.
+    todo::install(set, &live);
 }
 
 // MARK: B4′ side branches (2026-10-30)

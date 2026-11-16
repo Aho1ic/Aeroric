@@ -389,12 +389,14 @@ public struct CentralResourcePreview: View {
     let onOpenFile: () -> Void
     /// Saves a `.file` tab's text; nil keeps the tab read-only.
     let onSave: ((String) -> Void)?
+    /// Where a PDF excerpt goes; nil when no session is in front (Q-R4).
+    let excerptTarget: PDFExcerptTarget?
     public init(book: ProjectResourceBook, target: ResourcePreviewTarget, projectName: String,
                 projectAvailable: Bool, onRetry: @escaping () -> Void, onOpenFile: @escaping () -> Void,
-                onSave: ((String) -> Void)? = nil) {
+                onSave: ((String) -> Void)? = nil, excerptTarget: PDFExcerptTarget? = nil) {
         self.book = book; self.target = target; self.projectName = projectName
         self.projectAvailable = projectAvailable; self.onRetry = onRetry; self.onOpenFile = onOpenFile
-        self.onSave = onSave
+        self.onSave = onSave; self.excerptTarget = excerptTarget
     }
     private var scene: ProjectResourceScene { book.scene(target.projectID) }
     /// A loaded text file with a save path is edited in place (2026-10-26 C).
@@ -424,7 +426,8 @@ public struct CentralResourcePreview: View {
                         .disabled(!projectAvailable)
                 }
                 Text(target.path).font(AeroricType.mono(AeroricType.secondary)).textSelection(.enabled)
-                Text(editable ? "可编辑 · ⌘S 保存" : "只读 · 宿主快照 · 版本未知")
+                Text(editable ? "可编辑 · ⌘S 保存"
+                     : scene.previewMedia != nil ? "只读 · 本机文件" : "只读 · 宿主快照 · 版本未知")
                     .foregroundStyle(AeroricColor.textTertiary)
                 if book.isDeleted(target) {
                     Text(FileEditText.deletedNotice).foregroundStyle(AeroricColor.warning)
@@ -446,7 +449,16 @@ public struct CentralResourcePreview: View {
                         .font(AeroricType.mono(AeroricType.caption)).textSelection(.enabled).padding(12)
                 }
                 if scene.previewState == .loading { ProgressView().controlSize(.small).padding(12) }
-                if let text = scene.previewText {
+                if let media = scene.previewMedia {
+                    switch media.kind {
+                    case .pdf:
+                        PDFReaderView(url: media.url, source: LinkedFolderPath.absolute(target.path) ?? target.path,
+                                      target: excerptTarget)
+                            .id(media)
+                    case .image:
+                        ImageFileView(url: media.url).id(media)
+                    }
+                } else if let text = scene.previewText {
                     if text.isEmpty {
                         Text(target.kind == .file ? "空文件" : "此文件没有可显示的文本 diff")
                             .font(AeroricType.mono(AeroricType.caption)).padding(12)

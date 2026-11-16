@@ -391,6 +391,23 @@ extension AppServices {
             }
             if next != boardNeeds { boardNeeds = next }
         }
+        // B6 second batch: dream proposals belong to no session; they get
+        // rows of their own and count on the 记忆 badge.
+        var dreamCount = dreamNeeds.reduce(0) { $0 + $1.count }
+        if let reply = try? await client.memoryCall("memory.dreamPending", [:]) {
+            let rows = AttentionQueue.dreamRows((reply["proposals"]?.arrayValue ?? []).compactMap(LiveDreamProposal.decode))
+            if rows != dreamNeeds { dreamNeeds = rows }
+            dreamCount = rows.reduce(0) { $0 + $1.count }
+        }
+        // 2026-11-15: todos waiting for acceptance, and (第二批) Agent
+        // proposals, one row in 需要我处理.
+        if let reply = try? await client.memoryCall("todo.list", [:]) {
+            let todos = (reply["todos"]?.arrayValue ?? []).compactMap(LiveTodo.decode)
+            let review = todos.filter { $0.state == "assigned" && $0.progress == "review" }.count
+            let proposals = todos.filter(\.isProposed).count
+            if review != todoReview { todoReview = review }
+            if proposals != todoProposals { todoProposals = proposals }
+        }
         // B5-1: memory proposals, under the session that proposed them.
         if let items = try? await client.memoryAttention() {
             let now = UInt64(Date().timeIntervalSince1970 * 1000)
@@ -401,7 +418,7 @@ extension AppServices {
                                                          atMs: memoryNeeds[task]?.atMs ?? now)
             }
             if next != memoryNeeds { memoryNeeds = next }
-            if items.count != memoryPendingCount { memoryPendingCount = items.count }
+            if items.count + dreamCount != memoryPendingCount { memoryPendingCount = items.count + dreamCount }
             await memoryStore.refreshPending()
         }
         // B5-3b: skill proposals, under the session their experience came from.
@@ -656,6 +673,123 @@ struct HostMemoryService: MemoryService {
 
     func disableSkill(id: String, disabled: Bool) async throws {
         try await client().skillAction("memory.skillDisable", id: id, ["disabled": .bool(disabled)])
+    }
+
+    func dream(projectID: String?) async throws -> LiveMemoryRun? {
+        // A dream asks the analysis model, often for longer than 30 s.
+        let reply = try await client().memoryCall("memory.dream", projectID.map { ["projectId": .string($0)] } ?? [:],
+                                                  timeout: .seconds(600))
+        return LiveMemoryRun.decode(reply["run"])
+    }
+
+    func dreamProposals(projectID: String?) async throws -> [LiveDreamProposal] {
+        let reply = try await client().memoryCall("memory.dreamProposals",
+                                                  projectID.map { ["projectId": .string($0)] } ?? [:])
+        return (reply["proposals"]?.arrayValue ?? []).compactMap(LiveDreamProposal.decode)
+    }
+
+    func decideDream(id: String, accept: Bool, keep: String?) async throws {
+        var params: [String: JSONValue] = ["id": .string(id), "accept": .bool(accept)]
+        if let keep { params["keep"] = .string(keep) }
+        _ = try await client().memoryCall("memory.dreamDecide", params)
+    }
+
+    func undoDream(runID: String) async throws {
+        _ = try await client().memoryCall("memory.dreamUndo", ["runId": .string(runID)])
+    }
+
+    func revertDream(id: String) async throws {
+        _ = try await client().memoryCall("memory.dreamRevert", ["id": .string(id)])
+    }
+
+    func semanticStatus() async throws -> LiveSemanticStatus {
+        LiveSemanticStatus.decode(try await client().memoryCall("memory.semanticStatus", [:]))
+    }
+
+    func chain(id: String) async throws -> [LiveCodeChange] {
+        let reply = try await client().memoryCall("memory.chain", ["id": .string(id)])
+        return (reply["changes"]?.arrayValue ?? []).compactMap(LiveCodeChange.decode)
+    }
+}
+
+/// A12 (2026-11-14): the 定时任务 page's host calls, over `SessionsClient`.
+@MainActor
+struct HostScheduleService: ScheduleService {
+    weak var services: AppServices?
+
+    private func call(_ method: String, _ params: [String: JSONValue] = [:]) async throws -> JSONValue {
+        guard let client = services?.sessionsClient else { throw AppServices.ProjectError.notConnected }
+        return try await client.memoryCall(method, params)
+    }
+
+    func list() async throws -> [LiveScheduleRule] {
+        (try await call("schedule.list")["rules"]?.arrayValue ?? []).compactMap(LiveScheduleRule.decode)
+    }
+
+    func save(_ rule: LiveScheduleRule) async throws -> LiveScheduleRule {
+        let reply = try await call("schedule.save", ["rule": rule.json])
+        return reply["rule"].flatMap(LiveScheduleRule.decode) ?? rule
+    }
+
+    func delete(id: String) async throws {
+        _ = try await call("schedule.delete", ["id": .string(id)])
+    }
+
+    func runNow(id: String) async throws -> LiveScheduleRun {
+        let reply = try await call("schedule.runNow", ["id": .string(id)])
+        return reply["run"].flatMap(LiveScheduleRun.decode) ?? LiveScheduleRun(id: "", ruleId: id, outcome: "failed")
+    }
+
+    func runs(id: String) async throws -> [LiveScheduleRun] {
+        (try await call("schedule.runs", ["id": .string(id)])["runs"]?.arrayValue ?? []).compactMap(LiveScheduleRun.decode)
+    }
+}
+
+/// 2026-11-15 工作安排第一批: the 待办 page's host calls, over `SessionsClient`.
+@MainActor
+struct HostTodoService: TodoService {
+    weak var services: AppServices?
+
+    private func call(_ method: String, _ params: [String: JSONValue] = [:]) async throws -> JSONValue {
+        guard let client = services?.sessionsClient else { throw AppServices.ProjectError.notConnected }
+        return try await client.memoryCall(method, params)
+    }
+
+    func list() async throws -> [LiveTodo] {
+        (try await call("todo.list")["todos"]?.arrayValue ?? []).compactMap(LiveTodo.decode)
+    }
+
+    func save(_ todo: LiveTodo) async throws -> LiveTodo {
+        let reply = try await call("todo.save", ["todo": todo.json])
+        return reply["todo"].flatMap(LiveTodo.decode) ?? todo
+    }
+
+    func delete(id: String) async throws {
+        _ = try await call("todo.delete", ["id": .string(id)])
+    }
+
+    func assign(id: String, agent: String) async throws -> (LiveTodo, String) {
+        let reply = try await call("todo.assign", ["id": .string(id), "agent": .string(agent)])
+        guard let todo = reply["todo"].flatMap(LiveTodo.decode), let task = reply["taskId"]?.stringValue else {
+            throw Incomplete()
+        }
+        return (todo, task)
+    }
+
+    func decide(id: String, decision: String) async throws -> LiveTodo {
+        let reply = try await call("todo.decide", ["id": .string(id), "decision": .string(decision)])
+        guard let todo = reply["todo"].flatMap(LiveTodo.decode) else { throw Incomplete() }
+        return todo
+    }
+
+    func check(id: String) async throws -> LiveTodo {
+        let reply = try await call("todo.check", ["id": .string(id)])
+        guard let todo = reply["todo"].flatMap(LiveTodo.decode) else { throw Incomplete() }
+        return todo
+    }
+
+    private struct Incomplete: LocalizedError {
+        var errorDescription: String? { "宿主的回复不完整" }
     }
 }
 

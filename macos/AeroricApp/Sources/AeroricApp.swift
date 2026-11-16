@@ -342,6 +342,7 @@ struct AeroricNativeApp: App {
             // Tags on sidebar rows and in their menus (2026-10-29).
             .environment(services.tagBook)
             .environment(services.linkedFolderBook)
+            .environment(services.composerInbox)
             // M4: first-launch onboarding once the host is ready.
             .sheet(isPresented: Binding(
                 get: { OnboardingFlow.shouldPresent(completed: onboardingCompleted, phase: services.phaseSnapshot) },

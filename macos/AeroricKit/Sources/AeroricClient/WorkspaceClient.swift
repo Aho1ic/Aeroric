@@ -141,6 +141,10 @@ public struct WorkspaceClient: Sendable {
         public var childKind: String? = nil
         /// 2026-11-12: a discussion's own record (never started; its page lists the posts).
         public var discussion: Bool = false
+        /// 2026-11-14: `hostRestart` when an Aeroric restart cut the session.
+        public var interruptedBy: String? = nil
+        /// 2026-11-14 无人值守自动重试: the record's `autoRetry`.
+        public var autoRetry: AutoRetryInfo? = nil
     }
 
     /// 展示标题：记录无 title 字段时取 prompt 首行（展示推导，非业务推断）。
@@ -201,7 +205,9 @@ public struct WorkspaceClient: Sendable {
             childKind: record["reviewOf"] != nil ? "review"
                 : (record["branchOf"] != nil ? "branch" : (record["delegateOf"] != nil ? "delegate"
                     : (record["discussionOf"] != nil ? "discussion" : nil))),
-            discussion: record["discussion"]?.boolValue ?? false
+            discussion: record["discussion"]?.boolValue ?? false,
+            interruptedBy: record["interruptedBy"]?.stringValue,
+            autoRetry: AutoRetryInfo.parse(record["autoRetry"])
         )
     }
 
@@ -373,5 +379,37 @@ public struct WorkspaceClient: Sendable {
     public struct MalformedReply: Error, Equatable {
         public let reason: String
         public init(_ reason: String) { self.reason = reason }
+    }
+}
+
+/// 2026-11-14 无人值守自动重试: an unattended session's retries after a turn
+/// that did not run (core `sessions::auto_retry`).
+public struct AutoRetryInfo: Equatable, Sendable {
+    /// `waiting` `sent` `gaveUp` `cancelled`.
+    public var state: String
+    /// The turn's not-run reason: `quota` `service` `network`.
+    public var reason: String
+    /// Tries sent so far, and allowed.
+    public var count: Int
+    public var max: Int
+    public var dueMs: UInt64?
+    public var error: String?
+
+    public init(state: String, reason: String, count: Int = 0, max: Int = 3, dueMs: UInt64? = nil,
+                error: String? = nil) {
+        self.state = state
+        self.reason = reason
+        self.count = count
+        self.max = max
+        self.dueMs = dueMs
+        self.error = error
+    }
+
+    public static func parse(_ value: JSONValue?) -> AutoRetryInfo? {
+        guard let f = value?.objectValue, let state = f["state"]?.stringValue else { return nil }
+        let int = { (key: String) in f[key]?.numberText.flatMap { Int($0) } ?? 0 }
+        return AutoRetryInfo(state: state, reason: f["reason"]?.stringValue ?? "", count: int("count"),
+                             max: int("max"), dueMs: f["dueMs"]?.numberText.flatMap { UInt64($0) },
+                             error: f["error"]?.stringValue)
     }
 }

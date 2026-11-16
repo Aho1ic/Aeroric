@@ -56,7 +56,8 @@ Status: implemented
 
 - `aeroric-cli mcp-context` 是 stdio MCP 服务，提供 `search_sessions` / `read_session` / `read_handoff`。`read_session` 的分段续读和工具行见 [read_session 分段续读](2026-11-08-read-session-pages.md)。
 - 令牌按任务签发：经 `AERORIC_CONTEXT_TOKEN` 传入，会话关闭即作废，再次签发时旧令牌失效。
-- 每次启动随参数注入（Claude `--mcp-config`，Codex `thread/start` 的 `config`），不写全局配置。只给本机的 Claude、Codex 会话，远程会话和 omp/DSH 都不给。
+- 每次启动随参数注入（Claude `--mcp-config`，Codex `thread/start` 的 `config`，ACP 的 `session/new`、`session/resume`），不写全局配置。只给本机的 Claude、Codex 和 ACP 会话（本机 DSH，见 [通用 ACP 驱动](2026-11-08-acp-dialects.md)），远程会话和 omp 都不给。
+- `initialize` 和 `tools/list` 会问宿主记忆、Wiki 开没开，3 秒没回答就只给基础工具：DSH 等工具列表才开始一轮，宿主一忙就卡住开轮（见 [通用 ACP 驱动](2026-11-08-acp-dialects.md)）。
 - 检索只查令牌所属项目。`allProjects` 一律拒绝（Q-F18 要求用户授权，目前还没有开关）。
 - 只有进程名是 `aeroric-cli` 时宿主才启用，测试宿主不受影响。
 

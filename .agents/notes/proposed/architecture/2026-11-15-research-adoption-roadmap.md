@@ -171,7 +171,7 @@ A 状态与回执说真话 ──┬─→ B 验收、证据与产物 ──┬�
 |---|---|---|
 | [2026-11-02 前沿原生能力独立评审](./2026-11-02-frontier-native-capabilities-review.md) | 部分重叠 | 保留。它的 NR-01～NR-11 里，NR-01、NR-02 已由投递队列解决大半，剩余部分是本篇 A1；NR-04、NR-05 已修；NR-06 的剩余部分是 A9；NR-09 是 C8、C9。本篇不复述它的论文核对 |
 | [2026-11-02 路线复核](./2026-11-02-roadmap-recheck.md) | 部分重叠 | 保留。它提出的"先让状态说真话，再做改动审查"已变成 R1、R2 并落地；本篇是同一思路的下一轮 |
-| [2026-11-08 ACP 方言](../feature/2026-11-08-acp-dialects.md)、[2026-11-08 新增项目暂缓项](../feature/2026-11-08-new-addition-deferred.md) | 无关 | 不动 |
+| [2026-11-08 ACP 方言](../../implemented/feature/2026-11-08-acp-dialects.md)、[2026-11-08 新增项目暂缓项](../feature/2026-11-08-new-addition-deferred.md) | 无关 | 不动 |
 | [投递队列](../../implemented/feature/2026-11-02-delivery-queue.md)、[委派](../../implemented/feature/2026-10-31-delegation.md)、[讨论模式](../../implemented/feature/2026-11-12-discussion.md)、[回合撤销](../../implemented/feature/2026-11-04-turn-undo.md)、[能力表与登录](../../implemented/feature/2026-11-03-capabilities-and-login.md)、[故障注入](../../implemented/feature/2026-11-04-fault-injection.md) | 被本篇的切片修改 | 对应切片落地时原地更新这些笔记里的事实，不另起新篇 |
 
 ## Alternatives considered

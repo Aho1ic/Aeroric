@@ -25,13 +25,21 @@ public struct NewSessionHome: View {
     private let expiredLogins: [ExpiredLogin]
     @State private var loginHelp: ExpiredLogin?
     /// 2026-11-12: the configurations a discussion member can use, and how
-    /// to start one (topic, members, moderator, rounds → an error or nil).
+    /// to start one (an error or nil).
     private let discussionTargets: [RerunTarget]
-    private let onStartDiscussion: ((String, [LiveDiscussionChoice], Int, Int) async -> String?)?
+    private let onStartDiscussion: ((LiveDiscussionStart) async -> String?)?
+    /// 2026-11-13: members to start a discussion with (围绕这份稿子讨论);
+    /// taken once, then `onPrefillTaken`.
+    private let discussionPrefill: DiscussionPrefill?
+    private let onPrefillTaken: () -> Void
     @State private var discussing = false
     @State private var members: [LiveDiscussionChoice] = []
     @State private var moderator = 0
     @State private var rounds = DiscussionText.defaultRounds
+    @State private var anonymous = false
+    @State private var format: DiscussionText.FormatChoice = .auto
+    @State private var revisions = DiscussionText.defaultRevisions
+    @State private var requirements = DiscussionText.defaultRequirements
     @State private var discussionError: String?
     @State private var startingDiscussion = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -60,7 +68,8 @@ public struct NewSessionHome: View {
                 preferredHarness: String = "codex",
                 capabilities: [String: LiveCapabilities] = [:], expiredLogins: [ExpiredLogin] = [],
                 discussionTargets: [RerunTarget] = [],
-                onStartDiscussion: ((String, [LiveDiscussionChoice], Int, Int) async -> String?)? = nil) {
+                onStartDiscussion: ((LiveDiscussionStart) async -> String?)? = nil,
+                discussionPrefill: DiscussionPrefill? = nil, onPrefillTaken: @escaping () -> Void = {}) {
         _draft = draft
         self.projectID = projectID
         self.projects = projects
@@ -76,6 +85,8 @@ public struct NewSessionHome: View {
         self.expiredLogins = expiredLogins
         self.discussionTargets = discussionTargets
         self.onStartDiscussion = onStartDiscussion
+        self.discussionPrefill = discussionPrefill
+        self.onPrefillTaken = onPrefillTaken
     }
 
     /// R1-3a: the selected harness and Agent config on this Mac, when its
@@ -128,7 +139,9 @@ public struct NewSessionHome: View {
                     composer
                     if discussing {
                         DiscussionSetup(targets: discussionTargets, preferredHarness: harness, members: $members,
-                                        moderator: $moderator, rounds: $rounds,
+                                        moderator: $moderator, rounds: $rounds, anonymous: $anonymous,
+                                        topic: draft.task.prompt, format: $format, revisions: $revisions,
+                                        requirements: $requirements,
                                         isEditable: draft.isEditable && !startingDiscussion)
                             .padding(.top, AeroricSpace.m)
                             .transition(modeTransition(.offset(y: -AeroricSpace.l)))
@@ -160,6 +173,7 @@ public struct NewSessionHome: View {
         .onAppear(perform: adoptDefaults)
         .sheet(item: $loginHelp) { LoginHelpSheet(login: $0) }
         .onChange(of: configurations) { _, _ in adoptDefaults() }
+        .onChange(of: discussionPrefill?.id, initial: true) { _, _ in takePrefill() }
         .background(AeroricColor.canvas)
         .foregroundStyle(AeroricColor.text)
         .confirmationDialog("输入框里已有内容", isPresented: Binding(
@@ -239,6 +253,17 @@ public struct NewSessionHome: View {
             .map(ComposerSendState.blocked) ?? .ready
     }
 
+    /// 2026-11-13: switch to a discussion with the prefilled members; the
+    /// topic is already the draft's text.
+    private func takePrefill() {
+        guard let prefill = discussionPrefill, onStartDiscussion != nil else { return }
+        discussing = true
+        members = prefill.members
+        moderator = min(prefill.moderator, max(0, prefill.members.count - 1))
+        format = prefill.format
+        onPrefillTaken()
+    }
+
     /// 2026-11-12: start a discussion with the composer's text as its topic.
     private func startDiscussion() {
         guard let onStartDiscussion,
@@ -247,13 +272,20 @@ public struct NewSessionHome: View {
         startingDiscussion = true
         discussionError = nil
         Task {
-            let error = await onStartDiscussion(draft.task.prompt, members, moderator, rounds)
+            let error = await onStartDiscussion(LiveDiscussionStart(
+                topic: draft.task.prompt, members: members, moderator: moderator, rounds: rounds,
+                anonymous: anonymous, format: DiscussionText.format(format, topic: draft.task.prompt),
+                revisions: revisions, requirements: requirements))
             startingDiscussion = false
             discussionError = error
             if error == nil {
                 members = []
                 moderator = 0
                 rounds = DiscussionText.defaultRounds
+                anonymous = false
+                format = .auto
+                revisions = DiscussionText.defaultRevisions
+                requirements = DiscussionText.defaultRequirements
             }
         }
     }

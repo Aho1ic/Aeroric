@@ -20,6 +20,7 @@ use aeroric_core::agents::families::is_builtin;
 use aeroric_core::agents::launch::LaunchInput;
 use aeroric_core::context::CoreContext;
 use aeroric_core::events::EventLog;
+use aeroric_core::sessions::live::acp::driver::{AcpLauncher, AcpStart, TranscriptLocator};
 use aeroric_core::sessions::live::claude::driver::{ClaudeLauncher, ClaudeStart};
 use aeroric_core::sessions::live::claude::map::{
     claude_permission_mode, version_supported as claude_version_supported,
@@ -29,7 +30,7 @@ use aeroric_core::sessions::live::codex::server::{
     process_launcher, spawn_checked, Launcher, ProcessSpec,
 };
 use aeroric_core::sessions::live::executor::{
-    ClaudeKey, OmpKey, RemoteKey, Route, Routing, ServerKey,
+    AcpKey, ClaudeKey, OmpKey, RemoteKey, Route, Routing, ServerKey,
 };
 use aeroric_core::sessions::live::omp::driver::{
     version_supported as omp_version_supported, OmpLauncher, OmpStart,
@@ -184,6 +185,27 @@ impl Routing for HostRouting {
                 config,
             }));
         }
+        if family == ProtocolFamily::Dsh {
+            // Q-R5 (2026-11-13): local DSH runs over ACP — the built-in, or a
+            // pinned DSH Agent configuration through the local gateway. A
+            // custom dsh wrapper may not take `acp`: it stays on the PTY.
+            let config = match agent_config_id.filter(|id| !id.trim().is_empty()) {
+                Some(id) => {
+                    let config = resolve_config(self.context.paths.data_dir(), id).ok()?;
+                    if config.harness != Harness::Dsh {
+                        return None;
+                    }
+                    Some(config.config_id)
+                }
+                None if is_builtin(agent) => None,
+                None => return None,
+            };
+            return Some(Route::Acp(AcpKey {
+                family,
+                agent: agent.to_string(),
+                config,
+            }));
+        }
         if !matches!(family, ProtocolFamily::Codex | ProtocolFamily::Claude) {
             return None;
         }
@@ -236,6 +258,29 @@ impl Routing for HostRouting {
 
     fn omp_launcher(&self, key: &OmpKey) -> OmpLauncher {
         omp_launcher(Arc::clone(&self.context), key.clone())
+    }
+
+    fn acp_launcher(&self, key: &AcpKey) -> AcpLauncher {
+        dsh_acp_launcher(Arc::clone(&self.context), key.clone())
+    }
+
+    /// DSH writes `<DSH_HOME>/sessions/<project key>/<session>/session.vN.jsonl`.
+    fn acp_transcript(&self, key: &AcpKey, cwd: &str) -> Option<TranscriptLocator> {
+        use aeroric_core::sessions::dsh::{dsh_encode_segment, dsh_project_key, dsh_transcript_in};
+        let homes = self.context.paths.data_dir().join("agent-homes");
+        let home = match &key.config {
+            None => homes.join("dsh"),
+            Some(id) => homes.join(
+                resolve_config(self.context.paths.data_dir(), id)
+                    .ok()?
+                    .home_dir_name,
+            ),
+        };
+        let sessions = home.join("sessions").join(dsh_project_key(cwd));
+        Some(Arc::new(move |session_id: &str| {
+            dsh_transcript_in(&sessions.join(dsh_encode_segment(session_id)))
+                .map(|path| path.to_string_lossy().into_owned())
+        }))
     }
 
     /// SSH workspaces (2026-10-27): the three structured families of a
@@ -595,6 +640,102 @@ fn remote_codex_launcher(context: Arc<CoreContext>, key: RemoteKey) -> Launcher 
     })
 }
 
+/// `dsh acp` (Q-R5, 2026-11-13) with a managed `DSH_HOME`, never the
+/// user's own: the built-in's `agent-homes/dsh` (its own login), or a
+/// configuration's home whose only provider is the local gateway, with this
+/// task's model patch and a gateway token revoked when the process goes. The
+/// dialect's permission pin is set last, over everything inherited.
+fn dsh_acp_launcher(context: Arc<CoreContext>, key: AcpKey) -> AcpLauncher {
+    use aeroric_core::agent_connections::model::WireProtocol;
+    Arc::new(move |start: &AcpStart| {
+        let input = harness_path(&context, "dsh")
+            .map(LaunchInput::new)
+            .unwrap_or_else(|| LaunchInput::new("dsh"));
+        let mut spec = spec_with_login_env(input);
+        spec.cwd = Some(start.cwd.clone());
+        let mut args: Vec<String> = aeroric_core::sessions::live::acp::dialect::DSH
+            .args
+            .iter()
+            .map(|arg| arg.to_string())
+            .collect();
+        let mut ops = vec![EnvOp::Set("DSH_TELEMETRY_DISABLED".into(), "1".into())];
+        let mut token = None;
+        let home = match &key.config {
+            None => {
+                let home = context.paths.data_dir().join("agent-homes").join("dsh");
+                std::fs::create_dir_all(&home)
+                    .map_err(|e| format!("无法准备 DSH 托管目录 {}：{e}", home.display()))?;
+                ops.push(EnvOp::Set(
+                    "DSH_HOME".into(),
+                    home.to_string_lossy().into_owned(),
+                ));
+                home
+            }
+            Some(config_id) => {
+                let config = resolve_config(context.paths.data_dir(), config_id)?;
+                let base = crate::gateway::ensure_running(context.paths.data_dir())?;
+                let (base_url, api) = match config.protocol {
+                    WireProtocol::Responses => (format!("{base}/codex/v1"), "openai-responses"),
+                    _ => (format!("{base}/claude"), "anthropic-messages"),
+                };
+                ops.extend(config_home_env(&context, &config)?);
+                let home = context
+                    .paths
+                    .data_dir()
+                    .join("agent-homes")
+                    .join(&config.home_dir_name);
+                let model = start
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or(&config.default_model);
+                let patch = aeroric_core::settings::dsh_home::prepare_gateway_home(
+                    &home,
+                    &start.task_id,
+                    &base_url,
+                    api,
+                    &config.models,
+                    model,
+                )?;
+                args.extend(["--patch".to_string(), patch.to_string_lossy().into_owned()]);
+                let issued = aeroric_core::local_router::task_tokens::issue(
+                    &start.task_id,
+                    Some(config_id.clone()),
+                );
+                match gateway_env_ops(context.paths.data_dir(), ProtocolFamily::Dsh, &issued) {
+                    Ok(gateway) => ops.extend(gateway),
+                    Err(reason) => {
+                        aeroric_core::local_router::task_tokens::revoke_token(&issued);
+                        return Err(reason);
+                    }
+                }
+                token = Some(issued);
+                home
+            }
+        };
+        crate::builtin_skills_services::prepare(
+            &context,
+            "dsh",
+            Some(std::path::Path::new(&start.cwd)),
+            crate::builtin_skills_services::Mount::Home(&home),
+        );
+        ops.extend(
+            start
+                .env
+                .iter()
+                .map(|(name, value)| EnvOp::Set(name.clone(), value.clone())),
+        );
+        push_ops(&mut spec, ops);
+        // `dsh acp` answers `initialize` with its protocol version; that is the check.
+        let spawned = spawn_checked(&spec, |_| Ok(()), &args, "dsh");
+        match token {
+            Some(token) => with_token(spawned, token),
+            None => spawned,
+        }
+    })
+}
+
 /// `omp --mode rpc` with the managed home (`PI_CODING_AGENT_DIR`), never the
 /// user's `~/.omp`. No `AERORIC_TASK_ID`/`AERORIC_EVENT_DIR`, so the managed
 /// hook stays inert: status comes from the protocol.
@@ -834,6 +975,14 @@ fn claude_launcher(context: Arc<CoreContext>, key: ClaudeKey) -> ClaudeLauncher 
                 "1".into(),
             )],
         );
+        // 2026-11-13 Smart Friend: `ask_expert` waits up to EXPERT_MINUTES.
+        if start.mcp_config.is_some() {
+            let ms = (u64::from(aeroric_protocol::delegation::EXPERT_MINUTES) * 60 + 60) * 1000;
+            push_ops(
+                &mut spec,
+                vec![EnvOp::Set("MCP_TOOL_TIMEOUT".into(), ms.to_string())],
+            );
+        }
         let mut args = claude_args(start, passes_model);
         let cwd = std::path::Path::new(&start.cwd);
         if key.config.is_none() && key.agent == "claude" {

@@ -35,6 +35,10 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     case tasks
     /// A19: tasks waiting on the user, and recent failures.
     case attention
+    /// 2026-11-15 工作安排第一批: 待办.
+    case todos
+    /// A12 (2026-11-14): 定时任务.
+    case schedule
     case canvas
     /// G: connections, pools, routes and agent configurations.
     case agentConfigs
@@ -54,6 +58,8 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .wiki: "Wiki"
         case .tasks: "任务"
         case .attention: "需要我处理"
+        case .todos: "待办"
+        case .schedule: "定时任务"
         case .canvas: "画布"
         case .agentConfigs: "Agent 配置"
         case .connections: "SSH"
@@ -78,6 +84,8 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .wiki: "book.closed"
         case .tasks: "checklist"
         case .attention: "bell.badge"
+        case .todos: "checkmark.circle"
+        case .schedule: "clock.arrow.circlepath"
         case .canvas: "square.on.square.dashed"
         case .agentConfigs: "slider.horizontal.3"
         case .connections: "network"
@@ -98,7 +106,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     /// Agent tools gets real data today; the rest explain what they will do.
     var status: ToolSectionStatus {
         switch self {
-        case .tasks, .attention, .canvas, .agentConfigs, .memory, .wiki: .wired
+        case .tasks, .attention, .todos, .schedule, .canvas, .agentConfigs, .memory, .wiki: .wired
         case .connections: .wired
         case .infrastructure: .comingSoon("Docker 容器与镜像、端口占用、Conda 环境。")
         case .database: .comingSoon("SQLite、Redis、MongoDB 的浏览与查询。")
@@ -111,7 +119,7 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
 
     var group: SidebarGroup {
         switch self {
-        case .tasks, .attention, .canvas, .agentConfigs, .memory, .wiki: .work
+        case .tasks, .attention, .todos, .schedule, .canvas, .agentConfigs, .memory, .wiki: .work
         case .database, .notebook: .tools
         case .connections, .infrastructure, .extensions, .remote, .operations: .system
         }
@@ -150,6 +158,8 @@ struct TaskWorkspaceView: View {
     @State private var scopedProjectID: String?
     /// 每窗口选中的任务 id（窗口局部状态，不进 store）。
     @State private var selectedTaskID: String?
+    /// 2026-11-13: members for the next new-session page's discussion.
+    @State private var discussionPrefill: DiscussionPrefill?
     @State private var visitedTaskIDs: Set<String> = []
     @State private var taskProjectContexts: [String: String] = [:]
     @State private var taskFilterText = ""
@@ -874,7 +884,16 @@ struct TaskWorkspaceView: View {
                         default: return false
                         }
                         return true
-                    }
+                    },
+                    dreams: services.dreamNeeds,
+                    onOpenDreams: { dream in
+                        services.openMemory(projectID: dream.projectID,
+                                            tab: MemoryTab.allCases.first { $0.kind == dream.kind })
+                    },
+                    onContinue: { id in await services.continueAfterRestart(taskID: id) },
+                    todoReview: services.todoReview,
+                    todoProposals: services.todoProposals,
+                    onOpenTodos: { services.requestedSelection = WorkspaceSection.todos.sidebarID }
                 )
                 .opacity(previewActive ? 0 : 1)
                 .allowsHitTesting(!previewActive)
@@ -900,6 +919,22 @@ struct TaskWorkspaceView: View {
                                                      tab: source.kind == "skill" ? .skills : .experience)
                              }
                          })
+                    .opacity(previewActive ? 0 : 1)
+                    .allowsHitTesting(!previewActive)
+                    .accessibilityHidden(previewActive)
+            } else if activeSection == .todos {
+                TodoPage(store: services.todoStore,
+                         projects: services.taskStore.projects.map { (id: $0.id, name: $0.name) },
+                         agents: services.agentChoices(projectID: ""),
+                         onOpenTask: { selection = SessionNavigation.task($0) })
+                    .opacity(previewActive ? 0 : 1)
+                    .allowsHitTesting(!previewActive)
+                    .accessibilityHidden(previewActive)
+            } else if activeSection == .schedule {
+                SchedulePage(store: services.scheduleStore,
+                             projects: services.taskStore.projects.map { (id: $0.id, name: $0.name) },
+                             agents: services.agentChoices(projectID: ""),
+                             onOpenTask: { selection = SessionNavigation.task($0) })
                     .opacity(previewActive ? 0 : 1)
                     .allowsHitTesting(!previewActive)
                     .accessibilityHidden(previewActive)
@@ -964,7 +999,8 @@ struct TaskWorkspaceView: View {
                     onOpenFile: { openPreview(.init(projectID: id, path: target.path, kind: .file)) },
                     // Linked folders stay read-only (2026-10-30).
                     onSave: target.kind == .file && FileEditText.writable(target.path)
-                        ? { text in Task { await saveTab(target, text: text) } } : nil
+                        ? { text in Task { await saveTab(target, text: text) } } : nil,
+                    excerptTarget: excerptTarget
                 )
                 .id(target)
             }
@@ -1294,9 +1330,9 @@ struct TaskWorkspaceView: View {
             discussionTargets: configurations.filter { $0.blockedReasons.isEmpty }.map {
                 RerunTarget(id: $0.id, title: $0.title, agent: $0.agent, models: $0.options.models)
             },
-            onStartDiscussion: { topic, members, moderator, rounds in
-                await startDiscussion(scope, topic: topic, members: members, moderator: moderator, rounds: rounds)
-            }
+            onStartDiscussion: { start in await startDiscussion(scope, start) },
+            discussionPrefill: discussionPrefill,
+            onPrefillTaken: { discussionPrefill = nil }
         )
         .task(id: [catalogProjectID ?? "", services.configurationEpoch.uuidString,
                    services.agentCatalogEpoch.uuidString]) {
@@ -1467,7 +1503,7 @@ struct TaskWorkspaceView: View {
     @ViewBuilder
     private var sectionContent: some View {
         switch activeSection {
-        case .tasks, .attention, .canvas, .agentConfigs, .connections, .memory, .wiki:
+        case .tasks, .attention, .todos, .schedule, .canvas, .agentConfigs, .connections, .memory, .wiki:
             EmptyView() // Mounted directly by centralContent.
         case .infrastructure:
             HSplitView {
@@ -1525,6 +1561,13 @@ struct TaskWorkspaceView: View {
         }
     }
 
+    /// Q-R4: PDF excerpts go to the composer of the live session in front.
+    private var excerptTarget: PDFExcerptTarget? {
+        guard let task = selectedTask, !task.isDiscussion, services.liveStructured[task.id] == true else { return nil }
+        let inbox = services.composerInbox
+        return PDFExcerptTarget(title: task.title) { text in inbox.post(text, to: task.id) }
+    }
+
     private var selectedTask: TaskStore.TaskEntry? {
         selectedTaskID.flatMap { id in
             services.taskStore.tasks.first(where: { $0.id == id })
@@ -1553,8 +1596,16 @@ struct TaskWorkspaceView: View {
         } else if services.liveCapability {
             switch services.liveStructured[task.id] {
             case true?:
-                LiveSessionView(store: services.liveStore(for: task.id), facts: services.liveFacts(for: task),
-                                focusApproval: services.approvalFocus[task.id])
+                VStack(spacing: 0) {
+                    if task.restartCut, task.status == "interrupted" {
+                        RestartCutBanner { await services.continueAfterRestart(taskID: task.id) }
+                    }
+                    if let retry = task.autoRetry, retry.state == "waiting" {
+                        AutoRetryBanner(retry: retry) { await services.cancelAutoRetry(taskID: task.id) }
+                    }
+                    LiveSessionView(store: services.liveStore(for: task.id), facts: services.liveFacts(for: task),
+                                    focusApproval: services.approvalFocus[task.id])
+                }
                     .id("live.\(task.id)")
                     // The model and effort pickers read the project's catalog.
                     .task(id: task.projectID) { await services.loadSessionConfigurations(projectID: task.projectID) }
@@ -1588,18 +1639,31 @@ struct TaskWorkspaceView: View {
                 }
                 selection = draft
             },
-            changed: { await services.refreshWorkspace() }
+            changed: { await services.refreshWorkspace() },
+            discuss: { projectID, topic, members, moderator, format in
+                let draft = SessionNavigation.draft(projectID: projectID)
+                if let scope = SessionNavigation.draftScope(draft) {
+                    draftBook.open(scope)
+                    draftBook.edit(scope) { $0.task.prompt = topic }
+                }
+                discussionPrefill = DiscussionPrefill(members: members, moderator: moderator, format: format)
+                selection = draft
+            },
+            say: { id, text, mentions in
+                let discussion = try await services.sessionsClient?.sayInDiscussion(
+                    taskId: id, text: text, mentions: mentions)
+                await services.refreshWorkspace()
+                return discussion
+            }
         )
     }
 
     /// 2026-11-12: start a discussion from the new-session page; an error or nil.
-    private func startDiscussion(_ scope: SessionDraftScope, topic: String, members: [LiveDiscussionChoice],
-                                 moderator: Int, rounds: Int) async -> String? {
+    private func startDiscussion(_ scope: SessionDraftScope, _ start: LiveDiscussionStart) async -> String? {
         guard let projectID = scope.projectID else { return "先选一个项目" }
         guard let client = services.sessionsClient else { return "宿主没有连接" }
         do {
-            guard let discussion = try await client.startDiscussion(
-                projectId: projectID, topic: topic, members: members, moderator: moderator, rounds: rounds)
+            guard let discussion = try await client.startDiscussion(projectId: projectID, start: start)
             else { return "宿主没有返回讨论" }
             draftBook.edit(scope) { $0.task.prompt = "" }
             await services.refreshWorkspace()

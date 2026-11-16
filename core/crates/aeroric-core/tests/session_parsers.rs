@@ -307,6 +307,31 @@ fn codex_merges_assistant_parts_and_dedups_adjacent_user_text() {
 /// 2026-11-08：Codex 原生多代理在落盘记录里是普通函数调用。形状取自 0.163 的
 /// 真实记录（v2 的 spawn 消息是加密串）和同版本 v1 的探针记录。
 #[test]
+fn codex_code_mode_exec_cells_are_named_by_the_mcp_tools_they_call() {
+    let messages = parse_codex_session(&[
+        r#"{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","input":"text(await tools.mcp__aeroric_context__read_reference({repo:\"r\",path:\"a.go\"}));"}}"#,
+        r#"{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c2","input":"text(await tools.exec_command({cmd:\"ls\"}));"}}"#,
+        r#"{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c3","input":"a(tools.mcp__aeroric_context__search_wiki({})); b(tools.mcp__aeroric_context__read_wiki({})); c(tools.mcp__aeroric_context__search_wiki({}))"}}"#,
+    ]);
+    let names: Vec<String> = messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|c| match c {
+            SessionContent::ToolUse { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "aeroric_context.read_reference",
+            "exec",
+            "aeroric_context.search_wiki, aeroric_context.read_wiki"
+        ]
+    );
+}
+
+#[test]
 fn codex_multi_agent_calls_become_subagent_cards_with_their_child_s_report() {
     let tool_uses = |messages: &[SessionMessage]| -> Vec<(String, String, String)> {
         messages

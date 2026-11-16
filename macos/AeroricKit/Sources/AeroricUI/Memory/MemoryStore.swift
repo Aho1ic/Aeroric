@@ -38,6 +38,18 @@ public protocol MemoryService {
     func decideProposal(id: String, accept: Bool) async throws
     func useSkillVersion(id: String, version: Int) async throws
     func disableSkill(id: String, disabled: Bool) async throws
+    /// B6 (2026-11-13): 现在整理, a scope's dream proposals, deciding one,
+    /// and 撤销这次整理.
+    func dream(projectID: String?) async throws -> LiveMemoryRun?
+    func dreamProposals(projectID: String?) async throws -> [LiveDreamProposal]
+    func decideDream(id: String, accept: Bool, keep: String?) async throws
+    func undoDream(runID: String) async throws
+    /// B6 second batch: take back one accepted proposal.
+    func revertDream(id: String) async throws
+    /// B6: how far the vectors for 按意思找相近的记忆 are.
+    func semanticStatus() async throws -> LiveSemanticStatus
+    /// B6 代码版本链: the changes of the sessions a memory came from.
+    func chain(id: String) async throws -> [LiveCodeChange]
 }
 
 extension MemoryService {
@@ -59,6 +71,13 @@ extension MemoryService {
     public func decideProposal(id: String, accept: Bool) async throws {}
     public func useSkillVersion(id: String, version: Int) async throws {}
     public func disableSkill(id: String, disabled: Bool) async throws {}
+    public func dream(projectID: String?) async throws -> LiveMemoryRun? { nil }
+    public func dreamProposals(projectID: String?) async throws -> [LiveDreamProposal] { [] }
+    public func decideDream(id: String, accept: Bool, keep: String?) async throws {}
+    public func undoDream(runID: String) async throws {}
+    public func revertDream(id: String) async throws {}
+    public func semanticStatus() async throws -> LiveSemanticStatus { LiveSemanticStatus() }
+    public func chain(id: String) async throws -> [LiveCodeChange] { [] }
 }
 
 /// The memory page's five tabs (§6.7).
@@ -117,6 +136,10 @@ public final class MemoryStore {
     public private(set) var models: [LiveMemoryModelChoice] = []
     /// B5-3b: every skill proposal (the 技能提案 tab, experience badges).
     public private(set) var proposals: [LiveSkillProposal] = []
+    /// B6: the scope's dream proposals, and how the last 现在整理 went.
+    public private(set) var dreamProposals: [LiveDreamProposal] = []
+    public private(set) var dreaming = false
+    public private(set) var dreamNote: String?
     /// 导入为候选's result per file path.
     public private(set) var importNotes: [String: String] = [:]
     /// Q4: 整理历史会话's plan and how the run is going.
@@ -154,7 +177,27 @@ public final class MemoryStore {
     public func count(_ tab: MemoryTab) -> Int {
         if tab == .skills { return proposals.filter { $0.state == "pending" }.count }
         guard let kind = tab.kind else { return 0 }
-        return counts[kind] ?? 0
+        return (counts[kind] ?? 0) + pendingDreams(tab).count
+    }
+
+    /// B6: the dream proposals waiting in a tab (by their items' kind).
+    public func pendingDreams(_ tab: MemoryTab) -> [LiveDreamProposal] {
+        guard let kind = tab.kind else { return [] }
+        return dreamProposals.filter { $0.isPending && $0.kind == kind }
+    }
+
+    /// B6 second batch: proposals of this tab the user accepted lately,
+    /// newest first — each can be taken back.
+    public func acceptedDreams(_ tab: MemoryTab) -> [LiveDreamProposal] {
+        guard let kind = tab.kind else { return [] }
+        return Array(dreamProposals.filter { $0.state == "accepted" && $0.kind == kind }
+            .sorted { ($0.decidedMs ?? 0) > ($1.decidedMs ?? 0) }
+            .prefix(5))
+    }
+
+    /// B6: an item of this scope, for a proposal's rows.
+    public func item(_ id: String) -> LiveMemoryItem? {
+        items.first { $0.id == id }
     }
 
     public func reload() async {
@@ -169,6 +212,7 @@ public final class MemoryStore {
             if tab == .about { native = (try? await service.native(projectID: scope)) ?? [] }
             if tab == .log { runsPage = try await service.runs() }
             proposals = (try? await service.proposals()) ?? proposals
+            dreamProposals = (try? await service.dreamProposals(projectID: scope)) ?? dreamProposals
             settings = try await service.settings()
         } catch where AgentConfigStore.isCancelled(error) {
             return
@@ -292,6 +336,63 @@ public final class MemoryStore {
         await run(disabled ? "停用技能" : "启用技能") { try await $0.disableSkill(id: proposal.id, disabled: disabled) }
     }
 
+    /// B6 现在整理: dream this scope now; the note says what came of it.
+    public func dream() async {
+        guard let service, !dreaming else { return }
+        dreaming = true
+        dreamNote = nil
+        defer { dreaming = false }
+        do {
+            let run = try await service.dream(projectID: scope)
+            dreamNote = run.map(MemoryText.dreamResult)
+        } catch {
+            errorText = "整理失败：\(AgentConfigStore.describe(error))"
+        }
+        await reload()
+        await refreshPending()
+    }
+
+    /// B6: keep one item of a proposal (the model's pick unless another is
+    /// given), or leave them all.
+    public func decideDream(_ proposal: LiveDreamProposal, keep: String?, accept: Bool) async {
+        await run(accept ? "采纳整理建议" : "不采纳整理建议") {
+            try await $0.decideDream(id: proposal.id, accept: accept, keep: keep)
+        }
+    }
+
+    /// B6: the 整理设置 line under 按意思找.
+    public private(set) var semantic: LiveSemanticStatus?
+
+    public func loadSemantic() async {
+        guard let service else { return }
+        semantic = try? await service.semanticStatus()
+    }
+
+    /// B6 second batch: 撤回 an accepted proposal.
+    public func revertDream(_ proposal: LiveDreamProposal) async {
+        await run("撤回整理建议") { try await $0.revertDream(id: proposal.id) }
+    }
+
+    /// B6 代码版本链 for one memory (相关改动…); nil while it loads.
+    public private(set) var chain: [LiveCodeChange]?
+
+    public func loadChain(_ item: LiveMemoryItem) async {
+        guard let service else { return }
+        chain = nil
+        do {
+            chain = try await service.chain(id: item.id)
+        } catch {
+            chain = []
+            errorText = "读取相关改动失败：\(AgentConfigStore.describe(error))"
+        }
+    }
+
+    /// B6 撤销这次整理.
+    public func undoDream(_ row: LiveMemoryRun) async {
+        await run("撤销这次整理") { try await $0.undoDream(runID: row.id) }
+        if tab == .log, let service { runsPage = (try? await service.runs()) ?? runsPage }
+    }
+
     /// 重试 a failed row.
     public func retry(_ row: LiveMemoryRun) async {
         await run("重新整理") { _ = try await $0.extract(taskID: row.taskId) }
@@ -325,9 +426,16 @@ public final class MemoryStore {
                                                 text: text, supersedes: item.id) }
     }
 
+    /// Items whose 确认 / 拒绝 the host has not answered yet: their row
+    /// shows that instead of the buttons, so a slow answer cannot be
+    /// clicked twice (2026-11-16: the second click failed with "现在的状态不能这样操作").
+    public private(set) var deciding: Set<String> = []
+
     /// Decided here, shown at once: no full reload per click (2026-11-02).
     public func confirm(_ item: LiveMemoryItem, accept: Bool) async {
-        guard let service else { return }
+        guard let service, !deciding.contains(item.id) else { return }
+        deciding.insert(item.id)
+        defer { deciding.remove(item.id) }
         do {
             try await service.confirm(id: item.id, accept: accept)
             settle([item.id], accept: accept)
@@ -484,8 +592,92 @@ public enum MemoryText {
         return reason.hasPrefix(prefix) ? String(reason.dropFirst(prefix.count)) : reason
     }
 
+    /// B6: a dream row's title — "整理记忆 · trainer".
+    public static func runTitle(_ run: LiveMemoryRun) -> String {
+        if run.isDream { return run.title.isEmpty ? "整理记忆" : "整理记忆 · \(run.title)" }
+        return run.title.isEmpty ? "未命名会话" : run.title
+    }
+
+    /// B6: what a dream did — "合并 2 条 · 待确认 1 条建议".
+    public static func dreamResult(_ run: LiveMemoryRun) -> String {
+        if run.state == "skipped" { return run.reason ?? "没有需要整理的" }
+        if run.state == "failed" { return runReason(run) ?? "整理失败" }
+        if run.merged == 0 && run.proposed == 0 { return run.reason ?? "没有发现重复、矛盾或过时" }
+        var parts: [String] = []
+        if run.merged > 0 { parts.append("合并 \(run.merged) 条") }
+        if run.proposed > 0 { parts.append("待确认 \(run.proposed) 条建议") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// B6: a dream that changed something can be undone, once.
+    public static func canUndo(_ run: LiveMemoryRun) -> Bool {
+        run.isDream && run.undoneMs == nil && (run.state == "done" || run.state == "partial")
+            && (run.merged > 0 || run.proposed > 0)
+    }
+
+    /// B6: a memory came from a session, so it may have code changes.
+    public static func hasChain(_ item: LiveMemoryItem) -> Bool {
+        item.evidence.contains { $0.taskId != nil }
+    }
+
+    /// B6: "src/ssh.rs::connect".
+    public static func changePlace(_ change: LiveCodeChange) -> String {
+        change.symbol.map { "\(change.path)::\($0)" } ?? change.path
+    }
+
+    /// B6: "main · +3 −1 · 已撤销 · 11月13日".
+    public static func changeDetail(_ change: LiveCodeChange) -> String {
+        var parts: [String] = []
+        if let branch = change.branch { parts.append(branch) }
+        parts.append("+\(change.additions) −\(change.deletions)")
+        parts.append(change.state == "undone" ? "已撤销" : change.state == "accepted" ? "已接受" : "待验收")
+        let date = Date(timeIntervalSince1970: Double(change.atMs) / 1000)
+        parts.append(date.formatted(date: .abbreviated, time: .shortened))
+        return parts.joined(separator: " · ")
+    }
+
+    /// B6: a proposal's heading.
+    public static func dreamHeading(_ proposal: LiveDreamProposal) -> String {
+        switch proposal.relation {
+        case "conflict": "这几条互相矛盾，留哪一条？"
+        case "stale": "这条可能过时了：提到的文件和代码都找不到了"
+        case "compress": "关于你的条目太长，新会话带不全，改写成 \(proposal.rewrite.count) 条？"
+        default: "这几条说的是同一件事，只留一条？"
+        }
+    }
+
+    /// B6 second batch: an accepted proposal, for its 撤回 row.
+    public static func dreamDone(_ proposal: LiveDreamProposal) -> String {
+        switch proposal.relation {
+        case "stale": "已归档 1 条过时的记忆"
+        case "compress": "已把 \(proposal.ids.count) 条改写成 \(proposal.rewrite.count) 条"
+        case "conflict": "已在 \(proposal.ids.count) 条矛盾的里留下 1 条"
+        default: "已把 \(proposal.ids.count) 条重复的合成 1 条"
+        }
+    }
+
+    /// B6 second batch: "找不到：src/ssh.rs、connect_timeout".
+    public static func dreamMissing(_ proposal: LiveDreamProposal) -> String {
+        "找不到：" + proposal.missing.joined(separator: "、")
+    }
+
+    /// B6: the 整理设置 line under 按意思找.
+    public static func semanticLine(_ status: LiveSemanticStatus) -> String {
+        if let error = status.error { return "向量没算成：\(error)" }
+        if status.model.isEmpty {
+            return "打开后在后台用随手记的 embedding 模型（\(status.configured)）给记忆算向量"
+        }
+        return "\(status.model) · 已算 \(status.embedded) 条 · 还差 \(status.missing) 条"
+    }
+
+    /// B6 second batch: the 需要我处理 row — "记忆整理待确认 2 条".
+    public static func dreamAttention(_ count: Int) -> String {
+        "记忆整理待确认 \(count) 条"
+    }
+
     /// What one extraction produced — "1 线索 · 1 候选 · 1 经验".
     public static func runOutput(_ run: LiveMemoryRun) -> String {
+        if run.isDream { return dreamResult(run) }
         var parts = ["\(run.facts) 线索", "\(run.candidates) 候选"]
         if run.experiences > 0 { parts.append("\(run.experiences) 经验") }
         return parts.joined(separator: " · ")

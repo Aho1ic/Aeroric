@@ -204,6 +204,10 @@ impl Memory {
             candidates: 0,
             experiences: 0,
             failed_writes: 0,
+            kind: aeroric_protocol::memory::MemoryRunKind::Extract,
+            retired: Vec::new(),
+            proposed: 0,
+            undone_ms: None,
         };
         if let Some(reason) = skip_reason(self, &session, &transcript) {
             run.reason = Some(reason);

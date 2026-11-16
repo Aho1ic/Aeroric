@@ -129,6 +129,9 @@ pub fn apply_status_transition(
             );
             write_field(&mut updated, "attentionRequestedAt", attention);
             write_field(&mut updated, "completedAt", completed);
+            if status != TaskStatus::Interrupted {
+                updated.0.remove(INTERRUPTED_BY_FIELD);
+            }
             if status == TaskStatus::Failed {
                 if let Some(reason) = failure_reason {
                     updated.0.insert(
@@ -554,6 +557,14 @@ pub fn record_diff_stats(
 /// ⇒ `failed`（`completedAt` 按 [`apply_status_transition`] 的先到者为准）；否则沿用
 /// [`normalize_after_boot`] 对"孩子没了"的约定 ⇒ `interrupted` 并补
 /// `attentionRequestedAt = 已有值 ?? now`。返回结算过的任务 id。
+/// 2026-11-14 宿主重启后续跑: an interrupted task the host restart cut says
+/// so (`interruptedBy`), and keeps when (`hostRestarts`, the last few) so the
+/// turn it cut is graded as not run. Any later status clears the first.
+pub const INTERRUPTED_BY_FIELD: &str = "interruptedBy";
+pub const HOST_RESTART: &str = "hostRestart";
+pub const HOST_RESTARTS_FIELD: &str = "hostRestarts";
+const HOST_RESTARTS_KEPT: usize = 20;
+
 pub fn settle_orphaned_sessions(
     records: &[Record],
     is_orphan: &dyn Fn(&Record) -> bool,
@@ -595,6 +606,21 @@ pub fn settle_orphaned_sessions(
             if !updated.contains("attentionRequestedAt") {
                 write_field(updated, "attentionRequestedAt", Field::Set(now_ms));
             }
+            updated.0.insert(
+                INTERRUPTED_BY_FIELD.to_string(),
+                Value::String(HOST_RESTART.to_string()),
+            );
+            let mut cuts: Vec<Value> = updated
+                .get(HOST_RESTARTS_FIELD)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            cuts.push(Value::from(now_ms));
+            let extra = cuts.len().saturating_sub(HOST_RESTARTS_KEPT);
+            cuts.drain(..extra);
+            updated
+                .0
+                .insert(HOST_RESTARTS_FIELD.to_string(), Value::Array(cuts));
         }
         settled.push(task_id.to_string());
     }
@@ -1309,5 +1335,37 @@ mod tests {
             Some(&json!("late")),
             "and a field it never touched survives untouched"
         );
+    }
+
+    /// 2026-11-14 宿主重启后续跑: a session the restart cut says so and keeps
+    /// when; a later status clears the mark but not the times.
+    #[test]
+    fn a_restart_cut_is_marked_and_a_later_status_clears_the_mark() {
+        let records = vec![task(json!({ "hostRestarts": [1, 2] }))];
+        let (next, settled) = settle_orphaned_sessions(&records, &|_| true, 500);
+        assert_eq!(settled, vec!["t1".to_string()]);
+        let row = &next[0].0;
+        assert_eq!(row["status"], json!("interrupted"));
+        assert_eq!(row[INTERRUPTED_BY_FIELD], json!(HOST_RESTART));
+        assert_eq!(row[HOST_RESTARTS_FIELD], json!([1, 2, 500]));
+
+        let running = apply_status_transition(&next, "t1", TaskStatus::Running, None, None, 600);
+        let row = &running.records[0].0;
+        assert!(
+            !row.contains_key(INTERRUPTED_BY_FIELD),
+            "continued: no longer cut"
+        );
+        assert_eq!(row[HOST_RESTARTS_FIELD], json!([1, 2, 500]));
+
+        let many: Vec<u64> = (0..25).collect();
+        let records = vec![task(json!({ "hostRestarts": many }))];
+        let (next, _) = settle_orphaned_sessions(&records, &|_| true, 999);
+        let cuts = next[0].0[HOST_RESTARTS_FIELD].as_array().unwrap();
+        assert_eq!(cuts.len(), HOST_RESTARTS_KEPT);
+        assert_eq!(cuts.last(), Some(&json!(999)));
+
+        // A session with a driver is not an orphan and keeps its status.
+        let (_, none) = settle_orphaned_sessions(&[task(json!({}))], &|_| false, 1);
+        assert!(none.is_empty());
     }
 }

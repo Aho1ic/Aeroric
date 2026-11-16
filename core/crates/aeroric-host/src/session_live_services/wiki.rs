@@ -45,7 +45,8 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
 }
 
 /// A handler that needs the `Arc` (it starts work that outlives the call).
-fn in_background(
+/// Also the 待办's 重新检查.
+pub(super) fn in_background(
     live: &Arc<Live>,
     run: fn(Arc<Live>, &Request) -> Frame,
 ) -> crate::dispatcher::Handler {

@@ -545,6 +545,7 @@ impl HostServices {
                     Arc::clone(&families),
                     Arc::clone(&service),
                     Arc::clone(&context),
+                    Arc::clone(&wiring.codex_rpc),
                 );
                 capabilities.push(aeroric_protocol::capability::Capability {
                     name: crate::session_live_services::CAPABILITY.into(),

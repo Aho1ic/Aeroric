@@ -12,6 +12,8 @@ public struct LiveSessionView: View {
     let focusApproval: String?
     @State private var draft = ""
     @Environment(AgentUpgradeBook.self) private var upgrades: AgentUpgradeBook?
+    /// Q-R4: PDF excerpts handed over while the preview covered this page.
+    @Environment(ComposerInbox.self) private var inbox: ComposerInbox?
     @State private var infoCollapsed: Bool
     @AppStorage(SessionInfoLayout.widthKey) private var infoWidth = Double(SessionInfoLayout.defaultWidth)
     @State private var dragStartWidth: Double?
@@ -191,6 +193,10 @@ public struct LiveSessionView: View {
         }
         .onChange(of: infoCollapsed) { _, value in UserDefaults.standard.set(value, forKey: Self.infoCollapsedKey) }
         .task(id: store.taskID) { await store.run() }
+        .onChange(of: inbox?.count(for: store.taskID) ?? 0, initial: true) { _, count in
+            guard count > 0, let inbox else { return }
+            draft = ComposerInbox.appending(inbox.take(store.taskID), to: draft)
+        }
         .sheet(item: $loginHelp) { LoginHelpSheet(login: $0) }
         .sheet(item: $rerunRequest) { request in
             RerunSheet(request: request, targets: facts.rerunTargets) { message, brief, choices in

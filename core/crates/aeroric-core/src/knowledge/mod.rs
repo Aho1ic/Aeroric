@@ -11,6 +11,7 @@ pub mod code_index;
 pub mod compile;
 pub mod explain;
 pub mod notes;
+pub mod references;
 mod store;
 
 #[cfg(test)]

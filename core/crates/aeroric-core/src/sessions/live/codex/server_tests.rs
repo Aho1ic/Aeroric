@@ -268,3 +268,63 @@ mod process {
         assert!(refused.contains("请升级"), "{refused}");
     }
 }
+
+/// 2026-11-14: a broken copy first on the PATH is passed over for a working
+/// one further down; a failure says what the program wrote to stderr.
+#[cfg(unix)]
+mod path_copies_tests {
+    use super::super::{checked_program, ProcessSpec};
+    use std::os::unix::fs::PermissionsExt;
+
+    fn tool(dir: &std::path::Path, body: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        let file = dir.join("faketool");
+        std::fs::write(&file, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn check(out: &str) -> Result<(), String> {
+        if out.contains("(Fake)") {
+            Ok(())
+        } else {
+            Err(format!("无法识别版本：{}", out.trim()))
+        }
+    }
+
+    fn spec(path: String) -> ProcessSpec {
+        ProcessSpec {
+            program: "faketool".into(),
+            env: vec![("PATH".into(), path)],
+            ..ProcessSpec::default()
+        }
+    }
+
+    #[test]
+    fn the_first_copy_that_passes_down_the_path_is_used() {
+        let root = std::env::temp_dir().join(format!("aeroric-copies-{}", uuid::Uuid::new_v4()));
+        let (broken, good) = (root.join("a"), root.join("b"));
+        tool(
+            &broken,
+            "echo 'Error: native binary not installed.' >&2; exit 1",
+        );
+        tool(&good, "echo '2.1.9 (Fake)'");
+        let path = format!("{}:{}:/usr/bin:/bin", broken.display(), good.display());
+        let got = checked_program(&spec(path), check, "Fake").unwrap();
+        assert_eq!(got, good.join("faketool").to_string_lossy());
+
+        // Only the broken one: the reason from stderr is in the error.
+        let only = format!("{}:/usr/bin:/bin", broken.display());
+        let error = checked_program(&spec(only), check, "Fake").unwrap_err();
+        assert!(error.starts_with("无法识别版本："), "{error}");
+        assert!(
+            error.contains("报错：Error: native binary not installed."),
+            "{error}"
+        );
+
+        // A path the user set is not second-guessed.
+        let mut set = spec(format!("{}:{}", broken.display(), good.display()));
+        set.program = broken.join("faketool").to_string_lossy().into_owned();
+        assert!(checked_program(&set, check, "Fake").is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

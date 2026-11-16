@@ -34,6 +34,7 @@ pub mod projects;
 pub mod providers;
 pub mod remote;
 pub mod runtime;
+pub mod schedule;
 pub mod sessions;
 pub mod settings;
 pub mod sse;
@@ -42,6 +43,7 @@ pub mod storage_backends;
 pub mod storage_lock;
 pub mod tasks;
 pub mod terminal;
+pub mod todos;
 
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use context::{

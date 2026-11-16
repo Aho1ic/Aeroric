@@ -79,6 +79,29 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     set.register(wire::SKILL_VERSION_METHOD, blocking(live, skill_version));
     set.register(wire::SKILL_DISABLE_METHOD, blocking(live, skill_disable));
     set.register("context.memoryFeedback", blocking(live, context_feedback));
+    set.register(wire::DREAM_METHOD, blocking(live, memory_dream));
+    set.register(
+        wire::DREAM_PROPOSALS_METHOD,
+        blocking(live, memory_dream_proposals),
+    );
+    set.register(
+        wire::DREAM_DECIDE_METHOD,
+        blocking(live, memory_dream_decide),
+    );
+    set.register(wire::DREAM_UNDO_METHOD, blocking(live, memory_dream_undo));
+    set.register(
+        wire::DREAM_REVERT_METHOD,
+        blocking(live, memory_dream_revert),
+    );
+    set.register(
+        wire::DREAM_PENDING_METHOD,
+        blocking(live, memory_dream_pending),
+    );
+    set.register(wire::CHAIN_METHOD, blocking(live, memory_chain));
+    set.register(
+        wire::SEMANTIC_STATUS_METHOD,
+        blocking(live, memory_semantic_status),
+    );
     start_sweeper(live);
 }
 
@@ -331,8 +354,13 @@ fn memory_project(live: &Live, request: &Request) -> Frame {
     };
     let memory = live.executor.memory();
     if let Some(enabled) = p.enabled {
+        let was = memory.project_enabled(&p.project_id);
         if let Err(error) = memory.set_project_enabled(&p.project_id, enabled) {
             return memory_failure(request, error);
+        }
+        // B6: the ledger's turns of a project that starts using memory.
+        if enabled && !was {
+            backfill_chain(live, &p.project_id);
         }
     }
     ok(
@@ -499,6 +527,86 @@ fn line(item: &MemoryItem) -> String {
     out
 }
 
+/// B6: a block's turn as the ledger has it now (accepted or undone since);
+/// the stored state once the ledger let the turn go.
+fn fresh(live: &Live, mut change: wire::CodeChange) -> wire::CodeChange {
+    if let Some(record) = live
+        .executor
+        .turn_ledger()
+        .get(&change.task_id, &change.turn_id)
+    {
+        change.state = record.state;
+    }
+    change
+}
+
+/// "  改动：src/ssh.rs::connect · main · +3 −1 · 已撤销".
+fn change_line(change: &wire::CodeChange) -> String {
+    let mut parts = vec![match &change.symbol {
+        Some(symbol) => format!("{}::{symbol}", change.path),
+        None => change.path.clone(),
+    }];
+    if let Some(branch) = &change.branch {
+        parts.push(branch.clone());
+    }
+    parts.push(format!("+{} −{}", change.additions, change.deletions));
+    parts.push(
+        match change.state {
+            aeroric_protocol::turn_ledger::TurnState::Pending => "待验收",
+            aeroric_protocol::turn_ledger::TurnState::Accepted => "已接受",
+            aeroric_protocol::turn_ledger::TurnState::Undone => "已撤销",
+        }
+        .into(),
+    );
+    format!("  改动：{}", parts.join(" · "))
+}
+
+/// B6: every ledger turn of the project's sessions not in the chain yet.
+fn backfill_chain(live: &Live, project_id: &str) {
+    let Ok(document) = live.service.load(project_id) else {
+        return;
+    };
+    let memory = live.executor.memory();
+    let ledger = live.executor.turn_ledger();
+    for record in document.records {
+        let Some(task_id) = record.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        for turn in ledger.list(task_id) {
+            if !memory.has_changes(task_id, &turn.turn_id) {
+                memory::chain::record_turn(memory, project_id, task_id, &turn);
+            }
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChainParams {
+    id: String,
+}
+
+/// `memory.chain {id}` (B6): the code changes of the sessions a memory came
+/// from, newest first.
+fn memory_chain(live: &Live, request: &Request) -> Frame {
+    let p: ChainParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let memory = live.executor.memory();
+    let item = match memory.item(&p.id) {
+        Ok(Some(item)) => item,
+        Ok(None) => return memory_failure(request, MemoryError::UnknownItem),
+        Err(error) => return memory_failure(request, error),
+    };
+    let changes: Vec<_> = memory
+        .changes_for(&item, 20)
+        .into_iter()
+        .map(|c| fresh(live, c))
+        .collect();
+    ok(request, json!({ "changes": changes }))
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RecallParams {
@@ -517,14 +625,37 @@ fn context_recall(live: &Live, request: &Request) -> Frame {
         Ok(scope) => scope,
         Err(frame) => return *frame,
     };
-    match live.executor.memory().recall(&project, &p.query) {
+    let vector = query_vector(live, &p.query);
+    match live
+        .executor
+        .memory()
+        .recall_with(&project, &p.query, vector.as_deref())
+    {
         Ok(items) => {
             let text = if items.is_empty() {
                 "没有找到相关记忆。".to_string()
             } else {
-                let lines: Vec<String> = items.iter().map(line).collect();
+                let memory = live.executor.memory();
+                let mut decorated = false;
+                let lines: Vec<String> = items
+                    .iter()
+                    .map(|item| {
+                        let mut out = line(item);
+                        for change in memory.changes_for(item, wire::CHAIN_PER_ITEM) {
+                            decorated = true;
+                            out.push('\n');
+                            out.push_str(&change_line(&fresh(live, change)));
+                        }
+                        out
+                    })
+                    .collect();
+                let note = if decorated {
+                    "\n“改动”是这条记忆的来源会话改过的代码块（文件::所在定义），从新到旧，已撤销的也列出；它说的是当时，不代表现在的代码。"
+                } else {
+                    ""
+                };
                 format!(
-                    "找到 {} 条记忆：\n{}\n用过之后可以用 memory_feedback 告诉 Aeroric 它有没有用。",
+                    "找到 {} 条记忆：\n{}{note}\n用过之后可以用 memory_feedback 告诉 Aeroric 它有没有用。",
                     items.len(),
                     lines.join("\n")
                 )
@@ -754,7 +885,7 @@ fn extract_task(live: &Live, task_id: &str, forced: bool) -> Result<wire::Memory
 pub(super) fn analysis_call(
     live: &Live,
     max_tokens: u32,
-) -> impl FnOnce(&str, &str) -> Result<aeroric_core::settings::model_detect::ChatOnce, String> {
+) -> impl Fn(&str, &str) -> Result<aeroric_core::settings::model_detect::ChatOnce, String> {
     use aeroric_core::agent_connections::store;
     let settings = live.executor.memory().settings();
     let data = live.context.paths.data_dir().to_path_buf();
@@ -898,11 +1029,115 @@ fn memory_extract(live: &Live, request: &Request) -> Frame {
     }
 }
 
+/// B6: when a session last ran a turn, as the sweeps saw it (a dream waits
+/// for `DREAM_IDLE_MS` of quiet).
+static LAST_BUSY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The project's name for 整理记录, or "全局".
+fn scope_title(live: &Live, project_id: Option<&str>) -> String {
+    let Some(id) = project_id else {
+        return "全局".into();
+    };
+    aeroric_core::projects::ProjectService::new(Arc::clone(&live.context))
+        .list()
+        .ok()
+        .and_then(|projects| {
+            projects
+                .into_iter()
+                .find(|p| p.get("id").and_then(Value::as_str) == Some(id))
+        })
+        .and_then(|p| p.get("name").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_else(|| id.to_string())
+}
+
+/// Dream one scope; a local project's folder is also checked for files and
+/// symbols gone (过时检测). `free_only`: only that check, no model.
+fn dream_scope(
+    live: &Live,
+    project_id: Option<&str>,
+    forced: bool,
+    free_only: bool,
+) -> Result<Option<wire::MemoryRun>, String> {
+    let title = scope_title(live, project_id);
+    let root = project_id.and_then(|id| project_dir(live, id));
+    live.executor.memory().dream(
+        memory::dream::DreamScope {
+            project_id,
+            title: &title,
+            forced,
+            root: root.as_deref(),
+            free_only,
+        },
+        analysis_call(live, 1200),
+        now_ms(),
+    )
+}
+
 /// The automatic pass (Q-M10, Q-M15): local native sessions of projects
 /// that use memory, done and quiet for `SETTLED_AFTER_MS` or archived,
 /// finished after auto was turned on, not extracted yet. Stops at the
-/// day's limit.
+/// day's limit. B6: then every scope due a dream, once all sessions have
+/// been quiet for `DREAM_IDLE_MS`.
 fn sweep(live: &Live) -> usize {
+    embed_missing(live);
+    let done = extract_finished(live);
+    dream_due_scopes(live);
+    done
+}
+
+fn dream_due_scopes(live: &Live) {
+    use std::sync::atomic::Ordering;
+    let memory = live.executor.memory();
+    let settings = memory.settings();
+    let now = now_ms();
+    if live
+        .executor
+        .registry()
+        .all()
+        .iter()
+        .any(|(_, driver)| driver.snapshot().turn_active)
+    {
+        LAST_BUSY_MS.store(now, Ordering::Relaxed);
+    }
+    if !settings.auto
+        || now.saturating_sub(LAST_BUSY_MS.load(Ordering::Relaxed)) < wire::DREAM_IDLE_MS
+    {
+        return;
+    }
+    // Second batch: with no dream due (or no model), a project still gets
+    // its daily 过时检测, which needs no model.
+    let mut dreaming = settings.model.is_some();
+    let Ok(projects) =
+        aeroric_core::projects::ProjectService::new(Arc::clone(&live.context)).list()
+    else {
+        return;
+    };
+    let mut scopes: Vec<Option<String>> = vec![None];
+    scopes.extend(
+        projects
+            .iter()
+            .filter_map(|p| p.get("id").and_then(Value::as_str))
+            .filter(|id| memory.project_enabled(id))
+            .map(|id| Some(id.to_string())),
+    );
+    for scope in scopes {
+        if dreaming && memory.dream_due(scope.as_deref(), now) {
+            match dream_scope(live, scope.as_deref(), false, false) {
+                Err(error) if error.contains("到上限") || error.contains("还没有选") => {
+                    dreaming = false;
+                }
+                _ => continue,
+            }
+        }
+        if let Some(project) = scope.as_deref() {
+            if memory.stale_due(project, now) {
+                let _ = dream_scope(live, scope.as_deref(), false, true);
+            }
+        }
+    }
+}
+
+fn extract_finished(live: &Live) -> usize {
     let memory = live.executor.memory();
     let settings = memory.settings();
     if !settings.auto || settings.model.is_none() {
@@ -929,10 +1164,15 @@ fn sweep(live: &Live) -> usize {
             let Some(id) = record.get("id").and_then(Value::as_str) else {
                 continue;
             };
+            let number = |key: &str| record.get(key).and_then(Value::as_u64);
+            // B6: a turn that ended between two sweeps keeps a dream
+            // waiting (a native session is `done` after every turn).
+            if let Some(at) = number("completedAt") {
+                LAST_BUSY_MS.fetch_max(at.min(now), std::sync::atomic::Ordering::Relaxed);
+            }
             if memory.extracted(id).is_some() || !live.structured(&record, &project) {
                 continue;
             }
-            let number = |key: &str| record.get(key).and_then(Value::as_u64);
             let status = record.get("status").and_then(Value::as_str);
             let finished = match (status, number("completedAt"), number("archivedAt")) {
                 (_, _, Some(archived)) => archived >= settings.enabled_ms,
@@ -957,6 +1197,175 @@ fn sweep(live: &Live) -> usize {
     done
 }
 
+/// `memory.dream {projectId?}` (B6): 现在整理 — dream one scope now, even
+/// with fewer than `DREAM_AFTER_NEW` new items; the day's limit holds.
+fn memory_dream(live: &Live, request: &Request) -> Frame {
+    let p: ScopeParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    match dream_scope(live, p.project_id.as_deref(), true, false) {
+        Ok(run) => ok(request, json!({ "run": run })),
+        Err(error) => failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
+    }
+}
+
+/// `memory.dreamProposals {projectId?}`: a scope's dream proposals.
+fn memory_dream_proposals(live: &Live, request: &Request) -> Frame {
+    let p: ScopeParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    answer(
+        request,
+        live.executor
+            .memory()
+            .dream_proposals(p.project_id.as_deref()),
+        "proposals",
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DreamDecideParams {
+    id: String,
+    accept: bool,
+    /// The item to keep, when the user picked another than the model.
+    #[serde(default)]
+    keep: Option<String>,
+}
+
+/// `memory.dreamDecide {id, accept, keep?}`.
+fn memory_dream_decide(live: &Live, request: &Request) -> Frame {
+    let p: DreamDecideParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    answer(
+        request,
+        live.executor
+            .memory()
+            .decide_dream(&p.id, p.accept, p.keep.as_deref(), now_ms()),
+        "proposal",
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DreamUndoParams {
+    run_id: String,
+}
+
+/// `memory.dreamUndo {runId}`: 撤销这次整理.
+fn memory_dream_undo(live: &Live, request: &Request) -> Frame {
+    let p: DreamUndoParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    answer(
+        request,
+        live.executor.memory().undo_dream(&p.run_id, now_ms()),
+        "run",
+    )
+}
+
+/// B6 可选 embedding: 随手记's embedding model, as a blocking function over
+/// whole lists (split into the provider's batches). `None` while
+/// 按意思找相近的记忆 is off.
+fn embedder(live: &Live) -> Option<(String, impl Fn(&[String]) -> Result<Vec<Vec<f32>>, String>)> {
+    if !live.executor.memory().settings().semantic {
+        return None;
+    }
+    let config = crate::notebook_services::resolve_key_with_secrets(
+        aeroric_core::settings::notebook_embed_config(),
+        &*live.context.secrets,
+    )
+    .ok()?;
+    let model = config.model.trim().to_string();
+    let embed = move |inputs: &[String]| -> Result<Vec<Vec<f32>>, String> {
+        use aeroric_core::notebook::rag::embed;
+        let mut out = Vec::with_capacity(inputs.len());
+        for range in embed::batches(config.provider, inputs.len()) {
+            let part = tokio::runtime::Handle::current()
+                .block_on(embed::embed_batch(&config, &inputs[range], &|| false))
+                .map_err(|e| e.to_string())?;
+            out.extend(part);
+        }
+        Ok(out)
+    };
+    Some((model, embed))
+}
+
+/// The sweep's part: vectors for items that have none yet.
+fn embed_missing(live: &Live) {
+    if let Some((model, embed)) = embedder(live) {
+        let _ = live
+            .executor
+            .memory()
+            .embed_missing(&model, embed, wire::SEMANTIC_PER_SWEEP);
+    }
+}
+
+/// The recall query's unit vector; `None` when off, or when the model
+/// cannot be reached (recall then uses words alone).
+fn query_vector(live: &Live, query: &str) -> Option<Vec<f32>> {
+    let (model, embed) = embedder(live)?;
+    // The last try failed (the sweep retries every two minutes): do not
+    // make every recall wait on a model that is not answering.
+    let status = live.executor.memory().semantic_status().ok()?;
+    if status.error.is_some() || status.model != model {
+        return None;
+    }
+    let text = memory::semantic::for_query(&model, query);
+    let vector = embed(&[text]).ok()?.into_iter().next()?;
+    Some(memory::semantic::unit(vector))
+}
+
+/// `memory.semanticStatus {}` (B6): how far the vectors are, with the model
+/// 随手记's settings name now.
+fn memory_semantic_status(live: &Live, request: &Request) -> Frame {
+    match live.executor.memory().semantic_status() {
+        Ok(status) => ok(
+            request,
+            json!({
+                "status": status,
+                "model": aeroric_core::settings::notebook_embed_config().model,
+            }),
+        ),
+        Err(error) => memory_failure(request, error),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DreamRevertParams {
+    id: String,
+}
+
+/// `memory.dreamRevert {id}` (B6 second batch): take back one accepted
+/// proposal.
+fn memory_dream_revert(live: &Live, request: &Request) -> Frame {
+    let p: DreamRevertParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    answer(
+        request,
+        live.executor.memory().revert_dream(&p.id, now_ms()),
+        "proposal",
+    )
+}
+
+/// `memory.dreamPending {}` (B6 second batch): the proposals waiting in
+/// every scope, for 需要我处理.
+fn memory_dream_pending(live: &Live, request: &Request) -> Frame {
+    answer(
+        request,
+        live.executor.memory().pending_dreams(),
+        "proposals",
+    )
+}
+
 /// `memory.sweep {}`: run the automatic pass now (the host runs it every
 /// two minutes on its own).
 fn memory_sweep(live: &Live, request: &Request) -> Frame {
@@ -967,6 +1376,29 @@ pub(super) fn start_sweeper(live: &Arc<Live>) {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         return;
     };
+    // B6: turns recorded before the chain existed, or while the host was
+    // down, once at start.
+    let start = Arc::downgrade(live);
+    handle.spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            let Some(live) = start.upgrade() else {
+                return;
+            };
+            let Ok(projects) =
+                aeroric_core::projects::ProjectService::new(Arc::clone(&live.context)).list()
+            else {
+                return;
+            };
+            for project in projects {
+                if let Some(id) = project.get("id").and_then(Value::as_str) {
+                    if live.executor.memory().project_enabled(id) {
+                        backfill_chain(&live, id);
+                    }
+                }
+            }
+        })
+        .await;
+    });
     let weak = Arc::downgrade(live);
     handle.spawn(async move {
         loop {

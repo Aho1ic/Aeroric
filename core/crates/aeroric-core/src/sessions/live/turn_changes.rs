@@ -50,6 +50,8 @@ pub struct TurnSettled {
     pub task_id: String,
     pub turn_id: String,
     pub reason: TurnEndReason,
+    /// The agent's error when the turn failed, as `TurnEnded` carried it.
+    pub error: Option<String>,
     pub diff: Option<TurnDiff>,
     pub checking: bool,
 }
@@ -105,6 +107,14 @@ impl TurnChangeTracker {
         *self.hook.lock() = Some(hook);
     }
 
+    /// B6: the project `task_id` was watched under.
+    pub fn project_of(&self, task_id: &str) -> Option<String> {
+        self.cwds
+            .lock()
+            .get(task_id)
+            .map(|(project, _)| project.clone())
+    }
+
     /// Where `task_id`'s agent works; set when its session starts.
     pub fn watch(&self, task_id: &str, project_id: &str, cwd: &str) {
         self.cwds.lock().insert(
@@ -127,7 +137,13 @@ impl TurnChangeTracker {
         });
     }
 
-    fn turn_ended(self: &Arc<Self>, task_id: &str, turn_id: &str, reason: TurnEndReason) {
+    fn turn_ended(
+        self: &Arc<Self>,
+        task_id: &str,
+        turn_id: &str,
+        reason: TurnEndReason,
+        error: Option<String>,
+    ) {
         let Some((before, started_ms)) = self.started.lock().remove(task_id) else {
             return;
         };
@@ -196,6 +212,7 @@ impl TurnChangeTracker {
                     task_id,
                     turn_id,
                     reason,
+                    error,
                     diff,
                     checking,
                 });
@@ -239,8 +256,12 @@ impl LiveStatusSink for TrackingSink {
         match &update.kind {
             SessionUpdateKind::TurnStarted { .. } => self.0.turn_started(&update.task_id),
             SessionUpdateKind::TurnEnded {
-                turn_id, reason, ..
-            } => self.0.turn_ended(&update.task_id, turn_id, *reason),
+                turn_id,
+                reason,
+                error,
+            } => self
+                .0
+                .turn_ended(&update.task_id, turn_id, *reason, error.clone()),
             _ => {}
         }
         self.0.inner.update(update);

@@ -3331,7 +3331,7 @@ fn terminal_validate_agent_launch(
     }
 }
 
-fn task_run(
+pub(crate) fn task_run(
     request: Request,
     service: std::sync::Arc<TaskService>,
     context: std::sync::Arc<aeroric_core::context::CoreContext>,
@@ -4767,6 +4767,11 @@ fn session_history(
                 task_id,
             );
             aeroric_core::sessions::turn_outcome::grade(&mut stats.turns, &records);
+            // 2026-11-14: the turn a host restart cut did not run.
+            aeroric_core::sessions::turn_outcome::mark_restarts(
+                &mut stats.turns,
+                &aeroric_core::sessions::turn_outcome::host_restarts(&record),
+            );
             aeroric_core::sessions::rerun::lift_replaced(
                 &mut stats.turns,
                 &records,

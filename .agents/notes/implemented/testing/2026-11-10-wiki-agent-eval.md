@@ -25,7 +25,7 @@ Status: implemented
 **工具说明写全**（`aeroric-cli/src/mcp_context.rs`）
 
 - Codex 把 `aeroric_context` 当作延迟加载的命名空间：模型只看到 `initialize` 返回的 `instructions` 这一句，需要时才去加载里面的工具。原来这句固定写"检索历史会话、读交接清单、委派子会话"，没提 Wiki 和记忆，模型就不会去找这两类工具。
-- 现在 `initialize` 先问宿主记忆和 Wiki 是否可用，可用的才写进说明（`instructions(memory, wiki)`）。
+- 现在 `initialize` 先问宿主记忆、Wiki 和参考代码库是否可用，可用的才写进说明（`instructions(memory, wiki, references)`；参考代码库见 [参考代码库](../feature/2026-11-13-reference-library.md)）。
 
 **题目与判分**
 
@@ -92,6 +92,7 @@ Status: implemented
   - 已有 Wiki、但从没动过开关的项目，也会一起变成关闭。Aeroric 项目在评测时显式打开过，保持开启。
   - 结论只覆盖"问代码机制"这类问题，以及 gpt-6.1-sol 这一个模型。问设计理由、历史决定的问题可能更依赖 Wiki，这次没有测。
   - 每题只跑一次，噪声比要找的差别还大。结论是"没看到收益"，不是"证明没用"。
+  - 参考代码库按同一规则评测，结论相反，保持默认开启，见 [R6-2 评测](2026-11-13-reference-library-eval.md)。
 - **验证**：
   - core 单测：开关默认关闭，按项目分开，打开、关闭都能读回。
   - CLI 单测：说明里列出实际提供的工具。

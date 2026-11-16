@@ -403,9 +403,8 @@ extension SessionsClient {
     }
 
     /// 2026-11-12: start a round-table discussion; the reply is the discussion.
-    public func startDiscussion(projectId: String, topic: String, members: [LiveDiscussionChoice],
-                                moderator: Int, rounds: Int) async throws -> LiveDiscussion? {
-        let list: [JSONValue] = members.map { choice in
+    public func startDiscussion(projectId: String, start: LiveDiscussionStart) async throws -> LiveDiscussion? {
+        let list: [JSONValue] = start.members.map { choice in
             var member: [String: JSONValue] = ["configurationId": .string(choice.configurationId)]
             if let model = choice.model { member["model"] = .string(model) }
             let angle = choice.angle.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -413,8 +412,11 @@ extension SessionsClient {
             return .object(member)
         }
         let frame = try await connection.request("discussion.start", params: .object([
-            "projectId": .string(projectId), "topic": .string(topic), "members": .array(list),
-            "moderator": .number(String(moderator)), "rounds": .number(String(rounds)),
+            "projectId": .string(projectId), "topic": .string(start.topic), "members": .array(list),
+            "moderator": .number(String(start.moderator)), "rounds": .number(String(start.rounds)),
+            "anonymous": .bool(start.anonymous), "format": .string(start.format),
+            "revisions": .number(String(start.revisions)),
+            "requirements": .string(start.requirements),
         ]))
         return LiveDiscussion.decode(frame.result["discussion"])
     }
@@ -425,7 +427,17 @@ extension SessionsClient {
         return LiveDiscussion.decode(frame.result["discussion"])
     }
 
-    /// 2026-11-12: `pause` / `resume` / `summarize` / `stop`.
+    /// 2026-11-13: the person speaks in a discussion; `mentions` (member
+    /// indexes) asks only them.
+    public func sayInDiscussion(taskId: String, text: String, mentions: [Int]) async throws -> LiveDiscussion? {
+        let frame = try await connection.request("discussion.say", params: .object([
+            "taskId": .string(taskId), "text": .string(text),
+            "mentions": .array(mentions.map { .number(String($0)) }),
+        ]))
+        return LiveDiscussion.decode(frame.result["discussion"])
+    }
+
+    /// 2026-11-12: `pause` / `resume` / `summarize` / `stop`; 2026-11-13 `again`.
     public func discussionAction(taskId: String, action: String) async throws -> LiveDiscussion? {
         let frame = try await connection.request("discussion.\(action)",
                                                   params: .object(["taskId": .string(taskId)]))
@@ -673,9 +685,12 @@ extension SessionsClient {
         _ = try await connection.request(method, params: .object(params))
     }
 
-    /// A memory method's reply.
-    public func memoryCall(_ method: String, _ params: [String: JSONValue]) async throws -> JSONValue {
-        try await connection.request(method, params: .object(params)).result
+    /// A memory method's reply. `timeout` for a call that runs a model on
+    /// the host (目检 2026-11-15: 现在整理 said "宿主没有及时回应" at 30 s
+    /// while the dream went on and finished).
+    public func memoryCall(_ method: String, _ params: [String: JSONValue],
+                           timeout: Duration = .seconds(30)) async throws -> JSONValue {
+        try await connection.request(method, params: .object(params), timeout: timeout).result
     }
 
     /// Read or set "为这个项目启用记忆".
@@ -774,6 +789,48 @@ extension SessionsClient {
         return try await connection.request(method, params: .object(params)).result
     }
 
+    // MARK: Q-R6 reference library
+
+    /// 2026-11-13 Smart Friend: the expert and the configurations it can run
+    /// on; `set` (with an optional model) or `clear` change it first.
+    public func expert(set configurationId: String? = nil, model: String? = nil,
+                       clear: Bool = false) async throws -> (LiveExpert?, [LiveExpertChoice]) {
+        var params: [String: JSONValue] = [:]
+        if clear { params["clear"] = .bool(true) }
+        if let configurationId {
+            var set: [String: JSONValue] = ["configurationId": .string(configurationId)]
+            if let model { set["model"] = .string(model) }
+            params["set"] = .object(set)
+        }
+        let frame = try await connection.request("delegation.expert", params: .object(params))
+        return (LiveExpert.decode(frame.result["expert"]),
+                (frame.result["choices"]?.arrayValue ?? []).compactMap(LiveExpertChoice.decode))
+    }
+
+    public func references() async throws -> [LiveReference] {
+        let frame = try await connection.request("references.list", params: .object([:]))
+        return (frame.result["references"]?.arrayValue ?? []).compactMap(LiveReference.decode)
+    }
+
+    public func addReference(path: String, name: String?, purpose: String?) async throws -> LiveReference {
+        var params: [String: JSONValue] = ["path": .string(path)]
+        if let name, !name.isEmpty { params["name"] = .string(name) }
+        if let purpose, !purpose.isEmpty { params["purpose"] = .string(purpose) }
+        let frame = try await connection.request("references.add", params: .object(params))
+        guard let reference = LiveReference.decode(frame.result["reference"]) else {
+            throw MalformedReply.malformedReply("references.add needs a reference")
+        }
+        return reference
+    }
+
+    public func removeReference(id: String) async throws {
+        _ = try await connection.request("references.remove", params: .object(["id": .string(id)]))
+    }
+
+    public func reindexReference(id: String) async throws {
+        _ = try await connection.request("references.reindex", params: .object(["id": .string(id)]))
+    }
+
     /// B4-1: loops that need the user (`review.attention`): task id → card.
     public func reviewAttention() async throws -> [String: LiveReviewCard] {
         let frame = try await connection.request("review.attention", params: .object([:]))
@@ -813,6 +870,36 @@ extension SessionsClient {
         let frame = try await connection.request("session.idleRelease.set",
                                                  params: .object(["enabled": .bool(enabled)]))
         return try Self.decodeIdleRelease(frame.result)
+    }
+
+    /// 2026-11-14 宿主重启后续跑: 继续 a session an Aeroric restart cut.
+    public func continueAfterRestart(taskId: String) async throws {
+        _ = try await connection.request("session.continueAfterRestart",
+                                         params: .object(["taskId": .string(taskId)]))
+    }
+
+    /// 2026-11-14 无人值守自动重试: stop waiting to retry.
+    public func cancelAutoRetry(taskId: String) async throws {
+        _ = try await connection.request("session.autoRetry.cancel",
+                                         params: .object(["taskId": .string(taskId)]))
+    }
+
+    /// Whether unattended sessions are continued on their own after a restart.
+    public func resumeAfterRestart() async throws -> Bool {
+        let frame = try await connection.request("session.resumeAfterRestart.get", params: .object([:]))
+        guard let enabled = frame.result["enabled"]?.boolValue else {
+            throw MalformedReply.malformedReply("session.resumeAfterRestart needs enabled")
+        }
+        return enabled
+    }
+
+    public func setResumeAfterRestart(enabled: Bool) async throws -> Bool {
+        let frame = try await connection.request("session.resumeAfterRestart.set",
+                                                 params: .object(["enabled": .bool(enabled)]))
+        guard let enabled = frame.result["enabled"]?.boolValue else {
+            throw MalformedReply.malformedReply("session.resumeAfterRestart needs enabled")
+        }
+        return enabled
     }
 
     public static func decodeIdleRelease(_ value: JSONValue) throws -> (enabled: Bool, idleMinutes: Int) {

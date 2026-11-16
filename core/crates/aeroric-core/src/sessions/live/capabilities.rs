@@ -2,7 +2,9 @@
 //! feature has an answer, so a new family will not compile until it is
 //! filled in (Q-S11). Facts come from the drivers: Codex runs in an OS
 //! sandbox, Claude and omp keep their own approvals; omp fixes its
-//! permission at start; Claude takes a steer as its next turn.
+//! permission at start; Claude takes a steer as its next turn. DSH runs
+//! over ACP (2026-11-13): its own sandbox holds the tier, fixed at start,
+//! and a write outside it asks first; local workspaces only.
 
 use aeroric_protocol::live_capability::{CapabilityEntry, Feature, Place, SupportState};
 
@@ -30,7 +32,7 @@ fn enforced_by(family: ProtocolFamily) -> &'static str {
         ProtocolFamily::Codex => "沙盒强制",
         ProtocolFamily::Claude => "由 Claude 把关 · 无沙盒",
         ProtocolFamily::Omp => "由 omp 把关 · 无沙盒",
-        ProtocolFamily::Dsh => "只靠提示，不强制",
+        ProtocolFamily::Dsh => "由 DSH 沙盒把关 · 越权写入先问你",
     }
 }
 
@@ -39,7 +41,14 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
     use ProtocolFamily as P;
     let enforced = enforced_by(family);
     let (state, note) = match (family, feature) {
-        (P::Dsh, _) => no("dsh 不走原生会话"),
+        (P::Dsh, _) if place == Place::Remote => no("DSH 只在本机工作区上运行原生会话"),
+        (P::Dsh, F::PermChange) => degraded("DSH 启动时固定权限：下次启动生效"),
+        (P::Dsh, F::PlanMode) => degraded("用只读沙盒代替规划：写入要你批准"),
+        (P::Dsh, F::Compact) => no("DSH 没有通过 ACP 提供压缩上下文"),
+        (P::Dsh, F::Review) => no("DSH 没有内置审查，可用“审查”让另一族来看"),
+        (P::Dsh, F::Steer) => degraded("DSH 会作为下一轮发出"),
+        (P::Dsh, F::DelegateChild | F::Reviewer) => no("还没加进审查者和子会话的候选"),
+        (P::Dsh, F::Effort | F::Receipts) => yes(None),
         (_, F::PermAsk | F::PermAutoEdit | F::PermFullAccess) => yes(Some(enforced)),
         (P::Omp, F::PermChange) => degraded("omp 启动时固定权限：下次启动生效"),
         (P::Codex | P::Claude, F::PermChange) => yes(None),
@@ -122,6 +131,18 @@ mod tests {
         assert_eq!(
             support(ProtocolFamily::Codex, Place::Remote, Feature::DelegateChild).state,
             SupportState::Unknown
+        );
+        assert_eq!(
+            at(ProtocolFamily::Dsh, Feature::Steer).state,
+            SupportState::Degraded
+        );
+        assert_eq!(
+            at(ProtocolFamily::Dsh, Feature::Receipts).state,
+            SupportState::Yes
+        );
+        assert_eq!(
+            support(ProtocolFamily::Dsh, Place::Remote, Feature::Receipts).state,
+            SupportState::No
         );
     }
 }

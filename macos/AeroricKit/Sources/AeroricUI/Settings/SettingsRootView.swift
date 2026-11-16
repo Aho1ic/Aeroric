@@ -21,6 +21,7 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
             switch $0 {
             case .legacyCleanup: state.legacyCleanup != nil
             case .imports: state.settingsImportBook?.isAvailable == true
+            case .references: state.settingsReferences?.isAvailable == true
             default: true
             }
         }
@@ -76,14 +77,16 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
                 KeepAwakeSettingsCard(store: keepAwake)
             }
             if let idleRelease = state.settingsIdleRelease, idleRelease.isAvailable {
-                IdleReleaseSettingsCard(store: idleRelease)
+                IdleReleaseSettingsCard(store: idleRelease, resume: state.settingsResumeAfterRestart)
             }
             MenuBarSettingsCard()
             SidebarSettingsCard()
         case .appearance:
             AppearanceSettingsPane()
         case .agents:
-            AgentsSettingsPane(openAgentConfig: state.settingsOpenAgentConfig)
+            AgentsSettingsPane(openAgentConfig: state.settingsOpenAgentConfig, expert: state.settingsExpert)
+        case .references:
+            if let references = state.settingsReferences { ReferenceLibraryPane(store: references) }
         case .imports:
             if let book = state.settingsImportBook { ImportsSettingsPane(book: book) }
         case .connection:

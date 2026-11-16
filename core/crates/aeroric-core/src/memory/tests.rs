@@ -365,6 +365,10 @@ fn settings_runs_and_the_extracted_mark_persist() {
         candidates: 0,
         experiences: 0,
         failed_writes: 0,
+        kind: aeroric_protocol::memory::MemoryRunKind::Extract,
+        retired: Vec::new(),
+        proposed: 0,
+        undone_ms: None,
     };
     memory
         .add_run(&run("r1", 10, MemoryRunState::Done))

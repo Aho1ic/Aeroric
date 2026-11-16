@@ -86,6 +86,18 @@ pub fn builtin() -> Vec<Role> {
             // R2-3b: writable roles work in an isolated copy by default.
             Workspace::Copy,
         ),
+        // 2026-11-13 Smart Friend: what `ask_expert` starts, on the model
+        // set in 设置 → Agents → 求助专家.
+        role(
+            aeroric_protocol::delegation::EXPERT_ROLE,
+            "专家",
+            "只读答疑：主会话遇到难点时请来的更强的模型（ask_expert）",
+            "只回答问题，不要修改任何文件。答案要具体、能直接照做；没把握的地方说清楚，缺信息时说明主会话该先读什么、跑什么再来问，不要编造。",
+            AgentChoice::Same,
+            ContextMode::Brief,
+            "plan",
+            Workspace::ReadOnly,
+        ),
     ]
 }
 
@@ -208,7 +220,11 @@ mod tests {
         let tmp =
             std::env::temp_dir().join(format!("aeroric-roles-{}", uuid::Uuid::new_v4().simple()));
         let dir = tmp.as_path();
-        assert_eq!(list(Some(dir)).len(), 5);
+        assert_eq!(
+            list(Some(dir)).len(),
+            6,
+            "five, and the expert since 2026-11-13"
+        );
         let mut researcher = find(Some(dir), "调研员").unwrap();
         researcher.instruction = "只看 docs/".into();
         let saved = save(dir, researcher).unwrap();
@@ -228,7 +244,7 @@ mod tests {
         )
         .unwrap();
         assert!(mine.id.starts_with("role-") && !mine.builtin);
-        assert_eq!(list(Some(dir)).len(), 6);
+        assert_eq!(list(Some(dir)).len(), 7);
         assert!(save(
             dir,
             Role {
@@ -253,6 +269,10 @@ mod tests {
         assert!(!find(Some(dir), "researcher").unwrap().customized);
         assert!(delete(dir, "researcher").unwrap_err().contains("内置"));
         delete(dir, &mine.id).unwrap();
-        assert_eq!(list(Some(dir)).len(), 5);
+        assert_eq!(
+            list(Some(dir)).len(),
+            6,
+            "five, and the expert since 2026-11-13"
+        );
     }
 }

@@ -227,6 +227,7 @@ impl Rig {
             task_id: task.into(),
             turn_id: turn.into(),
             reason: TurnEndReason::Completed,
+            error: None,
             diff,
             checking,
         });
@@ -684,6 +685,7 @@ fn a_settle_that_overtakes_the_turns_end_still_reads_the_text() {
         task_id: child.clone(),
         turn_id: "t1".into(),
         reason: TurnEndReason::Completed,
+        error: None,
         diff: None,
         checking: false,
     });
@@ -1142,4 +1144,152 @@ fn a_batch_is_one_delivery_every_card_follows() {
         Some(source_ref("p", &[b.clone(), a.clone()]))
     );
     assert_eq!(record.label, "委派结果 · 2 项");
+}
+
+/// 2026-11-13 Smart Friend: what `ask_expert` asks for.
+fn expert_contract(question: &str) -> Contract {
+    Contract {
+        instruction: prompt::expert_question(question),
+        role: Some(EXPERT_ROLE.into()),
+        context_mode: Some(ContextMode::Brief),
+        permission: Some("plan".into()),
+        workspace: Some(Workspace::ReadOnly),
+        ..Contract::default()
+    }
+}
+
+#[test]
+fn an_expert_answer_taken_by_the_tool_is_whole_and_not_sent_again() {
+    let rig = rig("ask");
+    // The parent waits on the tool call: its turn is running.
+    rig.host.busy.lock().insert("p".into());
+    let (id, child) = rig.running(expert_contract("为什么 loss 不降"), Origin::Session);
+    assert_eq!(
+        rig.d.take_expert_answer("p", &id).unwrap(),
+        ExpertAnswer::Pending
+    );
+    assert!(rig.host.started.lock()[0].1.contains("为什么 loss 不降"));
+    let long = "学习率太大。".repeat(400);
+    rig.answer(&child, "t1", &long, None, false);
+    wait("reported", || {
+        rig.card(&id).state == DelegationState::Reported
+    });
+    match rig.d.take_expert_answer("p", &id).unwrap() {
+        ExpertAnswer::Answered { text, .. } => {
+            assert_eq!(text, long, "the whole answer, not the card's cut");
+            assert!(text.chars().count() > MAX_RESULT_CHARS);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(rig.card(&id).sent);
+    rig.host.busy.lock().clear();
+    rig.push(
+        "p",
+        SessionUpdateKind::TurnEnded {
+            turn_id: "u1".into(),
+            reason: TurnEndReason::Completed,
+            error: None,
+        },
+    );
+    std::thread::sleep(Duration::from_millis(30));
+    assert!(rig.sent_to("p").is_empty(), "the tool already gave it back");
+}
+
+#[test]
+fn an_expert_that_could_not_start_fails_the_tool_and_is_not_sent_again() {
+    let rig = rig("ask");
+    rig.host.busy.lock().insert("p".into());
+    *rig.host.fail_start.lock() = true;
+    let card = rig
+        .d
+        .start("p", expert_contract("怎么办"), Origin::Session, "p")
+        .unwrap();
+    wait("failed", || {
+        rig.card(&card.delegation_id).state == DelegationState::Failed
+    });
+    assert_eq!(
+        rig.d.take_expert_answer("p", &card.delegation_id).unwrap(),
+        ExpertAnswer::Failed("本机没有 Codex".into())
+    );
+    assert!(rig.card(&card.delegation_id).sent);
+}
+
+/// Smart Friend eval (2026-11-13): the gateway refused the expert's model
+/// and the tool only said the turn did not end normally.
+#[test]
+fn an_expert_whose_turn_failed_tells_the_tool_why() {
+    let rig = rig("ask");
+    rig.host.busy.lock().insert("p".into());
+    let (id, child) = rig.running(expert_contract("怎么办"), Origin::Session);
+    let refused =
+        "unexpected status 403 Forbidden: model \"any/claude-opus-5-5\" is set not to be served";
+    rig.d.turn_settled(TurnSettled {
+        task_id: child,
+        turn_id: "t1".into(),
+        reason: TurnEndReason::Failed,
+        error: Some(refused.into()),
+        diff: None,
+        checking: false,
+    });
+    wait("failed", || rig.card(&id).state == DelegationState::Failed);
+    assert_eq!(
+        rig.d.take_expert_answer("p", &id).unwrap(),
+        ExpertAnswer::Failed(format!("子会话的回合没有正常结束：{refused}"))
+    );
+}
+
+#[test]
+fn a_turn_counts_only_its_own_expert_questions() {
+    let rig = rig("ask");
+    rig.push(
+        "p",
+        SessionUpdateKind::TurnStarted {
+            turn_id: "u1".into(),
+        },
+    );
+    rig.running(expert_contract("一"), Origin::Session);
+    rig.running(expert_contract("二"), Origin::Session);
+    rig.running(contract("查一下"), Origin::Session);
+    assert_eq!(rig.d.expert_asks_this_turn("p"), 2);
+    std::thread::sleep(Duration::from_millis(5));
+    rig.push(
+        "p",
+        SessionUpdateKind::TurnStarted {
+            turn_id: "u2".into(),
+        },
+    );
+    assert_eq!(rig.d.expert_asks_this_turn("p"), 0);
+}
+
+#[test]
+fn the_expert_is_kept_until_cleared_and_its_role_only_reads() {
+    let tmp =
+        std::env::temp_dir().join(format!("aeroric-expert-{}", uuid::Uuid::new_v4().simple()));
+    let rig = rig("ask");
+    assert!(rig.d.expert().is_none());
+    assert!(rig.d.set_expert(None).is_err(), "nowhere to keep it");
+    rig.d.set_dir(tmp.clone());
+    let choice = ExpertChoice {
+        configuration_id: "agent-config:opus".into(),
+        agent: "claude".into(),
+        model: Some("opus".into()),
+        label: "Claude 官方 · opus".into(),
+    };
+    rig.d.set_expert(Some(choice.clone())).unwrap();
+    assert_eq!(rig.d.expert(), Some(choice));
+    rig.d.set_expert(None).unwrap();
+    rig.d.set_expert(None).unwrap();
+    assert!(rig.d.expert().is_none());
+    let role = rig
+        .d
+        .roles()
+        .into_iter()
+        .find(|r| r.id == EXPERT_ROLE)
+        .unwrap();
+    assert_eq!(
+        (role.permission.as_str(), role.workspace),
+        ("plan", Workspace::ReadOnly)
+    );
+    assert_eq!(role.context_mode, ContextMode::Brief);
+    let _ = std::fs::remove_dir_all(tmp);
 }

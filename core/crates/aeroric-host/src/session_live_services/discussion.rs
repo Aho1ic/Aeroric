@@ -31,8 +31,11 @@ pub const PAUSE_METHOD: &str = "discussion.pause";
 pub const RESUME_METHOD: &str = "discussion.resume";
 pub const SUMMARIZE_METHOD: &str = "discussion.summarize";
 pub const STOP_METHOD: &str = "discussion.stop";
+pub const SAY_METHOD: &str = "discussion.say";
+pub const AGAIN_METHOD: &str = "discussion.again";
 
-/// The record field marking a discussion's own task.
+/// The record field marking a discussion's own task. Formats are
+/// `roundtable`, `review` (draft review) and `research` (2026-11-13).
 pub(super) const DISCUSSION_FIELD: &str = "discussion";
 /// The record field naming the discussion a member speaks in.
 pub(super) const DISCUSSION_OF_FIELD: &str = "discussionOf";
@@ -56,6 +59,8 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     set.register(RESUME_METHOD, blocking(live, resume));
     set.register(SUMMARIZE_METHOD, blocking(live, summarize));
     set.register(STOP_METHOD, blocking(live, stop));
+    set.register(SAY_METHOD, blocking(live, say));
+    set.register(AGAIN_METHOD, blocking(live, again));
 }
 
 /// Set fields on one record of `project_id`.
@@ -161,12 +166,34 @@ struct StartParams {
     #[serde(default)]
     moderator: usize,
     rounds: Option<u32>,
+    /// Members call each other 成员 A / B (2026-11-13).
+    #[serde(default)]
+    anonymous: bool,
+    /// `roundtable`, `review` (draft review, 2026-11-13), `research`, or
+    /// `relay` (2026-11-14; `rounds` then counts laps).
+    #[serde(default)]
+    format: core::Format,
+    /// Draft review: how many times the author may revise.
+    revisions: Option<u32>,
+    /// What every post should be like; absent is the default wording,
+    /// empty asks nothing (2026-11-13).
+    requirements: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct TaskParams {
     task_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SayParams {
+    task_id: String,
+    text: String,
+    /// Members asked by name, by index.
+    #[serde(default)]
+    mentions: Vec<usize>,
 }
 
 fn discussion_failure(request: &Request, error: DiscussionError) -> Frame {
@@ -332,6 +359,12 @@ fn start(live: &Live, request: &Request) -> Frame {
         posts: Vec::new(),
         note: None,
         created_ms: super::now_ms(),
+        anonymous: p.anonymous,
+        pending_replies: Vec::new(),
+        format: p.format,
+        max_revisions: p.revisions.unwrap_or(core::DEFAULT_REVISIONS),
+        requirements: p.requirements.map(|r| r.trim().to_string()),
+        assignments: Vec::new(),
     };
     let discussions = live.executor.discussions();
     // Registered before the members start, so their first words are heard.
@@ -345,9 +378,20 @@ fn start(live: &Live, request: &Request) -> Frame {
         }
     };
     // Like a delegated child: made and started directly, because the
-    // catalog lists no `plan` for a submission to ask for.
+    // catalog lists no `plan` for a submission to ask for. Only round 1's
+    // speakers start now; a reviewer is started with its first review.
+    let first = discussion.speakers(1);
     for (i, params) in p.members.iter().enumerate() {
-        if let Err(reason) = start_member(live, &project, &id, &title, &discussion, i, params) {
+        if let Err(reason) = start_member(
+            live,
+            &project,
+            &id,
+            &title,
+            &discussion,
+            i,
+            params,
+            first.contains(&i),
+        ) {
             discussions.member_failed(&id, i, &format!("没能开始：{reason}"));
         }
     }
@@ -356,7 +400,8 @@ fn start(live: &Live, request: &Request) -> Frame {
 }
 
 /// Make member `i`'s session, read-only, marked as the discussion's, and
-/// start it with its round-1 message.
+/// (when it speaks in round 1) start it with its round-1 message.
+#[allow(clippy::too_many_arguments)]
 fn start_member(
     live: &Live,
     project: &Record,
@@ -365,6 +410,7 @@ fn start_member(
     discussion: &Discussion,
     i: usize,
     params: &MemberParams,
+    start_now: bool,
 ) -> Result<(), String> {
     let member = &discussion.members[i];
     let project_id = &discussion.project_id;
@@ -406,6 +452,9 @@ fn start_member(
         &format!("{title}（讨论 · {}）", member.label),
     );
     let (project, _) = live.record(&member.task_id).ok_or("成员会话没有建成")?;
+    if !start_now {
+        return Ok(());
+    }
     live.service
         .start(
             &project,
@@ -432,6 +481,10 @@ fn view(live: &Live, discussion: &Discussion) -> Value {
         .posts
         .iter()
         .map(|post| {
+            // The user's words and a final version took no turn.
+            if post.kind == core::PostKind::User || post.stage == Some(core::Stage::Final) {
+                return Value::Null;
+            }
             turns
                 .get(post.member)
                 .and_then(|t| core::usage(post, t))
@@ -517,6 +570,25 @@ fn summarize(live: &Live, request: &Request) -> Frame {
 
 fn stop(live: &Live, request: &Request) -> Frame {
     act(live, request, |d, id| d.stop(id))
+}
+
+fn again(live: &Live, request: &Request) -> Frame {
+    act(live, request, |d, id| d.another_round(id))
+}
+
+fn say(live: &Live, request: &Request) -> Frame {
+    let p: SayParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    match live
+        .executor
+        .discussions()
+        .say(&p.task_id, &p.text, &p.mentions)
+    {
+        Ok(discussion) => ok(request, json!({ "discussion": view(live, &discussion) })),
+        Err(error) => discussion_failure(request, error),
+    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,33 @@
 //! after the last round, or as soon as everyone keeps their stance from
 //! round 2 on (frontier-roadmap Q-R7; antumi's group chat).
 //!
+//! 2026-11-13 second batch: the user can speak in the discussion (members
+//! hear it next round; once paused or summed up it starts another round),
+//! ask one member by name (it answers alone, the round does not move on),
+//! ask for another round, and start it anonymous (members call each other
+//! 成员 A / B).
+//!
+//! 2026-11-13 third batch, draft review ([`Format::Review`]): the moderator
+//! is the author and writes version 1; every other member reviews it alone
+//! and ends on "结论：通过" or "结论：需修改"; the author sees every review
+//! and writes the next version with notes on what changed. Odd rounds are
+//! the author's, even rounds the reviewers'; round r is version ⌈r/2⌉. The
+//! latest version is final once everyone passes it or the revisions run
+//! out ([`after_review_round`]).
+//!
+//! 2026-11-13 fourth batch, research ([`Format::Research`]): the moderator
+//! splits the question (a "分工：" line, then "- 名字：要查清的事" per
+//! member); each member gets only its part and the user's words, researches
+//! alone; the moderator then writes the report. A discussion also keeps the
+//! user's requirements (`requirements`), sent with every member prompt.
+//!
+//! 2026-11-14 relay ([`Format::Relay`], the roadmap's ring experiment): the
+//! members speak one at a time in order, each hearing only the post just
+//! before its own and what the user said; `max_rounds` counts laps and
+//! `round` counts turns (turn r is member (r−1) mod n). No stance lines;
+//! after the last lap the moderator sums up with every post. The round
+//! table already is the mesh (each round everyone hears everyone).
+//!
 //! [`Discussions`] sits on the session update chain: it collects each
 //! member's last message of a turn and, when the turn ends, records it as
 //! the member's post and decides the next step. Posts are written to disk as
@@ -29,6 +56,55 @@ pub const MIN_MEMBERS: usize = 2;
 pub const MAX_MEMBERS: usize = 5;
 pub const MAX_ROUNDS: u32 = 5;
 pub const DEFAULT_ROUNDS: u32 = 3;
+pub const MAX_REVISIONS: u32 = 3;
+pub const DEFAULT_REVISIONS: u32 = 2;
+
+fn default_revisions() -> u32 {
+    DEFAULT_REVISIONS
+}
+
+/// How the members work together.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Format {
+    /// Everyone answers each round; the moderator sums up.
+    #[default]
+    Roundtable,
+    /// The moderator writes, the others review, until it is final.
+    Review,
+    /// The moderator splits the question, each member researches its part
+    /// alone, the moderator writes the report.
+    Research,
+    /// One at a time in order, each hearing only the one before.
+    Relay,
+}
+
+/// What a draft-review post is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Stage {
+    Draft,
+    Review,
+    Revise,
+    Final,
+    /// Research: the moderator's split, then each member's part.
+    Split,
+    Research,
+}
+
+/// A reviewer's call on a version; on the final post, whether everyone
+/// passed the last version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Verdict {
+    Pass,
+    Revise,
+}
+
+/// The version round `round` of a draft review writes or reviews.
+pub fn version_of(round: u32) -> u32 {
+    round.div_ceil(2)
+}
 
 const RESTARTED: &str = "App 重启时这一轮被中断";
 
@@ -61,6 +137,10 @@ pub enum Stance {
 pub enum PostKind {
     Answer,
     Summary,
+    /// The user spoke; `member` means nothing here.
+    User,
+    /// A member answering the user who asked it by name.
+    Reply,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,9 +172,38 @@ pub struct Post {
     pub started_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_ms: Option<u64>,
+    /// A user post: the members it asks by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<usize>,
+    /// Draft review only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<Stage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
 }
 
 impl Post {
+    fn new(round: u32, member: usize, kind: PostKind) -> Self {
+        Post {
+            round,
+            member,
+            kind,
+            state: PostState::Speaking,
+            text: String::new(),
+            stance: None,
+            error: None,
+            waiting: None,
+            started_ms: now_ms(),
+            ended_ms: None,
+            mentions: Vec::new(),
+            stage: None,
+            version: None,
+            verdict: None,
+        }
+    }
+
     fn in_flight(&self) -> bool {
         matches!(self.state, PostState::Speaking | PostState::Waiting)
     }
@@ -131,22 +240,119 @@ pub struct Discussion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     pub created_ms: u64,
+    /// Members call each other 成员 A / B, not by agent and model. Set at
+    /// the start only, so earlier posts keep their names.
+    #[serde(default)]
+    pub anonymous: bool,
+    /// Members asked by name while still talking: asked once they finish.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_replies: Vec<usize>,
+    #[serde(default)]
+    pub format: Format,
+    /// Draft review: how many times the author may revise.
+    #[serde(default = "default_revisions")]
+    pub max_revisions: u32,
+    /// What the user asks of every post ("观点要具体……"). `None` (saved
+    /// before 2026-11-13, or not given) is the default; empty asks nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requirements: Option<String>,
+    /// Research: each member's part, by member index; the moderator's is
+    /// empty. Filled from the moderator's split.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignments: Vec<String>,
 }
 
 impl Discussion {
     /// What the discussion's task record shows in the sidebar.
     pub fn task_status(&self) -> TaskStatus {
+        let talking = || {
+            if self.posts.iter().any(|p| p.state == PostState::Waiting) {
+                TaskStatus::InputRequired
+            } else {
+                TaskStatus::Running
+            }
+        };
         match self.state {
             DiscussionState::Running | DiscussionState::Pausing | DiscussionState::Summarizing => {
-                if self.posts.iter().any(|p| p.state == PostState::Waiting) {
-                    TaskStatus::InputRequired
-                } else {
-                    TaskStatus::Running
-                }
+                talking()
             }
+            // A member asked by name is still answering.
+            DiscussionState::Paused | DiscussionState::Done if self.in_flight() => talking(),
             DiscussionState::Paused => TaskStatus::Interrupted,
             DiscussionState::Done => TaskStatus::Done,
             DiscussionState::Stopped => TaskStatus::Cancelled,
+        }
+    }
+
+    /// Who speaks in `round`: everyone at a round table; in a draft review
+    /// the author in odd rounds and the reviewers in even ones.
+    pub fn speakers(&self, round: u32) -> Vec<usize> {
+        let all = 0..self.members.len();
+        match self.format {
+            Format::Roundtable => all.collect(),
+            Format::Review if round % 2 == 1 => vec![self.moderator],
+            Format::Review => all.filter(|m| *m != self.moderator).collect(),
+            Format::Research if round == 1 => vec![self.moderator],
+            Format::Research => all.filter(|m| *m != self.moderator).collect(),
+            Format::Relay => vec![(round.max(1) as usize - 1) % self.members.len()],
+        }
+    }
+
+    /// Relay: which lap turn `round` is in.
+    pub fn lap(&self, round: u32) -> u32 {
+        (round.max(1) - 1) / self.members.len().max(1) as u32 + 1
+    }
+
+    /// Members are working alone: a draft review's reviewers, a research's
+    /// members, a relay's runners. Asking one by name would tell it the
+    /// others'.
+    pub fn working_alone(&self) -> bool {
+        match self.format {
+            Format::Roundtable => false,
+            Format::Review => self.round.is_multiple_of(2),
+            Format::Research => self.round == 2,
+            Format::Relay => true,
+        }
+    }
+
+    /// The author's latest finished version.
+    fn latest_draft(&self) -> Option<&Post> {
+        self.posts.iter().rev().find(|p| {
+            p.member == self.moderator
+                && p.kind == PostKind::Answer
+                && p.state == PostState::Done
+                && p.version.is_some()
+        })
+    }
+
+    /// `member`'s finished post of `round`, the latest when retried.
+    fn said(&self, round: u32, member: usize) -> Option<&Post> {
+        self.posts.iter().rev().find(|p| {
+            p.round == round
+                && p.member == member
+                && p.kind == PostKind::Answer
+                && p.state == PostState::Done
+        })
+    }
+
+    /// Every reviewer passed the author's latest version.
+    pub fn latest_version_passed(&self) -> bool {
+        let Some(version) = self.latest_draft().and_then(|p| p.version) else {
+            return false;
+        };
+        let round = version * 2;
+        self.speakers(round).iter().all(|m| {
+            self.said(round, *m)
+                .is_some_and(|p| p.verdict == Some(Verdict::Pass))
+        })
+    }
+
+    /// What members call member `i`: its label, or 成员 A / B when anonymous.
+    pub fn name(&self, i: usize) -> String {
+        if self.anonymous {
+            format!("成员 {}", char::from(b'A' + (i % 26) as u8))
+        } else {
+            self.members[i].label.clone()
         }
     }
 
@@ -154,21 +360,49 @@ impl Discussion {
         self.posts.iter().any(Post::in_flight)
     }
 
-    /// The posts `member` has not been sent yet, by the others, from before
-    /// `round` (`None`: every round, for the summary).
+    /// The posts `member` has not been sent yet, by the others or the
+    /// user, from before `round` (`None`: every round so far).
     pub fn unseen(&self, member: usize, round: Option<u32>) -> Vec<usize> {
         self.posts
             .iter()
             .enumerate()
             .filter(|(i, p)| {
-                p.member != member
-                    && p.kind == PostKind::Answer
+                // A reviewer hears the author and the user, never the other
+                // reviewers, so each review is its own; a researcher hears
+                // only the user (its part comes with its prompt).
+                let reviewer = self.format == Format::Review && member != self.moderator;
+                let researcher = self.format == Format::Research && member != self.moderator;
+                // A relay's runner hears only the turn just before its own;
+                // a reply or the summary hears everyone, as at a round table.
+                let runner = self.format == Format::Relay && round.is_some();
+                let heard = match p.kind {
+                    PostKind::User => true,
+                    PostKind::Answer | PostKind::Reply if runner => {
+                        p.kind == PostKind::Answer
+                            && p.member != member
+                            && round.is_some_and(|r| p.round + 1 == r)
+                    }
+                    PostKind::Answer | PostKind::Reply if researcher => false,
+                    PostKind::Answer | PostKind::Reply if reviewer => p.member == self.moderator,
+                    PostKind::Answer | PostKind::Reply => p.member != member,
+                    PostKind::Summary => false,
+                };
+                heard
                     && p.state == PostState::Done
                     && round.is_none_or(|r| p.round < r)
                     && !self.members[member].seen.contains(i)
             })
             .map(|(i, _)| i)
             .collect()
+    }
+
+    /// The summary post of the summing up under way: a later round's summing
+    /// up (after another round) is a new one.
+    fn current_summary(&self) -> Option<&Post> {
+        self.posts
+            .iter()
+            .rev()
+            .find(|p| p.kind == PostKind::Summary && p.round == self.round)
     }
 }
 
@@ -178,10 +412,18 @@ pub enum Next {
     Round(u32),
     Summarize,
     Pause(String),
+    /// Draft review: the latest version is final; whether everyone passed it.
+    Finalize(bool),
 }
 
 /// The step after round `discussion.round`, every answer of it in.
 pub fn after_round(discussion: &Discussion) -> Next {
+    match discussion.format {
+        Format::Review => return after_review_round(discussion),
+        Format::Research => return after_research_round(discussion),
+        Format::Relay => return after_relay_turn(discussion),
+        Format::Roundtable => {}
+    }
     let round = discussion.round;
     let answers: Vec<&Post> = discussion
         .posts
@@ -195,6 +437,16 @@ pub fn after_round(discussion: &Discussion) -> Next {
     if said.is_empty() {
         return Next::Pause(format!("第 {round} 轮没有人发言成功"));
     }
+    // The user spoke to everyone during this round: the members answer it
+    // next round, even past the round limit or when everyone kept their
+    // stance. Asking by name was answered already.
+    if discussion
+        .posts
+        .iter()
+        .any(|p| p.kind == PostKind::User && p.round == round && p.mentions.is_empty())
+    {
+        return Next::Round(round + 1);
+    }
     if round >= discussion.max_rounds {
         return Next::Summarize;
     }
@@ -202,6 +454,156 @@ pub fn after_round(discussion: &Discussion) -> Next {
         return Next::Summarize;
     }
     Next::Round(round + 1)
+}
+
+/// Relay: the next turn, or the summary once the last lap is run. A turn
+/// that failed pauses (carrying on asks the same runner again); the user
+/// speaking during a turn makes sure the next one runs.
+pub fn after_relay_turn(d: &Discussion) -> Next {
+    let round = d.round;
+    let done = d
+        .posts
+        .iter()
+        .any(|p| p.round == round && p.kind == PostKind::Answer && p.state == PostState::Done);
+    if !done {
+        let runner = d
+            .speakers(round)
+            .first()
+            .map(|m| d.name(*m))
+            .unwrap_or_default();
+        return Next::Pause(format!("第 {} 圈「{runner}」没发言成功", d.lap(round)));
+    }
+    let user = d
+        .posts
+        .iter()
+        .any(|p| p.kind == PostKind::User && p.round == round && p.mentions.is_empty());
+    if user || round < d.max_rounds * d.members.len() as u32 {
+        Next::Round(round + 1)
+    } else {
+        Next::Summarize
+    }
+}
+
+/// Draft review: after the author's round the reviewers review; after the
+/// reviews the version is final if all passed or no revision is left, else
+/// the author revises. A missing draft or review pauses; a version nobody
+/// finished reviewing never counts as passed.
+pub fn after_review_round(d: &Discussion) -> Next {
+    let round = d.round;
+    let version = version_of(round);
+    if round % 2 == 1 {
+        return if d.said(round, d.moderator).is_some() {
+            Next::Round(round + 1)
+        } else {
+            Next::Pause(format!("作者没写出第 {version} 版"))
+        };
+    }
+    let reviewers = d.speakers(round);
+    let missing = reviewers
+        .iter()
+        .filter(|m| d.said(round, **m).is_none())
+        .count();
+    if missing > 0 {
+        return Next::Pause(format!("第 {version} 版还有 {missing} 位评审没评完"));
+    }
+    if reviewers.iter().all(|m| {
+        d.said(round, *m)
+            .is_some_and(|p| p.verdict == Some(Verdict::Pass))
+    }) {
+        return Next::Finalize(true);
+    }
+    if version > d.max_revisions {
+        return Next::Finalize(false);
+    }
+    Next::Round(round + 1)
+}
+
+/// Research: the split (checked when it lands: a split missing someone
+/// fails) leads to the research; when every member has its part done the
+/// moderator writes the report. A missing split or part pauses.
+pub fn after_research_round(d: &Discussion) -> Next {
+    if d.round == 1 {
+        return if d.said(1, d.moderator).is_some() {
+            Next::Round(2)
+        } else {
+            Next::Pause("主持人没拆好分工".into())
+        };
+    }
+    let missing = d
+        .speakers(d.round)
+        .iter()
+        .filter(|m| d.said(d.round, **m).is_none())
+        .count();
+    if missing > 0 {
+        return Next::Pause(format!("还有 {missing} 位成员没查完"));
+    }
+    Next::Summarize
+}
+
+/// The parts in a moderator's split: after a line with "分工", lines like
+/// "- 名字：要查清的事". Names are matched case-insensitively against each
+/// member's `names`. Returns each found member's part.
+pub fn parse_assignments(text: &str, names: &[(usize, Vec<String>)]) -> HashMap<usize, String> {
+    let mut found = HashMap::new();
+    let mut started = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if !started {
+            started = line.contains("分工");
+            // "分工：" may carry the first part on the same line.
+            if !started {
+                continue;
+            }
+        }
+        let item = line
+            .trim_start_matches(|c: char| matches!(c, '-' | '*' | '•' | '·') || c.is_ascii_digit())
+            .trim_start_matches(['.', '、', ')', '）'])
+            .trim();
+        let Some(at) = item.find(['：', ':']) else {
+            continue;
+        };
+        let name = item[..at]
+            .trim()
+            .trim_matches(|c| matches!(c, '*' | '「' | '」' | '`' | '"'))
+            .trim()
+            .to_lowercase();
+        let part = item[at..]
+            .trim_start_matches(['：', ':'])
+            .trim()
+            .to_string();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((member, _)) = names
+            .iter()
+            .find(|(_, ns)| ns.iter().any(|n| n.to_lowercase() == name))
+        {
+            found.entry(*member).or_insert(part);
+        }
+    }
+    found
+}
+
+/// A review's last lines: "结论：通过" or "结论：需修改". Unreadable counts
+/// as needing changes, so an unclear review never passes a version.
+pub fn parse_verdict(text: &str) -> Verdict {
+    for line in text.lines().rev().filter(|l| !l.trim().is_empty()).take(3) {
+        let line = line
+            .trim()
+            .trim_matches(|c| matches!(c, '*' | '_' | '`' | '>'));
+        let Some(rest) = line.find("结论").map(|at| &line[at + "结论".len()..]) else {
+            continue;
+        };
+        let rest = rest.trim_start_matches([':', '：', ' ', '*']);
+        if rest.starts_with("通过") {
+            return Verdict::Pass;
+        }
+        if rest.starts_with("需修改") || rest.starts_with("需要修改") || rest.starts_with("不通过")
+        {
+            return Verdict::Revise;
+        }
+    }
+    Verdict::Revise
 }
 
 /// The stance a round-2+ answer ends on: its last lines, "立场：维持" or
@@ -294,6 +696,15 @@ struct State {
     text: HashMap<String, Vec<(String, String)>>,
 }
 
+/// The first name a member goes by in a split.
+fn names_of(names: &[(usize, Vec<String>)], member: usize) -> String {
+    names
+        .iter()
+        .find(|(m, _)| *m == member)
+        .and_then(|(_, ns)| ns.first().cloned())
+        .unwrap_or_default()
+}
+
 /// Messages to send once the lock is let go.
 type Outbox = Vec<(String, String)>;
 
@@ -337,6 +748,7 @@ pub fn load_all(dir: &Path) -> Vec<Discussion> {
             continue;
         };
         let mut cut = false;
+        discussion.pending_replies.clear();
         for post in discussion.posts.iter_mut().filter(|p| p.in_flight()) {
             post.state = PostState::Failed;
             post.error = Some(RESTARTED.into());
@@ -436,21 +848,29 @@ impl Discussions {
         if discussion.topic.trim().is_empty() {
             return Err(DiscussionError::Invalid("题目不能为空".into()));
         }
+        if discussion.format == Format::Review
+            && !(1..=MAX_REVISIONS).contains(&discussion.max_revisions)
+        {
+            return Err(DiscussionError::Invalid(format!(
+                "修订次数要在 1 到 {MAX_REVISIONS} 之间"
+            )));
+        }
         let now = now_ms();
         discussion.round = 1;
         discussion.state = DiscussionState::Running;
-        discussion.posts = (0..n)
+        let (stage, version) = match discussion.format {
+            Format::Roundtable | Format::Relay => (None, None),
+            Format::Review => (Some(Stage::Draft), Some(1)),
+            Format::Research => (Some(Stage::Split), None),
+        };
+        discussion.posts = discussion
+            .speakers(1)
+            .into_iter()
             .map(|member| Post {
-                round: 1,
-                member,
-                kind: PostKind::Answer,
-                state: PostState::Speaking,
-                text: String::new(),
-                stance: None,
-                error: None,
-                waiting: None,
                 started_ms: now,
-                ended_ms: None,
+                stage,
+                version,
+                ..Post::new(1, member, PostKind::Answer)
             })
             .collect();
         let mut state = self.state.lock();
@@ -517,25 +937,22 @@ impl Discussions {
                 d.state = DiscussionState::Running;
                 Ok(Vec::new())
             }
+            DiscussionState::Paused if d.in_flight() => Err(DiscussionError::Invalid(
+                "被点名的成员还在回答，等它说完再继续".into(),
+            )),
             DiscussionState::Paused => {
                 d.note = None;
                 let summary_failed = d
-                    .posts
-                    .last()
-                    .is_some_and(|p| p.kind == PostKind::Summary && p.state == PostState::Failed);
+                    .current_summary()
+                    .is_some_and(|p| p.state == PostState::Failed);
                 if summary_failed {
                     return Ok(Self::start_summary(d));
                 }
                 let round = d.round;
-                let lost: Vec<usize> = (0..d.members.len())
-                    .filter(|m| {
-                        !d.posts.iter().any(|p| {
-                            p.round == round
-                                && p.member == *m
-                                && p.kind == PostKind::Answer
-                                && p.state == PostState::Done
-                        })
-                    })
+                let lost: Vec<usize> = d
+                    .speakers(round)
+                    .into_iter()
+                    .filter(|m| d.said(round, *m).is_none())
                     .collect();
                 d.state = DiscussionState::Running;
                 if lost.is_empty() {
@@ -551,19 +968,49 @@ impl Discussions {
     pub fn summarize_now(&self, id: &str) -> Result<Discussion, DiscussionError> {
         let mut cut = Vec::new();
         let result = self.act(id, |d| {
+            // Already summing up (the round ended early on its own just
+            // before the click): nothing to do, and not an error.
+            if d.state == DiscussionState::Summarizing {
+                return Ok(Vec::new());
+            }
             if !matches!(
                 d.state,
                 DiscussionState::Running | DiscussionState::Pausing | DiscussionState::Paused
             ) {
                 return Err(DiscussionError::Invalid("讨论已经结束".into()));
             }
+            if d.format == Format::Review {
+                // 现在定稿: whoever is writing finishes first.
+                if d.latest_draft().is_none() {
+                    return Err(DiscussionError::Invalid("作者还没写出任何一版".into()));
+                }
+                d.note = None;
+                d.state = DiscussionState::Summarizing;
+                d.pending_replies.clear();
+                return Ok(if d.in_flight() {
+                    Vec::new()
+                } else {
+                    Self::finalize(d)
+                });
+            }
             if !d.posts.iter().any(|p| p.state == PostState::Done) {
                 return Err(DiscussionError::Invalid(
                     "还没有人发言，没有可总结的".into(),
                 ));
             }
+            if d.format == Format::Research
+                && !d
+                    .posts
+                    .iter()
+                    .any(|p| p.stage == Some(Stage::Research) && p.state == PostState::Done)
+            {
+                return Err(DiscussionError::Invalid(
+                    "还没有成员查完，没有可汇总的".into(),
+                ));
+            }
             d.note = None;
             d.state = DiscussionState::Summarizing;
+            d.pending_replies.clear();
             cut = d
                 .posts
                 .iter()
@@ -593,6 +1040,7 @@ impl Discussions {
             }
             d.state = DiscussionState::Stopped;
             d.note = None;
+            d.pending_replies.clear();
             cut = d
                 .posts
                 .iter()
@@ -607,6 +1055,120 @@ impl Discussions {
             }
         }
         result
+    }
+
+    /// The user speaks. Naming members (`mentions`) asks only them: each
+    /// answers alone, now or once it finishes what it is saying, and the
+    /// round does not move on. Otherwise every member hears it next round;
+    /// once paused or summed up, that round starts now and is summed up
+    /// again.
+    pub fn say(
+        &self,
+        id: &str,
+        text: &str,
+        mentions: &[usize],
+    ) -> Result<Discussion, DiscussionError> {
+        let text = text.trim().to_string();
+        self.act(id, |d| {
+            if text.is_empty() {
+                return Err(DiscussionError::Invalid("发言不能为空".into()));
+            }
+            if mentions.iter().any(|m| *m >= d.members.len()) {
+                return Err(DiscussionError::Invalid("点名的不是成员".into()));
+            }
+            match d.state {
+                DiscussionState::Stopped => {
+                    return Err(DiscussionError::Invalid("讨论已经停止".into()))
+                }
+                DiscussionState::Summarizing => {
+                    return Err(DiscussionError::Invalid(
+                        "主持人正在总结，等总结写完再发言".into(),
+                    ))
+                }
+                DiscussionState::Paused | DiscussionState::Done
+                    if mentions.is_empty() && d.in_flight() =>
+                {
+                    return Err(DiscussionError::Invalid(
+                        "被点名的成员还在回答，等它说完再发言".into(),
+                    ))
+                }
+                _ => {}
+            }
+            if !mentions.is_empty()
+                && d.working_alone()
+                && matches!(d.state, DiscussionState::Running | DiscussionState::Pausing)
+            {
+                return Err(DiscussionError::Invalid(if d.format == Format::Research {
+                    "调研进行中不能点名：被点名的成员会看到别人的结果".into()
+                } else if d.format == Format::Relay {
+                    "接力进行中不能点名：被点名的成员会看到全部发言".into()
+                } else {
+                    "评审进行中不能点名：被点名的评审会看到别人的意见".into()
+                }));
+            }
+            if mentions.is_empty()
+                && d.format == Format::Research
+                && d.state == DiscussionState::Done
+            {
+                return Err(DiscussionError::Invalid(
+                    "调研已出报告：可以 @成员 追问，或用报告卡转去讨论、起草".into(),
+                ));
+            }
+            let mut mentions = mentions.to_vec();
+            mentions.sort_unstable();
+            mentions.dedup();
+            let now = now_ms();
+            d.posts.push(Post {
+                state: PostState::Done,
+                text: text.clone(),
+                ended_ms: Some(now),
+                started_ms: now,
+                mentions: mentions.clone(),
+                ..Post::new(d.round, 0, PostKind::User)
+            });
+            if !mentions.is_empty() {
+                let mut outbox = Vec::new();
+                for m in mentions {
+                    let talking = d.posts.iter().any(|p| p.member == m && p.in_flight());
+                    if talking {
+                        if !d.pending_replies.contains(&m) {
+                            d.pending_replies.push(m);
+                        }
+                    } else {
+                        outbox.extend(Self::reply(d, m));
+                    }
+                }
+                return Ok(outbox);
+            }
+            Ok(match d.state {
+                // Research has no further round: the report will hear it.
+                DiscussionState::Paused if d.format == Format::Research => Vec::new(),
+                DiscussionState::Paused | DiscussionState::Done => Self::new_round(d),
+                // Running or pausing: heard next round.
+                _ => Vec::new(),
+            })
+        })
+    }
+
+    /// One more round once paused or summed up, then a fresh summary.
+    pub fn another_round(&self, id: &str) -> Result<Discussion, DiscussionError> {
+        self.act(id, |d| match d.state {
+            _ if d.format == Format::Research => Err(DiscussionError::Invalid(
+                "分工调研没有再来一轮：用报告卡转去讨论或起草".into(),
+            )),
+            DiscussionState::Paused | DiscussionState::Done if d.in_flight() => Err(
+                DiscussionError::Invalid("被点名的成员还在回答，等它说完".into()),
+            ),
+            DiscussionState::Paused | DiscussionState::Done => {
+                if !d.posts.iter().any(|p| p.state == PostState::Done) {
+                    return Err(DiscussionError::Invalid("还没有人发言".into()));
+                }
+                Ok(Self::new_round(d))
+            }
+            _ => Err(DiscussionError::Invalid(
+                "讨论暂停或总结之后才能再来一轮".into(),
+            )),
+        })
     }
 
     fn host(&self) -> Option<Arc<dyn DiscussionHost>> {
@@ -660,61 +1222,180 @@ impl Discussions {
         } else {
             d.unseen(member, Some(round))
         };
-        let text = if round == 1 {
-            prompt::opening(d, member)
-        } else {
-            prompt::round(d, &unseen)
+        let (text, stage) = match d.format {
+            Format::Roundtable if round == 1 => (prompt::opening(d, member), None),
+            Format::Roundtable => (prompt::round(d, &unseen), None),
+            Format::Review if round == 1 => (prompt::opening(d, member), Some(Stage::Draft)),
+            Format::Review if round.is_multiple_of(2) => {
+                (prompt::review(d, member, &unseen), Some(Stage::Review))
+            }
+            Format::Review => (prompt::revise(d, &unseen), Some(Stage::Revise)),
+            Format::Research if round == 1 => (prompt::opening(d, member), Some(Stage::Split)),
+            Format::Research => (prompt::research(d, member, &unseen), Some(Stage::Research)),
+            Format::Relay if round == 1 => (prompt::opening(d, member), None),
+            Format::Relay => (prompt::relay(d, member, &unseen), None),
         };
         d.members[member].seen.extend(unseen);
         d.posts.push(Post {
-            round,
-            member,
-            kind: PostKind::Answer,
-            state: PostState::Speaking,
-            text: String::new(),
-            stance: None,
-            error: None,
-            waiting: None,
-            started_ms: now_ms(),
-            ended_ms: None,
+            stage,
+            version: (d.format == Format::Review).then(|| version_of(round)),
+            ..Post::new(round, member, PostKind::Answer)
         });
         (d.members[member].task_id.clone(), text)
+    }
+
+    /// Member `member` answers the user's latest post that named it.
+    fn reply(d: &mut Discussion, member: usize) -> Option<(String, String)> {
+        let question = d
+            .posts
+            .iter()
+            .rposition(|p| p.kind == PostKind::User && p.mentions.contains(&member))?;
+        let heard: Vec<usize> = d
+            .unseen(member, None)
+            .into_iter()
+            .filter(|i| *i != question)
+            .collect();
+        let text = prompt::reply(d, question, &heard);
+        d.members[member].seen.extend(heard);
+        d.members[member].seen.push(question);
+        d.posts.push(Post::new(d.round, member, PostKind::Reply));
+        Some((d.members[member].task_id.clone(), text))
+    }
+
+    /// Everyone answers round `round + 1`, the last before a new summary.
+    /// In a draft review: the author writes the next version (再改一版),
+    /// reviewed once more before it is final.
+    fn new_round(d: &mut Discussion) -> Outbox {
+        match d.format {
+            Format::Roundtable => {
+                d.round += 1;
+                d.max_rounds = d.round;
+            }
+            Format::Review => {
+                d.round += if d.round.is_multiple_of(2) { 1 } else { 2 };
+                d.max_revisions = version_of(d.round) - 1;
+            }
+            // Never asked for (another_round and say refuse it).
+            Format::Research => return Vec::new(),
+            // One more lap, from the next runner.
+            Format::Relay => {
+                d.round += 1;
+                let n = d.members.len() as u32;
+                d.max_rounds = (d.round + n - 1).div_ceil(n);
+            }
+        }
+        d.state = DiscussionState::Running;
+        d.note = None;
+        let round = d.round;
+        d.speakers(round)
+            .into_iter()
+            .map(|m| Self::ask(d, m, round))
+            .collect()
+    }
+
+    /// Draft review: the author's latest version is final.
+    fn finalize(d: &mut Discussion) -> Outbox {
+        let passed = d.latest_version_passed();
+        let Some((text, version)) = d.latest_draft().map(|p| (p.text.clone(), p.version)) else {
+            d.state = DiscussionState::Paused;
+            d.note = Some("作者还没写出任何一版".into());
+            return Vec::new();
+        };
+        let now = now_ms();
+        d.posts.push(Post {
+            state: PostState::Done,
+            text,
+            stage: Some(Stage::Final),
+            version,
+            verdict: Some(if passed {
+                Verdict::Pass
+            } else {
+                Verdict::Revise
+            }),
+            started_ms: now,
+            ended_ms: Some(now),
+            ..Post::new(d.round, d.moderator, PostKind::Summary)
+        });
+        d.state = DiscussionState::Done;
+        d.note = None;
+        Vec::new()
     }
 
     fn start_summary(d: &mut Discussion) -> Outbox {
         d.state = DiscussionState::Summarizing;
         let m = d.moderator;
         let unseen = d.unseen(m, None);
-        let text = prompt::summary(d, &unseen);
+        let text = if d.format == Format::Research {
+            prompt::report(d, &unseen)
+        } else {
+            prompt::summary(d, &unseen)
+        };
         d.members[m].seen.extend(unseen);
-        d.posts.push(Post {
-            round: d.round,
-            member: m,
-            kind: PostKind::Summary,
-            state: PostState::Speaking,
-            text: String::new(),
-            stance: None,
-            error: None,
-            waiting: None,
-            started_ms: now_ms(),
-            ended_ms: None,
-        });
+        d.posts.push(Post::new(d.round, m, PostKind::Summary));
         vec![(d.members[m].task_id.clone(), text)]
+    }
+
+    /// Research: read the moderator's split once it lands. A split that
+    /// leaves a member out fails, so carrying on asks for it again.
+    fn check_split(d: &mut Discussion) {
+        if d.format != Format::Research || d.round != 1 {
+            return;
+        }
+        let names: Vec<(usize, Vec<String>)> = (0..d.members.len())
+            .filter(|m| *m != d.moderator)
+            .map(|m| (m, vec![d.name(m), d.members[m].label.clone()]))
+            .collect();
+        let Some(post) =
+            d.posts.iter_mut().rev().find(|p| {
+                p.round == 1 && p.stage == Some(Stage::Split) && p.state == PostState::Done
+            })
+        else {
+            return;
+        };
+        let parts = parse_assignments(&post.text, &names);
+        let missing: Vec<usize> = names
+            .iter()
+            .map(|(m, _)| *m)
+            .filter(|m| !parts.contains_key(m))
+            .collect();
+        if !missing.is_empty() {
+            let who: Vec<String> = missing
+                .iter()
+                .map(|m| format!("「{}」", names_of(&names, *m)))
+                .collect();
+            post.state = PostState::Failed;
+            post.error = Some(format!("分工里漏了{}", who.join("、")));
+            return;
+        }
+        d.assignments = (0..d.members.len())
+            .map(|m| parts.get(&m).cloned().unwrap_or_default())
+            .collect();
     }
 
     /// The round is said: the next round, the summary, or a pause.
     fn next(d: &mut Discussion) -> Outbox {
+        Self::check_split(d);
         match after_round(d) {
             Next::Round(round) => {
                 d.round = round;
-                (0..d.members.len())
+                d.speakers(round)
+                    .into_iter()
                     .map(|m| Self::ask(d, m, round))
                     .collect()
             }
             Next::Summarize => Self::start_summary(d),
+            Next::Finalize(_) => Self::finalize(d),
             Next::Pause(reason) => {
+                // Why the split failed says more than "没拆好".
+                let why = d
+                    .posts
+                    .iter()
+                    .rev()
+                    .find(|p| p.stage == Some(Stage::Split) && p.state == PostState::Failed)
+                    .and_then(|p| p.error.clone())
+                    .filter(|_| d.format == Format::Research && d.round == 1);
                 d.state = DiscussionState::Paused;
-                d.note = Some(reason);
+                d.note = Some(why.map(|w| format!("{reason}：{w}")).unwrap_or(reason));
                 Vec::new()
             }
         }
@@ -725,13 +1406,9 @@ impl Discussions {
         if d.in_flight() {
             return Vec::new();
         }
-        let last_summary = d
-            .posts
-            .last()
-            .filter(|p| p.kind == PostKind::Summary)
-            .map(|p| p.state);
         match d.state {
-            DiscussionState::Summarizing => match last_summary {
+            DiscussionState::Summarizing if d.format == Format::Review => Self::finalize(d),
+            DiscussionState::Summarizing => match d.current_summary().map(|p| p.state) {
                 Some(PostState::Done) => {
                     d.state = DiscussionState::Done;
                     Vec::new()
@@ -776,6 +1453,7 @@ impl Discussions {
             };
             let stopped = d.state == DiscussionState::Stopped;
             let summarizing = d.state == DiscussionState::Summarizing;
+            let relay = d.format == Format::Relay;
             // A turn the user started in the member's own session has no post.
             let Some(post) = d
                 .posts
@@ -789,8 +1467,12 @@ impl Discussions {
             post.waiting = None;
             if reason == TurnEndReason::Completed && !text.trim().is_empty() {
                 post.state = PostState::Done;
-                post.stance =
-                    (post.kind == PostKind::Answer && post.round >= 2).then(|| parse_stance(&text));
+                post.stance = (post.kind == PostKind::Answer
+                    && post.round >= 2
+                    && post.stage.is_none()
+                    && !relay)
+                    .then(|| parse_stance(&text));
+                post.verdict = (post.stage == Some(Stage::Review)).then(|| parse_verdict(&text));
                 post.text = text;
             } else {
                 post.state = PostState::Failed;
@@ -804,7 +1486,16 @@ impl Discussions {
                     (_, None) => "这一轮没有正常结束".into(),
                 });
             }
-            Self::advance(d)
+            // Asked by name while talking: it answers the user now.
+            let mut outbox = Vec::new();
+            if let Some(at) = d.pending_replies.iter().position(|m| *m == member) {
+                d.pending_replies.remove(at);
+                if !stopped {
+                    outbox.extend(Self::reply(d, member));
+                }
+            }
+            outbox.extend(Self::advance(d));
+            outbox
         };
         self.after_change(&id, outbox);
     }

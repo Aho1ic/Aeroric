@@ -26,6 +26,29 @@ pub const ACK_PROBES_METHOD: &str = "delegation.ackProbes";
 
 /// A child's result beyond this is cut.
 pub const MAX_RESULT_CHARS: usize = 2000;
+
+/// 2026-11-13 Smart Friend (frontier-roadmap §5.2 form B): `ask_expert`
+/// is a read-only delegation of this built-in role to the expert model.
+pub const EXPERT_ROLE: &str = "expert";
+/// Questions one parent turn may ask.
+pub const EXPERT_ASKS_PER_TURN: usize = 2;
+/// How long `ask_expert` waits for the answer; past it the answer comes
+/// back like any delegation result.
+pub const EXPERT_MINUTES: u32 = 10;
+
+/// The model `ask_expert` consults, set once for every session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpertChoice {
+    /// The catalog id of its Agent configuration.
+    pub configuration_id: String,
+    /// "claude" or "codex".
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// "Claude 官方 · opus".
+    pub label: String,
+}
 /// The minutes a delegation may run when its contract names none.
 pub const DEFAULT_MINUTES: u32 = 30;
 

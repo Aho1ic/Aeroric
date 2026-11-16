@@ -191,6 +191,12 @@ pub fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) 
                             },
                         );
                     }
+                    // Code mode wraps MCP calls in an `exec` cell; name the
+                    // card by the tools it calls, as the live card is.
+                    let name = match raw_value.and_then(|v| v.as_str()) {
+                        Some(code) if name == "exec" => code_mode_tools(code).unwrap_or(name),
+                        _ => name,
+                    };
                     let input = match raw_value {
                         Some(serde_json::Value::String(raw)) => {
                             serde_json::from_str::<serde_json::Value>(raw)
@@ -250,6 +256,29 @@ pub fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) 
 const SUBAGENT_TOOL: &str = "Agent";
 
 /// What a multi-agent call does, if it is one.
+/// The MCP tools a code-mode `exec` cell calls (`tools.mcp__server__tool(`),
+/// as `server.tool`, in order and without repeats; None when it calls none.
+fn code_mode_tools(code: &str) -> Option<String> {
+    let mut found: Vec<String> = Vec::new();
+    for (at, _) in code.match_indices("tools.mcp__") {
+        let rest = &code[at + "tools.mcp__".len()..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .unwrap_or(rest.len());
+        let Some((server, tool)) = rest[..end].split_once("__") else {
+            continue;
+        };
+        if server.is_empty() || tool.is_empty() {
+            continue;
+        }
+        let label = format!("{server}.{tool}");
+        if !found.contains(&label) {
+            found.push(label);
+        }
+    }
+    (!found.is_empty()).then(|| found.join(", "))
+}
+
 fn multi_agent_label(name: &str, namespace: Option<&str>) -> Option<&'static str> {
     let ours = matches!(
         namespace,

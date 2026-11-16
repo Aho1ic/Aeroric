@@ -22,11 +22,13 @@ pub mod live_capability;
 pub mod memory;
 pub mod project;
 pub mod review;
+pub mod schedule;
 pub mod session;
 pub mod session_live;
 pub mod submission;
 pub mod task;
 pub mod terminal;
+pub mod todo;
 pub mod turn_ledger;
 pub mod wiki;
 

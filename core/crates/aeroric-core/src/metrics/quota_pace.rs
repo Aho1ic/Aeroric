@@ -6,6 +6,8 @@
 //! minutes and keeps the readings here. The pace is the recent speed when
 //! the last hour has at least [`RECENT_READINGS`] readings, else the
 //! window's average; it only reports, it never switches anything.
+//! 配额感知调度 (2026-11-14) reads the same readings through [`state`] to put
+//! a 定时任务 off while the subscription is used up.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -178,6 +180,55 @@ pub fn pace(readings: &[Reading], window: &str, now_ms: i64) -> Option<WindowPac
     Some(result)
 }
 
+/// 配额感知调度 (2026-11-14): what the readings say about starting work now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuotaState {
+    /// Room to spare, or no reading fresh enough to go on.
+    Fine,
+    /// At this pace a window runs out (seconds since the epoch) before its
+    /// reset; the earlier one when both do.
+    Fast { exhaust_at: i64 },
+    /// A window is used up until its reset (seconds since the epoch); the
+    /// later one when both are.
+    Out { reset_at: i64 },
+}
+
+/// The subscription's state from readings no older than `fresh_ms`. A used-up
+/// reading whose reset has passed is not used up.
+pub fn state(readings: &[Reading], now_ms: i64, fresh_ms: i64) -> QuotaState {
+    let mut out: Option<i64> = None;
+    let mut fast: Option<i64> = None;
+    for window in ["primary", "secondary"] {
+        let Some(latest) = readings
+            .iter()
+            .filter(|r| r.window == window)
+            .max_by_key(|r| r.at_ms)
+            .filter(|r| now_ms - r.at_ms <= fresh_ms)
+        else {
+            continue;
+        };
+        if latest.used_percent >= 100 {
+            if latest.reset_at * 1000 > now_ms {
+                out = out.max(Some(latest.reset_at));
+            }
+            continue;
+        }
+        if let Some(WindowPace {
+            verdict: Verdict::Fast,
+            exhaust_at: Some(at),
+            ..
+        }) = pace(readings, window, now_ms)
+        {
+            fast = Some(fast.map_or(at, |f| f.min(at)));
+        }
+    }
+    match (out, fast) {
+        (Some(reset_at), _) => QuotaState::Out { reset_at },
+        (None, Some(exhaust_at)) => QuotaState::Fast { exhaust_at },
+        (None, None) => QuotaState::Fine,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +312,42 @@ mod tests {
         let p = pace(&[reading(start + 10_000, 1)], "primary", start + 10_000).unwrap();
         assert_eq!(p.verdict, Verdict::Unknown);
         assert!(pace(&[], "secondary", now).is_none());
+    }
+
+    #[test]
+    fn the_state_trusts_fresh_readings_only_and_a_passed_reset_is_not_used_up() {
+        let fresh = 15 * 60 * 1000;
+        let now = 9 * HOUR;
+        let mut week = reading(now, 100);
+        week.window = "secondary".into();
+        week.reset_at = RESET_S + 3 * 24 * 3600;
+        // Both used up: wait for the later reset.
+        assert_eq!(
+            state(&[reading(now, 100), week.clone()], now, fresh),
+            QuotaState::Out {
+                reset_at: week.reset_at
+            }
+        );
+        // Too old to trust.
+        assert_eq!(
+            state(&[reading(now - fresh - 1, 100)], now, fresh),
+            QuotaState::Fine
+        );
+        // Taken just before the reset, read just after it.
+        let after = RESET_S * 1000 + 30_000;
+        assert_eq!(
+            state(&[reading(after - 60_000, 100)], after, fresh),
+            QuotaState::Fine
+        );
+        // 60% two hours into five: fast, not out.
+        let early = 7 * HOUR;
+        assert_eq!(
+            state(&[reading(early, 60)], early, fresh),
+            QuotaState::Fast {
+                exhaust_at: (early + HOUR * 4 / 3) / 1000
+            }
+        );
+        assert_eq!(state(&[reading(now, 40)], now, fresh), QuotaState::Fine);
     }
 
     #[test]

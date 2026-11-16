@@ -12,7 +12,7 @@ Claude Code、Codex、omp 跑在真 PTY 里时，原生界面只能事后读会�
   - Claude Code：`claude` CLI 的 stream-json 控制协议（`--output-format stream-json --input-format stream-json --permission-prompt-tool stdio`，control_request/response）。协议无公开规范，以 Claude Agent SDK 源码为准。
   - Codex：`codex app-server` 的 stdio JSON-RPC，宿主内共享一个进程、多会话；仓库在 `contracts/codex/app-server-<版本>/` 保存其 Schema 快照。
   - omp：`omp --mode rpc`（`agents::launch::omp_rpc_args`），提示词走协议，不作位置参数。
-  - DSH：宿主结构化通道。
+  - DSH：本机新会话走 `dsh acp`（通用 ACP 驱动，见 [通用 ACP 驱动](../feature/2026-11-08-acp-dialects.md)）；PTY 里已在跑的旧会话仍走宿主结构化通道。
 - core 的会话事件模型参照 ACP `session/update`（消息片段、思考、工具调用与更新、计划、权限请求、子 Agent、用量、配置变更、错误、未识别内容），经事件主题 `session.update` 发给客户端。
 - 不再有"终端/原生模式"切换；会话怎么呈现由 Agent 族决定。
 - **呈现层操作**（滚动、折叠、切换面板或窗口）不得改变会话进程、会话 id、权限、模型或 cwd。改变模型、权限、effort 只能经驱动的显式 configure，从下一轮生效；中断只停止当前一轮，不结束会话。
