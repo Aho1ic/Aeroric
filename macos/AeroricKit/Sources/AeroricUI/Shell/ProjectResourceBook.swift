@@ -46,6 +46,37 @@ public enum ResourceReadStatus: Equatable, Sendable {
         }
     }
 }
+/// Q-R4 (2026-11-13): a local PDF or image the centre preview shows itself,
+/// read straight from this Mac. `revision` changes on every load so 重新读取
+/// rebuilds the viewer.
+public struct ResourceMedia: Hashable, Sendable {
+    public enum Kind: String, Hashable, Sendable { case pdf, image }
+    public let kind: Kind
+    public let url: URL
+    public let revision: UUID
+    public init(kind: Kind, url: URL, revision: UUID = UUID()) {
+        self.kind = kind; self.url = url; self.revision = revision
+    }
+    public static func kind(forExtension ext: String) -> Kind? {
+        switch ext.lowercased() {
+        case "pdf": .pdf
+        case "png", "jpg", "jpeg", "gif", "webp", "heic", "tif", "tiff", "bmp": .image
+        default: nil
+        }
+    }
+    /// The file behind a tree path on this Mac: inside a linked folder, or
+    /// inside the project when the project's folder is local. Nil for remote
+    /// projects, whose host only sends text back.
+    public static func localURL(path: String, projectPath: String) -> URL? {
+        if let absolute = LinkedFolderPath.absolute(path) { return URL(fileURLWithPath: absolute) }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: projectPath, isDirectory: &isDir), isDir.boolValue else {
+            return nil
+        }
+        return URL(fileURLWithPath: projectPath).appendingPathComponent(path)
+    }
+}
+
 public struct ResourcePreviewLine: Identifiable, Equatable, Sendable {
     public enum Kind: Equatable, Sendable { case plain, metadata, context, added, removed }
     public let id: Int
@@ -121,6 +152,8 @@ public struct ProjectResourceScene: Sendable {
     public var previewState: ResourceReadStatus = .notLoaded
     public var previewText: String?
     public var previewLines: [ResourcePreviewLine] = []
+    /// Set instead of `previewText` for a local PDF or image (Q-R4).
+    public var previewMedia: ResourceMedia?
     public var positions: [ResourcePreviewTarget: Int] = [:]
     /// Inline diff under a change row (M3), keyed by `ResourceGitChange.id`.
     /// Separate from the centre preview so expanding a row never replaces it.
@@ -298,6 +331,7 @@ public final class ProjectResourceBook {
                 value.previewRequest = nil
                 value.previewText = nil
                 value.previewLines = []
+                value.previewMedia = nil
                 value.previewState = .notLoaded
             }
             value.previewActive = true
@@ -471,6 +505,31 @@ public final class ProjectResourceBook {
             }
             return
         }
+        // Q-R4: PDFs and images are read on this Mac, not through the host.
+        if target.kind == .file,
+           let kind = ResourceMedia.kind(forExtension: (target.path as NSString).pathExtension) {
+            guard let url = ResourceMedia.localURL(path: target.path, projectPath: projectPath) else {
+                edit(target.projectID) {
+                    $0.previewRequest = nil
+                    $0.previewState = .unsupported("远程项目的 PDF 和图片还不能在这里查看；宿主只回传文本。")
+                }
+                return
+            }
+            guard FileManager.default.isReadableFile(atPath: url.path) else {
+                edit(target.projectID) {
+                    $0.previewRequest = nil; $0.previewMedia = nil
+                    $0.previewState = .failed("文件不在了，或没有读取权限")
+                }
+                return
+            }
+            edit(target.projectID) {
+                $0.previewRequest = nil
+                $0.previewText = nil; $0.previewLines = []
+                $0.previewMedia = ResourceMedia(kind: kind, url: url)
+                $0.previewState = .loaded
+            }
+            return
+        }
         let request = UUID()
         edit(target.projectID) { $0.previewRequest = request; $0.previewState = .loading }
         guard let reader else {
@@ -479,9 +538,7 @@ public final class ProjectResourceBook {
         }
         let ext = (target.path as NSString).pathExtension.lowercased()
         if target.kind == .file {
-            if [
-                "png", "jpg", "jpeg", "gif", "webp", "heic", "pdf", "zip", "ttf", "woff", "woff2",
-            ].contains(ext) {
+            if ["zip", "ttf", "woff", "woff2"].contains(ext) {
                 edit(target.projectID) {
                     $0.previewState = .unsupported("此类型尚无已接入的只读查看器，不会自动外开或授权。")
                 }
