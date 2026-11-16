@@ -25,8 +25,8 @@ use parking_lot::Mutex;
 use aeroric_protocol::checkpoint::{HandoffReason, Obligation, ObligationSource, ObligationState};
 use aeroric_protocol::delegation::{
     permission_rank, AcceptanceResult, AgentChoice, AuditAction, AuditEntry, Contract,
-    DelegationCard, DelegationState, Origin, ReputationRow, Resolved, Role, Workspace,
-    DEFAULT_MINUTES, MAX_RESULT_CHARS,
+    DelegationCard, DelegationState, ExpertChoice, Origin, ReputationRow, Resolved, Role,
+    Workspace, DEFAULT_MINUTES, EXPERT_ROLE, MAX_RESULT_CHARS,
 };
 
 pub use super::turn_changes::TurnSettled;
@@ -150,6 +150,19 @@ struct State {
     pending_return: HashSet<String>,
     /// In-memory audit when no directory is set (tests).
     audit: Vec<AuditEntry>,
+    /// When each session's current turn began (expert questions per turn).
+    turn_started: HashMap<String, u64>,
+}
+
+/// What `ask_expert` gets back when it looks again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExpertAnswer {
+    /// The expert is still at it.
+    Pending,
+    /// The whole answer; the card counts as sent, so it is not sent again.
+    Answered { text: String, label: String },
+    /// It did not answer; the card counts as sent too.
+    Failed(String),
 }
 
 pub struct Delegations {
@@ -224,6 +237,98 @@ impl Delegations {
     pub fn delete_role(&self, id: &str) -> Result<(), String> {
         let dir = self.dir().ok_or("角色库没有存放位置")?;
         roles::delete(&dir, id)
+    }
+
+    // MARK: expert (2026-11-13, Smart Friend)
+
+    /// The model `ask_expert` consults; `None` until the user sets one.
+    pub fn expert(&self) -> Option<ExpertChoice> {
+        let path = self.dir()?.join("expert.json");
+        std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    }
+
+    /// Set (or, with `None`, clear) the expert.
+    pub fn set_expert(&self, choice: Option<ExpertChoice>) -> Result<(), String> {
+        let dir = self.dir().ok_or("委派没有存放位置")?;
+        let path = dir.join("expert.json");
+        let Some(choice) = choice else {
+            return match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+                _ => Ok(()),
+            };
+        };
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let tmp = dir.join(".expert.json.tmp");
+        let bytes = serde_json::to_vec_pretty(&choice).map_err(|e| e.to_string())?;
+        std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    }
+
+    /// The expert questions `parent`'s agent asked since its turn began.
+    pub fn expert_asks_this_turn(&self, parent: &str) -> usize {
+        let mut state = self.state.lock();
+        self.ensure_loaded(&mut state, parent);
+        let since = state.turn_started.get(parent).copied().unwrap_or(0);
+        state.by_parent.get(parent).map_or(0, |entries| {
+            entries
+                .iter()
+                .filter(|e| {
+                    e.card.origin == Origin::Session
+                        && e.card.contract.role.as_deref() == Some(EXPERT_ROLE)
+                        && e.card.created_ms >= since
+                })
+                .count()
+        })
+    }
+
+    /// The expert's answer to delegation `id`, once it is in. Taking it
+    /// marks the card sent: the answer went back as the tool's result, so
+    /// it is not sent again as a delegation message.
+    pub fn take_expert_answer(
+        &self,
+        parent: &str,
+        id: &str,
+    ) -> Result<ExpertAnswer, DelegationError> {
+        let mut state = self.state.lock();
+        self.ensure_loaded(&mut state, parent);
+        let entry = find_mut(&mut state, parent, id).ok_or(DelegationError::NotFound)?;
+        if entry.card.state.is_open() {
+            return Ok(ExpertAnswer::Pending);
+        }
+        let answer = match entry.card.state {
+            DelegationState::Reported => {
+                let text = Some(entry.last_text.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .or_else(|| entry.card.result.clone())
+                    .unwrap_or_default();
+                if text.is_empty() {
+                    ExpertAnswer::Failed("专家没有给出回答".into())
+                } else {
+                    ExpertAnswer::Answered {
+                        text,
+                        label: entry.card.harness_label.clone(),
+                    }
+                }
+            }
+            other => ExpertAnswer::Failed(
+                entry
+                    .card
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| format!("专家没有答完（{other:?}）")),
+            ),
+        };
+        if !entry.card.sent {
+            clear_unsent(&mut entry.card);
+            entry.card.sent = true;
+            let audit = audit_of(&entry.card, AuditAction::Send, "ask_expert", "");
+            self.record(&mut state, audit);
+            drop(state);
+            self.publish(parent, id);
+        }
+        Ok(answer)
     }
 
     // MARK: reads
@@ -901,7 +1006,16 @@ impl Delegations {
         entry.card.state = DelegationState::Running;
         if settled.reason != TurnEndReason::Completed {
             drop(state);
-            self.fail(&parent, &id, "子会话的回合没有正常结束");
+            // The child's own error says why (a gateway refusing the model,
+            // a lost login); without it the parent and the expert tool only
+            // know that it failed.
+            let reason = match settled.error.as_deref().map(str::trim) {
+                Some(error) if !error.is_empty() => {
+                    format!("子会话的回合没有正常结束：{}", cut(error, FAILURE_CHARS))
+                }
+                _ => "子会话的回合没有正常结束".to_string(),
+            };
+            self.fail(&parent, &id, &reason);
             return;
         }
         if let Some(diff) = &settled.diff {
@@ -1077,6 +1191,7 @@ impl Delegations {
             SessionUpdateKind::TurnStarted { .. } => {
                 let mut state = self.state.lock();
                 state.text.remove(task);
+                state.turn_started.insert(task.clone(), now_ms());
                 if let Some((parent, id)) = state.children.get(task).cloned() {
                     if let Some(entry) = find_mut(&mut state, &parent, &id) {
                         entry.calls.clear();
@@ -1280,6 +1395,8 @@ impl Delegations {
 /// The line a card's error gets when its result did not reach the parent;
 /// it sits under any error of the card's own and goes when it is resent.
 const UNSENT: &str = "没送到父会话：";
+/// A failed child's own error is cut to this many characters on the card.
+const FAILURE_CHARS: usize = 300;
 
 fn mark_unsent(card: &mut DelegationCard, error: &str) {
     clear_unsent(card);

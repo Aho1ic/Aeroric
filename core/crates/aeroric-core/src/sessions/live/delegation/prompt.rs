@@ -79,6 +79,17 @@ fn state_text(card: &DelegationCard) -> &'static str {
     }
 }
 
+/// 2026-11-13 Smart Friend: the expert's instruction around the parent's
+/// question.
+pub fn expert_question(question: &str) -> String {
+    format!(
+        "主会话在做这项工作时遇到了难点，请你作为专家回答下面的问题。\n\n<question>\n{}\n</question>\n\n\
+         先看交接清单了解背景；需要时可以读项目里的文件核对，但不要修改任何文件。\
+         回答要具体、能直接照做。信息不够、没法确定时，直接说明缺什么，建议主会话先去读哪个文件或跑哪条命令再来问，不要编造。",
+        question.trim()
+    )
+}
+
 /// The message that brings results back to the parent.
 pub fn results(cards: &[DelegationCard]) -> String {
     let mut out = if cards.len() == 1 {

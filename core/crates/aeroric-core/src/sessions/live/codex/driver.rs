@@ -235,6 +235,10 @@ impl SessionDriver for CodexSession {
         let mut entry = server.entry();
         entry["required"] = json!(true);
         entry["startup_timeout_sec"] = json!(20);
+        // 2026-11-13 Smart Friend: `ask_expert` waits up to EXPERT_MINUTES
+        // for the answer; Codex's own limit for a tool call is 60 seconds.
+        entry["tool_timeout_sec"] =
+            json!(u64::from(aeroric_protocol::delegation::EXPERT_MINUTES) * 60 + 60);
         // CU 2026-10-31: under 每次询问 Codex asks before each MCP tool call
         // (an `mcpServer/elicitation/request` Aeroric declined), so
         // memory_recall came back "user rejected". These tools only touch
