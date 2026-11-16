@@ -344,3 +344,45 @@ fn an_import_of_a_folded_module_points_at_the_page_it_went_into() {
     assert_eq!(other.files.len(), 4, "the smallest, one merge at a time");
     assert_eq!(deps(module(&index, "c")), ["c::其他"]);
 }
+
+/// B6 (2026-11-13): the code version chain names a change by the innermost
+/// definition around it, private and nested ones included.
+#[test]
+fn file_definitions_name_nested_and_private_ones_with_their_span() {
+    use super::code_index::file_definitions;
+    let names = |path: &str, src: &str| -> Vec<(String, u32, u32)> {
+        file_definitions(path, src.as_bytes())
+            .into_iter()
+            .map(|d| (d.name, d.line, d.end))
+            .collect()
+    };
+    assert_eq!(
+        names(
+            "a.py",
+            "class Trainer:\n    def step(self):\n        pass\n\ndef _helper():\n    pass\n"
+        ),
+        vec![
+            ("Trainer".into(), 1, 3),
+            ("Trainer::step".into(), 2, 3),
+            ("_helper".into(), 5, 6)
+        ]
+    );
+    assert_eq!(
+        names(
+            "a.ts",
+            "class Store {\n  load() {\n    return 1;\n  }\n}\nconst run = () => 2;\n"
+        ),
+        vec![
+            ("Store".into(), 1, 5),
+            ("Store::load".into(), 2, 4),
+            ("run".into(), 6, 6)
+        ]
+    );
+    let swift = names(
+        "a.swift",
+        "struct Page {\n    func body() -> Int {\n        1\n    }\n}\n",
+    );
+    assert_eq!(swift.first().map(|d| d.0.as_str()), Some("Page"));
+    assert!(swift.iter().any(|d| d.0 == "Page::body"), "{swift:?}");
+    assert!(names("a.txt", "x").is_empty());
+}

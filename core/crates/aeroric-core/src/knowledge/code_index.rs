@@ -479,6 +479,132 @@ fn parse(lang: Lang, path: &str, src: &[u8]) -> Parsed {
     out
 }
 
+/// Q-R6 (2026-11-13): one file's top-level symbols, for the reference
+/// library's per-file index; empty for a language without a parser.
+pub fn file_symbols(path: &str, src: &[u8]) -> Vec<Symbol> {
+    match Lang::of(path) {
+        Some(lang) => parse(lang, path, src).symbols,
+        None => Vec::new(),
+    }
+}
+
+/// B6 (2026-11-13): a definition with the lines it spans, private and
+/// nested ones too — `TurnLedger::planned` — for the code version chain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Definition {
+    pub name: String,
+    pub line: u32,
+    pub end: u32,
+}
+
+/// The node kinds that are definitions, and the field naming each.
+fn definition_name<'t>(
+    lang: Lang,
+    node: tree_sitter::Node<'t>,
+) -> Option<(bool, tree_sitter::Node<'t>)> {
+    // (is a container whose members take its name as a prefix, name node)
+    let field = |f: &str| node.child_by_field_name(f);
+    match (lang, node.kind()) {
+        (Lang::Rust, "function_item" | "function_signature_item" | "macro_definition") => {
+            field("name").map(|n| (false, n))
+        }
+        (Lang::Rust, "struct_item" | "enum_item" | "union_item" | "trait_item" | "mod_item") => {
+            field("name").map(|n| (true, n))
+        }
+        (Lang::Rust, "impl_item") => field("type").map(|n| (true, n)),
+        (Lang::Python, "function_definition") => field("name").map(|n| (false, n)),
+        (Lang::Python, "class_definition") => field("name").map(|n| (true, n)),
+        (
+            Lang::Swift,
+            "function_declaration" | "init_declaration" | "protocol_function_declaration",
+        ) => field("name").map(|n| (false, n)),
+        (Lang::Swift, "class_declaration" | "protocol_declaration") => {
+            field("name").map(|n| (true, n))
+        }
+        (
+            Lang::TypeScript | Lang::Tsx,
+            "function_declaration" | "method_definition" | "generator_function_declaration",
+        ) => field("name").map(|n| (false, n)),
+        (Lang::TypeScript | Lang::Tsx, "variable_declarator")
+            if field("value").is_some_and(|v| {
+                matches!(
+                    v.kind(),
+                    "arrow_function" | "function_expression" | "function"
+                )
+            }) =>
+        {
+            field("name").map(|n| (false, n))
+        }
+        (
+            Lang::TypeScript | Lang::Tsx,
+            "class_declaration"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "abstract_class_declaration",
+        ) => field("name").map(|n| (true, n)),
+        _ => None,
+    }
+}
+
+fn collect_definitions(
+    lang: Lang,
+    node: tree_sitter::Node,
+    src: &[u8],
+    prefix: &str,
+    out: &mut Vec<Definition>,
+) {
+    for child in named_children(node) {
+        let mut inner = prefix.to_string();
+        if let Some((container, name)) = definition_name(lang, child) {
+            // `impl Foo<T>` is `Foo`.
+            let raw = text(name, src);
+            let short = raw.split(['<', ' ']).next().unwrap_or(raw);
+            let full = if prefix.is_empty() {
+                short.to_string()
+            } else {
+                format!("{prefix}::{short}")
+            };
+            if !short.is_empty() {
+                out.push(Definition {
+                    name: full.clone(),
+                    line: child.start_position().row as u32 + 1,
+                    end: child.end_position().row as u32 + 1,
+                });
+                if container {
+                    inner = full;
+                }
+            }
+        }
+        collect_definitions(lang, child, src, &inner, out);
+    }
+}
+
+/// B6: every definition of one file, nested ones named by what holds them;
+/// empty for a language without a parser.
+pub fn file_definitions(path: &str, src: &[u8]) -> Vec<Definition> {
+    let Some(lang) = Lang::of(path) else {
+        return Vec::new();
+    };
+    let language: tree_sitter::Language = match lang {
+        Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
+        Lang::Swift => tree_sitter_swift::LANGUAGE.into(),
+        Lang::Python => tree_sitter_python::LANGUAGE.into(),
+        Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+        Lang::Other => return Vec::new(),
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&language).is_err() {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(src, None) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    collect_definitions(lang, tree.root_node(), src, "", &mut out);
+    out
+}
+
 fn push_symbol(out: &mut Parsed, name: &str, kind: &str, path: &str, line: u32) {
     if !name.is_empty() {
         out.symbols.push(Symbol {
