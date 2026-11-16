@@ -58,7 +58,7 @@ fn tools() -> Value {
         },
         {
             "name": "delegations",
-            "description": "查看你发起过的委派及其状态、结论和验收结果。",
+            "description": "查看你发起过的委派及其状态、结论和验收结果；returnDelivery 说明结论有没有送到你这里（delivered 才是已送达，unknown 是结果不明）。",
             "inputSchema": {"type": "object", "properties": {}}
         },
         {

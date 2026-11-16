@@ -1794,9 +1794,30 @@ async fn a_delegation_runs_in_a_child_and_its_result_comes_back() {
         delivered["label"]
             .as_str()
             .unwrap()
-            .starts_with("委派 · [Aeroric 委派结果]"),
+            .starts_with("委派结果 · 查 reqwest"),
         "{delivered}"
     );
+    // A1: the card follows that delivery, and names it as its source.
+    assert_eq!(
+        delivered["sourceRef"],
+        format!("delegation:task-1/{id}"),
+        "{delivered}"
+    );
+    let deadline = std::time::Instant::now() + WAIT;
+    let card = loop {
+        let got = host
+            .call("delegation.list", json!({"taskId": "task-1"}))
+            .await
+            .unwrap();
+        if got["delegations"][0]["returnDelivery"]["state"] == "delivered" {
+            break got["delegations"][0].clone();
+        }
+        assert!(std::time::Instant::now() < deadline, "{got}");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(card["returnDelivery"]["id"], delivered["id"]);
+    assert_eq!(card["returnDelivery"]["evidence"], "protocol");
+    assert_eq!(card["sent"], true);
     let gone = host
         .call("delivery.resend", json!({"id": "nope"}))
         .await

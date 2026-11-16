@@ -197,6 +197,8 @@ impl StructuredExecutor {
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&deliveries) as Arc<dyn LiveStatusSink>;
         let delegations = super::delegation::Delegations::new(sink);
         delegations.set_registry(Arc::clone(&registry));
+        // A1: result cards go through the queue and follow their delivery.
+        delegations.follow(&deliveries);
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&delegations) as Arc<dyn LiveStatusSink>;
         let discussions = super::discussion::Discussions::new(sink);
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&discussions) as Arc<dyn LiveStatusSink>;

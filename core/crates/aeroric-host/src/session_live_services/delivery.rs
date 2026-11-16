@@ -88,30 +88,30 @@ pub(super) fn label(kind: &str, text: &str) -> String {
 }
 
 /// Queue something Aeroric sends on its own; it goes when the session's
-/// turn has ended (Q-S5).
+/// turn has ended (Q-S5). The record is returned so the caller can follow
+/// it (A1); `source_ref` says what it came from. Delegation results do not
+/// come here: core queues them itself and binds their cards.
 pub(super) fn enqueue_internal(
     live: &Live,
     task_id: &str,
     kind: DeliveryKind,
     text: String,
-) -> Result<(), String> {
+    source_ref: Option<&str>,
+) -> Result<wire::Delivery, String> {
     let name = match kind {
         DeliveryKind::Delegation => "委派",
         DeliveryKind::Review => "审查",
         DeliveryKind::Handoff => "交接",
         DeliveryKind::User => "你的消息",
     };
-    live.executor
-        .deliveries()
-        .enqueue(
-            task_id,
-            kind,
-            DeliveryMode::AfterTurn,
-            &label(name, &text),
-            &text,
-            None,
-        )
-        .map(|_| ())
+    live.executor.deliveries().enqueue(
+        task_id,
+        kind,
+        DeliveryMode::AfterTurn,
+        &label(name, &text),
+        &text,
+        source_ref,
+    )
 }
 
 pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {

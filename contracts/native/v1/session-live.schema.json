@@ -1189,6 +1189,41 @@
                     "result": {
                       "type": "string"
                     },
+                    "returnDelivery": {
+                      "properties": {
+                        "evidence": {
+                          "enum": [
+                            "protocol",
+                            "echo",
+                            "turnStarted",
+                            "transcript"
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "enum": [
+                            "waiting",
+                            "sending",
+                            "accepted",
+                            "delivered",
+                            "failed",
+                            "unknown",
+                            "paused",
+                            "withdrawn"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "state"
+                      ],
+                      "type": "object"
+                    },
                     "reworks": {
                       "type": "integer"
                     },

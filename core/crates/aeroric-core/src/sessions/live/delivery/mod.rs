@@ -48,6 +48,9 @@ pub enum DeliveryError {
     WrongState,
 }
 
+/// A1: told of every change to a queued item, after it is kept.
+pub type Watcher = Arc<dyn Fn(&Delivery) + Send + Sync>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Resume,
@@ -68,6 +71,8 @@ pub struct Deliveries {
     died_in_hand: Mutex<HashSet<String>>,
     /// R1-4: how long a hand-over may wait for any answer before it is unknown.
     send_timeout: Mutex<std::time::Duration>,
+    /// A1: who follows the items (the delegation result cards).
+    watcher: Mutex<Option<Watcher>>,
     me: Mutex<Weak<Self>>,
 }
 
@@ -85,6 +90,7 @@ impl Deliveries {
             in_hand: Mutex::default(),
             died_in_hand: Mutex::default(),
             send_timeout: Mutex::new(SEND_TIMEOUT),
+            watcher: Mutex::new(None),
             me: Mutex::new(Weak::new()),
         });
         *this.me.lock() = Arc::downgrade(&this);
@@ -97,6 +103,13 @@ impl Deliveries {
 
     pub fn set_registry(&self, registry: Arc<DriverRegistry>) {
         *self.registry.lock() = Some(registry);
+    }
+
+    /// A1: call `watcher` with every change to an item, outside the
+    /// queue's locks. It must not call back into the queue while holding a
+    /// lock the queue's callers hold.
+    pub fn set_watcher(&self, watcher: Watcher) {
+        *self.watcher.lock() = Some(watcher);
     }
 
     /// Open the queue in `dir` (the data directory). What was in flight
@@ -168,6 +181,37 @@ impl Deliveries {
         text: &str,
         source_ref: Option<&str>,
     ) -> Result<Delivery, String> {
+        self.add(task_id, kind, mode, label, text, source_ref, false)
+    }
+
+    /// A1: like [`Self::enqueue`], but while an item of this session with
+    /// the same `source_ref` is still on its way (waiting, sending,
+    /// accepted, paused) that item is returned and nothing is added: asking
+    /// twice for the same thing queues it once. Only for refs that name one
+    /// thing (`delegation:<parent>/<id>`); the user's `handoff` is not one.
+    pub fn enqueue_once(
+        &self,
+        task_id: &str,
+        kind: DeliveryKind,
+        mode: DeliveryMode,
+        label: &str,
+        text: &str,
+        source_ref: &str,
+    ) -> Result<Delivery, String> {
+        self.add(task_id, kind, mode, label, text, Some(source_ref), true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add(
+        &self,
+        task_id: &str,
+        kind: DeliveryKind,
+        mode: DeliveryMode,
+        label: &str,
+        text: &str,
+        source_ref: Option<&str>,
+        once: bool,
+    ) -> Result<Delivery, String> {
         let now = now_ms();
         let mut item = Delivery {
             id: format!("dv-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]),
@@ -188,6 +232,21 @@ impl Deliveries {
         let mut changed = Vec::new();
         {
             let mut store = self.store.lock();
+            if once {
+                let same = store.of_task(task_id).into_iter().find(|d| {
+                    d.source_ref.as_deref() == source_ref
+                        && matches!(
+                            d.state,
+                            DeliveryState::Waiting
+                                | DeliveryState::Sending
+                                | DeliveryState::Accepted
+                                | DeliveryState::Paused
+                        )
+                });
+                if let Some(same) = same {
+                    return Ok(same);
+                }
+            }
             item.created_ms = store.next_created(now);
             store
                 .add(&item)
@@ -452,6 +511,10 @@ impl Deliveries {
     }
 
     fn publish(&self, item: &Delivery) {
+        let watcher = self.watcher.lock().clone();
+        if let Some(watcher) = watcher {
+            watcher(item);
+        }
         let registry = self.registry.lock().clone();
         if let Some(log) = registry.and_then(|r| r.log(&item.task_id)) {
             let appended = log.push(

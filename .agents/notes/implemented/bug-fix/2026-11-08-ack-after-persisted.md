@@ -16,7 +16,7 @@ New-addition-1102 复核研究（gugu 的"持久提交成功之后才 ACK"）指
   - 已入队条目之后的状态变化仍用 `Store::save`：写库失败时保留内存状态并记日志（[统一投递队列](../feature/2026-11-02-delivery-queue.md) 的原规则，对已有条目不变）。
   - 宿主侧：`session.prompt` 回 `IO_ERROR`；内部投递 `enqueue_internal` 返回 `Result`，委派和审查的 `prompt` 把它往上传；"发送审查意见"用 `change_review::take_comments(task, send)`，排上队才把评论标为已发送。
 - **委派**：
-  - 发送失败（包括上面的入队失败）时 `unsend`：撤回 `sent`，卡片 `error` 加一行"没送到父会话：原因"，可以再点发送；自动合批同样处理，之后的触发会再合批一次。
+  - 入队失败时 `unsend`：撤回 `sent`，卡片 `error` 加一行"没送到父会话：原因"，可以再点发送；自动合批同样处理，之后的触发会再合批一次。已入队、之后投递失败的结果不再 `unsend`，卡片跟随投递记录，见 [A1](./2026-11-16-a1-delegation-card-follows-delivery.md)。
   - 这一行挂在卡片自己的错误下面，重新发送时去掉，不覆盖失败卡片原有的错误。
   - 审计里的"发送"记录不撤回：它记的是用户或 Aeroric 发起了发送。
 
@@ -34,5 +34,5 @@ New-addition-1102 复核研究（gugu 的"持久提交成功之后才 ACK"）指
   - 卡片的 `error` 可能是两行（原有失败原因加没送到）；界面原样显示。
 - **验证**：
   - `delivery::tests::an_item_that_cannot_be_written_down_is_not_queued`（原复现用例改为反向断言）；
-  - `delegation::tests::a_send_that_never_arrives_can_be_sent_again`；
+  - `delegation::tests::a_result_that_cannot_be_queued_can_be_sent_again`（A1 起改为删掉投递表来让入队失败）；
   - `change_review_tests::comments_wait_and_go_once` 覆盖排不上队时评论仍算未发送。

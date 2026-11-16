@@ -510,3 +510,102 @@ fn an_item_that_cannot_be_written_down_is_not_queued() {
     assert!(refused.starts_with("没能排上队"), "{refused}");
     assert!(queue.list("t").is_empty());
 }
+
+fn once(queue: &Deliveries, task: &str, source: &str, text: &str) -> Delivery {
+    queue
+        .enqueue_once(
+            task,
+            DeliveryKind::Delegation,
+            DeliveryMode::AfterTurn,
+            "委派结果",
+            text,
+            source,
+        )
+        .unwrap()
+}
+
+/// A1: asking twice for the same thing while it is on its way queues it once;
+/// once it is settled (or lost), asking again is a new item.
+#[test]
+fn the_same_source_on_its_way_is_queued_once() {
+    let (queue, host, _) = rig();
+    host.busy.lock().insert("p".into());
+    let first = once(&queue, "p", "delegation:p/dg-1", "结果");
+    let again = once(&queue, "p", "delegation:p/dg-1", "结果");
+    assert_eq!(again.id, first.id);
+    assert_eq!(queue.list("p").len(), 1);
+    let other = once(&queue, "p", "delegation:p/dg-2", "结果二");
+    assert_ne!(other.id, first.id, "another source is another item");
+    let elsewhere = once(&queue, "q", "delegation:p/dg-1", "结果");
+    assert_ne!(elsewhere.id, first.id, "another session is another item");
+    // `enqueue` itself never merges: the user's `handoff` ref is not one thing.
+    let a = queue
+        .enqueue(
+            "p",
+            DeliveryKind::User,
+            DeliveryMode::AfterTurn,
+            "你",
+            "一",
+            Some("handoff"),
+        )
+        .unwrap();
+    let b = queue
+        .enqueue(
+            "p",
+            DeliveryKind::User,
+            DeliveryMode::AfterTurn,
+            "你",
+            "二",
+            Some("handoff"),
+        )
+        .unwrap();
+    assert_ne!(a.id, b.id);
+
+    host.busy.lock().clear();
+    turn_ended(&queue, "p");
+    wait("first sent", || !host.sent.lock().is_empty());
+    assert_eq!(
+        once(&queue, "p", "delegation:p/dg-1", "结果").id,
+        first.id,
+        "sending"
+    );
+    queue.update(&update(
+        "p",
+        SessionUpdateKind::DeliveryReceipt {
+            id: first.id.clone(),
+            outcome: ReceiptOutcome::Rejected,
+            reason: Some("驱动拒收".into()),
+        },
+    ));
+    assert_eq!(state(&queue, &first.id), DeliveryState::Failed);
+    let after = once(&queue, "p", "delegation:p/dg-1", "结果");
+    assert_ne!(after.id, first.id, "a failed one is not on its way");
+}
+
+/// A1: the watcher hears every change, in the state the queue kept.
+#[test]
+fn the_watcher_hears_every_change() {
+    let (queue, host, _) = rig();
+    let heard: Arc<Mutex<Vec<(String, DeliveryState)>>> = Arc::default();
+    let sink = Arc::clone(&heard);
+    queue.set_watcher(Arc::new(move |d: &Delivery| {
+        sink.lock().push((d.id.clone(), d.state));
+    }));
+    let item = once(&queue, "p", "delegation:p/dg-1", "结果");
+    wait("sent", || host.sent.lock().len() == 1);
+    receipt(&queue, "p", &item.id, ReceiptOutcome::Delivered);
+    let states: Vec<DeliveryState> = heard
+        .lock()
+        .iter()
+        .filter(|(id, _)| *id == item.id)
+        .map(|(_, s)| *s)
+        .collect();
+    assert_eq!(
+        states,
+        vec![
+            DeliveryState::Waiting,
+            DeliveryState::Sending,
+            DeliveryState::Delivered
+        ]
+    );
+}

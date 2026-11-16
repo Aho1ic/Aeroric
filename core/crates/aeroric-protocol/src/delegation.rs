@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::checkpoint::{Acceptance, ObligationState};
+use crate::delivery::{DeliveryEvidence, DeliveryState};
 
 pub const START_METHOD: &str = "delegation.start";
 pub const LIST_METHOD: &str = "delegation.list";
@@ -269,7 +270,8 @@ pub struct DelegationCard {
     /// The result rests on something checkable: a checked criterion or a diff.
     #[serde(default)]
     pub evidence: bool,
-    /// The result went to the parent session.
+    /// The result was handed to the delivery queue for the parent session
+    /// (A1: whether it arrived is `return_delivery`, never this flag).
     #[serde(default)]
     pub sent: bool,
     #[serde(default)]
@@ -281,6 +283,36 @@ pub struct DelegationCard {
     /// B4-3: failure probes that fired on this delegation (never stop it).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub probes: Vec<Probe>,
+    /// A1 (2026-11-16): the delivery that carries the result to the parent,
+    /// as the queue last reported it. The queue is the authority: only its
+    /// changes write this, and a card read back after a restart takes the
+    /// queue's state again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_delivery: Option<ReturnDelivery>,
+}
+
+/// A1: the delivery a result card follows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReturnDelivery {
+    /// The delivery record's id (`dv-…`).
+    pub id: String,
+    pub state: DeliveryState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<DeliveryEvidence>,
+}
+
+impl ReturnDelivery {
+    pub fn of(delivery: &crate::delivery::Delivery) -> Self {
+        Self {
+            id: delivery.id.clone(),
+            state: delivery.state,
+            reason: delivery.reason.clone(),
+            evidence: delivery.evidence,
+        }
+    }
 }
 
 /// B4-3 (§5.5): one failure probe hit. Kinds: `repeat` (the same tool call
@@ -298,9 +330,15 @@ pub struct Probe {
 }
 
 impl DelegationCard {
-    /// Needs the user: it stopped badly, or a probe fired that nobody has seen.
+    /// Needs the user: it stopped badly, a probe fired that nobody has seen,
+    /// or nobody knows whether its result reached the parent (A1).
     pub fn needs_user(&self) -> bool {
-        self.state.needs_user() || self.probes.iter().any(|p| !p.acknowledged)
+        self.state.needs_user()
+            || self.probes.iter().any(|p| !p.acknowledged)
+            || self
+                .return_delivery
+                .as_ref()
+                .is_some_and(|r| r.state == DeliveryState::Unknown)
     }
 
     /// Every criterion checked and none failed (vacuously false with none).
@@ -428,5 +466,37 @@ mod tests {
         assert!(DelegationState::Checking.is_open());
         assert!(!DelegationState::Reported.is_open());
         assert!(DelegationState::OverBudget.needs_user());
+    }
+
+    #[test]
+    fn a_result_nobody_knows_arrived_needs_the_user() {
+        let mut card = DelegationCard {
+            state: DelegationState::Reported,
+            ..DelegationCard::default()
+        };
+        assert!(!card.needs_user());
+        let mut follow = ReturnDelivery {
+            id: "dv-1".into(),
+            state: DeliveryState::Failed,
+            reason: Some("会话打不开".into()),
+            evidence: None,
+        };
+        card.return_delivery = Some(follow.clone());
+        assert!(!card.needs_user(), "failed says why and offers a resend");
+        follow.state = DeliveryState::Unknown;
+        card.return_delivery = Some(follow);
+        assert!(card.needs_user());
+        let wire = serde_json::to_value(&card).unwrap();
+        assert_eq!(wire["returnDelivery"]["state"], "unknown");
+        let old: DelegationCard = serde_json::from_value(serde_json::json!({
+            "delegationId": "dg-1", "parentTaskId": "p", "origin": "user",
+            "contract": serde_json::to_value(Resolved::default()).unwrap(),
+            "state": "reported", "createdMs": 1, "sent": true
+        }))
+        .unwrap();
+        assert_eq!(
+            old.return_delivery, None,
+            "cards from before A1 still decode"
+        );
     }
 }

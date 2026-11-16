@@ -25,10 +25,12 @@ use parking_lot::Mutex;
 use aeroric_protocol::checkpoint::{HandoffReason, Obligation, ObligationSource, ObligationState};
 use aeroric_protocol::delegation::{
     permission_rank, AcceptanceResult, AgentChoice, AuditAction, AuditEntry, Contract,
-    DelegationCard, DelegationState, Origin, ReputationRow, Resolved, Role, Workspace,
-    DEFAULT_MINUTES, MAX_RESULT_CHARS,
+    DelegationCard, DelegationState, Origin, ReputationRow, Resolved, ReturnDelivery, Role,
+    Workspace, DEFAULT_MINUTES, MAX_RESULT_CHARS,
 };
+use aeroric_protocol::delivery::{Delivery, DeliveryKind, DeliveryMode, DeliveryState};
 
+use super::delivery::{Action, Deliveries, DeliveryError};
 pub use super::turn_changes::TurnSettled;
 use super::update::{SessionUpdate, SessionUpdateKind, TurnEndReason};
 use super::{now_ms, DriverRegistry, LiveStatusSink};
@@ -56,7 +58,9 @@ pub trait DelegationHost: Send + Sync {
     fn parent(&self, task_id: &str) -> Option<ParentInfo>;
     /// Start `card`'s child with `prompt` as its first message.
     fn start_child(&self, card: &DelegationCard, prompt: String) -> Result<Child, String>;
-    /// Send `text` to a task as a user message, reopening its session if needed.
+    /// Send `text` to a task as a user message, reopening its session if
+    /// needed (a rework note to the child). Results for the parent go
+    /// through the delivery queue instead (A1, [`Delegations::follow`]).
     fn prompt(&self, task_id: &str, text: String) -> Result<(), String>;
     fn interrupt(&self, task_id: &str);
     /// No turn is running (or no session is open).
@@ -159,9 +163,21 @@ pub struct Delegations {
     checkpoints: Mutex<Option<Weak<super::checkpoint::CheckpointSink>>>,
     dir: Mutex<Option<PathBuf>>,
     watch_every: Mutex<Duration>,
+    /// A1: the queue that carries results to the parent; unset, a result
+    /// cannot be handed over and its card says so.
+    deliveries: Mutex<Option<Weak<Deliveries>>>,
     state: Mutex<State>,
     me: Mutex<Weak<Delegations>>,
 }
+
+/// A1: the source of the delivery carrying `ids`' results to `parent`.
+pub fn source_ref(parent: &str, ids: &[String]) -> String {
+    let mut ids = ids.to_vec();
+    ids.sort();
+    format!("{SOURCE_PREFIX}{parent}/{}", ids.join("+"))
+}
+
+const SOURCE_PREFIX: &str = "delegation:";
 
 impl Delegations {
     pub fn new(inner: Arc<dyn LiveStatusSink>) -> Arc<Self> {
@@ -172,6 +188,7 @@ impl Delegations {
             checkpoints: Mutex::new(None),
             dir: Mutex::new(None),
             watch_every: Mutex::new(Duration::from_secs(5)),
+            deliveries: Mutex::new(None),
             state: Mutex::default(),
             me: Mutex::new(Weak::new()),
         });
@@ -190,6 +207,22 @@ impl Delegations {
 
     pub fn set_checkpoints(&self, checkpoints: Weak<super::checkpoint::CheckpointSink>) {
         *self.checkpoints.lock() = Some(checkpoints);
+    }
+
+    /// A1: results go to the parent through `deliveries`, and each result
+    /// card follows the record that carries it.
+    pub fn follow(&self, deliveries: &Arc<Deliveries>) {
+        *self.deliveries.lock() = Some(Arc::downgrade(deliveries));
+        let me = self.me.lock().clone();
+        deliveries.set_watcher(Arc::new(move |item: &Delivery| {
+            if let Some(this) = me.upgrade() {
+                this.on_delivery(item);
+            }
+        }));
+    }
+
+    fn queue(&self) -> Option<Arc<Deliveries>> {
+        self.deliveries.lock().as_ref().and_then(Weak::upgrade)
     }
 
     /// `<data>/delegations`: `tasks/<parent>.json`, `audit.jsonl`, `roles.json`.
@@ -646,14 +679,31 @@ impl Delegations {
 
     /// Send a result to the parent now (the user's own delegations; or any
     /// the user wants sent before the rest are in).
+    ///
+    /// A1: a card whose delivery failed or was paused sends that same
+    /// delivery again (a batch goes again whole); one whose delivery is
+    /// unknown or was withdrawn gets a new delivery of its own, the old one
+    /// left as it is.
     pub fn send(&self, parent: &str, id: &str, actor: &str) -> Result<(), DelegationError> {
-        let host = self.host.lock().clone().ok_or(DelegationError::NoParent)?;
+        self.host.lock().clone().ok_or(DelegationError::NoParent)?;
         let mut state = self.state.lock();
         self.ensure_loaded(&mut state, parent);
         let entry = find_mut(&mut state, parent, id).ok_or(DelegationError::NotFound)?;
-        if entry.card.state.is_open() || entry.card.sent {
+        if entry.card.state.is_open() {
             return Err(DelegationError::NothingToSend);
         }
+        let again = match &entry.card.return_delivery {
+            // Before A1 a sent card kept no record: it went, as far as anyone knows.
+            None if entry.card.sent => return Err(DelegationError::NothingToSend),
+            None => None,
+            Some(r) => match r.state {
+                DeliveryState::Failed => Some((r.id.clone(), Action::Resend)),
+                DeliveryState::Paused => Some((r.id.clone(), Action::Resume)),
+                DeliveryState::Unknown | DeliveryState::Withdrawn => None,
+                _ if !entry.card.sent => None,
+                _ => return Err(DelegationError::NothingToSend),
+            },
+        };
         clear_unsent(&mut entry.card);
         entry.card.sent = true;
         let card = entry.card.clone();
@@ -661,16 +711,99 @@ impl Delegations {
         self.record(&mut state, audit);
         drop(state);
         self.publish(parent, id);
-        let me = self.me.lock().clone();
-        let (parent_id, ids) = (parent.to_string(), vec![id.to_string()]);
-        std::thread::spawn(move || {
-            if let Err(error) = host.prompt(&parent_id, prompt::results(&[card])) {
-                if let Some(this) = me.upgrade() {
-                    this.unsend(&parent_id, &ids, &error);
+        if let Some((delivery, action)) = again {
+            match self.queue().map(|q| q.act(&delivery, action)) {
+                // The queue's own change moves the cards (`on_delivery`).
+                Some(Ok(_)) => return Ok(()),
+                // Already on its way again, or settled meanwhile.
+                Some(Err(DeliveryError::WrongState)) => return Ok(()),
+                Some(Err(DeliveryError::NotFound)) | None => {}
+            }
+        }
+        self.hand_over(parent, vec![card]);
+        Ok(())
+    }
+
+    /// A1: queue `cards`' results for `parent` as one delivery and bind each
+    /// card to it. Asking again while that delivery is on its way gets the
+    /// same one back. Called with no lock held: the queue tells
+    /// [`Self::on_delivery`] of its changes right away.
+    fn hand_over(&self, parent: &str, cards: Vec<DelegationCard>) {
+        let ids: Vec<String> = cards.iter().map(|c| c.delegation_id.clone()).collect();
+        let Some(queue) = self.queue() else {
+            self.unsend(parent, &ids, "投递队列不可用");
+            return;
+        };
+        let queued = queue.enqueue_once(
+            parent,
+            DeliveryKind::Delegation,
+            DeliveryMode::AfterTurn,
+            &result_label(&cards),
+            &prompt::results(&cards),
+            &source_ref(parent, &ids),
+        );
+        let delivery = match queued {
+            Ok(delivery) => delivery,
+            Err(error) => {
+                self.unsend(parent, &ids, &error);
+                return;
+            }
+        };
+        let mut state = self.state.lock();
+        // Read under the lock: a change after this waits for it in
+        // `on_delivery`, one before it is already here.
+        let now = queue.get(&delivery.id).unwrap_or(delivery);
+        for id in &ids {
+            if let Some(entry) = find_mut(&mut state, parent, id) {
+                entry.card.return_delivery = Some(ReturnDelivery::of(&now));
+            }
+        }
+        drop(state);
+        for id in &ids {
+            self.publish(parent, id);
+        }
+    }
+
+    /// A1: a delivery changed; the cards that follow it take its state.
+    /// Only a card's current delivery counts: one it left (sent again,
+    /// reworked) no longer moves it.
+    fn on_delivery(&self, item: &Delivery) {
+        if item.kind != DeliveryKind::Delegation
+            || !item
+                .source_ref
+                .as_deref()
+                .is_some_and(|s| s.starts_with(SOURCE_PREFIX))
+        {
+            return;
+        }
+        let parent = item.task_id.as_str();
+        let mut state = self.state.lock();
+        self.ensure_loaded(&mut state, parent);
+        // The queue's state now, not the one this call was made with: two
+        // changes may be told out of order.
+        let now = self
+            .queue()
+            .and_then(|q| q.get(&item.id))
+            .unwrap_or_else(|| item.clone());
+        let follow = ReturnDelivery::of(&now);
+        let mut changed = Vec::new();
+        if let Some(list) = state.by_parent.get_mut(parent) {
+            for entry in list.iter_mut() {
+                let mine = entry
+                    .card
+                    .return_delivery
+                    .as_ref()
+                    .is_some_and(|r| r.id == item.id);
+                if mine && entry.card.return_delivery.as_ref() != Some(&follow) {
+                    entry.card.return_delivery = Some(follow.clone());
+                    changed.push(entry.card.delegation_id.clone());
                 }
             }
-        });
-        Ok(())
+        }
+        drop(state);
+        for id in &changed {
+            self.publish(parent, id);
+        }
     }
 
     /// C 批 (2026-11-08): results that did not reach the parent are not
@@ -718,6 +851,8 @@ impl Delegations {
         entry.card.state = DelegationState::Running;
         entry.card.reworks += 1;
         entry.card.sent = false;
+        // A1: the old result's delivery is no longer this card's.
+        entry.card.return_delivery = None;
         entry.card.finished_ms = None;
         entry.card.error = None;
         // CU 2026-11-02 (F3): the rework's answer replaces the first one; a
@@ -1059,16 +1194,7 @@ impl Delegations {
         for card in &cards {
             self.publish(parent, &card.delegation_id);
         }
-        let me = self.me.lock().clone();
-        let parent_id = parent.to_string();
-        std::thread::spawn(move || {
-            if let Err(error) = host.prompt(&parent_id, prompt::results(&cards)) {
-                if let Some(this) = me.upgrade() {
-                    let ids: Vec<String> = cards.iter().map(|c| c.delegation_id.clone()).collect();
-                    this.unsend(&parent_id, &ids, &error);
-                }
-            }
-        });
+        self.hand_over(parent, cards);
     }
 
     fn on_update(&self, update: &SessionUpdate) {
@@ -1234,6 +1360,21 @@ impl Delegations {
             if card.state.is_open() {
                 card.state = DelegationState::Interrupted;
             }
+            // A1: the queue says where its result stands, not the file.
+            if let (Some(queue), Some(follow)) = (self.queue(), card.return_delivery.as_mut()) {
+                match queue.get(&follow.id) {
+                    Some(now) => *follow = ReturnDelivery::of(&now),
+                    None if !matches!(
+                        follow.state,
+                        DeliveryState::Delivered | DeliveryState::Withdrawn
+                    ) =>
+                    {
+                        follow.state = DeliveryState::Unknown;
+                        follow.reason = Some(RECORD_GONE.into());
+                    }
+                    None => {}
+                }
+            }
             if let Some(child) = &card.child_task_id {
                 state.children.insert(
                     child.clone(),
@@ -1277,9 +1418,34 @@ impl Delegations {
     }
 }
 
-/// The line a card's error gets when its result did not reach the parent;
+/// The line a card's error gets when its result could not even be queued
+/// for the parent (A1: a queued one that failed says so in its delivery);
 /// it sits under any error of the card's own and goes when it is resent.
 const UNSENT: &str = "没送到父会话：";
+
+/// A1: a card's delivery is not in the queue any more (and had not settled).
+pub const RECORD_GONE: &str = "投递记录不见了";
+
+/// What a result delivery is called in the queue: "委派结果 · 查清超时".
+fn result_label(cards: &[DelegationCard]) -> String {
+    match cards {
+        [card] => {
+            let first = card
+                .contract
+                .instruction
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or_default();
+            if first.is_empty() {
+                "委派结果".into()
+            } else {
+                format!("委派结果 · {}", cut(first, 24))
+            }
+        }
+        _ => format!("委派结果 · {} 项", cards.len()),
+    }
+}
 
 fn mark_unsent(card: &mut DelegationCard, error: &str) {
     clear_unsent(card);

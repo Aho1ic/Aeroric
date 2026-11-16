@@ -128,8 +128,9 @@ struct DelegationCard: View {
                 }
             }
             HStack(spacing: AeroricSpace.m) {
-                if card.canSend && card.origin == "user" {
-                    Button("发给主会话", action: onSend)
+                if card.canSend && (card.origin == "user" || card.returnDelivery != nil) {
+                    // A1: a result that did not arrive (or nobody knows) can go again.
+                    Button(card.returnDelivery == nil ? "发给主会话" : "再发一次", action: onSend)
                         .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
                         .fixedSize()
                         .accessibilityIdentifier("delegation.send")
@@ -193,19 +194,55 @@ public enum DelegationText {
         return "共享可写 · \(DelegationText.permission(permission))"
     }
 
+    /// The card's badge: how it ended, then where its result stands (A1).
     public static func state(_ card: LiveDelegationCard) -> (String, Color) {
+        let own: (String, Color)
         switch card.state {
-        case "starting": return ("启动中", AeroricColor.accent)
-        case "running": return ("进行中", AeroricColor.accent)
-        case "checking": return ("核对验收中", AeroricColor.accent)
-        case "reported":
-            if card.sent { return ("已回报 · 已发给主会话", AeroricColor.success) }
-            return ("已回报", AeroricColor.success)
-        case "failed": return ("失败", AeroricColor.danger)
-        case "stopped": return ("已停止", AeroricColor.textSecondary)
-        case "overBudget": return ("超出预算", AeroricColor.danger)
-        case "interrupted": return ("已中断", AeroricColor.warning)
-        default: return (card.state, AeroricColor.textSecondary)
+        case "starting": own = ("启动中", AeroricColor.accent)
+        case "running": own = ("进行中", AeroricColor.accent)
+        case "checking": own = ("核对验收中", AeroricColor.accent)
+        case "reported": own = ("已回报", AeroricColor.success)
+        case "failed": own = ("失败", AeroricColor.danger)
+        case "stopped": own = ("已停止", AeroricColor.textSecondary)
+        case "overBudget": own = ("超出预算", AeroricColor.danger)
+        case "interrupted": own = ("已中断", AeroricColor.warning)
+        default: own = (card.state, AeroricColor.textSecondary)
+        }
+        guard !card.isOpen, let (word, tint) = delivery(card) else { return own }
+        return ("\(own.0) · \(word)", card.state == "reported" ? tint : own.1)
+    }
+
+    /// A1: where the result stands on its way to the parent, read from the
+    /// delivery it follows; nil while nothing was handed over.
+    public static func delivery(_ card: LiveDelegationCard) -> (String, Color)? {
+        guard let follow = card.returnDelivery else {
+            // Written before A1: it went, with no record to prove it arrived.
+            return card.sent ? ("已发送（没有投递记录）", AeroricColor.textSecondary) : nil
+        }
+        switch follow.state {
+        case "waiting": return ("已入队", AeroricColor.accent)
+        case "sending": return ("正在发送", AeroricColor.accent)
+        case "accepted": return ("对方已收下", AeroricColor.accent)
+        case "delivered": return ("已送达", AeroricColor.success)
+        case "failed": return ("没送到", AeroricColor.danger)
+        case "unknown": return ("结果不明", AeroricColor.warning)
+        case "paused": return ("已暂停", AeroricColor.textSecondary)
+        case "withdrawn": return ("已撤回", AeroricColor.textSecondary)
+        default: return (follow.state, AeroricColor.textSecondary)
+        }
+    }
+
+    /// A1: why the result did not arrive, or what to check, for the footnote.
+    static func deliveryNote(_ card: LiveDelegationCard) -> String? {
+        guard let follow = card.returnDelivery else { return nil }
+        switch follow.state {
+        case "failed": return "没送到：\(follow.reason ?? "原因不明")"
+        case "unknown":
+            let why = follow.reason.map { "（\($0)）" } ?? ""
+            return "不知道主会话有没有收到\(why)，先去主会话核对再决定要不要再发"
+        case "paused": return "主会话按了停止，结果还没发出"
+        case "waiting": return "等主会话这一轮结束再发"
+        default: return nil
         }
     }
 
@@ -220,6 +257,7 @@ public enum DelegationText {
     /// One line under the card: changes, evidence, rework, why it stopped.
     public static func footnote(_ card: LiveDelegationCard) -> String? {
         var parts: [String] = []
+        if let note = deliveryNote(card) { parts.append(note) }
         if let error = card.error { parts.append(error) }
         if card.files > 0 { parts.append("改动 \(card.files) 个文件 +\(card.additions) −\(card.deletions)") }
         if card.state == "reported" && !card.evidence { parts.append("没有可核对的证据") }

@@ -23,12 +23,17 @@ public struct LiveDelegationCard: Equatable, Sendable {
     public var deletions: Int
     public var acceptance: [LiveDelegationAcceptance]
     public var evidence: Bool
+    /// Handed to the delivery queue for the parent. A1: whether it arrived
+    /// is `returnDelivery`, never this flag.
     public var sent: Bool
     public var reworks: Int
     public var error: String?
     public var tokens: UInt64?
     /// B4-3: failure probes that fired on it.
     public var probes: [LiveDelegationProbe]
+    /// A1 (2026-11-16): the delivery carrying the result to the parent, as
+    /// the queue last reported it.
+    public var returnDelivery: LiveDelegationReturn?
 
     public init(delegationId: String, parentTaskId: String = "", childTaskId: String? = nil, origin: String = "user",
                 roleName: String? = nil, harnessLabel: String = "", agent: String = "", model: String? = nil,
@@ -36,7 +41,8 @@ public struct LiveDelegationCard: Equatable, Sendable {
                 createdMs: UInt64 = 0, finishedMs: UInt64? = nil, result: String? = nil, files: Int = 0,
                 additions: Int = 0, deletions: Int = 0, acceptance: [LiveDelegationAcceptance] = [],
                 evidence: Bool = false, sent: Bool = false, reworks: Int = 0, error: String? = nil,
-                tokens: UInt64? = nil, probes: [LiveDelegationProbe] = []) {
+                tokens: UInt64? = nil, probes: [LiveDelegationProbe] = [],
+                returnDelivery: LiveDelegationReturn? = nil) {
         self.delegationId = delegationId
         self.parentTaskId = parentTaskId
         self.childTaskId = childTaskId
@@ -60,19 +66,56 @@ public struct LiveDelegationCard: Equatable, Sendable {
         self.error = error
         self.tokens = tokens
         self.probes = probes
+        self.returnDelivery = returnDelivery
     }
 
     public var isOpen: Bool { ["starting", "running", "checking"].contains(state) }
     /// "需要我处理": it failed, ran over budget, the host restarted under it,
-    /// or a probe fired that nobody has seen.
+    /// a probe fired that nobody has seen, or nobody knows whether its
+    /// result reached the parent (A1).
     public var needsUser: Bool {
         ["failed", "overBudget", "interrupted"].contains(state) || probes.contains { !$0.acknowledged }
+            || returnDelivery?.state == "unknown"
     }
-    /// The user can send it to the parent now.
-    public var canSend: Bool { !isOpen && !sent }
+    /// The user can send it to the parent now: never handed over, or its
+    /// delivery failed, was paused, withdrawn or lost (A1: "再发一次").
+    public var canSend: Bool {
+        guard !isOpen else { return false }
+        if let returnDelivery { return returnDelivery.canSendAgain || !sent }
+        return !sent
+    }
     /// Still something to do on its card: running, unsent, or needing the user.
     public var wantsUser: Bool { isOpen || canSend || needsUser }
     public var passedCount: Int { acceptance.filter { $0.state == "passed" }.count }
+}
+
+/// A1: the delivery a result card follows.
+public struct LiveDelegationReturn: Equatable, Sendable {
+    public var id: String
+    /// `waiting` `sending` `accepted` `delivered` `failed` `unknown` `paused` `withdrawn`.
+    public var state: String
+    public var reason: String?
+    /// `protocol` `echo` `turnStarted` `transcript`.
+    public var evidence: String?
+
+    public init(id: String, state: String, reason: String? = nil, evidence: String? = nil) {
+        self.id = id
+        self.state = state
+        self.reason = reason
+        self.evidence = evidence
+    }
+
+    /// Sending the card again does something: the same delivery goes again
+    /// (failed, paused) or a new one does (unknown, withdrawn).
+    public var canSendAgain: Bool { ["failed", "paused", "unknown", "withdrawn"].contains(state) }
+
+    static func decode(_ value: JSONValue?) -> LiveDelegationReturn? {
+        guard let f = value?.objectValue, let id = f["id"]?.stringValue, let state = f["state"]?.stringValue else {
+            return nil
+        }
+        return LiveDelegationReturn(id: id, state: state, reason: f["reason"]?.stringValue,
+                                    evidence: f["evidence"]?.stringValue)
+    }
 }
 
 public struct LiveDelegationAcceptance: Equatable, Sendable {
@@ -222,7 +265,8 @@ extension LiveDelegationCard {
             acceptance: acceptance, evidence: f["evidence"]?.boolValue ?? false,
             sent: f["sent"]?.boolValue ?? false, reworks: int("reworks"), error: f["error"]?.stringValue,
             tokens: f["tokens"]?.numberText.flatMap { UInt64($0) },
-            probes: (f["probes"]?.arrayValue ?? []).compactMap(LiveDelegationProbe.decode))
+            probes: (f["probes"]?.arrayValue ?? []).compactMap(LiveDelegationProbe.decode),
+            returnDelivery: LiveDelegationReturn.decode(f["returnDelivery"]))
     }
 }
 

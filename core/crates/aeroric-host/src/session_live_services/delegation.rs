@@ -379,7 +379,8 @@ impl DelegationHost for HostDelegations {
         })
     }
 
-    /// R1-2: results and rework notes go through the delivery queue.
+    /// R1-2: rework notes go through the delivery queue (results are
+    /// queued by core itself, A1).
     fn prompt(&self, task_id: &str, text: String) -> Result<(), String> {
         let live = self.live.upgrade().ok_or("宿主已关闭")?;
         super::delivery::enqueue_internal(
@@ -387,7 +388,9 @@ impl DelegationHost for HostDelegations {
             task_id,
             aeroric_protocol::delivery::DeliveryKind::Delegation,
             text,
+            None,
         )
+        .map(|_| ())
     }
 
     fn interrupt(&self, task_id: &str) {

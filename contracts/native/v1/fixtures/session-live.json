@@ -457,6 +457,11 @@
           "origin": "session",
           "parentTaskId": "task-1",
           "result": "用 ClientBuilder::connect_timeout",
+          "returnDelivery": {
+            "evidence": "protocol",
+            "id": "dv-1",
+            "state": "delivered"
+          },
           "reworks": 0,
           "roleName": "调研员",
           "sent": true,
@@ -477,7 +482,7 @@
           "kind": "delegation",
           "label": "委派结果 · 调研重试",
           "mode": "afterTurn",
-          "sourceRef": "dg-1",
+          "sourceRef": "delegation:task-1/dg-1",
           "state": "delivered",
           "taskId": "task-1",
           "text": "委派的结果回来了",

@@ -50,6 +50,36 @@ final class DelegationTextTests: XCTestCase {
         XCTAssertEqual(DelegationText.workspace("shared", permission: "auto_edit"), "共享可写 · 自动编辑")
     }
 
+    /// A1: the badge follows the delivery; only a delivered one says 已送达.
+    func testAResultCardSaysWhereItsResultStands() {
+        var card = LiveDelegationCard(delegationId: "dg-1", origin: "user", harnessLabel: "Codex", state: "reported",
+                                      sent: true)
+        XCTAssertEqual(DelegationText.state(card).0, "已回报 · 已发送（没有投递记录）")
+        XCTAssertFalse(card.canSend, "an old card that went is not offered again")
+        let words: [(String, String)] = [
+            ("waiting", "已入队"), ("sending", "正在发送"), ("accepted", "对方已收下"), ("delivered", "已送达"),
+            ("failed", "没送到"), ("unknown", "结果不明"), ("paused", "已暂停"), ("withdrawn", "已撤回"),
+        ]
+        for (state, word) in words {
+            card.returnDelivery = LiveDelegationReturn(id: "dv-1", state: state, reason: "会话打不开")
+            XCTAssertEqual(DelegationText.state(card).0, "已回报 · \(word)", state)
+            XCTAssertEqual(card.canSend, ["failed", "paused", "unknown", "withdrawn"].contains(state), state)
+            XCTAssertEqual(card.needsUser, state == "unknown", state)
+        }
+        card.returnDelivery = LiveDelegationReturn(id: "dv-1", state: "failed", reason: "会话打不开")
+        XCTAssertTrue(DelegationText.footnote(card)?.hasPrefix("没送到：会话打不开") == true)
+        card.returnDelivery = LiveDelegationReturn(id: "dv-1", state: "unknown", reason: "读不到会话记录")
+        XCTAssertTrue(DelegationText.footnote(card)?.contains("先去主会话核对") == true)
+        card.state = "failed"
+        card.returnDelivery = LiveDelegationReturn(id: "dv-1", state: "delivered", evidence: "protocol")
+        XCTAssertEqual(DelegationText.state(card).0, "失败 · 已送达")
+        card.state = "reported"
+        card.sent = false
+        card.returnDelivery = nil
+        XCTAssertEqual(DelegationText.state(card).0, "已回报", "nothing handed over yet")
+        XCTAssertTrue(card.canSend)
+    }
+
     func testTrackRecordsAndAuditReadAsOneLine() {
         let row = LiveReputationRow(agent: "codex", model: "gpt-5", role: "researcher", total: 5, reported: 4,
                                     failed: 1, accepted: 2, withAcceptance: 3, reworks: 1)

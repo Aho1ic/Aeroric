@@ -3,6 +3,9 @@ use std::time::Instant;
 
 use aeroric_protocol::checkpoint::Acceptance;
 use aeroric_protocol::delegation::{Budget, ContextMode};
+use aeroric_protocol::delivery::{DeliveryEvidence, ReceiptOutcome};
+
+use super::super::delivery::DeliveryHost;
 
 struct Quiet;
 impl LiveStatusSink for Quiet {
@@ -23,6 +26,29 @@ struct FakeHost {
     fail_start: Mutex<bool>,
     fail_prompt: Mutex<bool>,
     writers: Mutex<Vec<WriterRef>>,
+    /// A1: the parent's driver refuses what the queue hands it.
+    refuse: Mutex<Option<String>>,
+    /// A1: the parent's driver answers with receipts (else: accepted only).
+    receipts: Mutex<bool>,
+    /// A1: what the parent's own record says after a lost answer.
+    recorded: Mutex<Option<bool>>,
+}
+
+/// A1: the delivery queue's side of the host — the parent's driver.
+impl DeliveryHost for FakeHost {
+    fn send(&self, task_id: &str, _id: &str, text: &str) -> Result<bool, String> {
+        if let Some(reason) = self.refuse.lock().clone() {
+            return Err(reason);
+        }
+        self.sent.lock().push((task_id.into(), text.into()));
+        Ok(*self.receipts.lock())
+    }
+    fn idle(&self, task_id: &str) -> bool {
+        !self.busy.lock().contains(task_id)
+    }
+    fn recorded(&self, _task_id: &str, _text: &str) -> Option<bool> {
+        *self.recorded.lock()
+    }
 }
 
 impl DelegationHost for FakeHost {
@@ -65,6 +91,10 @@ impl DelegationHost for FakeHost {
 struct Rig {
     host: Arc<FakeHost>,
     d: Arc<Delegations>,
+    /// A1: the queue results go through, as the executor wires it.
+    queue: Arc<Deliveries>,
+    /// Its data directory (`delivery.db`).
+    queue_dir: PathBuf,
     seq: Mutex<u64>,
 }
 
@@ -84,12 +114,22 @@ fn rig(permission: &str) -> Rig {
             nested: true,
         },
     );
-    let d = Delegations::new(Arc::new(Quiet));
+    let queue_dir = std::env::temp_dir().join(format!(
+        "aeroric-delegation-queue-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let queue = Deliveries::new(Arc::new(Quiet));
+    queue.set_dir(&queue_dir).unwrap();
+    queue.set_host(Arc::clone(&host) as Arc<dyn DeliveryHost>);
+    let d = Delegations::new(Arc::clone(&queue) as Arc<dyn LiveStatusSink>);
     d.set_host(Arc::clone(&host) as Arc<dyn DelegationHost>);
     d.set_watch_every(Duration::from_millis(10));
+    d.follow(&queue);
     Rig {
         host,
         d,
+        queue,
+        queue_dir,
         seq: Mutex::new(0),
     }
 }
@@ -777,26 +817,329 @@ fn done_without_the_criteria_or_without_evidence_is_flagged() {
     assert!(probes(&rig, &traced).is_empty());
 }
 
-/// C 批 (2026-11-08): a result that did not reach the parent is not sent
-/// after all; the card says why and it can be sent again.
+/// C 批 (2026-11-08), A1 (落盘失败): a result that could not even be
+/// queued is not sent after all; the card says why and it can be sent again.
 #[test]
-fn a_send_that_never_arrives_can_be_sent_again() {
+fn a_result_that_cannot_be_queued_can_be_sent_again() {
     let rig = rig("ask");
     let (id, child) = rig.running(contract("查"), Origin::User);
     rig.answer(&child, "t1", "结论", None, false);
     wait("reported", || {
         rig.card(&id).state == DelegationState::Reported
     });
-    *rig.host.fail_prompt.lock() = true;
+    let db = rusqlite::Connection::open(rig.queue_dir.join("delivery.db")).unwrap();
+    db.execute_batch("DROP TABLE deliveries").unwrap();
     rig.d.send("p", &id, "user").unwrap();
-    wait("unsent", || !rig.card(&id).sent);
-    assert_eq!(
-        rig.card(&id).error.as_deref(),
-        Some("没送到父会话：会话打不开")
+    let card = rig.card(&id);
+    assert!(!card.sent);
+    assert!(
+        card.return_delivery.is_none(),
+        "no record, nothing to follow"
     );
-    *rig.host.fail_prompt.lock() = false;
+    assert!(
+        card.error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("没送到父会话：没能排上队")),
+        "{card:?}"
+    );
+    assert!(rig.queue.list("p").is_empty());
+    db.execute_batch(
+        "CREATE TABLE deliveries (
+            id TEXT PRIMARY KEY, task_id TEXT NOT NULL, state TEXT NOT NULL,
+            updated_ms INTEGER NOT NULL, body TEXT NOT NULL)",
+    )
+    .unwrap();
     rig.d.send("p", &id, "user").unwrap();
     wait("sent", || rig.sent_to("p").len() == 1);
-    assert!(rig.card(&id).sent);
-    assert!(rig.card(&id).error.is_none(), "送到之后不再说没送到");
+    let card = rig.card(&id);
+    assert!(card.sent);
+    assert!(card.error.is_none(), "排上队之后不再说没送到");
+    assert!(card.return_delivery.is_some());
+}
+
+// MARK: A1 — the result card follows its delivery
+
+/// A reported user delegation, not yet sent; its probes seen, so only its
+/// delivery can make it need the user.
+fn reported(rig: &Rig) -> String {
+    let (id, child) = rig.running(contract("查"), Origin::User);
+    rig.answer(&child, "t1", "结论", None, false);
+    wait("reported", || {
+        rig.card(&id).state == DelegationState::Reported
+    });
+    rig.d.ack_probes("p", &id).unwrap();
+    assert!(!rig.card(&id).needs_user());
+    id
+}
+
+fn follow_state(rig: &Rig, id: &str) -> Option<DeliveryState> {
+    rig.card(id).return_delivery.map(|r| r.state)
+}
+
+/// 完成条件：the card says delivered only when its record is delivered,
+/// with the record's evidence.
+#[test]
+fn a_card_is_delivered_only_with_its_records_evidence() {
+    let rig = rig("ask");
+    let id = reported(&rig);
+    rig.d.send("p", &id, "user").unwrap();
+    wait("accepted", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Accepted)
+    });
+    let card = rig.card(&id);
+    let follow = card.return_delivery.unwrap();
+    assert_eq!(follow.evidence, None, "taken, not yet proven");
+    let record = rig.queue.get(&follow.id).unwrap();
+    assert_eq!(
+        record.source_ref,
+        Some(source_ref("p", std::slice::from_ref(&id)))
+    );
+    assert_eq!(record.kind, DeliveryKind::Delegation);
+    rig.push(
+        "p",
+        SessionUpdateKind::TurnStarted {
+            turn_id: "u2".into(),
+        },
+    );
+    wait("delivered", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Delivered)
+    });
+    let follow = rig.card(&id).return_delivery.unwrap();
+    let record = rig.queue.get(&follow.id).unwrap();
+    assert_eq!(record.state, DeliveryState::Delivered);
+    assert_eq!(follow.evidence, Some(DeliveryEvidence::TurnStarted));
+    assert_eq!(follow.evidence, record.evidence);
+    assert_eq!(
+        rig.d.send("p", &id, "user").unwrap_err(),
+        DelegationError::NothingToSend
+    );
+}
+
+/// 入队成功后驱动拒收: the card says it did not arrive and why; sending it
+/// again sends the same delivery, so nothing reaches the parent twice.
+#[test]
+fn a_refused_result_says_why_and_goes_again_as_the_same_delivery() {
+    let rig = rig("ask");
+    let id = reported(&rig);
+    *rig.host.refuse.lock() = Some("会话打不开".into());
+    rig.d.send("p", &id, "user").unwrap();
+    wait("failed", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Failed)
+    });
+    let card = rig.card(&id);
+    let first = card.return_delivery.clone().unwrap();
+    assert_eq!(first.reason.as_deref(), Some("会话打不开"));
+    assert!(!card.needs_user(), "it says why and offers a resend");
+
+    // The driver takes it but the agent answers no.
+    *rig.host.refuse.lock() = None;
+    *rig.host.receipts.lock() = true;
+    rig.d.send("p", &id, "user").unwrap();
+    wait("handed over", || rig.sent_to("p").len() == 1);
+    assert_eq!(rig.card(&id).return_delivery.unwrap().id, first.id);
+    rig.push(
+        "p",
+        SessionUpdateKind::DeliveryReceipt {
+            id: first.id.clone(),
+            outcome: ReceiptOutcome::Rejected,
+            reason: Some("Agent 拒收".into()),
+        },
+    );
+    wait("refused", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Failed)
+    });
+    assert_eq!(
+        rig.card(&id).return_delivery.unwrap().reason.as_deref(),
+        Some("Agent 拒收")
+    );
+
+    rig.d.send("p", &id, "user").unwrap();
+    wait("handed over again", || rig.sent_to("p").len() == 2);
+    rig.push(
+        "p",
+        SessionUpdateKind::DeliveryReceipt {
+            id: first.id.clone(),
+            outcome: ReceiptOutcome::Delivered,
+            reason: None,
+        },
+    );
+    wait("delivered", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Delivered)
+    });
+    assert_eq!(rig.queue.list("p").len(), 1, "one delivery throughout");
+    assert_eq!(
+        rig.card(&id).return_delivery.unwrap().evidence,
+        Some(DeliveryEvidence::Protocol)
+    );
+}
+
+/// 接收后断线 + 过期事件: taken, then the parent's session died — nobody
+/// knows; it needs the user. Sent again it follows a new delivery, and a
+/// late receipt of the old one does not move it.
+#[test]
+fn a_lost_answer_needs_the_user_and_a_late_receipt_of_the_old_delivery_is_ignored() {
+    let rig = rig("ask");
+    let id = reported(&rig);
+    rig.d.send("p", &id, "user").unwrap();
+    wait("accepted", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Accepted)
+    });
+    let old = rig.card(&id).return_delivery.unwrap().id;
+    rig.d.status(
+        "project-1",
+        "p",
+        1,
+        TaskStatus::Failed,
+        Some("进程退出".into()),
+    );
+    wait("unknown", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Unknown)
+    });
+    let card = rig.card(&id);
+    assert!(card.sent, "handed over, not taken back");
+    assert!(card.needs_user());
+    assert!(rig.d.attention().iter().any(|c| c.delegation_id == id));
+
+    rig.d.send("p", &id, "user").unwrap();
+    let new = rig.card(&id).return_delivery.unwrap();
+    assert_ne!(new.id, old, "a new delivery; the unknown one stays");
+    assert_eq!(rig.queue.get(&old).unwrap().state, DeliveryState::Unknown);
+    wait("accepted again", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Accepted)
+    });
+    assert!(!rig.card(&id).needs_user());
+
+    rig.push(
+        "p",
+        SessionUpdateKind::DeliveryReceipt {
+            id: old.clone(),
+            outcome: ReceiptOutcome::Delivered,
+            reason: None,
+        },
+    );
+    assert_eq!(rig.queue.get(&old).unwrap().state, DeliveryState::Delivered);
+    std::thread::sleep(Duration::from_millis(30));
+    let card = rig.card(&id);
+    assert_eq!(card.return_delivery.as_ref().unwrap().id, new.id);
+    assert_eq!(follow_state(&rig, &id), Some(DeliveryState::Accepted));
+
+    // A rework leaves the delivery behind too.
+    rig.d.redo("p", &id, "", "user").unwrap();
+    assert!(rig.card(&id).return_delivery.is_none());
+}
+
+/// 连点两次发送: one delivery.
+#[test]
+fn sending_twice_queues_one_delivery() {
+    let rig = rig("ask");
+    rig.host.busy.lock().insert("p".into());
+    let id = reported(&rig);
+    rig.d.send("p", &id, "user").unwrap();
+    assert_eq!(
+        rig.d.send("p", &id, "user").unwrap_err(),
+        DelegationError::NothingToSend
+    );
+    // Even past the card's own guard, the queue gives the same one back.
+    let card = rig.card(&id);
+    rig.d.hand_over("p", vec![card.clone()]);
+    rig.d.hand_over("p", vec![card]);
+    let list = rig.queue.list("p");
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(list[0].state, DeliveryState::Waiting);
+    assert_eq!(rig.card(&id).return_delivery.unwrap().id, list[0].id);
+    assert!(rig.sent_to("p").is_empty(), "the parent is busy: it waits");
+}
+
+/// 宿主在入队后、送达前重启: the card reads its delivery back from the
+/// queue — unknown at first, delivered once the parent's record shows it.
+#[test]
+fn after_a_restart_the_card_takes_its_deliverys_state_from_the_queue() {
+    let tmp = std::env::temp_dir().join(format!(
+        "aeroric-delegations-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let rig = rig("ask");
+    rig.d.set_dir(tmp.clone());
+    let id = reported(&rig);
+    rig.d.send("p", &id, "user").unwrap();
+    wait("accepted", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Accepted)
+    });
+    let delivery = rig.card(&id).return_delivery.unwrap().id;
+    wait("saved", || {
+        std::fs::read_to_string(tmp.join("tasks/p.json")).is_ok_and(|s| s.contains("\"accepted\""))
+    });
+
+    // The host restarts.
+    let queue = Deliveries::new(Arc::new(Quiet));
+    queue.set_dir(&rig.queue_dir).unwrap();
+    let again = Delegations::new(Arc::clone(&queue) as Arc<dyn LiveStatusSink>);
+    again.set_dir(tmp.clone());
+    again.follow(&queue);
+    let card = again.list("p").remove(0);
+    let follow = card.return_delivery.clone().unwrap();
+    assert_eq!(follow.id, delivery);
+    assert_eq!(follow.state, DeliveryState::Unknown, "the answer was lost");
+    assert!(card.needs_user());
+
+    *rig.host.recorded.lock() = Some(true);
+    queue.set_host(Arc::clone(&rig.host) as Arc<dyn DeliveryHost>);
+    let follow = again.list("p").remove(0).return_delivery.unwrap();
+    assert_eq!(follow.state, DeliveryState::Delivered);
+    assert_eq!(follow.evidence, Some(DeliveryEvidence::Transcript));
+    assert!(again.attention().is_empty());
+}
+
+/// A card whose delivery the queue no longer has (and that had not
+/// settled) is unknown, not sent.
+#[test]
+fn a_card_whose_delivery_is_gone_is_unknown() {
+    let tmp = std::env::temp_dir().join(format!(
+        "aeroric-delegations-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let rig = rig("ask");
+    rig.d.set_dir(tmp.clone());
+    rig.host.busy.lock().insert("p".into());
+    let id = reported(&rig);
+    rig.d.send("p", &id, "user").unwrap();
+    wait("saved", || {
+        std::fs::read_to_string(tmp.join("tasks/p.json"))
+            .is_ok_and(|s| s.contains("returnDelivery"))
+    });
+    let empty = std::env::temp_dir().join(format!(
+        "aeroric-delegation-queue-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let queue = Deliveries::new(Arc::new(Quiet));
+    queue.set_dir(&empty).unwrap();
+    let again = Delegations::new(Arc::clone(&queue) as Arc<dyn LiveStatusSink>);
+    again.set_dir(tmp);
+    again.follow(&queue);
+    let follow = again.list("p").remove(0).return_delivery.unwrap();
+    assert_eq!(follow.state, DeliveryState::Unknown);
+    assert_eq!(follow.reason.as_deref(), Some(RECORD_GONE));
+}
+
+/// The agent's own results go back in one delivery that names every card.
+#[test]
+fn a_batch_is_one_delivery_every_card_follows() {
+    let rig = rig("ask");
+    let (a, child_a) = rig.running(contract("查 A"), Origin::Session);
+    let (b, child_b) = rig.running(contract("查 B"), Origin::Session);
+    rig.answer(&child_a, "t1", "A 的结论", None, false);
+    rig.answer(&child_b, "t1", "B 的结论", None, false);
+    wait("returned", || rig.sent_to("p").len() == 1);
+    wait("both follow", || {
+        follow_state(&rig, &a) == Some(DeliveryState::Accepted)
+            && follow_state(&rig, &b) == Some(DeliveryState::Accepted)
+    });
+    let one = rig.card(&a).return_delivery.unwrap().id;
+    assert_eq!(rig.card(&b).return_delivery.unwrap().id, one);
+    let record = rig.queue.get(&one).unwrap();
+    assert_eq!(
+        record.source_ref,
+        Some(source_ref("p", &[b.clone(), a.clone()]))
+    );
+    assert_eq!(record.label, "委派结果 · 2 项");
 }

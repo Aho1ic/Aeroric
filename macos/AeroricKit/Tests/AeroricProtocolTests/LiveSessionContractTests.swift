@@ -54,6 +54,8 @@ final class LiveSessionContractTests: XCTestCase {
         XCTAssertEqual(delegation?.acceptance, [LiveDelegationAcceptance(id: "a1", text: "给出可运行的示例", state: "open")])
         XCTAssertEqual(delegation?.tokens, 1200)
         XCTAssertEqual(delegation?.sent, true)
+        XCTAssertEqual(delegation?.returnDelivery,
+                       LiveDelegationReturn(id: "dv-1", state: "delivered", evidence: "protocol"))
         XCTAssertEqual(batch.updates[0], LiveSessionUpdate(taskId: "task-1", seq: 1, atMs: 1_761_350_400_000,
                                                            kind: .turnStarted(turnId: "u1")))
         let kinds = batch.updates.map(\.kind)

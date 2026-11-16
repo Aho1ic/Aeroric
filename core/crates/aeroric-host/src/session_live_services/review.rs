@@ -249,7 +249,9 @@ impl ReviewHost for HostReviews {
             task_id,
             aeroric_protocol::delivery::DeliveryKind::Review,
             text,
+            None,
         )
+        .map(|_| ())
     }
 }
 
