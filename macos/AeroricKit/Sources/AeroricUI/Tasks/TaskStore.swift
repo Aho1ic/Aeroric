@@ -51,6 +51,10 @@ public final class TaskStore {
         public var childKind: String?
         /// 2026-11-12: a discussion's own record; its page is the discussion.
         public var isDiscussion = false
+        /// 2026-11-14: an Aeroric restart cut it and it was not continued yet.
+        public var restartCut = false
+        /// 2026-11-14 无人值守自动重试.
+        public var autoRetry: AutoRetryInfo?
 
         public init(
             id: String,

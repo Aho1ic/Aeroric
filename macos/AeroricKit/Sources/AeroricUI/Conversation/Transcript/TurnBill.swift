@@ -75,6 +75,7 @@ public enum TurnBillText {
         case "service": "服务出错"
         case "network": "连不上"
         case "rejected": "请求被拒"
+        case "hostRestart": "Aeroric 重启"
         default: "出错"
         }
     }

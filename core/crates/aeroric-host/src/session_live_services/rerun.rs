@@ -71,7 +71,7 @@ fn ledger(live: &Live, task_id: &str) -> Vec<TurnRecord> {
 }
 
 /// The task's turns from its transcript, graded against its ledger.
-fn turns(live: &Live, record: &Record) -> Vec<TurnStat> {
+pub(super) fn turns(live: &Live, record: &Record) -> Vec<TurnStat> {
     use aeroric_core::sessions::transcript_stats;
     let (_, path) = aeroric_core::tasks::session_owner::current_session(record);
     let Some(raw) = path.and_then(|p| {
@@ -90,6 +90,7 @@ fn turns(live: &Live, record: &Record) -> Vec<TurnStat> {
     let mut turns = stats.map(|s| s.turns).unwrap_or_default();
     let id = field(record, "id").unwrap_or_default();
     turn_outcome::grade(&mut turns, &ledger(live, &id));
+    turn_outcome::mark_restarts(&mut turns, &turn_outcome::host_restarts(record));
     turns
 }
 

@@ -11,7 +11,7 @@
 //! - Otherwise it completed, or the user stopped it (`interrupted`).
 
 use aeroric_protocol::turn_ledger::{TurnRecord, TurnState};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::transcript_stats::TurnStat;
@@ -19,7 +19,7 @@ use super::transcript_stats::TurnStat;
 /// Kept of an error's text; enough to say what failed.
 const MESSAGE_CHARS: usize = 300;
 
-#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum NotRunReason {
     /// Out of quota, or rate limited.
@@ -34,6 +34,8 @@ pub enum NotRunReason {
     Network,
     /// The service rejected the request itself.
     Rejected,
+    /// 2026-11-14: Aeroric's host restarted while the turn ran.
+    HostRestart,
     Other,
 }
 
@@ -144,6 +146,45 @@ fn classify(status: Option<u16>, hint: &str, message: &str) -> NotRunReason {
         NotRunReason::Rejected
     } else {
         NotRunReason::Other
+    }
+}
+
+/// The times a host restart cut the task (`hostRestarts` on its record).
+pub fn host_restarts(record: &crate::storage::Record) -> Vec<u64> {
+    record
+        .get(crate::tasks::reducer::HOST_RESTARTS_FIELD)
+        .and_then(Value::as_array)
+        .map(|cuts| cuts.iter().filter_map(Value::as_u64).collect())
+        .unwrap_or_default()
+}
+
+/// 2026-11-14: a turn that never ended and had started when the host
+/// restarted did not run to its end because of Aeroric, not the model.
+///
+/// 目检 2026-11-15: Codex writes the turn as aborted (`interrupted`, with an
+/// end time) when its process goes down with the host, so the turn running
+/// at a cut — the last one started before it — counts too, and is no longer
+/// "stopped by the person". A cut is only recorded for a session that was
+/// running, so a turn the person stopped earlier is never the one at a cut.
+pub fn mark_restarts(turns: &mut [TurnStat], cuts: &[u64]) {
+    let at_cut: Vec<usize> = cuts
+        .iter()
+        .filter_map(|cut| turns.iter().rposition(|t| t.started_at <= *cut))
+        .collect();
+    for (index, turn) in turns.iter_mut().enumerate() {
+        if turn.not_run.is_some() {
+            continue;
+        }
+        let never_ended = turn.ended_at.is_none() && cuts.iter().any(|cut| *cut >= turn.started_at);
+        let aborted = turn.interrupted && at_cut.contains(&index);
+        if never_ended || aborted {
+            turn.interrupted = false;
+            turn.not_run = Some(NotRun {
+                reason: NotRunReason::HostRestart,
+                status: None,
+                message: "Aeroric 重启时这一轮还在跑，被打断了".into(),
+            });
+        }
     }
 }
 
@@ -398,5 +439,60 @@ mod tests {
             "no record: changed no files"
         );
         assert_eq!(turns[4].product_failure, None, "the user stopped it");
+    }
+
+    /// 2026-11-14: the turn a host restart cut is not run (宿主重启); one
+    /// that ended, or started after the restart, is not.
+    #[test]
+    fn the_turn_a_restart_cut_did_not_run() {
+        let turn = |started_at: u64, ended_at: Option<u64>| TurnStat {
+            started_at,
+            ended_at,
+            ..TurnStat::default()
+        };
+        let mut turns = vec![turn(100, Some(150)), turn(200, None), turn(900, None)];
+        mark_restarts(&mut turns, &[500]);
+        assert!(turns[0].not_run.is_none(), "ended before");
+        assert_eq!(
+            turns[1].not_run.as_ref().map(|n| n.reason),
+            Some(NotRunReason::HostRestart)
+        );
+        assert!(turns[2].not_run.is_none(), "the one running now");
+
+        // 目检 2026-11-15: Codex wrote the cut turn as aborted, with an end.
+        let stopped = |started_at: u64, ended_at: u64| TurnStat {
+            started_at,
+            ended_at: Some(ended_at),
+            interrupted: true,
+            ..TurnStat::default()
+        };
+        let mut turns = vec![
+            stopped(100, 120),
+            turn(200, Some(260)),
+            stopped(300, 318),
+            turn(600, Some(700)),
+        ];
+        mark_restarts(&mut turns, &[400]);
+        assert!(
+            turns[0].interrupted && turns[0].not_run.is_none(),
+            "the person stopped it, before another turn"
+        );
+        assert!(turns[1].not_run.is_none(), "it ended");
+        assert_eq!(
+            (
+                turns[2].interrupted,
+                turns[2].not_run.as_ref().map(|n| n.reason)
+            ),
+            (false, Some(NotRunReason::HostRestart))
+        );
+        assert!(turns[3].not_run.is_none(), "after the restart");
+
+        let record = crate::storage::Record(
+            json!({ "id": "t", "hostRestarts": [5, "x", 7] })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert_eq!(host_restarts(&record), vec![5, 7]);
     }
 }
