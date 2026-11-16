@@ -11,15 +11,13 @@ struct ImportedTranscript<Footer: View>: View {
     let agentSessionID: String?
     @ViewBuilder let footer: () -> Footer
     @State private var messages: [SessionMessage] = []
+    /// Grouped once per read, not per body (a turn's expand toggle re-ran it).
+    @State private var turns: [TranscriptTurn] = []
     @State private var loading = false
     @State private var errorText: String?
     @State private var expandedTurns: Set<String> = []
 
     private static var bottomID: String { "imported.bottom" }
-
-    private var turns: [TranscriptTurn] {
-        TranscriptTurns.group(TranscriptBuilder.items(from: messages, taskRunning: false))
-    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -27,7 +25,6 @@ struct ImportedTranscript<Footer: View>: View {
             ScrollViewReader { scroller in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 40) {
-                        let turns = turns
                         if turns.isEmpty {
                             AeroricEmptyState(systemImage: loading ? "hourglass" : "text.bubble",
                                               title: loading ? "正在读取会话历史…" : "这个会话没有可显示的内容",
@@ -116,7 +113,10 @@ struct ImportedTranscript<Footer: View>: View {
         loading = true
         Task { @MainActor in
             defer { loading = false }
-            do { messages = try await book.messages(id: sessionID) } catch { errorText = "读取历史失败：\(error)" }
+            do {
+                messages = try await book.messages(id: sessionID)
+                turns = TranscriptTurns.group(TranscriptBuilder.items(from: messages, taskRunning: false))
+            } catch { errorText = "读取历史失败：\(error)" }
         }
     }
 }

@@ -96,23 +96,27 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
             )
             let railShown = sidebarCollapsed || budget.sidebarAutoCollapsed
             HStack(spacing: 0) {
-                ProjectSidebar(
-                    selection: navigationSelection, items: state.sidebarItems,
-                    width: budget.sidebarWidth, collapsed: railShown,
-                    expandedProjects: expandedProjects,
-                    phase: state.phaseSnapshot, phaseText: state.phaseText,
-                    onNewProjectTask: { navigationSelection.wrappedValue = SessionNavigation.draft(projectID: $0) },
-                    onMoveSelection: moveSidebarSelection,
-                    onOpenFolder: { onCommand(PaletteCommand(id: "project.open", title: "打开项目…")) },
-                    onOpenRemote: { onCommand(PaletteCommand(id: "project.open_remote", title: "打开远程项目…")) },
-                    onOpenSettings: { onCommand(PaletteCommand(id: "settings.show", title: "设置…")) },
-                    onAddProject: { state.addProject(path: $0) },
-                    onSessionAction: { state.sessionAction($0, $1) },
-                    onProjectAction: { state.projectAction($0, $1) },
-                    projectGroupNames: state.projectGroupNames,
-                    agentChoices: { state.agentChoices(projectID: $0) },
-                    allSessions: { state.allSessions(projectID: $0) }
-                )
+                // Read in the reader's own body: a change to the rows (tasks,
+                // imports, attention counts …) re-renders the sidebar only.
+                SidebarItemsReader(state: state) { items in
+                    ProjectSidebar(
+                        selection: navigationSelection, items: items,
+                        width: budget.sidebarWidth, collapsed: railShown,
+                        expandedProjects: expandedProjects,
+                        phase: state.phaseSnapshot, phaseText: state.phaseText,
+                        onNewProjectTask: { navigationSelection.wrappedValue = SessionNavigation.draft(projectID: $0) },
+                        onMoveSelection: moveSidebarSelection,
+                        onOpenFolder: { onCommand(PaletteCommand(id: "project.open", title: "打开项目…")) },
+                        onOpenRemote: { onCommand(PaletteCommand(id: "project.open_remote", title: "打开远程项目…")) },
+                        onOpenSettings: { onCommand(PaletteCommand(id: "settings.show", title: "设置…")) },
+                        onAddProject: { state.addProject(path: $0) },
+                        onSessionAction: { state.sessionAction($0, $1) },
+                        onProjectAction: { state.projectAction($0, $1) },
+                        projectGroupNames: state.projectGroupNames,
+                        agentChoices: { state.agentChoices(projectID: $0) },
+                        allSessions: { state.allSessions(projectID: $0) }
+                    )
+                }
                 Group {
                     if railShown {
                         Color.clear.overlay(alignment: .leading) { HairlineDivider(.vertical) }
@@ -170,8 +174,10 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                                  identifier: "workspace.toggle-sidebar") { sidebarCollapsed.toggle() }
             }
             .bareToolbarItem()
-            ToolbarItem(placement: .primaryAction) { moreToolsMenu }
-                .bareToolbarItem()
+            ToolbarItem(placement: .primaryAction) {
+                SidebarItemsReader(state: state) { moreToolsMenu($0) }
+            }
+            .bareToolbarItem()
             ToolbarItem(placement: .primaryAction) {
                 NativeIconButton(systemImage: "sidebar.right", label: "辅助面板",
                                  identifier: "workspace.toggle-inspector",
@@ -196,7 +202,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
         .onPreferenceChange(WindowTitleKey.self) { title in
             if windowTitle != title { windowTitle = title }
         }
-        .background(alignment: .topLeading) { selectionProbe }
+        .background(alignment: .topLeading) { SidebarItemsReader(state: state) { selectionProbe($0) } }
         .modifier(HiddenWindowTitle())
         .modifier(NoTopScrollEdge())
         // 2026-10-27: no status bar (Ready / 运行中 / 待回应). The connection
@@ -254,8 +260,8 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
     /// The current item's title, read by the launch tests through
     /// `detail.selection`. The visible crumb was removed (2026-10-26 UI
     /// review); this zero-size element keeps the accessibility contract.
-    private var selectionProbe: some View {
-        let title = SidebarOrdering.item(id: selection, in: state.sidebarItems)?.title ?? "Aeroric"
+    private func selectionProbe(_ items: [SidebarItem]) -> some View {
+        let title = SidebarOrdering.item(id: selection, in: items)?.title ?? "Aeroric"
         return Color.clear
             .frame(width: 1, height: 1)
             .accessibilityElement()
@@ -266,8 +272,8 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
 
     /// The 11 tool and system surfaces (Git, 数据库, IDE …): one toolbar menu
     /// and ⌘K, never permanent sidebar rows.
-    private var moreToolsMenu: some View {
-        let tools = state.sidebarItems.filter { $0.group == .tools || $0.group == .system }
+    private func moreToolsMenu(_ items: [SidebarItem]) -> some View {
+        let tools = items.filter { $0.group == .tools || $0.group == .system }
         return Menu {
             ForEach([SidebarGroup.tools, .system], id: \.self) { group in
                 let rows = tools.filter { $0.group == group }
@@ -347,6 +353,16 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
             break
         }
     }
+}
+
+/// Reads `state.sidebarItems` in its own body. The rows are computed from
+/// most of the app's stores; read in `WorkspaceRootView.body`, any change to
+/// one of them re-evaluated the whole window (measured 2026-11-12).
+private struct SidebarItemsReader<State: WorkspaceStateProviding, Content: View>: View {
+    let state: State
+    @ViewBuilder let content: ([SidebarItem]) -> Content
+
+    var body: some View { content(state.sidebarItems) }
 }
 
 /// Drag handle for the sidebar width. Clamps to the P4-04 range 180–360pt.

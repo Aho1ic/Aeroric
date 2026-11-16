@@ -210,6 +210,12 @@ public final class LiveSessionStore {
     public private(set) var history: [SessionMessage] = []
     /// The whole session's usage and timing from its transcript.
     public private(set) var transcriptStats: SessionTranscriptStats?
+    /// `history` as transcript items and as turns with their timing, rebuilt
+    /// once per history read. 2026-11-12 (perf): the page derived them in its
+    /// body — N+3 times per body for N turns, at ~20 bodies a second while a
+    /// turn ran.
+    public private(set) var historyItems: [TranscriptItem] = []
+    public private(set) var historyTurns: [TranscriptTurn] = []
     public private(set) var model: LiveSessionModel?
     public private(set) var state: LiveSessionState?
     public private(set) var approvals = LiveApprovalMachine()
@@ -314,7 +320,7 @@ public final class LiveSessionStore {
             let state = try await actions.state(taskID: taskID)
             self.state = state
             model = LiveSessionModel(state: state)
-            approvals.retain(pending: state.pending)
+            retainApprovals(pending: state.pending)
             await reloadHistory()
             baseline = LiveHistoryMerge.assistantCount(history)
             await restoreDelegations()
@@ -342,7 +348,9 @@ public final class LiveSessionStore {
         guard var current = model else { return false }
         do {
             let batch = try await actions.updates(taskID: taskID, after: current.cursor)
-            connectionProblem = nil
+            // Only real changes are written: @Observable notifies on every
+            // assignment, and this runs every 50–500ms.
+            if connectionProblem != nil { connectionProblem = nil }
             pollFailures = 0
             let wasActive = current.turnActive
             switch current.apply(batch) {
@@ -351,8 +359,8 @@ public final class LiveSessionStore {
                 return false
             case let .applied(turnEnded):
                 if !wasActive && current.turnActive { baseline = LiveHistoryMerge.assistantCount(history) }
-                model = current
-                approvals.retain(pending: current.pending)
+                if current != model { model = current }
+                retainApprovals(pending: current.pending)
                 syncSendFailures(current)
                 if turnEnded {
                     await settleTurn()
@@ -384,7 +392,7 @@ public final class LiveSessionStore {
             var fresh = model ?? LiveSessionModel(state: state)
             fresh.resync(state)
             model = fresh
-            approvals.retain(pending: state.pending)
+            retainApprovals(pending: state.pending)
             await reloadHistory()
             baseline = LiveHistoryMerge.assistantCount(history)
             await restoreDelegations()
@@ -548,10 +556,18 @@ public final class LiveSessionStore {
             let page = try await actions.historyWithStats(taskID: taskID)
             history = page.messages
             if let stats = page.stats { transcriptStats = stats }
-            historyError = nil
+            historyItems = TranscriptBuilder.items(from: history, taskRunning: false)
+            historyTurns = TranscriptTurns.attach(transcriptStats?.turns ?? [], to: TranscriptTurns.group(historyItems))
+            if historyError != nil { historyError = nil }
         } catch {
             historyError = "历史载入失败：\(error)"
         }
+    }
+
+    private func retainApprovals(pending: [LivePendingPermission]) {
+        var next = approvals
+        next.retain(pending: pending)
+        if next != approvals { approvals = next }
     }
 
     public func retryHistory() async {
@@ -763,8 +779,14 @@ public final class LiveSessionStore {
     }
 
     /// A2: what the host said it could not write to the agent goes on the card.
+    /// A2: answers the host could not write keep their card, with the reason.
+    /// Written back only when it changes, like `retainApprovals`: a poll
+    /// runs every 50 ms in a turn and every write redraws the page.
     private func syncSendFailures(_ model: LiveSessionModel) {
-        for (id, reason) in model.sendFailures { approvals.hostFailed(id, message: reason) }
+        guard !model.sendFailures.isEmpty else { return }
+        var next = approvals
+        for (id, reason) in model.sendFailures { next.hostFailed(id, message: reason) }
+        if next != approvals { approvals = next }
     }
 
     /// Question cards being sent (disabled until the host resolves them).

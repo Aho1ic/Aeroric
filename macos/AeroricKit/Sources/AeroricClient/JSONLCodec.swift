@@ -38,6 +38,10 @@ public struct JSONLSplitBatch: Equatable, Sendable {
 /// Feeding an empty array is legal and returns an empty batch.
 public struct JSONLFrameSplitter: Sendable {
     private var buffer = Data()
+    /// Leading bytes of `buffer` already known to hold no delimiter. A large
+    /// frame arrives in many reads; rescanning it from the start on each one
+    /// was quadratic (2026-11-12: ~16% of a core in the reader on a busy host).
+    private var scanned = 0
 
     public init() {}
 
@@ -47,33 +51,51 @@ public struct JSONLFrameSplitter: Sendable {
         guard !bytes.isEmpty else { return JSONLSplitBatch(lines: []) }
         buffer.append(contentsOf: bytes)
 
-        guard buffer.firstIndex(of: UInt8(ascii: "\n")) != nil else {
+        guard var delimiter = Self.newline(in: buffer, from: scanned) else {
             if buffer.count > ProtocolCodec.maxFrameBytes {
                 let fault = TransportFault.overlong(bytes: buffer.count, limit: ProtocolCodec.maxFrameBytes)
-                buffer.removeAll()
+                reset()
                 return JSONLSplitBatch(lines: [], fault: fault)
             }
+            scanned = buffer.count
             return JSONLSplitBatch(lines: [])
         }
 
         var lines: [String] = []
-        var byteOffset = buffer.startIndex
-        while let delimiter = buffer[byteOffset...].firstIndex(of: UInt8(ascii: "\n")) {
-            let lineBytes = buffer[byteOffset..<delimiter]
-            byteOffset = buffer.index(after: delimiter)
+        var lineStart = 0
+        while true {
+            let tail = delimiter + 1
+            let next = Self.newline(in: buffer, from: tail)
             // A tail that already exceeds the cap without another delimiter
             // cannot become a valid frame; stop before decoding garbage.
-            if buffer[byteOffset...].firstIndex(of: UInt8(ascii: "\n")) == nil,
-               buffer.distance(from: byteOffset, to: buffer.endIndex) > ProtocolCodec.maxFrameBytes {
-                let fault = TransportFault.overlong(bytes: buffer.distance(from: byteOffset, to: buffer.endIndex),
-                                                    limit: ProtocolCodec.maxFrameBytes)
-                buffer.removeAll()
+            if next == nil, buffer.count - tail > ProtocolCodec.maxFrameBytes {
+                let fault = TransportFault.overlong(bytes: buffer.count - tail, limit: ProtocolCodec.maxFrameBytes)
+                reset()
                 return JSONLSplitBatch(lines: lines, fault: fault)
             }
-            lines.append(String(decoding: lineBytes, as: UTF8.self))
+            let base = buffer.startIndex
+            lines.append(String(decoding: buffer[(base + lineStart)..<(base + delimiter)], as: UTF8.self))
+            lineStart = tail
+            guard let next else { break }
+            delimiter = next
         }
-        buffer.removeSubrange(buffer.startIndex..<byteOffset)
+        buffer.removeSubrange(buffer.startIndex..<(buffer.startIndex + lineStart))
+        scanned = buffer.count
         return JSONLSplitBatch(lines: lines)
+    }
+
+    /// Offset of the first `\n` at or after `offset`, via `memchr`.
+    private static func newline(in data: Data, from offset: Int) -> Int? {
+        data.withUnsafeBytes { raw -> Int? in
+            guard offset < raw.count, let base = raw.baseAddress,
+                  let hit = memchr(base + offset, Int32(UInt8(ascii: "\n")), raw.count - offset) else { return nil }
+            return base.distance(to: UnsafeRawPointer(hit))
+        }
+    }
+
+    private mutating func reset() {
+        buffer.removeAll()
+        scanned = 0
     }
 
     /// Called once the peer half-closes: whatever is still buffered never
@@ -81,7 +103,7 @@ public struct JSONLFrameSplitter: Sendable {
     public mutating func finish() -> JSONLSplitBatch {
         guard !buffer.isEmpty else { return JSONLSplitBatch(lines: []) }
         let fault = TransportFault.prematureEOF(bufferedBytes: buffer.count)
-        buffer.removeAll()
+        reset()
         return JSONLSplitBatch(lines: [], fault: fault)
     }
 }
