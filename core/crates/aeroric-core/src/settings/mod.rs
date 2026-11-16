@@ -63,6 +63,27 @@ pub mod secret_fields;
 pub mod session_catalog;
 pub mod versions;
 
+/// B6 可选 embedding: 随手记's embedding settings with the app's proxy, for
+/// memory's vectors. The key, when the provider needs one, is the host's to
+/// add from the secret store.
+pub fn notebook_embed_config() -> crate::notebook::rag::embed::EmbedConfig {
+    let settings = load_settings_internal();
+    let embedding = settings.notebook_embedding_settings;
+    let proxy = settings.proxy_settings;
+    crate::notebook::rag::embed::EmbedConfig {
+        provider: embedding.provider,
+        base_url: embedding.base_url,
+        model: embedding.model,
+        api_key: String::new(),
+        proxy: crate::notebook::rag::embed::ProxyConfig {
+            url: proxy.url,
+            username: proxy.username,
+            password: proxy.password,
+            no_proxy: proxy.no_proxy,
+        },
+    }
+}
+
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};

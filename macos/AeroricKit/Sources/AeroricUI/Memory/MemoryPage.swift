@@ -22,6 +22,8 @@ public struct MemoryPage: View {
     @State private var planningHistory = false
     @State private var editingSkill: LiveSkillProposal?
     @State private var showClosedSkills = false
+    /// B6: the memory whose 相关改动 sheet is open.
+    @State private var chainOf: LiveMemoryItem?
     /// B5-2: a session clue opens its session.
     let onOpenTask: (String) -> Void
 
@@ -68,6 +70,12 @@ public struct MemoryPage: View {
                 editingSkill = nil
                 Task { await store.editProposal(proposal, edit) }
             }, onCancel: { editingSkill = nil })
+        }
+        .sheet(item: $chainOf) { item in
+            MemoryChainSheet(store: store, item: item, onOpenTask: { task in
+                chainOf = nil
+                onOpenTask(task)
+            }, onClose: { chainOf = nil })
         }
         .sheet(isPresented: $showSettings) {
             MemoryExtractSettingsSheet(store: store, onClose: { showSettings = false })
@@ -157,6 +165,21 @@ public struct MemoryPage: View {
                 .disabled(projects.isEmpty)
                 .accessibilityIdentifier("memory.history.open")
             }
+            if store.tab != .skills && store.tab != .history {
+                Button {
+                    Task { await store.dream() }
+                } label: {
+                    Label(store.dreaming ? "正在整理…" : "现在整理", systemImage: "wand.and.stars")
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                .disabled(!store.settings.hasModel || store.dreaming)
+                .help(store.settings.hasModel
+                      ? "把\(scopeTitle)里字面相近的记忆交给分析模型：重复的经验自动合并，其余的进待确认；可在整理记录里撤销"
+                      : "先在“整理设置”里选一个分析模型")
+                .accessibilityIdentifier("memory.dream")
+            }
             Button {
                 showSettings = true
             } label: {
@@ -189,6 +212,23 @@ public struct MemoryPage: View {
 
     @ViewBuilder private var content: some View {
         let shown = store.shown
+        if let note = store.dreamNote {
+            Label("刚才整理：\(note)", systemImage: "wand.and.stars")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .lineLimit(1)
+                .padding(.horizontal, AeroricSpace.s)
+                .accessibilityIdentifier("memory.dream.note")
+        }
+        let dreams = store.pendingDreams(store.tab)
+        if !dreams.isEmpty {
+            sectionLabel("整理建议 · \(dreams.count)", tint: AeroricColor.warning)
+            ForEach(dreams) { proposal in dreamCard(proposal) }
+        }
+        let accepted = store.acceptedDreams(store.tab)
+        if !accepted.isEmpty {
+            ForEach(accepted) { proposal in acceptedDreamRow(proposal) }
+        }
         if !shown.pending.isEmpty {
             HStack(spacing: AeroricSpace.m) {
                 sectionLabel("待确认 · \(shown.pending.count)", tint: AeroricColor.warning)
@@ -282,6 +322,189 @@ public struct MemoryPage: View {
                                 onImport: { Task { await store.importNative(file) } })
             }
         }
+    }
+
+    /// B6: one dream proposal — its items, the model's pick marked, a
+    /// 保留这条 on each; keeping one marks the others replaced by it.
+    /// B6 second batch: an accepted proposal, with 撤回.
+    private func acceptedDreamRow(_ proposal: LiveDreamProposal) -> some View {
+        HStack(spacing: AeroricSpace.m) {
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+            Text(MemoryText.dreamDone(proposal))
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .lineLimit(1)
+            Spacer(minLength: AeroricSpace.m)
+            Button("撤回") { Task { await store.revertDream(proposal) } }
+                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                .fixedSize()
+                .disabled(store.busyText != nil)
+                .help("恢复这次整理之前的样子；同样的建议以后不再提")
+                .accessibilityIdentifier("memory.dream.revert")
+        }
+        .padding(.horizontal, AeroricSpace.s)
+        .accessibilityIdentifier("memory.dream.accepted.\(proposal.id)")
+    }
+
+    @ViewBuilder private func dreamCard(_ proposal: LiveDreamProposal) -> some View {
+        switch proposal.relation {
+        case "stale": staleCard(proposal)
+        case "compress": compressCard(proposal)
+        default: groupCard(proposal)
+        }
+    }
+
+    private func dreamHeader(_ proposal: LiveDreamProposal, systemImage: String) -> some View {
+        HStack(spacing: AeroricSpace.m) {
+            Image(systemName: systemImage)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.warning)
+                .frame(width: 16)
+            Text(MemoryText.dreamHeading(proposal))
+                .font(.system(size: AeroricType.secondary, weight: .medium))
+                .lineLimit(1)
+            if !proposal.reason.isEmpty, proposal.relation != "stale" {
+                Text(proposal.reason)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: AeroricSpace.m)
+        }
+    }
+
+    private func dreamLine(_ text: String, help: String? = nil) -> some View {
+        Text(text)
+            .font(.system(size: AeroricType.secondary))
+            .lineLimit(2)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(help ?? text)
+            .padding(.horizontal, AeroricSpace.l)
+            .frame(minHeight: 30)
+            .background(Capsule(style: .continuous).fill(AeroricColor.layer2))
+    }
+
+    private func dreamButtons(_ proposal: LiveDreamProposal, keep: String, keepHelp: String,
+                              accept: String, acceptHelp: String) -> some View {
+        HStack(spacing: AeroricSpace.m) {
+            Spacer(minLength: AeroricSpace.m)
+            Button(keep) { Task { await store.decideDream(proposal, keep: nil, accept: false) } }
+                .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                .fixedSize()
+                .help(keepHelp)
+                .accessibilityIdentifier("memory.dream.reject")
+            Button(accept) { Task { await store.decideDream(proposal, keep: nil, accept: true) } }
+                .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
+                .fixedSize()
+                .help(acceptHelp)
+                .accessibilityIdentifier("memory.dream.accept")
+        }
+        .disabled(store.busyText != nil)
+    }
+
+    /// B6 second batch: 过时检测.
+    private func staleCard(_ proposal: LiveDreamProposal) -> some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            dreamHeader(proposal, systemImage: "clock.badge.questionmark")
+            dreamLine(store.item(proposal.keep)?.text ?? proposal.keep,
+                      help: store.item(proposal.keep).map(MemoryText.help))
+            Text(MemoryText.dreamMissing(proposal))
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, AeroricSpace.l)
+            dreamButtons(proposal, keep: "还有用", keepHelp: "留着这条；这些名字仍然找不到时不再提",
+                         accept: "归档", acceptHelp: "移到历史版本里的“已归档”，不再带进会话和检索；能撤回")
+        }
+        .padding(AeroricSpace.m)
+        .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(AeroricColor.warning.opacity(0.1)))
+        .accessibilityIdentifier("memory.dream.\(proposal.id)")
+    }
+
+    /// B6 second batch: 画像压缩.
+    private func compressCard(_ proposal: LiveDreamProposal) -> some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            dreamHeader(proposal, systemImage: "rectangle.compress.vertical")
+            Text("改写后（原来 \(proposal.ids.count) 条，置顶的不动）")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .padding(.horizontal, AeroricSpace.l)
+            ForEach(Array(proposal.rewrite.enumerated()), id: \.offset) { _, line in
+                dreamLine(line.text)
+            }
+            DisclosureGroup("原来的 \(proposal.ids.count) 条") {
+                ForEach(proposal.ids, id: \.self) { id in
+                    dreamLine(store.item(id)?.text ?? id)
+                }
+            }
+            .font(.system(size: AeroricType.caption))
+            .padding(.horizontal, AeroricSpace.l)
+            dreamButtons(proposal, keep: "保持原样", keepHelp: "不改写；同样这几条以后不再提",
+                         accept: "用改写后的", acceptHelp: "原来的几条标为“已取代”，在历史版本里还能看到；能撤回")
+        }
+        .padding(AeroricSpace.m)
+        .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(AeroricColor.warning.opacity(0.1)))
+        .accessibilityIdentifier("memory.dream.\(proposal.id)")
+    }
+
+    private func groupCard(_ proposal: LiveDreamProposal) -> some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            HStack(spacing: AeroricSpace.m) {
+                Image(systemName: proposal.relation == "conflict" ? "exclamationmark.triangle" : "square.on.square")
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.warning)
+                    .frame(width: 16)
+                Text(MemoryText.dreamHeading(proposal))
+                    .font(.system(size: AeroricType.secondary, weight: .medium))
+                    .lineLimit(1)
+                if !proposal.reason.isEmpty {
+                    Text(proposal.reason)
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: AeroricSpace.m)
+                Button("都留着") { Task { await store.decideDream(proposal, keep: nil, accept: false) } }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .fixedSize()
+                    .help("不改动这几条，以后整理也不再问这一组")
+                    .accessibilityIdentifier("memory.dream.reject")
+            }
+            ForEach(proposal.ids, id: \.self) { id in
+                let suggested = id == proposal.keep
+                HStack(spacing: AeroricSpace.m) {
+                    Text(store.item(id)?.text ?? id)
+                        .font(.system(size: AeroricType.secondary))
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help(store.item(id).map(MemoryText.help) ?? id)
+                    if let item = store.item(id) {
+                        CheckpointBadge(text: MemoryText.source(item),
+                                        tint: item.assertion == "userExplicit" ? AeroricColor.success : AeroricColor.accent)
+                    }
+                    Button(suggested ? "保留这条（建议）" : "保留这条") {
+                        Task { await store.decideDream(proposal, keep: id, accept: true) }
+                    }
+                    .buttonStyle(AeroricCapsuleButtonStyle(suggested ? .tinted : .ghost, compact: true))
+                    .fixedSize()
+                    .help("留下这一条，其余几条标为“已取代”，在历史版本里还能看到")
+                    .accessibilityIdentifier("memory.dream.keep")
+                }
+                .padding(.horizontal, AeroricSpace.l)
+                .frame(minHeight: 30)
+                .background(Capsule(style: .continuous).fill(AeroricColor.layer2))
+            }
+        }
+        .padding(AeroricSpace.m)
+        .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(AeroricColor.warning.opacity(0.1)))
+        .accessibilityIdentifier("memory.dream.\(proposal.id)")
     }
 
     /// B5-3b 技能提案.
@@ -429,7 +652,7 @@ public struct MemoryPage: View {
                 .font(.system(size: AeroricType.caption).monospacedDigit())
                 .foregroundStyle(AeroricColor.textTertiary)
                 .fixedSize()
-            Text(run.title.isEmpty ? "未命名会话" : run.title)
+            Text(MemoryText.runTitle(run))
                 .font(.system(size: AeroricType.secondary))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -455,7 +678,16 @@ public struct MemoryPage: View {
             if run.state == "done" || run.state == "partial" {
                 CheckpointBadge(text: MemoryText.runOutput(run), tint: AeroricColor.accent)
             }
-            if run.state == "failed" || run.state == "partial" {
+            if run.undoneMs != nil {
+                CheckpointBadge(text: "已撤销", tint: AeroricColor.textSecondary)
+            } else if MemoryText.canUndo(run) {
+                Button("撤销这次整理") { Task { await store.undoDream(run) } }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .fixedSize()
+                    .help("自动合并的经验恢复成生效中，还没确认的整理建议收回；你已确认的不变")
+                    .accessibilityIdentifier("memory.dream.undo")
+            }
+            if !run.isDream && (run.state == "failed" || run.state == "partial") {
                 Button("重试") { Task { await store.retry(run) } }
                     .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
                     .fixedSize()
@@ -553,7 +785,12 @@ public struct MemoryPage: View {
             } else {
                 CheckpointBadge(text: MemoryText.state(item), tint: AeroricColor.textSecondary)
             }
-            if pending {
+            if pending && store.deciding.contains(item.id) {
+                Text("处理中…")
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .fixedSize()
+            } else if pending {
                 Button("确认") { Task { await store.confirm(item, accept: true) } }
                     .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
                     .fixedSize()
@@ -600,6 +837,9 @@ public struct MemoryPage: View {
                 Button("有用", systemImage: "hand.thumbsup") { Task { await store.feedback(item, helpful: true) } }
                 Button("不对", systemImage: "hand.thumbsdown") { Task { await store.feedback(item, helpful: false) } }
                 Divider()
+            }
+            if MemoryText.hasChain(item) {
+                Button("相关改动…", systemImage: "chevron.left.forwardslash.chevron.right") { chainOf = item }
             }
             if item.kind == "sessionFact" || item.kind == "experience" {
                 if let task = item.evidence.first?.taskId {
@@ -801,6 +1041,27 @@ struct MemoryExtractSettingsSheet: View {
                 ), groupTitle: "每天最多整理几次", mode: .titleOnly,
                    segments: Self.limits.map { .init(value: $0, title: "\($0) 次") })
             }
+            row("按意思找") {
+                Toggle(draft.semantic ? "开" : "关", isOn: $draft.semantic)
+                    .toggleStyle(CapsuleToggleStyle())
+                    .help("召回和整理时也按意思找相近的记忆，不只看字面")
+                    .accessibilityIdentifier("memory.extract.semantic")
+            }
+            if draft.semantic {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let semantic = store.semantic {
+                        Text(MemoryText.semanticLine(semantic))
+                            .foregroundStyle(semantic.error == nil ? AeroricColor.textSecondary : AeroricColor.warning)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Text("用随手记设置里的 embedding 模型。nomic-embed-text 对中文分不清相关和无关，建议换 bge-m3 这类支持中文的模型。")
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.system(size: AeroricType.caption))
+                .padding(.leading, 64 + AeroricSpace.m)
+            }
             Text("只整理开启了记忆的项目 · 只发对话文字，不发工具输出 · 密钥先遮掉 · 候选都要你确认 · 打开之前结束的会话不会被整理")
                 .font(.system(size: AeroricType.caption))
                 .foregroundStyle(AeroricColor.textTertiary)
@@ -824,6 +1085,7 @@ struct MemoryExtractSettingsSheet: View {
         .task {
             draft = store.settings
             await store.loadModels()
+            await store.loadSemantic()
         }
     }
 
@@ -1005,5 +1267,95 @@ struct SkillEditSheet: View {
             text = proposal.body
             global = proposal.global
         }
+    }
+}
+
+/// B6 (2026-11-13): 代码版本链 — the code the memory's sessions changed,
+/// block by block (file and the definition it falls in), newest first;
+/// undone turns stay listed. Each block opens to its diff.
+struct MemoryChainSheet: View {
+    let store: MemoryStore
+    let item: LiveMemoryItem
+    let onOpenTask: (String) -> Void
+    let onClose: () -> Void
+    @State private var open: Set<String> = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.l) {
+            Text("相关改动").font(.system(size: AeroricType.title, weight: .semibold))
+            Text(item.text)
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+                .lineLimit(2)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: AeroricSpace.s) {
+                    if let chain = store.chain {
+                        if chain.isEmpty {
+                            Text("这条记忆的来源会话没有记下改动：只记开启记忆的项目、改过文件的轮次，保留 180 天。")
+                                .font(.system(size: AeroricType.secondary))
+                                .foregroundStyle(AeroricColor.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        ForEach(chain) { change in row(change) }
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+            }
+            .frame(height: 360)
+            HStack {
+                Spacer()
+                Button("关闭", action: onClose)
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(AeroricSpace.xl)
+        .frame(width: 620)
+        .task { await store.loadChain(item) }
+    }
+
+    @ViewBuilder private func row(_ change: LiveCodeChange) -> some View {
+        let isOpen = open.contains(change.id)
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            HStack(spacing: AeroricSpace.m) {
+                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .frame(width: 10)
+                Text(MemoryText.changePlace(change))
+                    .font(.system(size: AeroricType.secondary).monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(MemoryText.changeDetail(change))
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(change.state == "undone" ? AeroricColor.warning : AeroricColor.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                Button { onOpenTask(change.taskId) } label: {
+                    Image(systemName: "arrow.up.forward").foregroundStyle(AeroricColor.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .help("打开改动它的会话")
+            }
+            .padding(.horizontal, AeroricSpace.l)
+            .frame(height: 30)
+            .background(Capsule(style: .continuous).fill(AeroricColor.layer2))
+            .contentShape(Capsule())
+            .onTapGesture {
+                if isOpen { open.remove(change.id) } else { open.insert(change.id) }
+            }
+            if isOpen && !change.diff.isEmpty {
+                Text(change.diff)
+                    .font(AeroricType.mono(AeroricType.code))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(AeroricSpace.l)
+                    .background(AeroricRadius.shape(AeroricRadius.m).fill(AeroricColor.layer1))
+            }
+        }
+        .accessibilityIdentifier("memory.chain.\(change.id)")
     }
 }

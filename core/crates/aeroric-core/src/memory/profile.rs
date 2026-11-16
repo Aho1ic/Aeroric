@@ -15,6 +15,18 @@ fn category(item: &MemoryItem) -> &'static str {
     }
 }
 
+/// B6 second batch: some profile or fact item does not fit the budget (the
+/// cue for 画像压缩).
+pub(super) fn overflows(global: &[MemoryItem], project: &[MemoryItem]) -> bool {
+    let shown = render(global, project).map_or(0, |(_, ids)| ids.len());
+    let all = project
+        .iter()
+        .chain(global)
+        .filter(|i| matches!(i.kind, MemoryKind::Profile | MemoryKind::Fact))
+        .count();
+    shown < all
+}
+
 /// `global` and `project` are active items, pinned first then newest.
 /// The text and the ids it carries (B5-3a counts them as injected).
 pub(super) fn render(

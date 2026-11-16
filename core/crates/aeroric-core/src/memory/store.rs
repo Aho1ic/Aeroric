@@ -113,7 +113,16 @@ impl Store {
              CREATE TABLE IF NOT EXISTS extracted(task_id TEXT PRIMARY KEY, hash TEXT NOT NULL,
                 at_ms INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS proposals(id TEXT PRIMARY KEY, experience_id TEXT NOT NULL UNIQUE,
-                body TEXT NOT NULL, updated_ms INTEGER NOT NULL);",
+                body TEXT NOT NULL, updated_ms INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS dream_proposals(id TEXT PRIMARY KEY, project TEXT NOT NULL,
+                run_id TEXT NOT NULL, state TEXT NOT NULL, body TEXT NOT NULL, created_ms INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS chain(project TEXT NOT NULL, branch TEXT, path TEXT NOT NULL,
+                symbol TEXT, task_id TEXT NOT NULL, turn_id TEXT NOT NULL, at_ms INTEGER NOT NULL,
+                additions INTEGER NOT NULL, deletions INTEGER NOT NULL, state TEXT NOT NULL,
+                diff TEXT NOT NULL);
+             CREATE INDEX IF NOT EXISTS chain_turn ON chain(task_id, turn_id);
+             CREATE INDEX IF NOT EXISTS chain_project ON chain(project, at_ms);
+             CREATE TABLE IF NOT EXISTS vectors(item_id TEXT PRIMARY KEY, vec BLOB NOT NULL);",
             cjk::FTS_TOKENIZER
         ))?;
         // B5-3a: schema 1 → 2 only adds columns.
@@ -162,6 +171,9 @@ impl Store {
             ],
         )?;
         tx.execute("DELETE FROM items_fts WHERE id = ?1", [id])?;
+        // B6: the words changed, so the vector is stale; the next sweep
+        // embeds them again.
+        tx.execute("DELETE FROM vectors WHERE item_id = ?1", [id])?;
         tx.execute(
             "INSERT INTO items_fts(id, body) VALUES (?1, ?2)",
             params![id, cjk::segment(&body)],
@@ -231,6 +243,301 @@ impl Store {
             .iter()
             .filter_map(|b| serde_json::from_str(b).ok())
             .collect())
+    }
+
+    /// B6 代码版本链: one turn's blocks, replacing what it had.
+    pub(super) fn put_changes(
+        &mut self,
+        task_id: &str,
+        turn_id: &str,
+        changes: &[aeroric_protocol::memory::CodeChange],
+    ) -> Result<(), MemoryError> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM chain WHERE task_id = ?1 AND turn_id = ?2",
+            params![task_id, turn_id],
+        )?;
+        for c in changes {
+            tx.execute(
+                "INSERT INTO chain(project, branch, path, symbol, task_id, turn_id, at_ms,
+                                   additions, deletions, state, diff)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    c.project_id,
+                    c.branch,
+                    c.path,
+                    c.symbol,
+                    task_id,
+                    turn_id,
+                    c.at_ms as i64,
+                    c.additions as i64,
+                    c.deletions as i64,
+                    enc(&c.state),
+                    c.diff
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(super) fn has_changes(&self, task_id: &str, turn_id: &str) -> Result<bool, MemoryError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM chain WHERE task_id = ?1 AND turn_id = ?2 LIMIT 1",
+                params![task_id, turn_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    /// The newest blocks of these sessions.
+    pub(super) fn changes_of(
+        &self,
+        task_ids: &[String],
+        limit: usize,
+    ) -> Result<Vec<aeroric_protocol::memory::CodeChange>, MemoryError> {
+        let marks = vec!["?"; task_ids.len()].join(",");
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT project, branch, path, symbol, task_id, turn_id, at_ms, additions, deletions,
+                    state, diff
+             FROM chain WHERE task_id IN ({marks}) ORDER BY at_ms DESC, rowid LIMIT {limit}"
+        ))?;
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(task_ids.iter()), |row| {
+                Ok(aeroric_protocol::memory::CodeChange {
+                    project_id: row.get(0)?,
+                    branch: row.get(1)?,
+                    path: row.get(2)?,
+                    symbol: row.get(3)?,
+                    task_id: row.get(4)?,
+                    turn_id: row.get(5)?,
+                    at_ms: row.get::<_, i64>(6)? as u64,
+                    additions: row.get::<_, i64>(7)? as u32,
+                    deletions: row.get::<_, i64>(8)? as u32,
+                    state: dec(&row.get::<_, String>(9)?)?,
+                    diff: row.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// A project's blocks older than `before_ms`, and beyond its newest
+    /// `keep`, go.
+    pub(super) fn prune_changes(
+        &self,
+        project: &str,
+        before_ms: u64,
+        keep: usize,
+    ) -> Result<(), MemoryError> {
+        self.conn.execute(
+            "DELETE FROM chain WHERE project = ?1 AND at_ms < ?2",
+            params![project, before_ms as i64],
+        )?;
+        self.conn.execute(
+            "DELETE FROM chain WHERE project = ?1 AND rowid NOT IN
+               (SELECT rowid FROM chain WHERE project = ?1 ORDER BY at_ms DESC LIMIT ?2)",
+            params![project, keep as i64],
+        )?;
+        Ok(())
+    }
+
+    /// B6: a dream's proposal, stored whole.
+    pub(super) fn put_dream_proposal(
+        &self,
+        p: &aeroric_protocol::memory::DreamProposal,
+    ) -> Result<(), MemoryError> {
+        self.conn.execute(
+            "INSERT INTO dream_proposals(id, project, run_id, state, body, created_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET state = excluded.state, body = excluded.body",
+            params![
+                p.id,
+                p.project_id.clone().unwrap_or_default(),
+                p.run_id,
+                enc(&p.state),
+                serde_json::to_string(p).unwrap_or_default(),
+                p.created_ms as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// B6: a scope's dream proposals, newest first (`None` is global).
+    pub(super) fn dream_proposals(
+        &self,
+        project_id: Option<&str>,
+    ) -> Result<Vec<aeroric_protocol::memory::DreamProposal>, MemoryError> {
+        let mut statement = self.conn.prepare(
+            "SELECT body FROM dream_proposals WHERE project = ?1 ORDER BY created_ms DESC",
+        )?;
+        let rows = statement
+            .query_map([project_id.unwrap_or("")], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .iter()
+            .filter_map(|b| serde_json::from_str(b).ok())
+            .collect())
+    }
+
+    /// B6 可选 embedding: drop every vector (the model changed).
+    pub(super) fn clear_vectors(&self) -> Result<(), MemoryError> {
+        self.conn.execute("DELETE FROM vectors", [])?;
+        Ok(())
+    }
+
+    /// Active items without a vector, newest first.
+    pub(super) fn unembedded(&self, limit: usize) -> Result<Vec<MemoryItem>, MemoryError> {
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT {COLUMNS} FROM items WHERE state = 'active'
+               AND id NOT IN (SELECT item_id FROM vectors)
+             ORDER BY updated_ms DESC LIMIT ?1"
+        ))?;
+        let rows = statement
+            .query_map([limit as i64], row_item)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub(super) fn put_vector(&self, id: &str, vector: &[f32]) -> Result<(), MemoryError> {
+        let bytes: Vec<u8> = vector.iter().flat_map(|x| x.to_le_bytes()).collect();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO vectors(item_id, vec) VALUES (?1, ?2)",
+            params![id, bytes],
+        )?;
+        Ok(())
+    }
+
+    /// Active items with a vector, and without.
+    pub(super) fn vector_counts(&self) -> Result<(u32, u32), MemoryError> {
+        let count = |sql: &str| -> Result<u32, MemoryError> {
+            Ok(self.conn.query_row(sql, [], |row| row.get::<_, i64>(0))? as u32)
+        };
+        Ok((
+            count(
+                "SELECT COUNT(*) FROM items WHERE state = 'active'
+                   AND id IN (SELECT item_id FROM vectors)",
+            )?,
+            count(
+                "SELECT COUNT(*) FROM items WHERE state = 'active'
+                   AND id NOT IN (SELECT item_id FROM vectors)",
+            )?,
+        ))
+    }
+
+    /// The vectors of a scope's active items (`None`: global).
+    pub(super) fn vectors(
+        &self,
+        project_id: Option<&str>,
+    ) -> Result<Vec<(String, Vec<f32>)>, MemoryError> {
+        let mut statement = self.conn.prepare(
+            "SELECT v.item_id, v.vec FROM vectors v JOIN items i ON i.id = v.item_id
+             WHERE i.state = 'active' AND i.project = ?1",
+        )?;
+        let rows = statement
+            .query_map([project_id.unwrap_or("")], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, bytes)| {
+                let v = bytes
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                (id, v)
+            })
+            .collect())
+    }
+
+    /// B6 second batch: the proposals waiting in every scope, newest first.
+    pub(super) fn pending_dream_proposals(
+        &self,
+    ) -> Result<Vec<aeroric_protocol::memory::DreamProposal>, MemoryError> {
+        let mut statement = self.conn.prepare(
+            "SELECT body FROM dream_proposals WHERE state = ?1 ORDER BY created_ms DESC",
+        )?;
+        let rows = statement
+            .query_map(
+                [enc(&aeroric_protocol::memory::DreamProposalState::Pending)],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .iter()
+            .filter_map(|b| serde_json::from_str(b).ok())
+            .collect())
+    }
+
+    pub(super) fn dream_proposal(
+        &self,
+        id: &str,
+    ) -> Result<Option<aeroric_protocol::memory::DreamProposal>, MemoryError> {
+        let body: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT body FROM dream_proposals WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(body.and_then(|b| serde_json::from_str(&b).ok()))
+    }
+
+    /// B6: one 整理记录 row by id.
+    pub(super) fn run(
+        &self,
+        id: &str,
+    ) -> Result<Option<aeroric_protocol::memory::MemoryRun>, MemoryError> {
+        let body: Option<String> = self
+            .conn
+            .query_row("SELECT body FROM runs WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        Ok(body.and_then(|b| serde_json::from_str(&b).ok()))
+    }
+
+    /// B6: mark an active item replaced by `keep`; false when it is no
+    /// longer active.
+    pub(super) fn retire(&self, id: &str, keep: &str, now_ms: u64) -> Result<bool, MemoryError> {
+        Ok(self.conn.execute(
+            "UPDATE items SET state = 'superseded', superseded_by = ?2, updated_ms = ?3
+             WHERE id = ?1 AND state = 'active'",
+            params![id, keep, now_ms as i64],
+        )? == 1)
+    }
+
+    /// B6: take a dream's merge back — only while the item is still the one
+    /// the dream replaced by `keep`.
+    pub(super) fn unretire(&self, id: &str, keep: &str, now_ms: u64) -> Result<bool, MemoryError> {
+        Ok(self.conn.execute(
+            "UPDATE items SET state = 'active', superseded_by = NULL, updated_ms = ?3
+             WHERE id = ?1 AND state = 'superseded' AND superseded_by = ?2",
+            params![id, keep, now_ms as i64],
+        )? == 1)
+    }
+
+    /// B6: items of these kinds added to a scope since `since_ms`.
+    pub(super) fn added_since(
+        &self,
+        project_id: Option<&str>,
+        kinds: &[MemoryKind],
+        since_ms: u64,
+    ) -> Result<u32, MemoryError> {
+        let mut total = 0;
+        for kind in kinds {
+            total += self.conn.query_row(
+                "SELECT COUNT(*) FROM items WHERE project = ?1 AND kind = ?2 AND created_ms > ?3",
+                params![project_id.unwrap_or(""), enc(kind), since_ms as i64],
+                |row| row.get::<_, i64>(0),
+            )? as u32;
+        }
+        Ok(total)
     }
 
     /// The active session clue a task's extraction left, if any.
@@ -500,7 +807,10 @@ impl Store {
         &self,
         run: &aeroric_protocol::memory::MemoryRun,
     ) -> Result<(), MemoryError> {
-        let counted = run.state != aeroric_protocol::memory::MemoryRunState::Skipped;
+        // B6 second batch: a dream that called no model (过时检测 only)
+        // does not use up the allowance.
+        let counted = run.state != aeroric_protocol::memory::MemoryRunState::Skipped
+            && !(run.kind == aeroric_protocol::memory::MemoryRunKind::Dream && run.model.is_none());
         self.conn.execute(
             "INSERT OR REPLACE INTO runs(id, at_ms, body, counted) VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -651,6 +961,7 @@ impl Store {
         tx.execute("DELETE FROM items WHERE id = ?1", [&item.id])?;
         tx.execute("DELETE FROM evidence WHERE item_id = ?1", [&item.id])?;
         tx.execute("DELETE FROM items_fts WHERE id = ?1", [&item.id])?;
+        tx.execute("DELETE FROM vectors WHERE item_id = ?1", [&item.id])?;
         // A newer version that pointed here now starts the chain.
         tx.execute(
             "UPDATE items SET supersedes = NULL WHERE supersedes = ?1",

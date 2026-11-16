@@ -38,6 +38,48 @@ pub const SKILL_DISABLE_METHOD: &str = "memory.skillDisable";
 /// would cost, then one session at a time.
 pub const HISTORY_PLAN_METHOD: &str = "memory.historyPlan";
 pub const EXTRACT_IMPORTED_METHOD: &str = "memory.extractImported";
+// B6 (2026-11-13): 后台整理（做梦） — similar items of one scope merged or
+// put to the user, as one run that can be undone (frontier-roadmap §6.5).
+pub const DREAM_METHOD: &str = "memory.dream";
+pub const DREAM_PROPOSALS_METHOD: &str = "memory.dreamProposals";
+pub const DREAM_DECIDE_METHOD: &str = "memory.dreamDecide";
+pub const DREAM_UNDO_METHOD: &str = "memory.dreamUndo";
+// B6 second batch (2026-11-14): 过时检测、画像压缩、整理建议进“需要我处理”.
+/// Take back one decided proposal (its items come back as they were).
+pub const DREAM_REVERT_METHOD: &str = "memory.dreamRevert";
+/// The proposals waiting in every scope, for 需要我处理.
+pub const DREAM_PENDING_METHOD: &str = "memory.dreamPending";
+/// The profile is rewritten only from this many unpinned items up.
+pub const COMPRESS_MIN_ITEMS: usize = 3;
+// B6 (2026-11-14): 可选 embedding — "按意思找相近的记忆", a derived index.
+pub const SEMANTIC_STATUS_METHOD: &str = "memory.semanticStatus";
+/// Nearest vectors taken per recall, and the cosine under which one is
+/// not counted as related.
+pub const SEMANTIC_EACH: usize = 20;
+pub const SEMANTIC_RECALL_MIN: f32 = 0.5;
+/// A dream counts two items alike from this cosine up.
+pub const SEMANTIC_DREAM_ALIKE: f32 = 0.75;
+/// Items embedded per sweep.
+pub const SEMANTIC_PER_SWEEP: usize = 256;
+/// A scope is dreamt on its own once this many items were added since the
+/// last time.
+pub const DREAM_AFTER_NEW: u32 = 20;
+/// …and no session has run a turn for this long.
+pub const DREAM_IDLE_MS: u64 = 10 * 60 * 1000;
+/// Groups of similar items sent in one run, and items in one group.
+pub const DREAM_MAX_GROUPS: usize = 12;
+pub const DREAM_GROUP_MAX: usize = 6;
+// B6 (2026-11-13): 代码版本链 — every turn's changes by branch × file ×
+// definition, undone ones kept, shown under the memories they came from
+// (frontier-roadmap J6, §6.1). Never searched on its own.
+pub const CHAIN_METHOD: &str = "memory.chain";
+/// Changes kept this long, and at most this many per project.
+pub const CHAIN_KEEP_MS: u64 = 180 * 24 * 60 * 60 * 1000;
+pub const CHAIN_KEEP_PER_PROJECT: usize = 5000;
+/// One block's diff text is cut to this.
+pub const CHAIN_DIFF_CHARS: usize = 2000;
+/// Changes shown under one recalled memory.
+pub const CHAIN_PER_ITEM: usize = 3;
 /// B5-3a: experiences kept from one extraction.
 pub const EXTRACT_MAX_EXPERIENCES: usize = 2;
 
@@ -215,6 +257,23 @@ pub struct MemorySettings {
     /// When `auto` was last turned on; sessions finished before it are left alone.
     #[serde(default)]
     pub enabled_ms: u64,
+    /// B6: 按意思找相近的记忆 — vectors from 随手记's embedding settings
+    /// join recall and a dream's grouping. Off by default.
+    #[serde(default)]
+    pub semantic: bool,
+}
+
+/// B6: how far the vector table is.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticStatus {
+    /// The model the table was built with; empty before the first one.
+    pub model: String,
+    pub embedded: u32,
+    /// Active items still without a vector.
+    pub missing: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 fn default_daily_limit() -> u32 {
@@ -229,6 +288,7 @@ impl Default for MemorySettings {
             model: None,
             daily_limit: DEFAULT_DAILY_LIMIT,
             enabled_ms: 0,
+            semantic: false,
         }
     }
 }
@@ -241,6 +301,26 @@ pub enum MemoryRunState {
     Partial,
     Failed,
     Skipped,
+}
+
+/// B6: what a 整理记录 row was.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MemoryRunKind {
+    /// One session's extraction (B5-2).
+    #[default]
+    Extract,
+    /// 做梦: a scope's similar items merged or put to the user.
+    Dream,
+}
+
+/// B6: one item a dream marked replaced, kept so the run can be undone.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DreamRetired {
+    pub id: String,
+    /// The item it was merged into.
+    pub keep: String,
 }
 
 /// B5-2: one extraction, for 整理记录.
@@ -274,6 +354,110 @@ pub struct MemoryRun {
     /// R1-1: items the store failed to write; the run is retried.
     #[serde(default)]
     pub failed_writes: u32,
+    /// B6: an extraction or a dream.
+    #[serde(default)]
+    pub kind: MemoryRunKind,
+    /// B6: items a dream merged on its own (and can take back).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired: Vec<DreamRetired>,
+    /// B6: groups a dream put to the user.
+    #[serde(default)]
+    pub proposed: u32,
+    /// B6: when the dream was undone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undone_ms: Option<u64>,
+}
+
+/// B6: one block of one turn's change — the hunks of one file under one
+/// definition (the nearest one above them; none at the top of a file or in
+/// a language without a parser).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeChange {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    pub task_id: String,
+    pub turn_id: String,
+    pub at_ms: u64,
+    pub additions: u32,
+    pub deletions: u32,
+    /// The turn's state as last seen (`pending` `accepted` `undone`).
+    pub state: crate::turn_ledger::TurnState,
+    /// The hunks, cut to `CHAIN_DIFF_CHARS`.
+    pub diff: String,
+}
+
+/// B6: how a group of similar items relate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DreamRelation {
+    /// They say the same thing: keep one.
+    Duplicate,
+    /// They cannot both hold: the user picks.
+    Conflict,
+    /// Second batch: every file or symbol the item names is gone from the
+    /// project (`missing`); accepting archives it.
+    Stale,
+    /// Second batch: the profile no longer fits the session budget;
+    /// accepting replaces `ids` with `rewrite`.
+    Compress,
+}
+
+/// B6 second batch: one item of a profile rewrite.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DreamRewrite {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<MemoryCategory>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DreamProposalState {
+    Pending,
+    Accepted,
+    Rejected,
+    /// Its dream was undone before the user decided.
+    Withdrawn,
+    /// Second batch: accepted, then taken back by the user.
+    Reverted,
+}
+
+/// B6: a group a dream may not change on its own — the user's words, a
+/// pinned item, the profile, or a conflict. Accepting keeps one item and
+/// marks the others replaced by it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DreamProposal {
+    pub id: String,
+    pub run_id: String,
+    /// `None` is global.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    pub kind: MemoryKind,
+    pub relation: DreamRelation,
+    pub ids: Vec<String>,
+    /// The item the model would keep.
+    pub keep: String,
+    pub reason: String,
+    pub state: DreamProposalState,
+    pub created_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_ms: Option<u64>,
+    /// `Stale`: the paths and symbols no longer found.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+    /// `Compress`: the shorter profile the model wrote.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rewrite: Vec<DreamRewrite>,
+    /// `Compress`, once accepted: the items it made (removed on revert).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub created: Vec<String>,
 }
 
 /// Q4: one imported session 整理历史会话 could send.

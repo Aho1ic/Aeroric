@@ -58,11 +58,174 @@ private final class FakeMemoryService: MemoryService {
         guard let run = runFor[id] else { throw ConnectionError.io("今天已经整理了 30 次，到上限了，明天再整理") }
         return run
     }
+    var dreams: [LiveDreamProposal] = []
+    var dreamRun: LiveMemoryRun?
+    func dream(projectID: String?) async throws -> LiveMemoryRun? {
+        calls.append("dream \(projectID ?? "global")")
+        return dreamRun
+    }
+    func dreamProposals(projectID: String?) async throws -> [LiveDreamProposal] { dreams }
+    func decideDream(id: String, accept: Bool, keep: String?) async throws {
+        calls.append("decideDream \(id) \(accept) \(keep ?? "-")")
+    }
+    func undoDream(runID: String) async throws { calls.append("undoDream \(runID)") }
+    func revertDream(id: String) async throws { calls.append("revertDream \(id)") }
+    func semanticStatus() async throws -> LiveSemanticStatus { LiveSemanticStatus(model: "bge-m3", embedded: 3, missing: 1) }
+    var changes: [LiveCodeChange] = []
+    func chain(id: String) async throws -> [LiveCodeChange] {
+        calls.append("chain \(id)")
+        return changes
+    }
 }
 
 /// B5-1: the memory page's model and the words it shares with `/记住`.
 @MainActor
 final class MemoryTests: XCTestCase {
+    /// B6 (2026-11-13): a dream's row and proposals decode, and say what
+    /// they did; only a dream that changed something can be undone, once.
+    func testADreamRowAndItsProposalsDecodeAndSayWhatTheyDid() {
+        let run = LiveMemoryRun.decode(.object([
+            "id": .string("run-1"), "taskId": .string(""), "title": .string("trainer"), "state": .string("done"),
+            "kind": .string("dream"), "proposed": .number("1"),
+            "retired": .array([.object(["id": .string("mem-2"), "keep": .string("mem-1")]),
+                               .object(["id": .string("mem-3"), "keep": .string("mem-1")])]),
+        ]))!
+        XCTAssertTrue(run.isDream)
+        XCTAssertEqual(run.merged, 2)
+        XCTAssertEqual(MemoryText.runTitle(run), "整理记忆 · trainer")
+        XCTAssertEqual(MemoryText.runOutput(run), "合并 2 条 · 待确认 1 条建议")
+        XCTAssertTrue(MemoryText.canUndo(run))
+        var undone = run
+        undone.undoneMs = 9
+        XCTAssertFalse(MemoryText.canUndo(undone))
+        let nothing = LiveMemoryRun(id: "r", state: "done", kind: "dream")
+        XCTAssertEqual(MemoryText.dreamResult(nothing), "没有发现重复、矛盾或过时")
+        XCTAssertFalse(MemoryText.canUndo(nothing))
+        XCTAssertFalse(LiveMemoryRun(id: "x", state: "done", facts: 1).isDream)
+
+        let proposal = LiveDreamProposal.decode(.object([
+            "id": .string("dream-1"), "runId": .string("run-1"), "kind": .string("fact"),
+            "relation": .string("conflict"), "ids": .array([.string("a"), .string("b")]),
+            "keep": .string("b"), "reason": .string("缩进只能一种"), "state": .string("pending"),
+        ]))!
+        XCTAssertEqual(proposal.ids, ["a", "b"])
+        XCTAssertEqual(MemoryText.dreamHeading(proposal), "这几条互相矛盾，留哪一条？")
+    }
+
+    /// B6: 代码版本链 rows decode and read as a place and a line.
+    func testCodeChangesDecodeAndTheStoreLoadsThemForAMemory() async {
+        let change = LiveCodeChange.decode(.object([
+            "path": .string("src/ssh.rs"), "symbol": .string("connect"), "branch": .string("main"),
+            "taskId": .string("t1"), "turnId": .string("u1"), "atMs": .number("0"),
+            "additions": .number("3"), "deletions": .number("1"), "state": .string("undone"),
+            "diff": .string("@@ -1 +1 @@"),
+        ]))!
+        XCTAssertEqual(MemoryText.changePlace(change), "src/ssh.rs::connect")
+        XCTAssertTrue(MemoryText.changeDetail(change).hasPrefix("main · +3 −1 · 已撤销"))
+        XCTAssertEqual(MemoryText.changePlace(LiveCodeChange(path: "logo.png")), "logo.png")
+
+        let typed = LiveMemoryItem(id: "a", text: "x")
+        let fromSession = LiveMemoryItem(id: "b", text: "y", evidence: [LiveMemoryEvidence(taskId: "t1", excerpt: "y")])
+        XCTAssertFalse(MemoryText.hasChain(typed))
+        XCTAssertTrue(MemoryText.hasChain(fromSession))
+        let service = FakeMemoryService()
+        service.changes = [change]
+        let store = MemoryStore(service: service)
+        await store.loadChain(fromSession)
+        XCTAssertEqual(store.chain, [change])
+        XCTAssertTrue(service.calls.contains("chain b"))
+    }
+
+    /// B6 second batch: a stale and a rewrite proposal decode and say what
+    /// they ask; accepted ones can be taken back; 需要我处理 gets one row per
+    /// scope, newest first.
+    func testStaleAndRewriteProposalsSayWhatTheyAskAndJoinTheAttentionQueue() async {
+        let stale = LiveDreamProposal.decode(.object([
+            "id": .string("d-s"), "kind": .string("fact"), "relation": .string("stale"),
+            "ids": .array([.string("a")]), "keep": .string("a"), "state": .string("pending"),
+            "missing": .array([.string("src/ssh.rs"), .string("connect_timeout")]),
+        ]))!
+        XCTAssertEqual(stale.missing, ["src/ssh.rs", "connect_timeout"])
+        XCTAssertEqual(MemoryText.dreamMissing(stale), "找不到：src/ssh.rs、connect_timeout")
+        XCTAssertEqual(MemoryText.dreamHeading(stale), "这条可能过时了：提到的文件和代码都找不到了")
+        let compress = LiveDreamProposal.decode(.object([
+            "id": .string("d-c"), "kind": .string("profile"), "relation": .string("compress"),
+            "ids": .array([.string("p1"), .string("p2"), .string("p3")]), "state": .string("accepted"),
+            "decidedMs": .number("9"),
+            "rewrite": .array([.object(["text": .string("偏好甲乙"), "category": .string("preference")])]),
+        ]))!
+        XCTAssertEqual(compress.rewrite, [LiveDreamRewrite(text: "偏好甲乙", category: "preference")])
+        XCTAssertEqual(compress.decidedMs, 9)
+        XCTAssertEqual(MemoryText.dreamHeading(compress), "关于你的条目太长，新会话带不全，改写成 1 条？")
+        XCTAssertEqual(MemoryText.dreamDone(compress), "已把 3 条改写成 1 条")
+
+        let service = FakeMemoryService()
+        service.dreams = [stale, compress]
+        let store = MemoryStore(service: service)
+        store.show(scope: "p", tab: .about)
+        await store.reload()
+        XCTAssertEqual(store.acceptedDreams(.about).map(\.id), ["d-c"])
+        XCTAssertTrue(store.acceptedDreams(.context).isEmpty)
+        XCTAssertEqual(store.pendingDreams(.context).map(\.id), ["d-s"])
+        await store.revertDream(compress)
+        XCTAssertTrue(service.calls.contains("revertDream d-c"))
+
+        let rows = AttentionQueue.dreamRows([
+            LiveDreamProposal(id: "1", projectId: "p", kind: "fact", createdMs: 5),
+            LiveDreamProposal(id: "2", projectId: "p", kind: "experience", createdMs: 7),
+            LiveDreamProposal(id: "3", kind: "profile", createdMs: 6),
+            LiveDreamProposal(id: "4", projectId: "q", state: "rejected", createdMs: 9),
+        ])
+        XCTAssertEqual(rows.map(\.id), ["dream#p", "dream#global"])
+        XCTAssertEqual(rows[0].count, 2)
+        XCTAssertEqual(rows[0].kind, "experience", "opens the newest one's tab")
+        XCTAssertEqual(MemoryText.dreamAttention(rows[0].count), "记忆整理待确认 2 条")
+    }
+
+    /// B6 可选 embedding: the switch round-trips, and the status line says
+    /// how far the vectors are, or why they are not.
+    func testTheSemanticSwitchRoundTripsAndItsLineSaysHowFarItIs() async {
+        let on = LiveMemorySettings.decode(.object(["semantic": .bool(true)]))
+        XCTAssertTrue(on.semantic)
+        XCTAssertEqual(on.json.objectValue?["semantic"], .bool(true))
+        XCTAssertFalse(LiveMemorySettings.decode(.object([:])).semantic, "off by default")
+        let status = LiveSemanticStatus.decode(.object([
+            "status": .object(["model": .string("bge-m3"), "embedded": .number("12"), "missing": .number("2")]),
+            "model": .string("bge-m3"),
+        ]))
+        XCTAssertEqual(MemoryText.semanticLine(status), "bge-m3 · 已算 12 条 · 还差 2 条")
+        XCTAssertEqual(MemoryText.semanticLine(LiveSemanticStatus(configured: "nomic-embed-text")),
+                       "打开后在后台用随手记的 embedding 模型（nomic-embed-text）给记忆算向量")
+        XCTAssertEqual(MemoryText.semanticLine(LiveSemanticStatus(model: "x", error: "连不上")), "向量没算成：连不上")
+        let store = MemoryStore(service: FakeMemoryService())
+        await store.loadSemantic()
+        XCTAssertEqual(store.semantic?.embedded, 3)
+    }
+
+    func testDreamProposalsWaitInTheirTabAndTheStoreSendsTheChoice() async {
+        let service = FakeMemoryService()
+        service.items = [LiveMemoryItem(id: "a", projectId: "p", kind: "fact", text: "缩进用 tab"),
+                         LiveMemoryItem(id: "b", projectId: "p", kind: "fact", text: "缩进用空格")]
+        service.dreams = [LiveDreamProposal(id: "d1", kind: "fact", relation: "conflict", ids: ["a", "b"], keep: "b"),
+                          LiveDreamProposal(id: "d2", kind: "fact", ids: ["a", "b"], state: "rejected")]
+        service.dreamRun = LiveMemoryRun(id: "run-1", state: "done", kind: "dream", merged: 1, proposed: 1)
+        let store = MemoryStore(service: service)
+        store.show(scope: "p", tab: .context)
+        await store.reload()
+        XCTAssertEqual(store.pendingDreams(.context).map(\.id), ["d1"])
+        XCTAssertTrue(store.pendingDreams(.about).isEmpty)
+        XCTAssertEqual(store.count(.context), 3, "two items and one proposal")
+        XCTAssertEqual(store.item("a")?.text, "缩进用 tab")
+
+        await store.dream()
+        XCTAssertEqual(store.dreamNote, "合并 1 条 · 待确认 1 条建议")
+        await store.decideDream(store.pendingDreams(.context)[0], keep: "a", accept: true)
+        await store.undoDream(service.dreamRun!)
+        XCTAssertTrue(service.calls.contains("dream p"))
+        XCTAssertTrue(service.calls.contains("decideDream d1 true a"))
+        XCTAssertTrue(service.calls.contains("undoDream run-1"))
+    }
+
     func testRememberCommandNeedsTextAfterIt() {
         XCTAssertEqual(MemoryText.rememberCommand("/记住 回复用中文"), "回复用中文")
         XCTAssertEqual(MemoryText.rememberCommand("/记住：只在 main 工作"), "只在 main 工作")

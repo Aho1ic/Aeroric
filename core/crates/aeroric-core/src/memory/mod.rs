@@ -8,12 +8,16 @@
 //! CJK-segmented text, `notebook::rag::cjk`).
 
 mod barrier;
+pub mod chain;
+pub mod dream;
 pub mod extract;
 pub mod native;
 mod profile;
 pub mod run;
 mod secrets;
+pub mod semantic;
 pub mod skills;
+pub mod stale;
 mod store;
 
 #[cfg(test)]
@@ -123,6 +127,8 @@ pub struct Memory {
     store: Mutex<Option<Store>>,
     /// B5-3b: the data folder (learned skills live beside the built-in ones).
     data_dir: Mutex<Option<PathBuf>>,
+    /// B6: scopes being dreamt now (one dream per scope at a time).
+    dreaming: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Memory {
@@ -544,8 +550,35 @@ impl Memory {
     /// `memory_recall`: active items of the project and global that match,
     /// the project's first, pinned and user-stated ones ahead.
     pub fn recall(&self, project_id: &str, query: &str) -> Result<Vec<MemoryItem>, MemoryError> {
+        self.recall_with(project_id, query, None)
+    }
+
+    /// B6 可选 embedding: with the query's unit vector, the nearest items
+    /// join the FTS hits and the two lists are fused (RRF); the fused score
+    /// takes the rank's place below.
+    pub fn recall_with(
+        &self,
+        project_id: &str,
+        query: &str,
+        vector: Option<&[f32]>,
+    ) -> Result<Vec<MemoryItem>, MemoryError> {
         self.with(|store| {
             let mut found = store.search(project_id, query, 30)?;
+            if let Some(vector) = vector {
+                let near = semantic::nearest(store, project_id, vector)?;
+                let words: Vec<String> = found.iter().map(|(_, i)| i.id.clone()).collect();
+                let score = semantic::fuse(&[words, near.clone()]);
+                for id in near {
+                    if !found.iter().any(|(_, i)| i.id == id) {
+                        if let Some(item) = store.get(&id)? {
+                            found.push((0, item));
+                        }
+                    }
+                }
+                for (rank, item) in found.iter_mut() {
+                    *rank = -((score.get(&item.id).copied().unwrap_or(0.0) * 1e6) as i64);
+                }
+            }
             // B5-3a: trusted and found useful first; more 不对 than 有用 last.
             found.sort_by_key(|(rank, item)| {
                 (
