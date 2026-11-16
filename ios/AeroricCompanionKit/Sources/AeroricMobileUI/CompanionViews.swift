@@ -174,17 +174,26 @@ public struct CompanionTasksPane: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("待审批请求").font(.subheadline).bold()
                     ForEach(store.pendingApprovals) { approval in
-                        HStack {
-                            Text(approval.summary)
-                            Spacer()
-                            Button("批准") {
-                                try? store.submitApproval(requestId: approval.requestId, approve: true)
+                        let answerable = store.connectionState.isMacOnline && approval.state.canSubmit
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(approval.summary)
+                                Spacer()
+                                Button("批准") {
+                                    try? store.submitApproval(requestId: approval.requestId, approve: true)
+                                }
+                                .disabled(!answerable)
+                                Button("拒绝") {
+                                    try? store.submitApproval(requestId: approval.requestId, approve: false)
+                                }
+                                .disabled(!answerable)
                             }
-                            .disabled(!store.connectionState.isMacOnline)
-                            Button("拒绝") {
-                                try? store.submitApproval(requestId: approval.requestId, approve: false)
+                            if let note = approval.state.note {
+                                Text(note)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("companion.approval.note")
                             }
-                            .disabled(!store.connectionState.isMacOnline)
                         }
                     }
                 }

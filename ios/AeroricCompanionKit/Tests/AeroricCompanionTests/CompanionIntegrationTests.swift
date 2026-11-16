@@ -116,6 +116,9 @@ final class CompanionIntegrationTests: XCTestCase {
         XCTAssertFalse(store.resyncNeeded)
 
         try store.submitApproval(requestId: "req-1", approve: true)
+        // A2: answered is not settled; the card waits for the Mac's word.
+        XCTAssertEqual(store.pendingApprovals.map(\.state), [.submitting(approve: true)])
+        store.applyApprovalOutcome(requestId: "req-1", .resolved)
         XCTAssertTrue(store.pendingApprovals.isEmpty)
 
         store.ingestTerminalFrame(TerminalFrame(opcode: .snapshotStart, streamId: 1, seq: 1, payload: Data()))
@@ -218,6 +221,49 @@ final class CompanionIntegrationTests: XCTestCase {
     }
 
     // MARK: - 5. Adaptive iPhone / iPad Views & Liquid Glass
+
+    /// A2: an answer from the phone is settled only by the Mac's word; a lost
+    /// reply is "not known" and never resent; the Mac answering first wins.
+    @MainActor
+    func testAnApprovalWaitsForTheMacsWordAndTheFirstAnswerWins() throws {
+        let store = CompanionStore()
+        try store.pairWithMac(hostName: "Mac", staticPubB64: ServerHandshakeResponder().publicBase64Url,
+                              initialEpoch: "e1", mode: .directLAN)
+        store.handleReconnect(newEpoch: "e1", latestHostSeq: 1, mode: .directLAN, snapshotTasks: [], snapshotApprovals: [
+            CompanionApproval(requestId: "r1", taskId: "t1", summary: "rm -rf build", hostEpoch: "e1"),
+            CompanionApproval(requestId: "r2", taskId: "t1", summary: "npm test", hostEpoch: "e1"),
+            CompanionApproval(requestId: "r3", taskId: "t1", summary: "git push", hostEpoch: "e1"),
+        ])
+
+        // Not written to the agent: the card stays and can be answered again.
+        try store.submitApproval(requestId: "r1", approve: true)
+        XCTAssertThrowsError(try store.submitApproval(requestId: "r1", approve: true)) { error in
+            XCTAssertEqual(error as? CompanionActionError, .approvalNotAnswerable(requestId: "r1"))
+        }
+        store.applyApprovalOutcome(requestId: "r1", .sendFailed(reason: "写不进 Claude 的输入"))
+        XCTAssertEqual(store.pendingApprovals.first?.state, .failed(reason: "写不进 Claude 的输入"))
+        try store.submitApproval(requestId: "r1", approve: true)
+
+        // No reply: not known, never resent on its own; answering again is allowed.
+        try store.submitApproval(requestId: "r2", approve: false)
+        store.applyApprovalOutcome(requestId: "r2", .timedOut)
+        XCTAssertEqual(store.pendingApprovals[1].state, .unknown(reason: "没等到 Mac 的回复，不知道送到没有"))
+        XCTAssertEqual(store.sentFramesLog.filter { $0.contains(":r2:") }.count, 1)
+        XCTAssertTrue(store.pendingApprovals[1].state.canSubmit)
+
+        // The Mac answered the same request first: this end says so and stops.
+        try store.submitApproval(requestId: "r3", approve: true)
+        store.applyApprovalOutcome(requestId: "r3", .answeredElsewhere)
+        XCTAssertEqual(store.pendingApprovals[2].state, .answeredElsewhere)
+        XCTAssertEqual(store.pendingApprovals[2].state.note, "已由另一端处理")
+        XCTAssertThrowsError(try store.submitApproval(requestId: "r3", approve: false))
+
+        // Ended with the connection: no longer answerable; resolved: gone.
+        store.applyApprovalOutcome(requestId: "r1", .ended(reason: "审批没送出去：这次请求已随连接结束"))
+        XCTAssertFalse(store.pendingApprovals[0].state.canSubmit)
+        store.applyApprovalOutcome(requestId: "r2", .resolved)
+        XCTAssertEqual(store.pendingApprovals.map(\.requestId), ["r1", "r3"])
+    }
 
     @MainActor
     func testAdaptiveIPhoneAndIPadCompanionViewsAndLiquidGlass() {

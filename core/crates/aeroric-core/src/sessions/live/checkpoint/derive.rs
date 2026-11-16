@@ -7,7 +7,9 @@ use aeroric_protocol::checkpoint::{
     Checkpoint, Consent, Effect, Entry, Epistemic, EvidenceKind, EvidenceRef, Intent, IntentState,
     Obligation, ObligationSource, ObligationState, MAX_ENTRIES, MAX_TEXT_CHARS,
 };
-use aeroric_protocol::session_live::{SessionUpdate, SessionUpdateKind, ToolKind, ToolStatus};
+use aeroric_protocol::session_live::{
+    PermissionSendState, SessionUpdate, SessionUpdateKind, ToolKind, ToolStatus,
+};
 
 /// Unknown effects kept at most; the oldest drop first.
 const MAX_UNKNOWN: usize = 20;
@@ -199,6 +201,13 @@ impl Building {
                 };
                 self.set_intent(id, state)
             }
+            // A2: an answer that did not reach the agent is no consent. Still
+            // open (`failed`): the intent keeps waiting. Ended with the
+            // connection or turn: as a cancel, whether it ran is not known.
+            K::PermissionSendFailed { id, state, .. } => match state {
+                PermissionSendState::Failed => Change::None,
+                PermissionSendState::Ended => self.set_intent(id, IntentState::OutcomeUnknown),
+            },
             K::Question { id, title, .. } => {
                 self.questions.insert(id.clone(), title.clone());
                 Change::None

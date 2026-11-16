@@ -88,7 +88,7 @@
     "turnActive": true
   },
   "updates": {
-    "latestSeq": 29,
+    "latestSeq": 30,
     "updates": [
       {
         "atMs": 1761350400000,
@@ -145,34 +145,43 @@
       },
       {
         "atMs": 1761350400005,
+        "id": "7",
+        "reason": "审批没送出去：Agent 的输入已关闭",
+        "seq": 6,
+        "state": "failed",
+        "taskId": "task-1",
+        "type": "permissionSendFailed"
+      },
+      {
+        "atMs": 1761350400006,
         "decision": "allowOnce",
         "id": "7",
-        "seq": 6,
+        "seq": 7,
         "taskId": "task-1",
         "type": "permissionResolved"
       },
       {
-        "atMs": 1761350400006,
+        "atMs": 1761350400007,
         "id": "c1",
         "outputDelta": "total 0\n",
-        "seq": 7,
+        "seq": 8,
         "status": "running",
         "taskId": "task-1",
         "type": "toolCallUpdate"
       },
       {
-        "atMs": 1761350400007,
+        "atMs": 1761350400008,
         "id": "c1",
         "result": {
           "exitCode": 0
         },
-        "seq": 8,
+        "seq": 9,
         "status": "completed",
         "taskId": "task-1",
         "type": "toolCallUpdate"
       },
       {
-        "atMs": 1761350400008,
+        "atMs": 1761350400009,
         "entries": [
           {
             "status": "completed",
@@ -183,25 +192,25 @@
             "text": "改代码"
           }
         ],
-        "seq": 9,
+        "seq": 10,
         "taskId": "task-1",
         "type": "plan"
       },
       {
-        "atMs": 1761350400009,
+        "atMs": 1761350400010,
         "detail": "读取 src/main.rs",
         "id": "s1",
-        "seq": 10,
+        "seq": 11,
         "status": "running",
         "taskId": "task-1",
         "title": "检索",
         "type": "subagent"
       },
       {
-        "atMs": 1761350400010,
+        "atMs": 1761350400011,
         "id": "8",
         "kind": "bash",
-        "seq": 11,
+        "seq": 12,
         "subject": "bash",
         "summary": "npm run lint",
         "taskId": "task-1",
@@ -209,13 +218,13 @@
         "type": "autoApproved"
       },
       {
-        "atMs": 1761350400011,
+        "atMs": 1761350400012,
         "id": "q1",
         "options": [
           "vitest",
           "jest"
         ],
-        "seq": 12,
+        "seq": 13,
         "style": "select",
         "taskId": "task-1",
         "timeoutMs": 30000,
@@ -223,50 +232,50 @@
         "type": "question"
       },
       {
-        "atMs": 1761350400012,
+        "atMs": 1761350400013,
         "id": "q1",
         "outcome": "answered",
-        "seq": 13,
+        "seq": 14,
         "taskId": "task-1",
         "type": "questionResolved"
       },
       {
-        "atMs": 1761350400013,
+        "atMs": 1761350400014,
         "level": "info",
         "message": "上下文已自动压缩",
-        "seq": 14,
+        "seq": 15,
         "taskId": "task-1",
         "type": "notice"
       },
       {
-        "atMs": 1761350400014,
+        "atMs": 1761350400015,
         "contextLimit": 200000,
         "contextUsed": 1200,
         "inputTokens": 1500,
         "outputTokens": 300,
-        "seq": 15,
+        "seq": 16,
         "taskId": "task-1",
         "type": "usage"
       },
       {
-        "atMs": 1761350400015,
+        "atMs": 1761350400016,
         "model": "gpt-5",
         "permission": "auto_edit",
-        "seq": 16,
+        "seq": 17,
         "taskId": "task-1",
         "type": "configChanged"
       },
       {
-        "atMs": 1761350400016,
+        "atMs": 1761350400017,
         "message": "上下文已压缩",
         "recoverable": true,
-        "seq": 17,
+        "seq": 18,
         "taskId": "task-1",
         "type": "error"
       },
       {
         "additions": 3,
-        "atMs": 1761350400017,
+        "atMs": 1761350400018,
         "deletions": 1,
         "files": [
           {
@@ -278,13 +287,13 @@
             "path": "docs/diagram.png"
           }
         ],
-        "seq": 18,
+        "seq": 19,
         "taskId": "task-1",
         "turnId": "u1",
         "type": "turnChanges"
       },
       {
-        "atMs": 1761350400018,
+        "atMs": 1761350400019,
         "items": [
           {
             "failures": [
@@ -298,14 +307,14 @@
             "summary": "2 项中 1 项失败"
           }
         ],
-        "seq": 19,
+        "seq": 20,
         "state": "failed",
         "taskId": "task-1",
         "turnId": "u1",
         "type": "autoCheck"
       },
       {
-        "atMs": 1761350400019,
+        "atMs": 1761350400020,
         "checkpoint": {
           "effects": [
             {
@@ -355,7 +364,7 @@
           "updatedMs": 1761350400000
         },
         "reason": "sourceMove",
-        "seq": 20,
+        "seq": 21,
         "taskId": "task-1",
         "type": "handoff"
       },
@@ -366,17 +375,17 @@
             "text": "cargo test search_timeout 通过"
           }
         ],
-        "atMs": 1761350400020,
+        "atMs": 1761350400021,
         "requirements": [
           "超时可以配置"
         ],
-        "seq": 21,
+        "seq": 22,
         "taskId": "task-1",
         "turnId": "u0",
         "type": "clarification"
       },
       {
-        "atMs": 1761350400021,
+        "atMs": 1761350400022,
         "result": {
           "additions": 0,
           "deletions": 0,
@@ -386,12 +395,12 @@
           "taskId": "task-2",
           "title": "查 reqwest 超时语义"
         },
-        "seq": 22,
+        "seq": 23,
         "taskId": "task-1",
         "type": "branchReturned"
       },
       {
-        "atMs": 1761350400022,
+        "atMs": 1761350400023,
         "review": {
           "findings": [
             {
@@ -411,12 +420,12 @@
           "summary": "超时逻辑可行，重试上限缺测试",
           "turnId": "u1"
         },
-        "seq": 23,
+        "seq": 24,
         "taskId": "task-1",
         "type": "review"
       },
       {
-        "atMs": 1761350400023,
+        "atMs": 1761350400024,
         "delegation": {
           "acceptance": [
             {
@@ -468,12 +477,12 @@
           "state": "reported",
           "tokens": 1200
         },
-        "seq": 24,
+        "seq": 25,
         "taskId": "task-1",
         "type": "delegation"
       },
       {
-        "atMs": 1761350400024,
+        "atMs": 1761350400025,
         "delivery": {
           "attempts": 1,
           "createdMs": 1761350400000,
@@ -488,40 +497,40 @@
           "text": "委派的结果回来了",
           "updatedMs": 1761350401000
         },
-        "seq": 25,
+        "seq": 26,
         "taskId": "task-1",
         "type": "delivery"
       },
       {
-        "atMs": 1761350400025,
+        "atMs": 1761350400026,
         "id": "dv-1",
         "outcome": "delivered",
-        "seq": 26,
+        "seq": 27,
         "taskId": "task-1",
         "type": "deliveryReceipt"
       },
       {
-        "atMs": 1761350400026,
+        "atMs": 1761350400027,
         "kind": "item/futureThing",
         "payload": {
           "x": 1
         },
-        "seq": 27,
+        "seq": 28,
         "taskId": "task-1",
         "type": "unknown"
       },
       {
-        "atMs": 1761350400027,
+        "atMs": 1761350400028,
         "messageId": "m1",
-        "seq": 28,
+        "seq": 29,
         "taskId": "task-1",
         "text": "我来看看",
         "type": "messageCompleted"
       },
       {
-        "atMs": 1761350400028,
+        "atMs": 1761350400029,
         "reason": "completed",
-        "seq": 29,
+        "seq": 30,
         "taskId": "task-1",
         "turnId": "u1",
         "type": "turnEnded"

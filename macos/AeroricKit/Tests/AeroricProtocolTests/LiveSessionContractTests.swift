@@ -18,10 +18,10 @@ final class LiveSessionContractTests: XCTestCase {
 
     func testEveryUpdateKindInTheFixtureDecodesAsKnown() throws {
         let batch = try LiveUpdatesBatch.decode(try fixture()["updates"] ?? .null)
-        XCTAssertEqual(batch.updates.count, 29)
-        XCTAssertEqual(batch.latestSeq, 29)
+        XCTAssertEqual(batch.updates.count, 30)
+        XCTAssertEqual(batch.latestSeq, 30)
         XCTAssertNil(batch.gapOldestAvailable)
-        XCTAssertEqual(batch.updates.map(\.seq), Array(1...29))
+        XCTAssertEqual(batch.updates.map(\.seq), Array(1...30))
         let handoff = batch.updates.compactMap { update -> (String, LiveCheckpoint)? in
             if case let .handoff(reason, checkpoint) = update.kind { return (reason, checkpoint) } else { return nil }
         }.first
@@ -62,6 +62,8 @@ final class LiveSessionContractTests: XCTestCase {
         XCTAssertTrue(kinds.contains(.thoughtChunk(id: "r1", text: "先看目录", summary: true)))
         XCTAssertTrue(kinds.contains(.permissionRequest(id: "7", toolCallId: "c1", kind: "command", summary: "ls -la",
                                                         options: ["allowOnce", "allowForSession", "deny"])))
+        XCTAssertTrue(kinds.contains(.permissionSendFailed(id: "7", state: .failed,
+                                                           reason: "审批没送出去：Agent 的输入已关闭")))
         XCTAssertTrue(kinds.contains(.toolCallUpdate(id: "c1", status: .completed, outputDelta: nil,
                                                      result: .object(["exitCode": .number("0")]))))
         XCTAssertTrue(kinds.contains(.plan([LivePlanEntry(text: "读代码", status: "completed"),

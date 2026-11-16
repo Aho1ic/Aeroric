@@ -26,7 +26,22 @@ struct LiveApprovalCard: View {
     }
 
     private var submitting: Bool {
-        if case .submitting = phase { true } else { false }
+        switch phase {
+        case .submitting, .settledElsewhere: true
+        default: false
+        }
+    }
+
+    /// A2: why the answer is not settled yet, said before what to do.
+    private var note: (text: String, danger: Bool)? {
+        switch phase {
+        case let .failed(_, message):
+            // The host's own reason already says it was not sent.
+            ((message.hasPrefix("审批没送出去") ? message : "没送出去：\(message)") + "。可以再答一次", true)
+        case let .unknown(_, message): ("\(message)。不会自动重发；再答一次也不会答两次", true)
+        case let .settledElsewhere(message): (message, false)
+        default: nil
+        }
     }
 
     var body: some View {
@@ -64,10 +79,11 @@ struct LiveApprovalCard: View {
                         .onSubmit { onDecide(.deny) }
                         .accessibilityIdentifier("session.live.approval.reason")
                 }
-                if case let .failed(_, message) = phase {
-                    Text("提交失败：\(message)，可重试")
+                if let note {
+                    Text(note.text)
                         .font(.system(size: AeroricType.caption))
-                        .foregroundStyle(AeroricColor.danger)
+                        .foregroundStyle(note.danger ? AeroricColor.danger : AeroricColor.textTertiary)
+                        .accessibilityIdentifier("session.live.approval.note")
                 }
                 buttons
             }
@@ -82,7 +98,7 @@ struct LiveApprovalCard: View {
 
     @ViewBuilder private var buttons: some View {
         HStack(spacing: AeroricSpace.m) {
-            if submitting {
+            if case .submitting = phase {
                 Text("已提交，等待 Agent 确认…")
                     .font(.system(size: AeroricType.caption))
                     .foregroundStyle(AeroricColor.textTertiary)

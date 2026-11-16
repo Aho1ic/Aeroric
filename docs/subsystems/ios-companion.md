@@ -13,6 +13,7 @@
 ## 规则
 
 - 推送只是提示：`CompanionStore.ingestPushHint` 只置 `resyncNeeded`，审批只来自 E2EE 快照。见 [推送平面](../../.agents/notes/implemented/architecture/2026-10-13-push-plane.md)。
+- 审批卡等 Mac 的结果：`submitApproval` 只把卡片改为 `submitting`，`applyApprovalOutcome` 按 Mac 的结果移除（`resolved`）或改为 `failed`、`unknown`（没等到回复，不自动重发）、`answeredElsewhere`、`ended`。手机的 `task.respond` 目前走宿主的钩子审批登记表，还没接到结构化会话的驱动。
 - 范围是完整任务伴随与相关高级操作，不复制桌面 IDE/DAP、数据库网格、基础设施与笔记工作区。
 
 ## 测试

@@ -35,6 +35,9 @@ public enum CompanionActionError: Error, Equatable, Sendable {
     case macOfflineNoQueueing(String)
     case deviceRevoked
     case staleApprovalRejected(requestId: String, approvalEpoch: String, currentEpoch: String)
+    /// A2: this approval was already answered (and is waiting for the Mac's
+    /// word), or is over; it cannot be answered again from here.
+    case approvalNotAnswerable(requestId: String)
     case duplicateOrOutOfOrderEvent(seq: UInt64, lastSeq: UInt64)
 }
 
@@ -75,18 +78,71 @@ public struct CompanionTask: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A2: where an answer from this phone stands. A card leaves only when the
+/// Mac says the agent got the answer (or an authoritative snapshot drops it).
+public enum CompanionApprovalState: Equatable, Sendable {
+    case open
+    /// Sent to the Mac; waiting for its word on whether the agent got it.
+    case submitting(approve: Bool)
+    /// The Mac could not write the answer to the agent; answer again.
+    case failed(reason: String)
+    /// No word came back, so whether it arrived is not known. Never resent on
+    /// its own; answering again is safe (the Mac refuses a second answer).
+    case unknown(reason: String)
+    /// Another end (the Mac, or another device) answered first.
+    case answeredElsewhere
+    /// The request ended without the answer (the connection or turn ended).
+    case ended(reason: String)
+
+    public var canSubmit: Bool {
+        switch self {
+        case .open, .failed, .unknown: true
+        case .submitting, .answeredElsewhere, .ended: false
+        }
+    }
+
+    /// What the card says under the summary; nil while nothing went wrong.
+    public var note: String? {
+        switch self {
+        case .open: nil
+        case .submitting: "已发给 Mac，等它确认"
+        case let .failed(reason): "没送出去：\(reason)。可以再答一次"
+        case let .unknown(reason): "\(reason)。不会自动重发"
+        case .answeredElsewhere: "已由另一端处理"
+        case let .ended(reason): reason
+        }
+    }
+}
+
+/// A2: the Mac's word on an answer this phone sent.
+public enum CompanionApprovalOutcome: Equatable, Sendable {
+    /// The agent got the answer: the request is settled.
+    case resolved
+    /// The Mac could not write it to the agent; the request is still open.
+    case sendFailed(reason: String)
+    /// The request ended with the connection or turn, unanswered.
+    case ended(reason: String)
+    /// The call to the Mac got no reply in time.
+    case timedOut
+    /// Another end answered first (`BUSY` / `NOT_FOUND`).
+    case answeredElsewhere
+}
+
 public struct CompanionApproval: Identifiable, Equatable, Sendable {
     public var id: String { requestId }
     public var requestId: String
     public var taskId: String
     public var summary: String
     public var hostEpoch: String
+    public var state: CompanionApprovalState
 
-    public init(requestId: String, taskId: String, summary: String, hostEpoch: String) {
+    public init(requestId: String, taskId: String, summary: String, hostEpoch: String,
+                state: CompanionApprovalState = .open) {
         self.requestId = requestId
         self.taskId = taskId
         self.summary = summary
         self.hostEpoch = hostEpoch
+        self.state = state
     }
 }
 
@@ -539,9 +595,30 @@ public final class CompanionStore {
                 currentEpoch: activeEpoch
             )
         }
-        pendingApprovals.remove(at: index)
+        // A2: the card stays until the Mac says the agent got the answer.
+        guard approval.state.canSubmit else {
+            throw CompanionActionError.approvalNotAnswerable(requestId: requestId)
+        }
+        pendingApprovals[index].state = .submitting(approve: approve)
         let action = approve ? "approve" : "deny"
         sentFramesLog.append("task.respond:\(approval.taskId):\(requestId):\(action)")
+    }
+
+    /// A2: the Mac's word on an answer. Only `resolved` removes the card.
+    public func applyApprovalOutcome(requestId: String, _ outcome: CompanionApprovalOutcome) {
+        guard let index = pendingApprovals.firstIndex(where: { $0.requestId == requestId }) else { return }
+        switch outcome {
+        case .resolved:
+            pendingApprovals.remove(at: index)
+        case let .sendFailed(reason):
+            pendingApprovals[index].state = .failed(reason: reason)
+        case let .ended(reason):
+            pendingApprovals[index].state = .ended(reason: reason)
+        case .timedOut:
+            pendingApprovals[index].state = .unknown(reason: "没等到 Mac 的回复，不知道送到没有")
+        case .answeredElsewhere:
+            pendingApprovals[index].state = .answeredElsewhere
+        }
     }
 
     public func sendTerminalInput(streamId: UInt32, text: String) throws -> TerminalFrame {

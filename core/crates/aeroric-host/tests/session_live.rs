@@ -1164,6 +1164,87 @@ async fn a_task_checkpoint_records_the_goal_and_a_pending_approval() {
     );
 }
 
+/// A2: two ends answer the same approval while Codex is busy: the first is
+/// held, the second is refused `BUSY`. Codex exits before the answer is
+/// written: the request ends unsent, never as answered, and the checkpoint
+/// records no consent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_codex_never_got_is_not_settled_and_the_second_answer_is_busy() {
+    let mut host = Host::start(true).await;
+    host.start_task("修复超时");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th-1", "path": "/tmp/th-1.jsonl"}}),
+    );
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-1", "turn": {"id": "u1"}}),
+    );
+    peer.send(
+        json!({"jsonrpc": "2.0", "id": 7, "method": "item/commandExecution/requestApproval",
+        "params": {"threadId": "th-1", "itemId": "c1", "command": "git push"}}),
+    );
+    host.until_state("a pending approval", |s| {
+        s["pending"].as_array().is_some_and(|p| p.len() == 1)
+    })
+    .await;
+
+    host.call("session.interrupt", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    let _ = peer.expect("turn/interrupt").await;
+    host.call(
+        "session.respond",
+        json!({"taskId": "task-1", "requestId": "7", "decision": "allowOnce"}),
+    )
+    .await
+    .unwrap();
+    let second = host
+        .call(
+            "session.respond",
+            json!({"taskId": "task-1", "requestId": "7", "decision": "deny"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(second["code"], "BUSY");
+
+    drop(peer);
+    host.until_state("the request ended", |s| {
+        s["pending"].as_array().is_some_and(|p| p.is_empty())
+    })
+    .await;
+    let batch = host
+        .call("session.updates", json!({"taskId": "task-1", "after": 0}))
+        .await
+        .unwrap();
+    let updates = batch["updates"].as_array().unwrap();
+    assert!(
+        updates.iter().any(|u| u["type"] == "permissionSendFailed"
+            && u["id"] == "7"
+            && u["state"] == "ended"),
+        "{batch}"
+    );
+    assert!(
+        !updates.iter().any(|u| u["type"] == "permissionResolved"),
+        "{batch}"
+    );
+    let got = host
+        .call("checkpoint.get", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(got["checkpoint"]["intents"][0]["state"], "outcomeUnknown");
+}
+
 /// B4′: accepting the clarification card turns the ticked criteria into the
 /// task's obligations and starts the work with them in the message.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

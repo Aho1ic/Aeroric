@@ -20,10 +20,13 @@ use super::approvals::{ToolApproval, APPROVE, DENY};
 use super::map::{plan_from_todos, Mapped, OmpMapper};
 use super::rpc::OmpClient;
 use crate::sessions::live::codex::rpc::{ChildGuard, Transport};
-use crate::sessions::live::update::{PendingQuestion, PlanEntry, SessionUpdateKind, TurnEndReason};
+use crate::sessions::live::update::{
+    PendingQuestion, PermissionSendState, PlanEntry, SessionUpdateKind, TurnEndReason,
+};
 use crate::sessions::live::{
-    now_ms, Answer, ConfigChange, Decision, DriverError, LiveStatusSink, PendingPermission,
-    SessionDriver, SessionState, SharedLog, SlashCommand,
+    answer_not_written, now_ms, Answer, ConfigChange, Decision, DriverError, LiveStatusSink,
+    PendingPermission, SessionDriver, SessionState, SharedLog, SlashCommand,
+    ANSWER_ENDED_WITH_CONNECTION, ANSWER_ENDED_WITH_TURN,
 };
 use crate::tasks::{ProtocolFamily, TaskStatus};
 use aeroric_protocol::delivery::ReceiptOutcome;
@@ -101,6 +104,10 @@ enum Command {
 struct Approval {
     approval: ToolApproval,
     view: PendingPermission,
+    /// A2: an answer is on its way to the actor; a second one is refused.
+    claimed: bool,
+    /// A2: the user answered at least once.
+    tried: bool,
 }
 
 struct State {
@@ -210,6 +217,14 @@ impl OmpSession {
             .send(command)
             .map_err(|_| DriverError::Transport("会话已结束".into()))
     }
+
+    /// A2: an answer that never reached the actor frees the request.
+    fn release(&self, request_id: &str) {
+        let mut state = self.state.lock();
+        if let Some(pending) = state.pending.iter_mut().find(|p| p.view.id == request_id) {
+            pending.claimed = false;
+        }
+    }
 }
 
 impl SessionDriver for OmpSession {
@@ -247,16 +262,19 @@ impl SessionDriver for OmpSession {
     }
 
     fn respond(&self, request_id: &str, decision: Decision) -> Result<(), DriverError> {
-        if !self
-            .state
-            .lock()
-            .pending
-            .iter()
-            .any(|p| p.view.id == request_id)
         {
-            return Err(DriverError::UnknownRequest(request_id.to_string()));
+            let mut state = self.state.lock();
+            let Some(pending) = state.pending.iter_mut().find(|p| p.view.id == request_id) else {
+                return Err(DriverError::UnknownRequest(request_id.to_string()));
+            };
+            if pending.claimed {
+                return Err(DriverError::AlreadyAnswered(request_id.to_string()));
+            }
+            pending.claimed = true;
+            pending.tried = true;
         }
         self.send(Command::Respond(request_id.to_string(), decision))
+            .inspect_err(|_| self.release(request_id))
     }
 
     fn answer(&self, question_id: &str, answer: Answer) -> Result<(), DriverError> {
@@ -758,25 +776,45 @@ impl Actor {
         }
     }
 
+    /// A2: the request stays pending until the answer is written; only a
+    /// written answer settles it, records an "always allow" grant or steers
+    /// a denial's reason.
     fn respond(&mut self, id: String, decision: Decision) {
-        let pending = {
-            let mut state = self.state.lock();
-            let index = state.pending.iter().position(|p| p.view.id == id);
-            index.map(|i| state.pending.remove(i))
+        let session = {
+            let state = self.state.lock();
+            let pending = state.pending.iter().find(|p| p.view.id == id);
+            pending.map(|p| p.approval.session.clone())
         };
-        let (Some(pending), Some(client)) = (pending, self.client()) else {
+        let Some(session) = session else {
             return;
         };
-        let label = match (&decision, &pending.approval.session) {
-            (Decision::AllowOnce, _) | (Decision::AllowForSession, None) => APPROVE.to_string(),
-            (Decision::AllowForSession, Some((subject, label))) => {
-                self.state.lock().grants.insert(subject.clone());
-                label.clone()
+        let Some(client) = self.client() else {
+            self.end_unsent(|p| p.view.id == id, ANSWER_ENDED_WITH_CONNECTION);
+            return;
+        };
+        let (label, grant) = match (&decision, session) {
+            (Decision::AllowOnce, _) | (Decision::AllowForSession, None) => {
+                (APPROVE.to_string(), None)
             }
-            (Decision::Deny { .. }, _) => DENY.to_string(),
+            (Decision::AllowForSession, Some((subject, label))) => (label, Some(subject)),
+            (Decision::Deny { .. }, _) => (DENY.to_string(), None),
         };
         if let Err(error) = client.answer_ui(&id, json!({"value": label})) {
-            self.recoverable(format!("审批未送达：{error}"));
+            self.release_actor(&id);
+            self.push(SessionUpdateKind::PermissionSendFailed {
+                id,
+                state: PermissionSendState::Failed,
+                reason: answer_not_written("omp", error),
+            });
+            self.status(TaskStatus::InputRequired, None);
+            return;
+        }
+        {
+            let mut state = self.state.lock();
+            state.pending.retain(|p| p.view.id != id);
+            if let Some(subject) = grant {
+                state.grants.insert(subject);
+            }
         }
         self.push(SessionUpdateKind::PermissionResolved {
             id,
@@ -920,7 +958,12 @@ impl Actor {
                 options: view.options.clone(),
                 subagent: None,
             });
-            self.state.lock().pending.push(Approval { approval, view });
+            self.state.lock().pending.push(Approval {
+                approval,
+                view,
+                claimed: false,
+                tried: false,
+            });
             self.status(TaskStatus::InputRequired, None);
             return;
         }
@@ -1025,7 +1068,7 @@ impl Actor {
             state.idle_since = now_ms();
             state.active_turn.take()
         };
-        self.drop_waiting();
+        self.drop_waiting(ANSWER_ENDED_WITH_TURN);
         let reason = if self.interrupted || status == "aborted" {
             TurnEndReason::Interrupted
         } else if status == "error" {
@@ -1072,21 +1115,45 @@ impl Actor {
         }
     }
 
-    /// Approvals and questions die with the turn.
-    fn drop_waiting(&self) {
-        let (approvals, questions) = {
-            let mut state = self.state.lock();
-            (
-                std::mem::take(&mut state.pending),
-                std::mem::take(&mut state.questions),
-            )
-        };
-        for approval in approvals {
-            self.push(SessionUpdateKind::PermissionResolved {
-                id: approval.view.id,
-                decision: "cancelled".into(),
-            });
+    fn release_actor(&self, id: &str) {
+        let mut state = self.state.lock();
+        if let Some(pending) = state.pending.iter_mut().find(|p| p.view.id == id) {
+            pending.claimed = false;
         }
+    }
+
+    /// Approvals matching `matches` end without omp waiting on them; one the
+    /// user answered ends as not sent (A2), the rest as `cancelled`.
+    fn end_unsent(&self, matches: impl Fn(&Approval) -> bool, unsent: &str) {
+        let dropped = {
+            let mut state = self.state.lock();
+            let (dropped, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut state.pending)
+                .into_iter()
+                .partition(|p| matches(p));
+            state.pending = kept;
+            dropped
+        };
+        for approval in dropped {
+            if approval.tried {
+                self.push(SessionUpdateKind::PermissionSendFailed {
+                    id: approval.view.id,
+                    state: PermissionSendState::Ended,
+                    reason: unsent.into(),
+                });
+            } else {
+                self.push(SessionUpdateKind::PermissionResolved {
+                    id: approval.view.id,
+                    decision: "cancelled".into(),
+                });
+            }
+        }
+    }
+
+    /// Approvals and questions die with the turn (`unsent`: why an answered
+    /// approval's answer never got through).
+    fn drop_waiting(&self, unsent: &str) {
+        self.end_unsent(|_| true, unsent);
+        let questions = std::mem::take(&mut self.state.lock().questions);
         for question in questions {
             self.push(SessionUpdateKind::QuestionResolved {
                 id: question.id,
@@ -1108,7 +1175,7 @@ impl Actor {
             let unsettled = !std::mem::replace(&mut state.settled, true);
             (state.active_turn.take(), unsettled)
         };
-        self.drop_waiting();
+        self.drop_waiting(ANSWER_ENDED_WITH_CONNECTION);
         if unsettled && turn.is_none() {
             self.push(SessionUpdateKind::Error {
                 message: "omp 进程已退出，未结算的后台作业随之结束".into(),

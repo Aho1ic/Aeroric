@@ -353,6 +353,7 @@ public final class LiveSessionStore {
                 if !wasActive && current.turnActive { baseline = LiveHistoryMerge.assistantCount(history) }
                 model = current
                 approvals.retain(pending: current.pending)
+                syncSendFailures(current)
                 if turnEnded {
                     await settleTurn()
                     await refreshLogin()
@@ -751,12 +752,19 @@ public final class LiveSessionStore {
 
     public func respond(_ id: String, _ decision: LiveDecision) async {
         guard let submission = approvals.submit(id, decision) else { return }
+        model?.clearSendFailure(id)
         do {
             try await actions.respond(taskID: taskID, requestID: id, decision: submission.decision,
                                       reason: submission.reason)
         } catch {
-            approvals.failed(id, message: "\(error)")
+            // A2: a timeout is "not known", never resent on its own.
+            approvals.submitFailed(id, .classify(error))
         }
+    }
+
+    /// A2: what the host said it could not write to the agent goes on the card.
+    private func syncSendFailures(_ model: LiveSessionModel) {
+        for (id, reason) in model.sendFailures { approvals.hostFailed(id, message: reason) }
     }
 
     /// Question cards being sent (disabled until the host resolves them).

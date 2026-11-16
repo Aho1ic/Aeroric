@@ -385,3 +385,43 @@ fn a_clarification_turn_becomes_a_card_and_its_goal_is_the_request() {
     });
     assert!(b.clarification.is_none());
 }
+
+fn unsent(id: &str, state: PermissionSendState) -> SessionUpdateKind {
+    SessionUpdateKind::PermissionSendFailed {
+        id: id.into(),
+        state,
+        reason: "审批没送出去".into(),
+    }
+}
+
+/// A2: consent comes only from an answer that reached the agent. One that
+/// did not stays pending; one that ended with the connection is unknown.
+#[test]
+fn an_answer_that_did_not_reach_the_agent_is_no_consent() {
+    let b = run(vec![
+        call("c1", ToolKind::Command, "rm -rf build"),
+        ask("p1", "c1", "rm -rf build"),
+        unsent("p1", PermissionSendState::Failed),
+    ]);
+    assert_eq!(b.checkpoint.intents[0].state, IntentState::Pending);
+    assert!(!b.allowed.contains("p1"));
+
+    let b = run(vec![
+        call("c1", ToolKind::Command, "rm -rf build"),
+        ask("p1", "c1", "rm -rf build"),
+        unsent("p1", PermissionSendState::Failed),
+        unsent("p1", PermissionSendState::Ended),
+        end(),
+    ]);
+    assert_eq!(b.checkpoint.intents[0].state, IntentState::OutcomeUnknown);
+    assert!(!b.allowed.contains("p1"));
+
+    // Sent on the second try: consent from that answer.
+    let b = run(vec![
+        call("c1", ToolKind::Command, "git push"),
+        ask("p1", "c1", "git push"),
+        unsent("p1", PermissionSendState::Failed),
+        resolved("p1", "allowOnce"),
+    ]);
+    assert!(b.allowed.contains("p1"));
+}

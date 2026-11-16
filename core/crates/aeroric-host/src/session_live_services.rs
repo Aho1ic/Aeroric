@@ -1017,6 +1017,7 @@ fn driver_failure(request: &Request, error: DriverError) -> Frame {
     let code = match &error {
         DriverError::Unsupported(_) => ErrorCode::InvalidArgument,
         DriverError::UnknownRequest(_) => ErrorCode::NotFound,
+        DriverError::AlreadyAnswered(_) => ErrorCode::Busy,
         DriverError::Agent(_) | DriverError::Transport(_) => ErrorCode::IoError,
     };
     failure(request.id.clone(), code, &error.to_string())

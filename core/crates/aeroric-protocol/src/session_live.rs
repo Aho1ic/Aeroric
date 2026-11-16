@@ -54,6 +54,16 @@ pub enum TurnEndReason {
     Failed,
 }
 
+/// A2: why an answer to an approval did not reach the agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionSendState {
+    /// Not written; the request is still open and can be answered again.
+    Failed,
+    /// The connection to the agent is gone; the request ended with it.
+    Ended,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ToolKind {
@@ -176,9 +186,21 @@ pub enum SessionUpdateKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subagent: Option<String>,
     },
+    /// The request is settled: the user's answer was written to the agent
+    /// (`allowOnce` | `allowForSession` | `deny`), or the agent settled it
+    /// itself (`cancelled` | `resolved`). Never published for an answer that
+    /// did not reach the agent (A2).
     PermissionResolved {
         id: String,
         decision: String,
+    },
+    /// A2: an answer to `id` did not reach the agent. `failed` keeps the
+    /// request open (answer again); `ended` means it ended with the
+    /// connection. Never a decision.
+    PermissionSendFailed {
+        id: String,
+        state: PermissionSendState,
+        reason: String,
     },
     Subagent {
         id: String,
@@ -566,6 +588,11 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
             summary: "ls -la".into(),
             options: vec!["allowOnce".into(), "allowForSession".into(), "deny".into()],
             subagent: None,
+        },
+        K::PermissionSendFailed {
+            id: "7".into(),
+            state: PermissionSendState::Failed,
+            reason: "审批没送出去：Agent 的输入已关闭".into(),
         },
         K::PermissionResolved {
             id: "7".into(),
@@ -1044,6 +1071,11 @@ pub fn schema() -> Value {
             json!({"id": s, "decision": s}),
         ),
         update_variant(
+            "permissionSendFailed",
+            json!(["id", "state", "reason"]),
+            json!({"id": s, "state": {"enum": ["failed", "ended"]}, "reason": s}),
+        ),
+        update_variant(
             "subagent",
             json!(["id", "title", "status"]),
             json!({"id": s, "title": s, "status": s, "detail": s}),
@@ -1273,6 +1305,7 @@ mod tests {
             "plan",
             "permissionRequest",
             "permissionResolved",
+            "permissionSendFailed",
             "subagent",
             "autoApproved",
             "question",

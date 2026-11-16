@@ -1,4 +1,5 @@
-import AeroricProtocol
+import AeroricClient
+@testable import AeroricProtocol
 @testable import AeroricUI
 import XCTest
 
@@ -280,6 +281,70 @@ final class LiveSessionModelTests: XCTestCase {
         machine.retain(pending: [LivePendingPermission(id: "9", kind: "command", summary: "", toolCallId: nil)])
         XCTAssertEqual(machine.phase("7"), .pending, "resolved cards are forgotten")
         XCTAssertEqual(machine.phase("9"), .submitting(.deny))
+    }
+
+    /// A2: an answer the host could not write keeps the card with the reason;
+    /// one that ended with the connection removes it and says why.
+    func testAnAnswerThatDidNotArriveKeepsTheCardOrSaysItEnded() {
+        var model = LiveSessionModel(state: state())
+        _ = model.apply(batch([
+            .turnStarted(turnId: "u"),
+            .permissionRequest(id: "7", toolCallId: "c", kind: "command", summary: "rm -rf build", options: []),
+            .permissionRequest(id: "8", toolCallId: nil, kind: "command", summary: "ls", options: []),
+            .permissionSendFailed(id: "7", state: .failed, reason: "审批没送出去：写不进 Claude 的输入（closed）"),
+        ]))
+        XCTAssertEqual(model.pending.map(\.id), ["7", "8"], "a failed answer is no resolution")
+        XCTAssertEqual(model.sendFailures["7"], "审批没送出去：写不进 Claude 的输入（closed）")
+        model.clearSendFailure("7")
+        XCTAssertNil(model.sendFailures["7"])
+
+        _ = model.apply(batch([.permissionSendFailed(id: "8", state: .ended, reason: "审批没送出去：这次请求已随连接结束")],
+                              from: 5))
+        XCTAssertEqual(model.pending.map(\.id), ["7"])
+        XCTAssertEqual(model.items.last,
+                       .notice(id: "seq5", message: "审批没送出去：这次请求已随连接结束（ls）", recoverable: false))
+
+        _ = model.apply(batch([.permissionSendFailed(id: "7", state: .failed, reason: "again"),
+                               .permissionResolved(id: "7", decision: "allowOnce")], from: 6))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertTrue(model.sendFailures.isEmpty, "a later resolution clears the failure")
+    }
+
+    /// A2: a timeout is "not known" (never resent on its own); BUSY / NOT_FOUND
+    /// mean another end answered; the host's failure lands on the card.
+    func testApprovalMachineTellsNotSentFromNotKnownFromAnsweredElsewhere() {
+        func refused(_ code: WireErrorCode) -> Error {
+            ConnectionError.refused(FailureFrame(id: "1", error: RpcError(code: code, message: "m", retryable: false),
+                                                 additional: [:]))
+        }
+        typealias Failure = LiveApprovalMachine.SubmitFailure
+        XCTAssertEqual(Failure.classify(ConnectionError.timedOut), .unknown("等宿主回复超时，不知道送到没有"))
+        XCTAssertEqual(Failure.classify(ConnectionError.disconnected), .unknown("和宿主的连接断了，不知道送到没有"))
+        XCTAssertEqual(Failure.classify(refused(.busy)), .settledElsewhere("另一端正在回答这条审批"))
+        XCTAssertEqual(Failure.classify(refused(.notFound)), .settledElsewhere("这条审批已由另一端处理，或已经结束"))
+        XCTAssertEqual(Failure.classify(refused(.ioError)), .notSent("m"))
+        XCTAssertEqual(Failure.classify(ConnectionError.notConnected), .notSent("\(ConnectionError.notConnected)"))
+
+        var machine = LiveApprovalMachine()
+        _ = machine.submit("7", .allowOnce)
+        machine.submitFailed("7", .unknown("超时"))
+        XCTAssertEqual(machine.phase("7"), .unknown(.allowOnce, message: "超时"))
+        XCTAssertTrue(machine.canAct("7"), "the user may send again; the host refuses a second answer")
+        _ = machine.submit("7", .allowOnce)
+        machine.submitFailed("7", .settledElsewhere("另一端正在回答这条审批"))
+        XCTAssertEqual(machine.phase("7"), .settledElsewhere(message: "另一端正在回答这条审批"))
+        XCTAssertFalse(machine.canAct("7"))
+        XCTAssertNil(machine.submit("7", .deny))
+
+        machine.hostFailed("7", message: "写不进")
+        XCTAssertEqual(machine.phase("7"), .failed(nil, message: "写不进"), "another end's answer failed")
+        XCTAssertTrue(machine.canAct("7"))
+        machine.beginDeny("7")
+        machine.hostFailed("7", message: "写不进")
+        XCTAssertEqual(machine.phase("7"), .denying(reason: ""), "a reason being typed is left alone")
+        _ = machine.submit("8", .allowForSession)
+        machine.hostFailed("8", message: "写不进")
+        XCTAssertEqual(machine.phase("8"), .failed(.allowForSession, message: "写不进"))
     }
 
     func testSlashCommands() {

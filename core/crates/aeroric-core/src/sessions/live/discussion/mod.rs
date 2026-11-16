@@ -21,7 +21,7 @@ use std::sync::{Arc, Weak};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use super::update::{SessionUpdate, SessionUpdateKind, TurnEndReason};
+use super::update::{PermissionSendState, SessionUpdate, SessionUpdateKind, TurnEndReason};
 use super::{now_ms, Decision, LiveStatusSink};
 use crate::tasks::{ProtocolFamily, TaskStatus};
 
@@ -921,7 +921,13 @@ impl Discussions {
                 let (task, title) = (task.clone(), title.clone());
                 self.spawn(move |this| this.waiting(&task, Some(title)));
             }
-            SessionUpdateKind::PermissionResolved { .. } => {
+            // A2: an answer that did not get through (`failed`) leaves the
+            // member waiting; `ended` settles the request like a resolution.
+            SessionUpdateKind::PermissionResolved { .. }
+            | SessionUpdateKind::PermissionSendFailed {
+                state: PermissionSendState::Ended,
+                ..
+            } => {
                 let task = task.clone();
                 self.spawn(move |this| this.waiting(&task, None));
             }

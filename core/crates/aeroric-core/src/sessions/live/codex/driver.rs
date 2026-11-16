@@ -20,10 +20,13 @@ use super::map::{
 };
 use super::rpc::{Inbound, RpcClient, RpcError};
 use super::server::{CodexServer, Connection, SERVER_EXITED};
-use crate::sessions::live::update::{PlanEntry, SessionUpdateKind, ToolStatus, TurnEndReason};
+use crate::sessions::live::update::{
+    PermissionSendState, PlanEntry, SessionUpdateKind, ToolStatus, TurnEndReason,
+};
 use crate::sessions::live::{
-    now_ms, ConfigChange, Decision, DriverError, LiveStatusSink, PendingPermission, SessionDriver,
-    SessionState, SharedLog, SlashCommand,
+    answer_not_written, now_ms, ConfigChange, Decision, DriverError, LiveStatusSink,
+    PendingPermission, SessionDriver, SessionState, SharedLog, SlashCommand,
+    ANSWER_ENDED_WITH_CONNECTION, ANSWER_ENDED_WITH_TURN,
 };
 use crate::tasks::{ProtocolFamily, TaskStatus};
 use aeroric_protocol::delivery::ReceiptOutcome;
@@ -64,6 +67,10 @@ struct Pending {
     view: PendingPermission,
     /// The subagent thread that asked; `None` for the session's own thread.
     child: Option<String>,
+    /// A2: an answer is on its way to the actor; a second one is refused.
+    claimed: bool,
+    /// A2: the user answered at least once.
+    tried: bool,
 }
 
 /// A Codex subagent's thread routed to this session (2026-11-07): its
@@ -216,6 +223,14 @@ impl CodexSession {
             .send(command)
             .map_err(|_| DriverError::Transport("会话已结束".into()))
     }
+
+    /// A2: an answer that never reached the actor frees the request.
+    fn release(&self, request_id: &str) {
+        let mut state = self.state.lock();
+        if let Some(pending) = state.pending.iter_mut().find(|p| p.view.id == request_id) {
+            pending.claimed = false;
+        }
+    }
 }
 
 impl SessionDriver for CodexSession {
@@ -279,16 +294,19 @@ impl SessionDriver for CodexSession {
     }
 
     fn respond(&self, request_id: &str, decision: Decision) -> Result<(), DriverError> {
-        if !self
-            .state
-            .lock()
-            .pending
-            .iter()
-            .any(|p| p.view.id == request_id)
         {
-            return Err(DriverError::UnknownRequest(request_id.to_string()));
+            let mut state = self.state.lock();
+            let Some(pending) = state.pending.iter_mut().find(|p| p.view.id == request_id) else {
+                return Err(DriverError::UnknownRequest(request_id.to_string()));
+            };
+            if pending.claimed {
+                return Err(DriverError::AlreadyAnswered(request_id.to_string()));
+            }
+            pending.claimed = true;
+            pending.tried = true;
         }
         self.send(Command::Respond(request_id.to_string(), decision))
+            .inspect_err(|_| self.release(request_id))
     }
 
     fn configure(&self, change: ConfigChange) -> Result<(), DriverError> {
@@ -666,22 +684,50 @@ impl Actor {
         }
     }
 
+    /// A2: the request stays pending until the answer is written; only a
+    /// written answer settles it (and only then does a denial's reason go).
     async fn respond(&mut self, id: String, decision: Decision) {
-        let pending = {
-            let mut state = self.state.lock();
-            let index = state.pending.iter().position(|p| p.view.id == id);
-            index.map(|i| state.pending.remove(i))
+        let found = {
+            let state = self.state.lock();
+            let pending = state.pending.iter().find(|p| p.view.id == id);
+            pending.map(|p| {
+                (
+                    p.id.clone(),
+                    approval_response(&p.method, &p.params, &decision),
+                    p.child.clone(),
+                )
+            })
         };
-        let (Some(pending), Some(client)) = (pending, self.client()) else {
+        let Some((request, answer, child)) = found else {
             return;
         };
-        let answer = approval_response(&pending.method, &pending.params, &decision);
-        if let Err(error) = client.respond(&pending.id, answer) {
-            self.push(SessionUpdateKind::Error {
-                message: format!("审批未送达：{error}"),
-                recoverable: true,
+        let Some(client) = self.client() else {
+            self.drop_pending(
+                |p| p.view.id == id,
+                "cancelled",
+                Some(ANSWER_ENDED_WITH_CONNECTION),
+            );
+            return;
+        };
+        if let Err(error) = client.respond(&request, answer) {
+            if let Some(p) = self
+                .state
+                .lock()
+                .pending
+                .iter_mut()
+                .find(|p| p.view.id == id)
+            {
+                p.claimed = false;
+            }
+            self.push(SessionUpdateKind::PermissionSendFailed {
+                id,
+                state: PermissionSendState::Failed,
+                reason: answer_not_written("Codex", error),
             });
+            self.status(TaskStatus::InputRequired, None);
+            return;
         }
+        self.state.lock().pending.retain(|p| p.view.id != id);
         self.push(SessionUpdateKind::PermissionResolved {
             id,
             decision: decision.wire().into(),
@@ -693,8 +739,7 @@ impl Actor {
         } = &decision
         {
             if !reason.trim().is_empty() {
-                self.steer_reason(&client, pending.child.as_deref(), reason)
-                    .await;
+                self.steer_reason(&client, child.as_deref(), reason).await;
             }
         }
         if !waiting {
@@ -842,7 +887,11 @@ impl Actor {
                     (card, title, files, others)
                 };
                 // Its unanswered approvals died with its turn.
-                self.drop_pending(|p| p.child.as_deref() == Some(child.as_str()), "cancelled");
+                self.drop_pending(
+                    |p| p.child.as_deref() == Some(child.as_str()),
+                    "cancelled",
+                    Some(ANSWER_ENDED_WITH_TURN),
+                );
                 if let Some(card) = card {
                     let (word, done) = match status {
                         "failed" => ("失败", ToolStatus::Failed),
@@ -874,7 +923,7 @@ impl Actor {
             Inbound::Notification { method, .. } if method == SERVER_EXITED => self.server_exited(),
             Inbound::Notification { method, params } if method == "serverRequest/resolved" => {
                 let id = params.get("requestId").map(request_key).unwrap_or_default();
-                self.drop_pending(|p| p.view.id == id, "resolved");
+                self.drop_pending(|p| p.view.id == id, "resolved", None);
             }
             Inbound::Notification { method, params } => {
                 if let Some(child) = self.child_of(&params) {
@@ -902,7 +951,11 @@ impl Actor {
                     }
                     Some(TurnSignal::Ended { reason, error, .. }) => {
                         // A subagent's approvals outlive this turn: it may still run.
-                        self.drop_pending(|p| p.child.is_none(), "cancelled");
+                        self.drop_pending(
+                            |p| p.child.is_none(),
+                            "cancelled",
+                            Some(ANSWER_ENDED_WITH_TURN),
+                        );
                         let settled = match reason {
                             TurnEndReason::Completed => (TaskStatus::Done, None),
                             TurnEndReason::Interrupted => (TaskStatus::Interrupted, None),
@@ -966,6 +1019,8 @@ impl Actor {
                             params,
                             view,
                             child,
+                            claimed: false,
+                            tried: false,
                         });
                         self.push(update);
                         self.status(TaskStatus::InputRequired, None);
@@ -1010,7 +1065,16 @@ impl Actor {
         }
     }
 
-    fn drop_pending(&self, matches: impl Fn(&Pending) -> bool, decision: &str) {
+    /// Settle requests Codex no longer waits on. One the user answered
+    /// without the answer getting through ends as not sent (`unsent`, A2)
+    /// when the turn or the connection ended; Codex's own `resolved` passes
+    /// `None`.
+    fn drop_pending(
+        &self,
+        matches: impl Fn(&Pending) -> bool,
+        decision: &str,
+        unsent: Option<&str>,
+    ) {
         let (dropped, cleared) = {
             let mut state = self.state.lock();
             let (dropped, kept): (Vec<_>, Vec<_>) =
@@ -1021,13 +1085,24 @@ impl Actor {
         };
         let child_asked = dropped.iter().any(|p| p.child.is_some());
         for pending in dropped {
-            self.push(SessionUpdateKind::PermissionResolved {
-                id: pending.view.id,
-                decision: decision.into(),
-            });
+            self.settle_dropped(pending, decision, unsent);
         }
         if cleared && (child_asked || self.state.lock().active_turn.is_some()) {
             self.waiting_over();
+        }
+    }
+
+    fn settle_dropped(&self, pending: Pending, decision: &str, unsent: Option<&str>) {
+        match unsent.filter(|_| pending.tried) {
+            Some(reason) => self.push(SessionUpdateKind::PermissionSendFailed {
+                id: pending.view.id,
+                state: PermissionSendState::Ended,
+                reason: reason.into(),
+            }),
+            None => self.push(SessionUpdateKind::PermissionResolved {
+                id: pending.view.id,
+                decision: decision.into(),
+            }),
         }
     }
 
@@ -1115,15 +1190,9 @@ impl Actor {
                 recoverable: true,
             });
         }
-        let had_pending = !self.state.lock().pending.is_empty();
-        if had_pending {
-            let dropped: Vec<_> = self.state.lock().pending.drain(..).collect();
-            for pending in dropped {
-                self.push(SessionUpdateKind::PermissionResolved {
-                    id: pending.view.id,
-                    decision: "cancelled".into(),
-                });
-            }
+        let dropped: Vec<_> = self.state.lock().pending.drain(..).collect();
+        for pending in dropped {
+            self.settle_dropped(pending, "cancelled", Some(ANSWER_ENDED_WITH_CONNECTION));
         }
         if let Some(turn_id) = turn {
             let message = "Codex 进程已退出".to_string();

@@ -43,6 +43,12 @@ public struct LivePlanEntry: Equatable, Sendable {
     }
 }
 
+/// A2: why an answer to an approval did not reach the agent.
+public enum LivePermissionSendState: String, Equatable, Sendable {
+    case failed
+    case ended
+}
+
 public enum LiveUpdateKind: Equatable, Sendable {
     case turnStarted(turnId: String)
     case turnEnded(turnId: String, reason: LiveTurnEndReason, error: String?)
@@ -56,6 +62,9 @@ public enum LiveUpdateKind: Equatable, Sendable {
     case permissionRequest(id: String, toolCallId: String?, kind: String, summary: String, options: [String],
                            subagent: String? = nil)
     case permissionResolved(id: String, decision: String)
+    /// A2: an answer to `id` did not reach the agent. `failed`: the request is
+    /// still open; `ended`: it ended with the connection or the turn.
+    case permissionSendFailed(id: String, state: LivePermissionSendState, reason: String)
     case subagent(id: String, title: String, status: String, detail: String?)
     /// Answered for the user from an "always allow in this session" grant.
     case autoApproved(id: String, toolCallId: String?, kind: String, summary: String, subject: String)
@@ -343,6 +352,10 @@ extension LiveUpdateKind {
         case "permissionResolved":
             guard let id = string(f, "id"), let decision = string(f, "decision") else { return nil }
             return .permissionResolved(id: id, decision: decision)
+        case "permissionSendFailed":
+            guard let id = string(f, "id"), let state = string(f, "state").flatMap(LivePermissionSendState.init),
+                  let reason = string(f, "reason") else { return nil }
+            return .permissionSendFailed(id: id, state: state, reason: reason)
         case "subagent":
             guard let id = string(f, "id"), let title = string(f, "title"), let status = string(f, "status") else { return nil }
             return .subagent(id: id, title: title, status: status, detail: string(f, "detail"))

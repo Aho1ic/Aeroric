@@ -424,3 +424,82 @@ async fn an_exit_while_unsettled_says_the_async_work_ended() {
     })
     .await;
 }
+
+/// A2: the permission updates the driver pushed, in order.
+fn answers(sink: &Sink) -> Vec<SessionUpdateKind> {
+    sink.updates
+        .lock()
+        .iter()
+        .filter(|u| {
+            matches!(
+                u.kind,
+                SessionUpdateKind::PermissionResolved { .. }
+                    | SessionUpdateKind::PermissionSendFailed { .. }
+            )
+        })
+        .map(|u| u.kind.clone())
+        .collect()
+}
+
+async fn bash_asked(h: &Harness, peer: &Peer) {
+    peer.send(json!({"type": "extension_ui_request", "id": "u1", "method": "select",
+        "title": "Allow tool: bash\nCommand: npm test", "options": ["Approve", "Approve bash for this session", "Deny"]}));
+    wait_status(&h.sink, TaskStatus::InputRequired).await;
+}
+
+/// A2 选了没发出 (返回错误): omp stops reading; the "always allow" answer is
+/// not written, so the request stays open and no grant is remembered.
+#[tokio::test]
+async fn an_answer_omp_cannot_take_keeps_the_request_open_and_grants_nothing() {
+    let mut h = start();
+    let (mut peer, _id) = running(&mut h).await;
+    bash_asked(&h, &peer).await;
+    peer.from_client.close();
+    h.session.respond("u1", Decision::AllowForSession).unwrap();
+    let sink = Arc::clone(&h.sink);
+    until("send failed", move || !answers(&sink).is_empty()).await;
+    let [SessionUpdateKind::PermissionSendFailed { id, state, reason }] = &answers(&h.sink)[..]
+    else {
+        panic!("{:?}", answers(&h.sink))
+    };
+    assert_eq!((id.as_str(), *state), ("u1", PermissionSendState::Failed));
+    assert!(
+        reason.starts_with("审批没送出去：写不进 omp 的输入"),
+        "{reason}"
+    );
+    assert_eq!(h.session.snapshot().pending[0].id, "u1");
+    assert!(h.session.state.lock().grants.is_empty());
+    assert_eq!(h.sink.last_status(), Some(TaskStatus::InputRequired));
+}
+
+/// A2 选了没发出 (连接关闭) and Mac 与手机同时回答 on omp.
+#[tokio::test]
+async fn a_held_answer_wins_once_and_ends_unsent_when_omp_exits() {
+    let mut h = start();
+    let (mut peer, _id) = running(&mut h).await;
+    bash_asked(&h, &peer).await;
+    h.session.interrupt().unwrap();
+    let _ = peer.expect("abort").await;
+    h.session.respond("u1", Decision::AllowOnce).unwrap();
+    assert_eq!(
+        h.session.respond("u1", Decision::Deny { reason: None }),
+        Err(DriverError::AlreadyAnswered("u1".into()))
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(answers(&h.sink).is_empty(), "nothing is written yet");
+    drop(peer);
+    wait_status(&h.sink, TaskStatus::Failed).await;
+    let answers = answers(&h.sink);
+    assert_eq!(
+        answers.last(),
+        Some(&SessionUpdateKind::PermissionSendFailed {
+            id: "u1".into(),
+            state: PermissionSendState::Ended,
+            reason: crate::sessions::live::ANSWER_ENDED_WITH_CONNECTION.into(),
+        }),
+        "{answers:?}"
+    );
+    assert!(!answers
+        .iter()
+        .any(|a| matches!(a, SessionUpdateKind::PermissionResolved { .. })));
+}

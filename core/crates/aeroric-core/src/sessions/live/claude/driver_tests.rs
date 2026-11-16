@@ -597,3 +597,142 @@ async fn an_exit_between_turns_without_background_work_stays_quiet() {
     until("gone", move || session.idle_since_ms().is_none()).await;
     assert!(!h.sink.update_types().contains(&"error".to_string()));
 }
+
+/// A2: the permission updates the driver pushed, in order.
+fn answers(sink: &Sink) -> Vec<SessionUpdateKind> {
+    sink.updates
+        .lock()
+        .iter()
+        .filter(|u| {
+            matches!(
+                u.kind,
+                SessionUpdateKind::PermissionResolved { .. }
+                    | SessionUpdateKind::PermissionSendFailed { .. }
+            )
+        })
+        .map(|u| u.kind.clone())
+        .collect()
+}
+
+async fn wait_answers(sink: &Arc<Sink>, count: usize) {
+    let sink = Arc::clone(sink);
+    until("permission updates", move || answers(&sink).len() >= count).await;
+}
+
+async fn asked(h: &Harness, peer: &Peer, id: &str) {
+    peer.send(json!({"type": "control_request", "request_id": id, "request": {"subtype": "can_use_tool", "tool_name": "Bash",
+        "input": {"command": "rm -rf build"}, "tool_use_id": "tu9"}}));
+    wait_status(&h.sink, TaskStatus::InputRequired).await;
+}
+
+/// A2 选了没发出 (返回错误): Claude's input is closed while the session still
+/// reads; the answer is not written, so nothing settles the request.
+#[tokio::test]
+async fn an_answer_that_cannot_be_written_keeps_the_request_open() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    asked(&h, &peer, "perm1").await;
+    peer.from_client.close();
+    h.session.respond("perm1", Decision::AllowOnce).unwrap();
+    wait_answers(&h.sink, 1).await;
+    let [SessionUpdateKind::PermissionSendFailed { id, state, reason }] = &answers(&h.sink)[..]
+    else {
+        panic!("{:?}", answers(&h.sink))
+    };
+    assert_eq!(
+        (id.as_str(), *state),
+        ("perm1", PermissionSendState::Failed)
+    );
+    assert!(
+        reason.starts_with("审批没送出去：写不进 Claude 的输入"),
+        "{reason}"
+    );
+    assert_eq!(h.session.snapshot().pending[0].id, "perm1");
+    assert_eq!(h.sink.last_status(), Some(TaskStatus::InputRequired));
+    // Not resent on its own; the user may answer again.
+    h.session.respond("perm1", Decision::AllowOnce).unwrap();
+    wait_answers(&h.sink, 2).await;
+    assert!(answers(&h.sink)
+        .iter()
+        .all(|a| matches!(a, SessionUpdateKind::PermissionSendFailed { .. })));
+}
+
+/// A2 选了没发出 (超时) and Mac 与手机同时回答: while the actor still waits on
+/// something else, the answer is held, not reported settled; a second answer
+/// to the same request is refused; once written, it settles.
+#[tokio::test]
+async fn an_answer_is_settled_only_once_written_and_the_first_answer_wins() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    asked(&h, &peer, "perm1").await;
+    h.session.interrupt().unwrap();
+    let (interrupt, _) = peer.expect_control("interrupt").await;
+    h.session.respond("perm1", Decision::AllowOnce).unwrap();
+    assert_eq!(
+        h.session.respond(
+            "perm1",
+            Decision::Deny {
+                reason: Some("手机上点的".into())
+            }
+        ),
+        Err(DriverError::AlreadyAnswered("perm1".into()))
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(answers(&h.sink).is_empty(), "nothing is written yet");
+    assert_eq!(h.session.snapshot().pending.len(), 1);
+
+    peer.ok(&interrupt, json!({}));
+    let answer = peer.next().await;
+    assert_eq!(answer["response"]["request_id"], "perm1");
+    assert_eq!(answer["response"]["response"]["behavior"], "allow");
+    wait_answers(&h.sink, 1).await;
+    assert_eq!(
+        answers(&h.sink),
+        [SessionUpdateKind::PermissionResolved {
+            id: "perm1".into(),
+            decision: "allowOnce".into()
+        }]
+    );
+    assert_eq!(
+        h.session.respond("perm1", Decision::AllowOnce),
+        Err(DriverError::UnknownRequest("perm1".into()))
+    );
+}
+
+/// A2 选了没发出 (连接关闭): the process goes before the answer is written;
+/// the request ends as not sent, never as answered.
+#[tokio::test]
+async fn an_answer_whose_connection_closed_ends_unsent() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    asked(&h, &peer, "perm1").await;
+    peer.send(json!({"type": "control_request", "request_id": "perm2", "request": {"subtype": "can_use_tool", "tool_name": "Bash",
+        "input": {"command": "ls"}}}));
+    let session = Arc::clone(&h.session);
+    until("two pending", move || session.snapshot().pending.len() == 2).await;
+    h.session.interrupt().unwrap();
+    let _ = peer.expect_control("interrupt").await;
+    h.session.respond("perm1", Decision::AllowOnce).unwrap();
+    drop(peer);
+    wait_status(&h.sink, TaskStatus::Failed).await;
+    let answers = answers(&h.sink);
+    assert!(
+        answers.contains(&SessionUpdateKind::PermissionSendFailed {
+            id: "perm1".into(),
+            state: PermissionSendState::Ended,
+            reason: crate::sessions::live::ANSWER_ENDED_WITH_CONNECTION.into(),
+        }),
+        "{answers:?}"
+    );
+    assert!(
+        answers.contains(&SessionUpdateKind::PermissionResolved {
+            id: "perm2".into(),
+            decision: "cancelled".into()
+        }),
+        "an unanswered request is cancelled as before: {answers:?}"
+    );
+    assert!(!answers.iter().any(|a| matches!(
+        a,
+        SessionUpdateKind::PermissionResolved { id, .. } if id == "perm1"
+    )));
+}

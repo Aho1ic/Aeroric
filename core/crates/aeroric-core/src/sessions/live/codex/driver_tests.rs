@@ -917,3 +917,101 @@ async fn a_thread_nobody_spawned_is_still_refused() {
     assert_eq!(answer["error"]["code"], -32601);
     assert!(h.session.snapshot().pending.is_empty());
 }
+
+/// A2: the permission updates the driver pushed, in order.
+fn answers(sink: &Sink) -> Vec<SessionUpdateKind> {
+    sink.updates
+        .lock()
+        .iter()
+        .filter(|u| {
+            matches!(
+                u.kind,
+                SessionUpdateKind::PermissionResolved { .. }
+                    | SessionUpdateKind::PermissionSendFailed { .. }
+            )
+        })
+        .map(|u| u.kind.clone())
+        .collect()
+}
+
+async fn approval_asked(h: &Harness, peer: &Peer, id: i64) {
+    peer.request(
+        id,
+        "item/commandExecution/requestApproval",
+        json!({"threadId": "th1", "itemId": "c1", "command": "rm -rf x"}),
+    );
+    let sink = Arc::clone(&h.sink);
+    until("input required", move || {
+        sink.last_status() == Some(TaskStatus::InputRequired)
+    })
+    .await;
+}
+
+/// A2 选了没发出 (返回错误): Codex stops reading; the denial is not written,
+/// the request stays open and its reason is not steered.
+#[tokio::test]
+async fn an_answer_codex_cannot_take_keeps_the_request_open() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    approval_asked(&h, &peer, 7).await;
+    peer.deafen();
+    h.session
+        .respond(
+            "7",
+            Decision::Deny {
+                reason: Some("别删".into()),
+            },
+        )
+        .unwrap();
+    let sink = Arc::clone(&h.sink);
+    until("send failed", move || !answers(&sink).is_empty()).await;
+    let [SessionUpdateKind::PermissionSendFailed { id, state, reason }] = &answers(&h.sink)[..]
+    else {
+        panic!("{:?}", answers(&h.sink))
+    };
+    assert_eq!((id.as_str(), *state), ("7", PermissionSendState::Failed));
+    assert!(
+        reason.starts_with("审批没送出去：写不进 Codex 的输入"),
+        "{reason}"
+    );
+    assert_eq!(h.session.snapshot().pending[0].id, "7");
+    assert_eq!(h.sink.last_status(), Some(TaskStatus::InputRequired));
+}
+
+/// A2 选了没发出 (连接关闭) and Mac 与手机同时回答: the answer waits behind an
+/// interrupt Codex never answers; a second answer is refused; Codex exits
+/// before the answer is written, so the request ends unsent.
+#[tokio::test]
+async fn a_held_answer_wins_once_and_ends_unsent_when_codex_exits() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    approval_asked(&h, &peer, 7).await;
+    h.session.interrupt().unwrap();
+    let _ = peer.expect("turn/interrupt").await;
+    h.session.respond("7", Decision::AllowOnce).unwrap();
+    assert_eq!(
+        h.session.respond("7", Decision::AllowForSession),
+        Err(DriverError::AlreadyAnswered("7".into()))
+    );
+    peer.silent().await;
+    assert!(answers(&h.sink).is_empty(), "nothing is written yet");
+    drop(peer);
+    let sink = Arc::clone(&h.sink);
+    until("failed", move || {
+        sink.last_status() == Some(TaskStatus::Failed)
+    })
+    .await;
+    let answers = answers(&h.sink);
+    assert_eq!(
+        answers.last(),
+        Some(&SessionUpdateKind::PermissionSendFailed {
+            id: "7".into(),
+            state: PermissionSendState::Ended,
+            reason: crate::sessions::live::ANSWER_ENDED_WITH_CONNECTION.into(),
+        }),
+        "{answers:?}"
+    );
+    assert!(!answers
+        .iter()
+        .any(|a| matches!(a, SessionUpdateKind::PermissionResolved { .. })));
+}

@@ -19,6 +19,8 @@
 
 驱动把协议消息归一为 core 的会话事件（参照 ACP `session/update`：消息与思考片段、工具调用、计划、权限请求、子 Agent、用量、配置变更、错误、未识别内容），经 topic `session.update` 发给客户端。未识别内容带来源保留并显示，不丢弃、不猜测、不自动批准。
 
+审批回应写进 Agent 的输入之后，驱动才发 `permissionResolved`。写不进去时发 `permissionSendFailed`：`failed` 表示请求仍开着、任务回到 `input_required`，用户可以再答；`ended` 表示请求随连接或这一轮结束，回答没送到。被回答过的请求在连接或回合结束时以 `ended` 结束，没回答过的仍以 `cancelled` 结束。同一请求同时只接受一个回答，第二个回答返回 `BUSY`（`DriverError::AlreadyAnswered`），请求已不在返回 `NOT_FOUND`。审批回应不自动重发；omp 的"本会话总是允许"在写成功后才记下。检查点只把写成功的批准记为同意。
+
 ## SSH 远程
 
 Claude/Codex/omp 可经 ssh 在远端运行（`sessions/live/remote.rs`、`aeroric-host/src/remote_sessions.rs`）：登录 shell、逐词转义、`StrictHostKeyChecking=yes` 与 Aeroric 自己的 known_hosts；只有密钥的连接加 `BatchMode=yes`，密码连接经 `SSH_ASKPASS = aeroric-cli askpass` 兑换一次性票据（60 秒、3 次）。仅限内建 Agent。

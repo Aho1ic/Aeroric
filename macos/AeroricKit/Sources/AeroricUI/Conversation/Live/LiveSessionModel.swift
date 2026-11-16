@@ -251,6 +251,9 @@ public struct LiveSessionModel: Equatable, Sendable {
     public private(set) var cursor: UInt64
     public private(set) var items: [LiveItem] = []
     public private(set) var pending: [LivePendingPermission] = []
+    /// A2: approvals whose answer the host could not write to the agent,
+    /// with its reason; the card stays and can be answered again.
+    public private(set) var sendFailures: [String: String] = [:]
     /// Question cards waiting for the user (omp dialogs).
     public private(set) var questions: [LivePendingQuestion] = []
     /// The permission is fixed for this session (omp).
@@ -293,6 +296,11 @@ public struct LiveSessionModel: Equatable, Sendable {
         stats = SessionStats(outputBaseline: state.outputTokens ?? 0)
         config = LiveConfig(model: state.model, permission: state.permission, effort: state.effort)
         turnActive = state.turnActive
+    }
+
+    /// A2: the user answers again; the old failure no longer describes the card.
+    public mutating func clearSendFailure(_ id: String) {
+        sendFailures[id] = nil
     }
 
     /// After a gap: start over from the host's snapshot (history is re-read by the caller).
@@ -461,6 +469,19 @@ public struct LiveSessionModel: Equatable, Sendable {
             }
         case let .permissionResolved(id, _):
             pending.removeAll { $0.id == id }
+            sendFailures[id] = nil
+        case let .permissionSendFailed(id, state, reason):
+            switch state {
+            case .failed:
+                if pending.contains(where: { $0.id == id }) { sendFailures[id] = reason }
+            case .ended:
+                // The request is over without the answer: the card goes, a line says why.
+                let summary = pending.first { $0.id == id }?.summary
+                pending.removeAll { $0.id == id }
+                sendFailures[id] = nil
+                let line = summary.map { "\(reason)（\($0)）" } ?? reason
+                items.append(.notice(id: "seq\(update.seq)", message: line, recoverable: false))
+            }
         case let .subagent(id, title, status, detail):
             let agent = LiveSubagent(id: id, title: title, status: status, detail: detail)
             if let index = subagents.firstIndex(where: { $0.id == id }) {

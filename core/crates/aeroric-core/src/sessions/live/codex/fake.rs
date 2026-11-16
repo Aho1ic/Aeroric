@@ -74,6 +74,12 @@ impl Peer {
         self.expect("initialized").await;
     }
 
+    /// A2 fault: the process stops reading its input (every write fails)
+    /// while its output still flows.
+    pub fn deafen(&mut self) {
+        self.from_client.close();
+    }
+
     /// The process exits.
     pub fn close(&mut self) {
         self.to_client = None;

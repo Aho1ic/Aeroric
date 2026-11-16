@@ -17,10 +17,13 @@ use super::map::{
     claude_permission_mode, map_permission_request, permission_response, ClaudeMapper, ClaudeSignal,
 };
 use crate::sessions::live::codex::rpc::{ChildGuard, Transport};
-use crate::sessions::live::update::{PlanEntry, SessionUpdateKind, TurnEndReason};
+use crate::sessions::live::update::{
+    PermissionSendState, PlanEntry, SessionUpdateKind, TurnEndReason,
+};
 use crate::sessions::live::{
-    now_ms, ConfigChange, Decision, DriverError, LiveStatusSink, PendingPermission, SessionDriver,
-    SessionState, SharedLog, SlashCommand,
+    answer_not_written, now_ms, ConfigChange, Decision, DriverError, LiveStatusSink,
+    PendingPermission, SessionDriver, SessionState, SharedLog, SlashCommand,
+    ANSWER_ENDED_WITH_CONNECTION, ANSWER_ENDED_WITH_TURN,
 };
 use crate::tasks::{ProtocolFamily, TaskStatus};
 use aeroric_protocol::delivery::ReceiptOutcome;
@@ -98,6 +101,11 @@ enum Command {
 struct Pending {
     request: Value,
     view: PendingPermission,
+    /// A2: an answer is on its way to the actor; a second one is refused.
+    claimed: bool,
+    /// A2: the user answered at least once (so its end is "not sent", not
+    /// a plain cancel).
+    tried: bool,
 }
 
 struct State {
@@ -260,16 +268,9 @@ impl SessionDriver for ClaudeSession {
     }
 
     fn respond(&self, request_id: &str, decision: Decision) -> Result<(), DriverError> {
-        if !self
-            .state
-            .lock()
-            .pending
-            .iter()
-            .any(|p| p.view.id == request_id)
-        {
-            return Err(DriverError::UnknownRequest(request_id.to_string()));
-        }
+        claim(&self.state, request_id)?;
         self.send(Command::Respond(request_id.to_string(), decision))
+            .inspect_err(|_| release(&self.state, request_id))
     }
 
     fn configure(&self, change: ConfigChange) -> Result<(), DriverError> {
@@ -351,6 +352,26 @@ impl SessionDriver for ClaudeSession {
 
     fn rebind(&self, generation: u64) {
         self.state.lock().generation = generation;
+    }
+}
+
+/// A2: take the request for one answer (first come wins).
+fn claim(state: &Mutex<State>, id: &str) -> Result<(), DriverError> {
+    let mut state = state.lock();
+    let Some(pending) = state.pending.iter_mut().find(|p| p.view.id == id) else {
+        return Err(DriverError::UnknownRequest(id.to_string()));
+    };
+    if pending.claimed {
+        return Err(DriverError::AlreadyAnswered(id.to_string()));
+    }
+    pending.claimed = true;
+    pending.tried = true;
+    Ok(())
+}
+
+fn release(state: &Mutex<State>, id: &str) {
+    if let Some(pending) = state.lock().pending.iter_mut().find(|p| p.view.id == id) {
+        pending.claimed = false;
     }
 }
 
@@ -624,21 +645,36 @@ impl Actor {
         }
     }
 
+    /// A2: the request stays pending until the answer is written; only a
+    /// written answer settles it.
     fn respond(&mut self, id: String, decision: Decision) {
-        let pending = {
-            let mut state = self.state.lock();
-            let index = state.pending.iter().position(|p| p.view.id == id);
-            index.map(|i| state.pending.remove(i))
+        let request = {
+            let state = self.state.lock();
+            let pending = state.pending.iter().find(|p| p.view.id == id);
+            pending.map(|p| p.request.clone())
         };
-        let (Some(pending), Some(client)) = (pending, self.client()) else {
+        let Some(request) = request else {
             return;
         };
-        if let Err(error) = client.respond(&id, permission_response(&pending.request, &decision)) {
-            self.push(SessionUpdateKind::Error {
-                message: format!("审批未送达：{error}"),
-                recoverable: true,
+        let Some(client) = self.client() else {
+            self.drop_pending(
+                |p| p.view.id == id,
+                "cancelled",
+                Some(ANSWER_ENDED_WITH_CONNECTION),
+            );
+            return;
+        };
+        if let Err(error) = client.respond(&id, permission_response(&request, &decision)) {
+            release(&self.state, &id);
+            self.push(SessionUpdateKind::PermissionSendFailed {
+                id,
+                state: PermissionSendState::Failed,
+                reason: answer_not_written("Claude", error),
             });
+            self.status(TaskStatus::InputRequired, None);
+            return;
         }
+        self.state.lock().pending.retain(|p| p.view.id != id);
         self.push(SessionUpdateKind::PermissionResolved {
             id,
             decision: decision.wire().into(),
@@ -678,7 +714,12 @@ impl Actor {
                         },
                         _ => unreachable!("map_permission_request returns permission requests"),
                     };
-                    self.state.lock().pending.push(Pending { request, view });
+                    self.state.lock().pending.push(Pending {
+                        request,
+                        view,
+                        claimed: false,
+                        tried: false,
+                    });
                     self.push(update);
                     self.status(TaskStatus::InputRequired, None);
                 } else {
@@ -706,7 +747,7 @@ impl Actor {
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    self.drop_pending(|p| p.view.id == id, "cancelled");
+                    self.drop_pending(|p| p.view.id == id, "cancelled", None);
                     return;
                 }
                 if message.get("isReplay").and_then(Value::as_bool) == Some(true) {
@@ -786,7 +827,7 @@ impl Actor {
             state.idle_since = now_ms();
             state.active_turn.take()
         };
-        self.drop_pending(|_| true, "cancelled");
+        self.drop_pending(|_| true, "cancelled", Some(ANSWER_ENDED_WITH_TURN));
         let refused = self.refused.take();
         let (failed, error) = match refused {
             Some(reason) => (true, Some(reason)),
@@ -868,7 +909,16 @@ impl Actor {
         }
     }
 
-    fn drop_pending(&self, matches: impl Fn(&Pending) -> bool, decision: &str) {
+    /// Settle requests the agent no longer waits on. One the user answered
+    /// without the answer getting through ends as not sent (`unsent`, A2)
+    /// rather than as `decision`, when the reason is that the turn or the
+    /// connection ended; the agent's own withdrawal passes `None`.
+    fn drop_pending(
+        &self,
+        matches: impl Fn(&Pending) -> bool,
+        decision: &str,
+        unsent: Option<&str>,
+    ) {
         let (dropped, resume_running) = {
             let mut state = self.state.lock();
             let (dropped, kept): (Vec<_>, Vec<_>) =
@@ -879,10 +929,17 @@ impl Actor {
             (dropped, resume)
         };
         for pending in dropped {
-            self.push(SessionUpdateKind::PermissionResolved {
-                id: pending.view.id,
-                decision: decision.into(),
-            });
+            match unsent.filter(|_| pending.tried) {
+                Some(reason) => self.push(SessionUpdateKind::PermissionSendFailed {
+                    id: pending.view.id,
+                    state: PermissionSendState::Ended,
+                    reason: reason.into(),
+                }),
+                None => self.push(SessionUpdateKind::PermissionResolved {
+                    id: pending.view.id,
+                    decision: decision.into(),
+                }),
+            }
         }
         if resume_running {
             self.status(TaskStatus::Running, None);
@@ -903,7 +960,7 @@ impl Actor {
             state.background = 0;
             state.active_turn.take()
         };
-        self.drop_pending(|_| true, "cancelled");
+        self.drop_pending(|_| true, "cancelled", Some(ANSWER_ENDED_WITH_CONNECTION));
         if lost > 0 {
             self.push(SessionUpdateKind::Error {
                 message: format!("Claude 进程已退出，{lost} 个后台任务随之结束"),

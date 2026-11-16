@@ -507,6 +507,32 @@
             },
             {
               "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "failed",
+                    "ended"
+                  ]
+                },
+                "type": {
+                  "const": "permissionSendFailed"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "state",
+                "reason"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "detail": {
                   "type": "string"
                 },

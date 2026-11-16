@@ -64,12 +64,25 @@ pub enum SlashCommand {
     Review,
 }
 
+/// A2: why an answered approval ended without its answer reaching the agent
+/// (`PermissionSendFailed { state: ended }`).
+pub const ANSWER_ENDED_WITH_CONNECTION: &str = "审批没送出去：这次请求已随连接结束";
+pub const ANSWER_ENDED_WITH_TURN: &str = "审批没送出去：这次请求已随这一轮结束";
+
+/// A2: the reason on `PermissionSendFailed { state: failed }`.
+pub fn answer_not_written(agent: &str, error: impl std::fmt::Display) -> String {
+    format!("审批没送出去：写不进 {agent} 的输入（{error}）")
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DriverError {
     #[error("{0}")]
     Unsupported(String),
     #[error("no pending request {0}")]
     UnknownRequest(String),
+    /// A2: another answer to this request is on its way to the agent.
+    #[error("这条审批正在由另一端回答：{0}")]
+    AlreadyAnswered(String),
     #[error("{0}")]
     Agent(String),
     #[error("the agent process is not available: {0}")]
