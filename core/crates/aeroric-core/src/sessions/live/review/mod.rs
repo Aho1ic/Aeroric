@@ -98,6 +98,10 @@ struct Loop {
     /// reuses the reviewer only while the choice is unchanged (B4-CU-02).
     #[serde(default)]
     chosen: Option<ReviewerChoice>,
+    /// B5: the last round's blocking issues and the tree its answer left,
+    /// to stop a loop that goes in circles.
+    #[serde(default)]
+    progress: Option<(Vec<String>, String)>,
 }
 
 #[derive(Default)]
@@ -439,6 +443,20 @@ impl ReviewLoop {
         }
         match diff {
             Some(diff) if adopted > 0 => {
+                // B5: the same blocking issues as last round, and the answer
+                // left the files exactly as last time: another round would
+                // say the same again.
+                let issues = blocking_issues(&l.card.findings);
+                let stuck = !diff.after.is_empty()
+                    && l.progress
+                        .as_ref()
+                        .is_some_and(|(before, tree)| *before == issues && *tree == diff.after);
+                if stuck {
+                    l.card.state = ReviewState::Escalated;
+                    l.card.raw = Some(NO_PROGRESS.into());
+                    return None;
+                }
+                l.progress = Some((issues, diff.after.clone()));
                 if l.card.round >= MAX_ROUNDS {
                     l.card.state = ReviewState::Escalated;
                     l.card.raw = Some(format!("已审查 {MAX_ROUNDS} 轮仍有阻断问题，交给你决定"));
@@ -783,6 +801,34 @@ fn needs_user(card: &ReviewCard) -> bool {
                 .findings
                 .iter()
                 .any(|f| f.severity == Severity::Blocker && f.decision == Some(Decision::Reject)))
+}
+
+/// B5: why a loop stopped before its last round.
+pub const NO_PROGRESS: &str = "上一轮和这一轮的阻断问题相同，改动也没有变化，交给你决定";
+
+/// B5: a round's blocking issues, each reduced to where it points (file and
+/// line) or, without a place, to its words without spacing and punctuation,
+/// so a reworded repeat is still the same issue.
+fn blocking_issues(findings: &[aeroric_protocol::review::Finding]) -> Vec<String> {
+    let mut keys: Vec<String> = findings
+        .iter()
+        .filter(|f| f.severity == aeroric_protocol::review::Severity::Blocker)
+        .map(|f| match (&f.file, f.line) {
+            (Some(file), Some(line)) => format!("{file}:{line}"),
+            (Some(file), None) => format!("{file}:{}", plain(&f.text)),
+            _ => plain(&f.text),
+        })
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+fn plain(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn checks_summary(run: &str, items: &[super::update::AutoCheckItem]) -> String {

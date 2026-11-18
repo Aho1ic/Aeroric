@@ -519,3 +519,50 @@ fn gate_flags_reach_the_reviewer_to_judge() {
     let clean = prompt::reviewer(&diff(&["a.rs"]), &context(&[]));
     assert!(!clean.contains("门禁完整性"));
 }
+
+/// B5: the second round repeats the first (the same blocking issue,
+/// reworded but at the same place) and the answer leaves the files exactly
+/// as before: the loop stops instead of using up its rounds.
+#[test]
+fn a_round_that_repeats_the_last_one_stops_the_loop() {
+    const REWORDED: &str = "```json\n{\"verdict\":\"changes\",\"findings\":[{\"id\":\"r1\",\"severity\":\"blocker\",\"file\":\"src/a.rs\",\"line\":3,\"text\":\"重试次数仍然没有上限！\"},{\"id\":\"r2\",\"severity\":\"minor\",\"text\":\"另一个命名\"}]}\n```";
+    let tree = |after: &str| TurnDiff {
+        after: after.into(),
+        ..diff(&["src/a.rs"])
+    };
+    let rig = rig(true, false);
+    to_writer(&rig);
+    rig.turn("t1", "u2", &answer("adopt", "adopt"));
+    rig.settled("t1", "u2", Some(tree("tree-1")), false);
+    rig.wait_sent(3);
+    rig.turn("rev-1", "v2", REWORDED);
+    rig.wait_sent(4);
+    rig.turn("t1", "u3", &answer("adopt", "adopt"));
+    rig.settled("t1", "u3", Some(tree("tree-1")), false);
+    let card = rig.reviews.card("t1").unwrap();
+    assert_eq!((card.round, card.state), (2, ReviewState::Escalated));
+    assert_eq!(card.raw.as_deref(), Some(super::NO_PROGRESS));
+}
+
+/// B5: the same issues while the files keep changing is an author still
+/// trying: the loop goes on.
+#[test]
+fn the_same_issues_with_new_changes_go_on() {
+    let tree = |after: &str| TurnDiff {
+        after: after.into(),
+        ..diff(&["src/a.rs"])
+    };
+    let rig = rig(true, false);
+    to_writer(&rig);
+    rig.turn("t1", "u2", &answer("adopt", "adopt"));
+    rig.settled("t1", "u2", Some(tree("tree-1")), false);
+    rig.wait_sent(3);
+    rig.turn("rev-1", "v2", BLOCKER);
+    rig.wait_sent(4);
+    rig.turn("t1", "u3", &answer("adopt", "adopt"));
+    rig.settled("t1", "u3", Some(tree("tree-2")), false);
+    let sent = rig.wait_sent(5);
+    assert!(sent.last().unwrap().1.contains("第 3 轮"));
+    let card = rig.reviews.card("t1").unwrap();
+    assert_eq!((card.round, card.state), (3, ReviewState::Reviewing));
+}

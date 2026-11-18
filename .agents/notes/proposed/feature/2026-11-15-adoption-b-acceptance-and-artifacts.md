@@ -106,6 +106,8 @@ id 既然是预先定好的，义务可以在启动之前就写入。
 
 ### B5 审查循环没有进展就停
 
+2026-11-18 已实现，见 [B5 实现笔记](../../implemented/feature/2026-11-18-b5-review-loop-stops-without-progress.md)。
+
 **用户会看到：** 审查循环在两轮之间没有实质变化时提前停下，写明"上一轮和这一轮的问题相同，改动也没有变化，交给你决定"。
 
 **现状：** `core/crates/aeroric-core/src/sessions/live/review/mod.rs:442`：只有轮数达到 `MAX_ROUNDS` 才停。作者反复提交同样的改动、审查者反复给出同样的问题时，会把轮数耗完。
