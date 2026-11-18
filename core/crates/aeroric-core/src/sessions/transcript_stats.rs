@@ -442,6 +442,22 @@ fn codex_base_kind(text: &str, base: Option<&str>) -> &'static str {
 
 /// A Codex tool result that reports failure: a script that failed, a
 /// command that exited non-zero, or a call the person stopped or rejected.
+/// DSH's bash tool reports a non-zero exit inside the text (`[exit code: 1]`)
+/// with `isError: false` (2026-11-18 round-7 review: `ls` of a missing folder
+/// read "完成"). Shared with the DSH history parser so the row and the bill agree.
+pub(crate) fn dsh_exit_failed(output: &str) -> bool {
+    output
+        .lines()
+        .rev()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("[exit code: ")
+                .and_then(|rest| rest.strip_suffix(']'))
+        })
+        .and_then(|code| code.trim().parse::<i64>().ok())
+        .is_some_and(|code| code != 0)
+}
+
 /// Also read by the Codex history parser, so a tool row and the bill agree.
 pub(crate) fn codex_failed(output: &Value) -> bool {
     let text = text_of(output);
@@ -995,8 +1011,10 @@ pub fn dsh(lines: &[String]) -> Option<TranscriptStats> {
             }
             "tool/result" => {
                 if let Some(id) = data["message"]["source"]["callId"].as_str() {
-                    let failed = data["isError"] == true || data["message"]["isError"] == true;
                     let output = text_of(&data["message"]["content"]);
+                    let failed = data["isError"] == true
+                        || data["message"]["isError"] == true
+                        || dsh_exit_failed(&output);
                     clock.tool_end(&mut stats, id, at, failed, &output);
                 }
             }

@@ -429,9 +429,11 @@ fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
                 .and_then(Value::as_str)
             {
                 let mut output = tool_result_output(blocks);
-                let failed =
+                let is_error =
                     data.pointer("/message/isError").and_then(Value::as_bool) == Some(true);
-                if failed && !output.is_empty() {
+                // A non-zero `[exit code: N]` is a failure too (isError stays false).
+                let failed = is_error || super::transcript_stats::dsh_exit_failed(&output);
+                if is_error && !output.is_empty() {
                     output = format!("[error] {output}");
                 }
                 messages.push(SessionMessage {
@@ -460,8 +462,9 @@ fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
                     .cloned()
                     .unwrap_or_default();
                 let mut output = tool_result_output(&inner);
-                let failed = block.get("isError").and_then(Value::as_bool) == Some(true);
-                if failed && !output.is_empty() {
+                let is_error = block.get("isError").and_then(Value::as_bool) == Some(true);
+                let failed = is_error || super::transcript_stats::dsh_exit_failed(&output);
+                if is_error && !output.is_empty() {
                     output = format!("[error] {output}");
                 }
                 messages.push(SessionMessage {

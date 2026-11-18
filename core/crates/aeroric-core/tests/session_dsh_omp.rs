@@ -360,3 +360,40 @@ fn dsh_and_omp_failed_tools_carry_the_failed_flag() {
     assert_eq!(flags(parse_dsh_session_lines(&dsh).unwrap()), expected);
     assert_eq!(flags(parse_omp_session_lines(&omp).unwrap()), expected);
 }
+
+/// Round-7 review (2026-11-18): DSH v4 reports a failed shell command with
+/// `isError: false` and the exit status at the end of the text.
+#[test]
+fn a_dsh_command_with_a_non_zero_exit_is_failed() {
+    let line = |id: &str, text: &str| {
+        format!(
+            r#"{{"type":"tool/result","seq":1,"time":2,"data":{{"turn":1,"step":1,"message":{{"role":"tool","source":{{"kind":"tool","callId":"{id}"}},"toolCallId":"{id}","content":[{{"type":"text","text":"{text}"}}],"isError":false}}}}}}"#
+        )
+    };
+    let lines = vec![
+        dsh_header_line(0, "d2", 1),
+        line(
+            "bad",
+            r"[stderr]\nls: /x: No such file or directory\n[exit code: 1]",
+        ),
+        line("ok", r"review-ok\n"),
+        line("zero", r"done\n[exit code: 0]"),
+    ];
+    let flags: Vec<(String, bool)> = parse_dsh_session_lines(&lines)
+        .unwrap()
+        .iter()
+        .flat_map(|m| m.content.clone())
+        .filter_map(|c| match c {
+            SessionContent::ToolResult { id, failed, .. } => Some((id, failed)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        flags,
+        vec![
+            ("bad".to_string(), true),
+            ("ok".to_string(), false),
+            ("zero".to_string(), false)
+        ]
+    );
+}
