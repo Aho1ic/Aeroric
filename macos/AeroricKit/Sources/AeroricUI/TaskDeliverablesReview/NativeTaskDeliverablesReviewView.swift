@@ -59,6 +59,7 @@ public struct NativeTaskDeliverablesReviewView: View {
                     }
                     .padding(.bottom, NativePanelGeometry.panelInset)
                 }
+                .scrollIndicators(.hidden)
             }
             .padding(NativePanelGeometry.panelInset)
             .foregroundStyle(AeroricColor.text)
@@ -263,7 +264,7 @@ public struct NativeTaskDeliverablesReviewView: View {
                     set: { store.setOrganizationTitleDraft($0) }
                 )
             )
-            .textFieldStyle(.roundedBorder)
+            .textFieldStyle(.capsule)
             .accessibilityIdentifier("taskDeliverablesReview.organization.title")
             TextField(
                 "展示说明",
@@ -272,7 +273,7 @@ public struct NativeTaskDeliverablesReviewView: View {
                     set: { store.setOrganizationDescriptionDraft($0) }
                 )
             )
-            .textFieldStyle(.roundedBorder)
+            .textFieldStyle(.capsule)
             .accessibilityIdentifier("taskDeliverablesReview.organization.description")
             HStack {
                 Button("应用整理") {

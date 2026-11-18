@@ -30,7 +30,11 @@ check("Xcode license accepted (blocks cc, python3, swift, ld)", ["xcrun", "swift
 check("SDK path resolvable", ["xcrun", "--sdk", "macosx", "--show-sdk-path"]);
 check("Rust toolchain", ["rustc", "--version"]);
 check("Cargo", ["cargo", "--version"]);
-check("Node", ["node", "--version"]);
+// The notes gate runs `.ts` files directly: Node strips types by default
+// from 22.18 on (docs/cookbook/build-and-verify.md says the same).
+check("Node 22.18+ (runs .ts directly)", ["node", "--version"], {
+  match: /^v(2[3-9]|[3-9]\d|22\.(1[89]|[2-9]\d))\./m,
+});
 check("pnpm", ["pnpm", "--version"]);
 check("python3 for Trellis scripts", ["python3", "--version"]);
 check("Trellis CLI", ["trellis", "--version"]);

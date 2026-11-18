@@ -51,6 +51,7 @@ public struct NativeToolsConnectionsReviewView: View {
                 }
                 .padding(NativePanelGeometry.panelInset)
             }
+            .scrollIndicators(.hidden)
             .foregroundStyle(AeroricColor.text)
             .background {
                 NativePanelFoundation(preference: surface, reduceTransparency: reduceTransparency)

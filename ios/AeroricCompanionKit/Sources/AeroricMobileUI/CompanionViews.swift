@@ -142,6 +142,16 @@ public struct CompanionTasksPane: View {
         self.store = store
     }
 
+    /// Runs `action`; a refusal shows as `errorMessage`, success clears it.
+    private func attempt(_ action: () throws -> Void) {
+        do {
+            try action()
+            errorMessage = nil
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -170,6 +180,14 @@ public struct CompanionTasksPane: View {
                 .accessibilityIdentifier("companion.task.submit")
             }
 
+            // B4-4: a refused action says why instead of doing nothing.
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("companion.error")
+            }
+
             if !store.pendingApprovals.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("待审批请求").font(.subheadline).bold()
@@ -180,11 +198,11 @@ public struct CompanionTasksPane: View {
                                 Text(approval.summary)
                                 Spacer()
                                 Button("批准") {
-                                    try? store.submitApproval(requestId: approval.requestId, approve: true)
+                                    attempt { try store.submitApproval(requestId: approval.requestId, approve: true) }
                                 }
                                 .disabled(!answerable)
                                 Button("拒绝") {
-                                    try? store.submitApproval(requestId: approval.requestId, approve: false)
+                                    attempt { try store.submitApproval(requestId: approval.requestId, approve: false) }
                                 }
                                 .disabled(!answerable)
                             }
@@ -202,10 +220,11 @@ public struct CompanionTasksPane: View {
             }
 
             HStack(spacing: 8) {
-                ForEach(CompanionSessionControl.allCases, id: \.self) { ctrl in
+                // B4-4: only what the Mac's adapter says it offers.
+                ForEach(store.adapterCapabilities.offeredControls, id: \.self) { ctrl in
                     Button(ctrl.rawValue) {
                         if let taskId = store.selectedTaskId ?? store.tasks.first?.id {
-                            try? store.triggerSessionControl(ctrl, taskId: taskId)
+                            attempt { _ = try store.triggerSessionControl(ctrl, taskId: taskId) }
                         }
                     }
                     .disabled(!store.connectionState.isMacOnline)

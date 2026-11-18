@@ -60,6 +60,10 @@ pub enum SessionContent {
     ToolResult {
         id: String,
         output: String,
+        /// The tool did not run or failed (Claude's `is_error`, e.g. a
+        /// permission the host denied). Absent on the wire when false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        failed: bool,
     },
     Thinking {
         thinking: String,

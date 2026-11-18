@@ -118,6 +118,9 @@ final class PushCoordinator: NSObject, ObservableObject, UNUserNotificationCente
 
 @main
 struct AeroricCompanionApp: App {
+    /// B4-4: without the adaptor UIKit never calls the delegate, and the APNs
+    /// token callback (`didRegisterForRemoteNotificationsWithDeviceToken`) is lost.
+    @UIApplicationDelegateAdaptor(CompanionAppDelegate.self) private var appDelegate
     @State private var store = CompanionStore()
     @StateObject private var push = PushCoordinator()
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -133,6 +136,7 @@ struct AeroricCompanionApp: App {
             )
             .environmentObject(push)
             .onAppear {
+                appDelegate.push = push
                 push.store = store
                 // The store owns *when* a token may be uploaded (Mac online +
                 // device id known); this closure owns *how* it reaches the Mac.

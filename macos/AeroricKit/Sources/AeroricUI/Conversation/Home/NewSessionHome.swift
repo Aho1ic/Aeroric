@@ -138,7 +138,8 @@ public struct NewSessionHome: View {
                     aboveComposer.padding(.bottom, AeroricSpace.s)
                     composer
                     if discussing {
-                        DiscussionSetup(targets: discussionTargets, preferredHarness: harness, members: $members,
+                        DiscussionSetup(targets: discussionTargets, capabilities: capabilities,
+                                        preferredHarness: harness, members: $members,
                                         moderator: $moderator, rounds: $rounds, anonymous: $anonymous,
                                         topic: draft.task.prompt, format: $format, revisions: $revisions,
                                         requirements: $requirements,
@@ -169,6 +170,7 @@ public struct NewSessionHome: View {
                 .padding(.bottom, AeroricSpace.huge + 2 * AeroricSpace.xxl)
                 .frame(maxWidth: .infinity, minHeight: viewport.size.height)
             }
+            .scrollIndicators(.hidden)
         }
         .onAppear(perform: adoptDefaults)
         .sheet(item: $loginHelp) { LoginHelpSheet(login: $0) }
@@ -413,7 +415,8 @@ public struct NewSessionHome: View {
     }
 
     private var configurationPicker: some View {
-        ComposerPicker(title: selected?.title ?? "Agent", systemImage: AgentGlyph.symbol(for: selected?.agent),
+        ComposerPicker(title: ComposerPickerOptions.configurationTitle(configurations, draft: draft),
+                       systemImage: AgentGlyph.symbol(for: selected?.agent),
                        menu: ComposerPickerOptions.configurations(configurations, draft: draft, harness: harness,
                                                                   remote: project?.path.hasPrefix("ssh://") == true),
                        identifier: "new-session.configuration") { id in

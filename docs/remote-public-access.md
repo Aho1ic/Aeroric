@@ -49,9 +49,18 @@ location / {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
+    # The relay trusts these headers only from a loopback peer (this proxy).
+    # Set them to the client's own address, overwriting anything the client
+    # sent: per-client rate limits and the address the desktop is told about
+    # come from here, so a forwarded value lets a client pose as another.
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Real-IP $remote_addr;
     proxy_read_timeout 90s;
 }
 ```
+
+Caddy's `reverse_proxy` sets `X-Forwarded-For` from the client address by
+itself; nothing to add there.
 
 Configure the desktop with `wss://relay.example.com` and the exact same token.
 The token authenticates desktop host registration; phone-to-desktop
@@ -80,9 +89,11 @@ untrusted—device revocation is the boundary for removing that authority.
 
 ## Push notifications (AP6)
 
-Aeroric ships **no notifications service**. Reminders are delivered by a
-sender that you deploy yourself, which is the only place the APNs auth key
-(`.p8`) exists. The Mac app and the phone never hold it.
+Reminders are delivered by the push sender in `remote-push/`. The product
+maintains its code; a deployment can be run by the product or hosted by
+you, and no public deployment is running. Whoever deploys it holds the APNs
+auth key (`.p8`), and that deployment is the only place the key exists. The
+Mac app, the relay and the phone never hold it.
 
 ### What leaves your Mac
 

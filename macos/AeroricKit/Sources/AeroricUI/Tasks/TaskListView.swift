@@ -28,7 +28,7 @@ public struct TaskListView: View {
         VStack(spacing: 0) {
             HStack {
                 TextField("过滤任务…", text: $filterText)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.capsule)
                     .accessibilityIdentifier("tasks.filter")
                 Button("新建任务") { onOpenDraft?() }
                     .accessibilityIdentifier("tasks.new")

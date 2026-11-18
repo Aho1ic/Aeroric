@@ -253,6 +253,7 @@ public struct ChangesPanel: View {
             }
             .padding(AeroricSpace.l)
         }
+        .scrollIndicators(.hidden)
         .task(id: store.scope) { await store.load() }
         .accessibilityIdentifier("changes.panel")
     }

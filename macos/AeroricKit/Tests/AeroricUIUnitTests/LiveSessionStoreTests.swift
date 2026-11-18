@@ -3,7 +3,7 @@ import AeroricProtocol
 import XCTest
 
 @MainActor
-private final class FakeLiveActions: LiveSessionActions {
+private class FakeLiveActions: LiveSessionActions {
     var stateValue: LiveSessionState
     var batches: [LiveUpdatesBatch] = []
     var historyValue: [AeroricUI.SessionMessage] = []
@@ -22,6 +22,13 @@ private final class FakeLiveActions: LiveSessionActions {
         calls.append("history")
         if failHistory { throw LiveSessionError.unsupported("帧过大") }
         return historyValue
+    }
+    /// A6: when set, history comes in pages; the argument is how many.
+    var paged: ((Int) -> LiveHistory)?
+    func history(taskID: String, pages: Int) async throws -> LiveHistory {
+        guard let paged else { return LiveHistory(messages: try await history(taskID: taskID)) }
+        calls.append("history pages \(pages)")
+        return paged(pages)
     }
     var writers: [LiveSharedWriter] = []
     func prompt(taskID: String, text: String, afterTurn: Bool) async throws -> LivePromptReceipt {
@@ -53,6 +60,13 @@ private final class FakeLiveActions: LiveSessionActions {
     }
     func makeMemoryGlobal(id: String) async throws { calls.append("global \(id)") }
     func undoMemory(id: String) async throws { calls.append("undo \(id)") }
+    func answer(taskID: String, questionID: String, value: String?, confirmed: Bool?, cancelled: Bool) async throws {
+        calls.append("answer \(questionID)")
+    }
+    func turnPlan(taskID: String, turnID: String, action: String, apply: Bool) async throws -> LiveTurnPlan {
+        calls.append("turn \(action) \(turnID)")
+        return LiveTurnPlan(files: [.init(path: "a7-one.txt")], turns: [turnID])
+    }
 }
 
 @MainActor
@@ -148,6 +162,33 @@ final class LiveSessionStoreTests: XCTestCase {
         await store.retryHistory()
         XCTAssertNil(store.historyError)
         XCTAssertEqual(store.history, [user, reply])
+    }
+
+    /// A6: a long session offers its older messages; once loaded, later reads
+    /// keep that depth. Lines that did not read are said.
+    func testEarlierHistoryIsOfferedAndTheDepthIsKept() async {
+        let actions = FakeLiveActions(state: state(seq: 1))
+        let oldest = AeroricUI.SessionMessage(role: "user", content: [.text(text: "最早")])
+        let unreadable = SessionUnreadable(count: 2, firstLine: 17)
+        let (first, second) = (user, reply)
+        actions.paged = { pages in
+            pages > LiveHistory.pageStep
+                ? LiveHistory(messages: [oldest, first, second], unreadable: unreadable)
+                : LiveHistory(messages: [first, second], hasEarlier: true, unreadable: unreadable)
+        }
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        XCTAssertTrue(store.hasEarlierHistory)
+        XCTAssertEqual(store.history, [user, reply])
+        XCTAssertEqual(store.historyUnreadable?.text, "历史文件里有 2 行读不出来（第一处在第 17 行）")
+        await store.loadEarlierHistory()
+        XCTAssertEqual(store.history, [oldest, user, reply])
+        XCTAssertFalse(store.hasEarlierHistory)
+        // Nothing older left: asking again reads nothing.
+        await store.loadEarlierHistory()
+        await store.retryHistory()
+        XCTAssertEqual(actions.calls.filter { $0.hasPrefix("history pages") },
+                       ["history pages 24", "history pages 48", "history pages 48"])
     }
 
     /// B4-2: "#角色 …" delegates instead of prompting; an unknown name is a message.
@@ -272,5 +313,98 @@ final class LiveSessionStoreTests: XCTestCase {
         await store.respond("7", .allowOnce)
         XCTAssertEqual(store.approvals.phase("7"), .submitting(.allowOnce))
         XCTAssertEqual(actions.calls.filter { $0.hasPrefix("respond") }, ["respond 7 deny 别删", "respond 7 allowOnce -"])
+    }
+
+    /// B2-2: a resolved card frees its id: a new question that reuses `q1`
+    /// can be answered too.
+    func testAQuestionIdUsedAgainCanBeAnsweredAgain() async {
+        let actions = FakeLiveActions(state: state(seq: 1))
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        let q1 = LivePendingQuestion(id: "q1", style: "confirm", title: "继续？")
+        actions.batches = [LiveUpdatesBatch(updates: [update(2, .question(q1))], latestSeq: 2)]
+        await store.poll()
+        await store.answer("q1", confirmed: true)
+        XCTAssertEqual(store.answering, ["q1"])
+        actions.batches = [LiveUpdatesBatch(updates: [update(3, .questionResolved(id: "q1", outcome: "answered")),
+                                                     update(4, .question(q1))], latestSeq: 4)]
+        await store.poll()
+        XCTAssertEqual(store.answering, [], "the first q1 is resolved; the new one is free")
+        await store.answer("q1", confirmed: false)
+        XCTAssertEqual(actions.calls.filter { $0 == "answer q1" }.count, 2)
+    }
+
+    /// B2-2: a poll that was waiting while the page reopened drops what it
+    /// read instead of writing the older model over the new one.
+    func testAPollThatStartedBeforeAnOpenDoesNotWriteBack() async {
+        let actions = SlowUpdates(state: state(seq: 1))
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        actions.batches = [LiveUpdatesBatch(updates: [update(2, .notice(level: "info", message: "旧的"))], latestSeq: 2)]
+        let poll = Task { await store.poll() }
+        await actions.waiting()
+        actions.stateValue = state(seq: 9)
+        await store.open()
+        actions.release()
+        _ = await poll.value
+        XCTAssertEqual(store.model?.cursor, 9, "the reopened model stays")
+    }
+
+    /// B2-2: a failed "load earlier" keeps the depth that was shown.
+    func testAFailedEarlierReadKeepsTheDepth() async {
+        let actions = FakeLiveActions(state: state(seq: 1))
+        actions.paged = { _ in LiveHistory(messages: [], hasEarlier: true) }
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        XCTAssertEqual(store.historyPages, LiveHistory.pageStep)
+        actions.paged = nil
+        actions.failHistory = true
+        await store.loadEarlierHistory()
+        XCTAssertEqual(store.historyPages, LiveHistory.pageStep)
+        XCTAssertNotNil(store.historyError)
+    }
+
+
+    /// 目检 2026-11-17: undoing or taking back a turn reads history again, so
+    /// its footer (产品失败 · 已撤销) follows the ledger instead of staying.
+    func testUndoAndRestoreReadHistoryAgain() async {
+        let actions = FakeLiveActions(state: state(seq: 1))
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        let before = actions.calls.filter { $0 == "history" }.count
+        let undone = await store.applyTurn("u1", action: "undo")
+        XCTAssertTrue(undone)
+        let restored = await store.applyTurn("u1", action: "restore")
+        XCTAssertTrue(restored)
+        XCTAssertEqual(actions.calls.filter { $0 == "history" }.count, before + 2)
+    }
+}
+
+
+/// B2-2: `updates` that waits until the test lets it go.
+private final class SlowUpdates: FakeLiveActions {
+    private var gate: CheckedContinuation<Void, Never>?
+    private var entered: CheckedContinuation<Void, Never>?
+    private var isWaiting = false
+
+    override func updates(taskID: String, after: UInt64) async throws -> LiveUpdatesBatch {
+        let batch = try await super.updates(taskID: taskID, after: after)
+        await withCheckedContinuation { gate in
+            self.gate = gate
+            isWaiting = true
+            entered?.resume()
+            entered = nil
+        }
+        return batch
+    }
+
+    func waiting() async {
+        if isWaiting { return }
+        await withCheckedContinuation { entered = $0 }
+    }
+
+    func release() {
+        gate?.resume()
+        gate = nil
     }
 }

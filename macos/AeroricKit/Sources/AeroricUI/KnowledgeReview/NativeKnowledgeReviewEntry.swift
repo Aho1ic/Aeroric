@@ -273,6 +273,7 @@ public struct NativeKnowledgeReviewRefusalView: View {
                 .padding(NativePanelGeometry.panelInset * 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.hidden)
         }
         .padding(NativePanelGeometry.panelInset)
         .frame(minWidth: 320, minHeight: 240)

@@ -51,7 +51,9 @@ public enum LivePermissionSendState: String, Equatable, Sendable {
 
 public enum LiveUpdateKind: Equatable, Sendable {
     case turnStarted(turnId: String)
-    case turnEnded(turnId: String, reason: LiveTurnEndReason, error: String?)
+    /// A3: `rawStatus` is the agent's own end state when Aeroric does not
+    /// know it (empty when it sent none); the turn is then `failed`.
+    case turnEnded(turnId: String, reason: LiveTurnEndReason, error: String?, rawStatus: String? = nil)
     case messageChunk(messageId: String, role: String, text: String)
     case messageCompleted(messageId: String, text: String?)
     case thoughtChunk(id: String, text: String, summary: Bool)
@@ -96,7 +98,8 @@ public enum LiveUpdateKind: Equatable, Sendable {
     /// R1-2: a queued message for this session; the latest of an `id` replaces it.
     case delivery(LiveDelivery)
     /// R1-2: a driver's receipt for the host's queue; nothing to show.
-    case deliveryReceipt(id: String, outcome: String)
+    /// B2-6: `reason` says why a message was not delivered, when the host knows.
+    case deliveryReceipt(id: String, outcome: String, reason: String? = nil)
     /// Kept with its source `type` (or the agent's own kind for host-side unknowns).
     case unknown(kind: String, payload: JSONValue)
 }
@@ -309,7 +312,14 @@ extension LiveSessionUpdate {
         guard let taskId = string(fields, "taskId"), let seq = uint(fields["seq"]), let atMs = uint(fields["atMs"]),
               let type = string(fields, "type")
         else { throw LiveSessionDecodeError("an update needs taskId, seq, atMs and type") }
-        return LiveSessionUpdate(taskId: taskId, seq: seq, atMs: atMs, kind: LiveUpdateKind.decode(type: type, fields))
+        var kind = LiveUpdateKind.decode(type: type, fields)
+        // B2-6: a question without its own `askedAtMs` was asked when the
+        // update was written (its countdown starts there).
+        if case var .question(question) = kind, question.askedAtMs == 0 {
+            question.askedAtMs = atMs
+            kind = .question(question)
+        }
+        return LiveSessionUpdate(taskId: taskId, seq: seq, atMs: atMs, kind: kind)
     }
 }
 
@@ -324,7 +334,8 @@ extension LiveUpdateKind {
             return string(f, "turnId").map { .turnStarted(turnId: $0) }
         case "turnEnded":
             guard let id = string(f, "turnId"), let reason = string(f, "reason").flatMap(LiveTurnEndReason.init) else { return nil }
-            return .turnEnded(turnId: id, reason: reason, error: string(f, "error"))
+            return .turnEnded(turnId: id, reason: reason, error: string(f, "error"),
+                              rawStatus: string(f, "rawStatus"))
         case "messageChunk":
             guard let id = string(f, "messageId"), let role = string(f, "role"), let text = string(f, "text") else { return nil }
             return .messageChunk(messageId: id, role: role, text: text)
@@ -419,7 +430,7 @@ extension LiveUpdateKind {
             return LiveDelivery.decode(f["delivery"]).map { .delivery($0) }
         case "deliveryReceipt":
             guard let id = string(f, "id"), let outcome = string(f, "outcome") else { return nil }
-            return .deliveryReceipt(id: id, outcome: outcome)
+            return .deliveryReceipt(id: id, outcome: outcome, reason: string(f, "reason"))
         case "unknown":
             guard let kind = string(f, "kind") else { return nil }
             return .unknown(kind: kind, payload: f["payload"] ?? .null)

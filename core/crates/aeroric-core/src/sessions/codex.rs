@@ -234,7 +234,11 @@ pub fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) 
                     if !id.is_empty() || !output.trim().is_empty() {
                         messages.push(SessionMessage {
                             role: "user".to_string(),
-                            content: vec![SessionContent::ToolResult { id, output }],
+                            content: vec![SessionContent::ToolResult {
+                                id,
+                                output,
+                                failed: false,
+                            }],
                             message_id: None,
                         });
                     }
@@ -364,7 +368,10 @@ fn edit_spawn(
 fn append_to_result(messages: &mut [SessionMessage], id: &str, line: &str) {
     for message in messages.iter_mut().rev() {
         for part in &mut message.content {
-            if let SessionContent::ToolResult { id: result, output } = part {
+            if let SessionContent::ToolResult {
+                id: result, output, ..
+            } = part
+            {
                 if result == id {
                     output.push('\n');
                     output.push_str(line);

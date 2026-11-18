@@ -8,13 +8,20 @@ public struct RerunTarget: Equatable, Sendable, Identifiable {
     /// The harness it runs (`codex`, `claude`, …), told apart when titles repeat.
     public var agent: String
     public var models: [String]
+    /// B2-5: the harness it runs on; a derived configuration (`claude_gpt55`)
+    /// or a custom one names another agent but runs this harness.
+    public var harness: String
 
-    public init(id: String, title: String, agent: String = "", models: [String]) {
+    public init(id: String, title: String, agent: String = "", models: [String], harness: String = "") {
         self.id = id
         self.title = title
         self.agent = agent
         self.models = models
+        self.harness = harness
     }
+
+    /// The harness to group it under and look capabilities up by.
+    public var harnessKey: String { harness.isEmpty ? agent : harness }
 }
 
 /// R5-2: the words of the rerun sheet and the comparison card.
@@ -165,7 +172,7 @@ struct RerunSheet: View {
                     ForEach(targets) { target in row(target) }
                 }
             }
-            .scrollIndicators(.automatic)
+            .scrollIndicators(.hidden)
             .frame(maxHeight: 260)
             // 目检 2026-11-12: the sheet opened with keyboard focus on the
             // first row, drawn as an accent (purple) ring around it.
@@ -313,6 +320,7 @@ struct RerunCompareCard: View {
                     ForEach(group.runs) { run in column(title: run.label, result: run.result, run: run) }
                 }
             }
+            .scrollIndicators(.hidden)
         }
         .padding(AeroricSpace.l)
         .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: 10))

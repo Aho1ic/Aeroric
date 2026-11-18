@@ -81,7 +81,7 @@ struct LiveQuestionCard: View {
             }
         case "input":
             TextField(question.placeholder ?? "输入回答", text: $text)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.capsule)
                 .focused($focused)
                 .onSubmit(submit)
         case "editor":
@@ -177,8 +177,9 @@ private struct OptionRowChrome: ViewModifier {
     let selected: Bool
 
     func body(content: Content) -> some View {
-        let shape = AeroricRadius.shape(AeroricRadius.s)
-        content
+        // B3-3: a selectable row is a capsule.
+        let shape = Capsule(style: .continuous)
+        return content
             .font(.system(size: AeroricType.body))
             .padding(.horizontal, AeroricSpace.l)
             .padding(.vertical, AeroricSpace.s + 1)

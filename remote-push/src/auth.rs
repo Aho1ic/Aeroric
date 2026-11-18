@@ -1,7 +1,7 @@
 //! 发送端认证:per-user 凭据、HMAC-SHA256 请求签名、nonce 重放防护与限流。
 //!
 //! 为什么不引入账号体系(Q10「优先复用设备信任关系,不默认增加账号」):
-//! 发送端是**用户自托管**的,「用户」就是这份部署的所有者派生出的一台台设备。
+//! 发送端由产品方部署或用户自托管,「用户」是向这份部署登记过的一台台宿主。
 //! 宿主在配对后向发送端 `/v1/enroll` 领一份 per-user 凭据(id + 32 字节随机
 //! 密钥),存进系统钥匙串;此后每次请求用 HMAC-SHA256 签名该请求的
 //! 方法/路径/时间戳/nonce/完整体(格式唯一定义在 `remote_protocol::signature_string`)。
@@ -109,6 +109,18 @@ impl CredentialStore {
         );
         self.persist()?;
         Ok((id, secret))
+    }
+
+    /// B4-5: the network's `/v1/enroll` never replaces an existing user's
+    /// credential (that would lock the real host out); the local `enroll`
+    /// subcommand still can, through [`CredentialStore::enroll`].
+    pub fn enroll_new(&mut self, user_hint: Option<&str>) -> Result<(String, String), String> {
+        if let Some(hint) = user_hint.map(str::trim).filter(|hint| !hint.is_empty()) {
+            if self.users.contains_key(&sanitize_user(hint)?) {
+                return Err("that user is already enrolled".to_string());
+            }
+        }
+        self.enroll(user_hint)
     }
 
     /// 删除一份凭据(部署方撤销某台宿主时用)。
@@ -232,6 +244,15 @@ pub(crate) fn write_private(path: &Path, contents: &str) -> Result<(), String> {
 /// 为什么要按时间淘汰而不是「永久记账」:没有账号体系也就没有可靠的全局时钟
 /// 与清理周期,永久记账会被一个不断换 nonce 的调用方撑爆;窗口外的重放本来
 /// 也会被签名时间戳判死,所以记账窗口与签名窗口取同一个值。
+/// [`ReplayGuard::observe`] 的结论。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Replay {
+    Fresh,
+    Seen,
+    /// 窗口内的 nonce 已记满:先拒绝,等它们过期。
+    Full,
+}
+
 pub struct ReplayGuard {
     seen: Mutex<HashMap<String, Instant>>,
     window: Duration,
@@ -245,24 +266,24 @@ impl ReplayGuard {
         }
     }
 
-    /// `true` = 首次见到(放行);`false` = 重放(拒绝)。
-    pub fn observe(&self, nonce: &str) -> bool {
+    /// 某个用户的某个 nonce 是否第一次出现。
+    ///
+    /// B4-5(2026-11-18):按 `(user, nonce)` 记账,别的用户用同一个 nonce 不算重放;
+    /// 表满时拒绝新请求,而不是淘汰还在窗口里的 nonce(那样窗口内的重放会被放行)。
+    /// 调用方先过签名和限流,所以只有已认证、没超额的请求能占表。
+    pub fn observe(&self, user: &str, nonce: &str) -> Replay {
         let now = Instant::now();
         let mut seen = self.seen.lock();
         seen.retain(|_, at| now.duration_since(*at) < self.window);
+        let key = format!("{user}\u{0}{nonce}");
+        if seen.contains_key(&key) {
+            return Replay::Seen;
+        }
         if seen.len() >= MAX_TRACKED_NONCES {
-            // 到顶:淘汰最旧的一半。窗口内的记账宁可少留几条(重放仍会被
-            // 时间戳判死),也不能让内存无界增长。
-            let mut ages: Vec<Instant> = seen.values().copied().collect();
-            ages.sort_unstable();
-            let cutoff = ages[ages.len() / 2];
-            seen.retain(|_, at| *at >= cutoff);
+            return Replay::Full;
         }
-        if seen.contains_key(nonce) {
-            return false;
-        }
-        seen.insert(nonce.to_string(), now);
-        true
+        seen.insert(key, now);
+        Replay::Fresh
     }
 
     pub fn tracked(&self) -> usize {
@@ -320,9 +341,15 @@ impl RateLimiter {
 }
 
 /// 时间戳窗口:拒绝明显过期/未来的请求(挡重放的第二道闸)。
+///
+/// B4-1(2026-11-18):时间戳来自未认证的请求。`(now - issued).abs()` 在 `issued`
+/// 取 `i64::MIN` 一类值时 Debug 下溢出 panic、Release 下回绕成负数而放行;
+/// 非正的时间戳一律拒绝,差值用 `abs_diff` 求,不会溢出。
 pub fn timestamp_in_window(issued_at_ms: i64, now_ms: i64, window_ms: i64) -> bool {
-    let delta = (now_ms - issued_at_ms).abs();
-    delta <= window_ms
+    if issued_at_ms <= 0 || now_ms <= 0 || window_ms < 0 {
+        return false;
+    }
+    now_ms.abs_diff(issued_at_ms) <= window_ms as u64
 }
 
 /// 当前毫秒时间戳。与 core 的时钟口径一致(UTC epoch 毫秒)。
@@ -403,13 +430,26 @@ mod tests {
     #[test]
     fn replay_guard_rejects_the_second_use_and_stays_bounded() {
         let guard = ReplayGuard::new(Duration::from_millis(50));
-        assert!(guard.observe("a"));
-        assert!(!guard.observe("a"));
-        assert!(guard.observe("b"));
+        assert_eq!(guard.observe("u1", "a"), Replay::Fresh);
+        assert_eq!(guard.observe("u1", "a"), Replay::Seen);
+        assert_eq!(guard.observe("u1", "b"), Replay::Fresh);
+        // B4-5: another user's same nonce is not a replay of this one's.
+        assert_eq!(guard.observe("u2", "a"), Replay::Fresh);
         // 窗口过后同一 nonce 重新可用(此时时间戳闸门仍然拦得住真重放)。
         std::thread::sleep(Duration::from_millis(60));
-        assert!(guard.observe("a"));
-        assert!(guard.tracked() <= 2);
+        assert_eq!(guard.observe("u1", "a"), Replay::Fresh);
+        assert!(guard.tracked() <= 3);
+    }
+
+    /// B4-5: a full table refuses new nonces instead of forgetting live ones.
+    #[test]
+    fn a_full_replay_table_refuses_instead_of_forgetting() {
+        let guard = ReplayGuard::new(Duration::from_secs(60));
+        for index in 0..MAX_TRACKED_NONCES {
+            assert_eq!(guard.observe("u", &format!("n{index}")), Replay::Fresh);
+        }
+        assert_eq!(guard.observe("u", "one-more"), Replay::Full);
+        assert_eq!(guard.observe("u", "n0"), Replay::Seen, "still remembered");
     }
 
     #[test]
@@ -430,6 +470,19 @@ mod tests {
         assert!(timestamp_in_window(now - 59_000, now, 60_000));
         assert!(!timestamp_in_window(now - 61_000, now, 60_000));
         assert!(!timestamp_in_window(now + 61_000, now, 60_000));
+        // B4-1: hostile timestamps neither panic nor slip through.
+        for issued in [
+            i64::MIN,
+            i64::MIN + 1,
+            -1,
+            0,
+            i64::MAX,
+            now.wrapping_add(i64::MIN),
+        ] {
+            assert!(!timestamp_in_window(issued, now, 60_000), "{issued}");
+        }
+        assert!(!timestamp_in_window(now, now, -1));
+        assert!(!timestamp_in_window(now, i64::MIN, 60_000));
     }
 
     #[test]

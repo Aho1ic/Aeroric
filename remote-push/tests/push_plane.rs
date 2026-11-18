@@ -299,7 +299,7 @@ async fn push_reaches_a_real_h2_fake_apns_with_a_privacy_limited_payload() {
     let (status, body, _) = post_signed(
         &sender_base,
         "/v1/bind",
-        bind_body("dev-1", "aa11bb22", "bind-1", at),
+        bind_body("dev-1", "aa11bb22aa11bb22aa11bb22aa11bb22", "bind-1", at),
     )
     .await;
     assert_eq!(status, 200, "bind response: {body}");
@@ -329,7 +329,7 @@ async fn push_reaches_a_real_h2_fake_apns_with_a_privacy_limited_payload() {
     assert_eq!(calls.len(), 1);
     let call = &calls[0];
     assert_eq!(
-        call.path, "/3/device/aa11bb22",
+        call.path, "/3/device/aa11bb22aa11bb22aa11bb22aa11bb22",
         "APNs :path must target the device token"
     );
     assert_eq!(
@@ -410,10 +410,10 @@ async fn apns_410_invalidates_the_binding_and_the_next_push_does_not_call_apns()
     post_signed(
         &sender_base,
         "/v1/bind",
-        bind_body("dev-1", "deadbeef", "b1", at),
+        bind_body("dev-1", "deadbeefdeadbeefdeadbeefdeadbeef", "b1", at),
     )
     .await;
-    fake.reject("deadbeef", 410, "Unregistered");
+    fake.reject("deadbeefdeadbeefdeadbeefdeadbeef", 410, "Unregistered");
 
     let (status, body, _) = post_signed(
         &sender_base,
@@ -460,10 +460,10 @@ async fn bad_device_token_is_also_treated_as_invalidation() {
     post_signed(
         &sender_base,
         "/v1/bind",
-        bind_body("dev-2", "cafebabe", "b1", at),
+        bind_body("dev-2", "cafebabecafebabecafebabecafebabe", "b1", at),
     )
     .await;
-    fake.reject("cafebabe", 400, "BadDeviceToken");
+    fake.reject("cafebabecafebabecafebabecafebabe", 400, "BadDeviceToken");
 
     let (_, body, _) = post_signed(
         &sender_base,
@@ -493,10 +493,10 @@ async fn throttling_is_reported_to_the_host_as_a_backoff_requirement() {
     post_signed(
         &sender_base,
         "/v1/bind",
-        bind_body("dev-3", "0badf00d", "b1", at),
+        bind_body("dev-3", "0badf00d0badf00d0badf00d0badf00d", "b1", at),
     )
     .await;
-    fake.reject("0badf00d", 429, "TooManyRequests");
+    fake.reject("0badf00d0badf00d0badf00d0badf00d", 429, "TooManyRequests");
 
     let (_, body, _) = post_signed(
         &sender_base,
@@ -525,12 +525,19 @@ async fn replay_tampering_and_unknown_credentials_never_reach_apns() {
         user: "host-a".to_string(),
         device_id: "dev-1".to_string(),
         platform: "ios".to_string(),
-        token: "tok".to_string(),
+        token: "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0".to_string(),
         issued_at_ms: at,
         nonce: "x1".to_string(),
         signature: sign(
             "other-secret",
-            &bind_signature_message("host-a", "dev-1", "ios", "tok", at, "x1"),
+            &bind_signature_message(
+                "host-a",
+                "dev-1",
+                "ios",
+                "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+                at,
+                "x1",
+            ),
         ),
     })
     .expect("body");
@@ -542,7 +549,7 @@ async fn replay_tampering_and_unknown_credentials_never_reach_apns() {
         post_signed(
             &sender_base,
             "/v1/bind",
-            bind_body("dev-1", "tok", "x2", stale)
+            bind_body("dev-1", "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0", "x2", stale)
         )
         .await
         .0,
@@ -554,7 +561,7 @@ async fn replay_tampering_and_unknown_credentials_never_reach_apns() {
         post_signed(
             &sender_base,
             "/v1/bind",
-            bind_body("dev-1", "tok", "x3", at)
+            bind_body("dev-1", "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0", "x3", at)
         )
         .await
         .0,
@@ -587,7 +594,7 @@ async fn revocation_unbinds_and_stops_future_pushes() {
     post_signed(
         &sender_base,
         "/v1/bind",
-        bind_body("dev-9", "feedface", "b1", at),
+        bind_body("dev-9", "feedfacefeedfacefeedfacefeedface", "b1", at),
     )
     .await;
     let (_, body, _) = post_signed(
@@ -632,7 +639,7 @@ async fn a_user_cannot_push_another_users_devices() {
     post_signed(
         &sender_base,
         "/v1/bind",
-        bind_body("dev-1", "aaaabbbb", "b1", at),
+        bind_body("dev-1", "aaaabbbbaaaabbbbaaaabbbbaaaabbbb", "b1", at),
     )
     .await;
     state
@@ -689,7 +696,7 @@ async fn rate_limited_response_carries_retry_after() {
         post_signed(
             &sender_base,
             "/v1/bind",
-            bind_body("dev-1", "tok", "r1", at)
+            bind_body("dev-1", "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0", "r1", at)
         )
         .await
         .0,
@@ -698,7 +705,7 @@ async fn rate_limited_response_carries_retry_after() {
     let (status, body, headers) = post_signed(
         &sender_base,
         "/v1/bind",
-        bind_body("dev-1", "tok", "r2", at),
+        bind_body("dev-1", "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0", "r2", at),
     )
     .await;
     assert_eq!(status, 429, "{body}");

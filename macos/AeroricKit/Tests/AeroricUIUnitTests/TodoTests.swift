@@ -7,9 +7,12 @@ private final class FakeTodoService: TodoService {
     var todos: [LiveTodo] = []
     var calls: [String] = []
     var refuse: String?
+    /// B2-7: how long a save takes (nanoseconds).
+    var pause: UInt64 = 0
 
     func list() async throws -> [LiveTodo] { todos }
     func save(_ todo: LiveTodo) async throws -> LiveTodo {
+        if pause > 0 { try await Task.sleep(nanoseconds: pause) }
         if let refuse { throw NSError(domain: "x", code: 1, userInfo: [NSLocalizedDescriptionKey: refuse]) }
         calls.append("save \(todo.title)")
         var saved = todo
@@ -22,8 +25,10 @@ private final class FakeTodoService: TodoService {
         calls.append("delete \(id)")
         todos.removeAll { $0.id == id }
     }
-    func assign(id: String, agent: String) async throws -> (LiveTodo, String) {
-        calls.append("assign \(id) \(agent)")
+    func assign(id: String, to runner: LiveTodoRunner) async throws -> (LiveTodo, String) {
+        let agent = runner.agent
+        calls.append("assign \(id) \(agent)" + (runner.configurationId.map { " \($0)" } ?? "")
+                     + (runner.model.map { " \($0)" } ?? ""))
         guard let i = todos.firstIndex(where: { $0.id == id }) else { throw NSError(domain: "x", code: 2) }
         todos[i].state = "assigned"
         todos[i].progress = "running"
@@ -95,7 +100,7 @@ final class TodoTests: XCTestCase {
         let added = await store.save(LiveTodo(projectId: "p", title: "加测试"))
         XCTAssertTrue(added)
         XCTAssertEqual(store.open.count, 1)
-        let task = await store.assign(store.todos[0], agent: "codex")
+        let task = await store.assign(store.todos[0], to: LiveTodoRunner(agent: "codex"))
         XCTAssertEqual(task, "task-9")
         XCTAssertEqual(store.todos[0].progress, "running")
         XCTAssertEqual(store.reviewCount, 0)
@@ -113,7 +118,7 @@ final class TodoTests: XCTestCase {
         let saved = await store.save(LiveTodo(projectId: "p", title: " "))
         XCTAssertFalse(saved)
         XCTAssertTrue(store.errorText?.contains("写上要做什么") == true, store.errorText ?? "")
-        let none = await TodoStore(service: nil).assign(LiveTodo(id: "x"), agent: "codex")
+        let none = await TodoStore(service: nil).assign(LiveTodo(id: "x"), to: LiveTodoRunner(agent: "codex"))
         XCTAssertNil(none)
     }
 }
@@ -195,4 +200,88 @@ final class TodoSecondBatchTests: XCTestCase {
         XCTAssertEqual(store.open.count, 2)
         XCTAssertEqual(service.calls, ["check a1", "take p1"])
     }
+
+    // MARK: 2026-11-17 交办选配置和模型
+
+    private let targets = [
+        RerunTarget(id: "codex", title: "Codex", agent: "codex", models: ["gpt-6.1-sol", "gpt-6.1-mini"]),
+        RerunTarget(id: "agent-config:ds", title: "DeepSeek", agent: "codex", models: ["deepseek-v4"]),
+        RerunTarget(id: "claude", title: "Claude Code", agent: "claude", models: []),
+    ]
+
+    func testTheSheetStartsWithTheLastConfigurationAndModel() {
+        var todo = LiveTodo(id: "t", title: "x")
+        XCTAssertNil(TodoText.defaultPick(todo, targets: [], fallbackAgent: "codex"), "no catalog: the Agent alone")
+        XCTAssert(TodoText.defaultPick(todo, targets: targets, fallbackAgent: "claude")! == ("claude", nil))
+        XCTAssert(TodoText.defaultPick(todo, targets: targets, fallbackAgent: "codex")! == ("codex", "gpt-6.1-sol"))
+        todo.assignments = [LiveTodoAssignment(taskId: "a", agent: "codex", model: "gpt-6.1-mini", configurationId: "codex")]
+        XCTAssert(TodoText.defaultPick(todo, targets: targets, fallbackAgent: "claude")! == ("codex", "gpt-6.1-mini"))
+        // A model the configuration no longer offers falls back to its first.
+        todo.assignments = [LiveTodoAssignment(taskId: "a", agent: "codex", model: "gone", configurationId: "codex")]
+        XCTAssert(TodoText.defaultPick(todo, targets: targets, fallbackAgent: "codex")! == ("codex", "gpt-6.1-sol"))
+        // A configuration that is gone: the last Agent's first one.
+        todo.assignments = [LiveTodoAssignment(taskId: "a", agent: "claude", configurationId: "agent-config:gone")]
+        XCTAssert(TodoText.defaultPick(todo, targets: targets, fallbackAgent: "codex")! == ("claude", nil))
+    }
+
+    func testAHandOutSendsItsConfigurationAndModel() async {
+        XCTAssertEqual(LiveTodoRunner(agent: "codex").params, ["agent": .string("codex")])
+        XCTAssertEqual(LiveTodoRunner(agent: "codex", configurationId: "agent-config:ds", model: "deepseek-v4").params,
+                       ["agent": .string("codex"), "configurationId": .string("agent-config:ds"),
+                        "model": .string("deepseek-v4")])
+        let service = FakeTodoService()
+        service.todos = [LiveTodo(id: "todo-1", title: "x")]
+        let store = TodoStore(service: service)
+        await store.reload()
+        _ = await store.assign(store.todos[0], to: LiveTodoRunner(agent: "codex", configurationId: "agent-config:ds",
+                                                                   model: "deepseek-v4"))
+        XCTAssertEqual(service.calls.last, "assign todo-1 codex agent-config:ds deepseek-v4")
+    }
+
+    func testTheListNamesTheConfigurationItRanWith() {
+        let wire = JSONValue.object([
+            "id": .string("todo-1"), "projectId": .string("p"), "title": .string("x"), "state": .string("assigned"),
+            "assignments": .array([.object(["taskId": .string("t1"), "agent": .string("codex"),
+                                            "model": .string("deepseek-v4"), "configurationId": .string("agent-config:ds"),
+                                            "label": .string("DeepSeek · deepseek-v4"), "atMs": .number("5")])]),
+        ])
+        let todo = LiveTodo.decode(wire)!
+        XCTAssertEqual(todo.assignments[0].configurationId, "agent-config:ds")
+        XCTAssertEqual(TodoText.assignments(todo) { $0 }, "交办 1 次 · 上次 DeepSeek · deepseek-v4")
+        XCTAssertTrue(TodoText.assignHint(todo, picksConfiguration: true).hasPrefix("会话用选的配置和模型"))
+        XCTAssertTrue(TodoText.assignHint(todo, picksConfiguration: false).hasPrefix("会话用这个 Agent 的默认权限模式和模型"))
+    }
+
+    /// B2-7: a second click on 保存 while the first save runs sends nothing.
+    func testADoubleSaveMakesOneTodo() async {
+        let service = FakeTodoService()
+        service.pause = 200_000_000
+        let store = TodoStore(service: service)
+        let draft = LiveTodo(projectId: "p", title: "加测试")
+        async let first = store.save(draft)
+        async let second = store.save(draft)
+        let (a, b) = await (first, second)
+        XCTAssertEqual([a, b].filter { $0 }.count, 1)
+        XCTAssertEqual(service.calls.filter { $0 == "save 加测试" }.count, 1)
+        XCTAssertTrue(store.writing.isEmpty)
+    }
+
+    /// Round-2 review E1: the second click of a double click can land after
+    /// the first save already finished, while the sheet is still closing.
+    /// The same editor saves once; a new editor saves again.
+    func testAnEditorThatSavedSavesNothingMore() async {
+        let service = FakeTodoService()
+        let store = TodoStore(service: service)
+        let draft = LiveTodo(projectId: "p", title: "加测试")
+        let editor = UUID()
+        let first = await store.save(draft, from: editor)
+        let second = await store.save(draft, from: editor)
+        XCTAssertTrue(first)
+        XCTAssertFalse(second)
+        XCTAssertEqual(service.calls.filter { $0 == "save 加测试" }.count, 1)
+        let another = await store.save(draft, from: UUID())
+        XCTAssertTrue(another)
+        XCTAssertEqual(service.calls.filter { $0 == "save 加测试" }.count, 2)
+    }
+
 }

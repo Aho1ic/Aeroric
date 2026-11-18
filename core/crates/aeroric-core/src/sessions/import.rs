@@ -463,6 +463,30 @@ impl ImportStore {
         &self,
         id: &str,
     ) -> Result<(ImportedSession, Vec<SessionMessage>), ImportError> {
+        self.messages_with_unreadable(id)
+            .map(|(session, messages, _)| (session, messages))
+    }
+
+    /// A6: [`Self::messages`] plus the lines of the file that were not JSON
+    /// (none for sources read from a database).
+    ///
+    /// 目检 2026-11-17: a 121 MB Codex rollout took 6.5 s per read, and the
+    /// page reads it once per page of history — the session showed nothing
+    /// for minutes. The last file parsed is kept (keyed by its path, size and
+    /// modification time), so the next pages of the same file are cheap; the
+    /// grant is still checked on every call, so a revoked agent's session is
+    /// never served from it.
+    pub fn messages_with_unreadable(
+        &self,
+        id: &str,
+    ) -> Result<
+        (
+            ImportedSession,
+            Vec<SessionMessage>,
+            Option<crate::sessions::history::Unreadable>,
+        ),
+        ImportError,
+    > {
         let session = self
             .index()
             .into_iter()
@@ -475,6 +499,85 @@ impl ImportStore {
         {
             return Err(ImportError::NotGranted(session.agent.as_str()));
         }
+        let key = parsed_key(&session);
+        if let Some(key) = &key {
+            let cache = LAST_PARSED.lock();
+            if let Some((cached_key, messages, unreadable)) = cache.as_ref() {
+                if cached_key == key {
+                    return Ok((session, messages.clone(), unreadable.clone()));
+                }
+            }
+        }
+        let (session, messages, unreadable) = self.messages_with_unreadable_uncached(id)?;
+        if let Some(key) = key {
+            *LAST_PARSED.lock() = Some((key, messages.clone(), unreadable.clone()));
+        }
+        Ok((session, messages, unreadable))
+    }
+
+    fn messages_with_unreadable_uncached(
+        &self,
+        id: &str,
+    ) -> Result<
+        (
+            ImportedSession,
+            Vec<SessionMessage>,
+            Option<crate::sessions::history::Unreadable>,
+        ),
+        ImportError,
+    > {
+        use crate::sessions::history::{unreadable_lines, Window};
+        let session = self
+            .index()
+            .into_iter()
+            .find(|session| session.id == id)
+            .ok_or_else(|| ImportError::UnknownSession(id.to_string()))?;
+        if !self
+            .grants()
+            .iter()
+            .any(|grant| grant.agent == session.agent)
+        {
+            return Err(ImportError::NotGranted(session.agent.as_str()));
+        }
+        // B1-8: omp's and DSH's files are JSON lines too: their bad lines
+        // are counted, and a file the parser refuses says why instead of
+        // failing the import or reading as empty.
+        let lined = match session.agent {
+            ImportAgent::Dsh => Some((
+                crate::sessions::dsh::read_dsh_session_lines(&session.source_path)
+                    .map_err(ImportError::Io)?,
+                Window {
+                    numbered: true,
+                    // Read as lines: whether the file ends in a newline is
+                    // not known, so its last line is not judged.
+                    open_tail: true,
+                    ..Window::default()
+                },
+            )),
+            ImportAgent::Omp => Some((
+                crate::sessions::history::read_session_tail(&session.source_path)
+                    .map_err(ImportError::Io)?
+                    .0,
+                Window {
+                    open_tail: true,
+                    ..Window::default()
+                },
+            )),
+            _ => None,
+        };
+        if let Some((lines, window)) = lined {
+            let parsed = if session.agent == ImportAgent::Dsh {
+                crate::sessions::dsh::parse_dsh_session_lines(&lines)
+            } else {
+                crate::sessions::omp::parse_omp_session_lines(&lines)
+            };
+            let mut unreadable = unreadable_lines(&lines, window);
+            let messages = parsed.unwrap_or_else(|reason| {
+                unreadable.get_or_insert_with(Default::default).reason = Some(reason);
+                Vec::new()
+            });
+            return Ok((session, messages, unreadable));
+        }
         if session.agent.is_external() && !session.agent.claude_format() {
             let messages = import_sources::messages(
                 session.agent,
@@ -482,7 +585,7 @@ impl ImportStore {
                 session.source_key.as_deref(),
             )
             .map_err(ImportError::Io)?;
-            return Ok((session, messages));
+            return Ok((session, messages, None));
         }
         let on_disk = super::transcript_file::resolve(&session.source_path)
             .unwrap_or_else(|| session.source_path.clone());
@@ -491,18 +594,29 @@ impl ImportStore {
             .len();
         // 2026-10-28: an oversized session is read from its tail (the newest
         // lines, `read_session_tail`) instead of being refused.
-        let lines: Vec<String> = if size > MAX_SESSION_BYTES {
-            crate::sessions::history::read_session_tail(&session.source_path)
+        let (lines, window): (Vec<String>, Window) = if size > MAX_SESSION_BYTES {
+            let tail = crate::sessions::history::read_session_tail(&session.source_path)
                 .map_err(ImportError::Io)?
-                .0
+                .0;
+            // Whole lines from the end: no fragment, but not the file's
+            // numbers; the last may still be being written (B1-8).
+            (
+                tail,
+                Window {
+                    open_tail: true,
+                    ..Window::default()
+                },
+            )
         } else {
             let text = super::transcript_file::read_to_string(&session.source_path)
                 .map_err(|e| ImportError::Io(e.to_string()))?;
-            text.lines().map(str::to_string).collect()
+            let window = Window::whole(&text);
+            (text.lines().map(str::to_string).collect(), window)
         };
+        let unreadable = unreadable_lines(&lines, window);
         let mut messages = Vec::new();
         parse_session_lines(&lines, session.agent == ImportAgent::Codex, &mut messages);
-        Ok((session, messages))
+        Ok((session, messages, unreadable))
     }
 }
 
@@ -841,6 +955,34 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
 fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), ImportError> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|e| ImportError::Io(e.to_string()))?;
     write_atomic(path, &bytes, FileMode::Private).map_err(|e| ImportError::Io(e.to_string()))
+}
+
+/// What identifies one parse of an imported file: its path, size and
+/// modification time. `None` for sources that are not one file (databases).
+type ParsedKey = (PathBuf, u64, Option<std::time::SystemTime>);
+
+/// The last imported file parsed (see `ImportStore::messages_with_unreadable`).
+#[allow(clippy::type_complexity)]
+static LAST_PARSED: parking_lot::Mutex<
+    Option<(
+        ParsedKey,
+        Vec<SessionMessage>,
+        Option<crate::sessions::history::Unreadable>,
+    )>,
+> = parking_lot::Mutex::new(None);
+
+fn parsed_key(session: &ImportedSession) -> Option<ParsedKey> {
+    if session.agent.is_external()
+        && !session.agent.claude_format()
+        && !matches!(session.agent, ImportAgent::Dsh | ImportAgent::Omp)
+    {
+        return None;
+    }
+    let on_disk = super::transcript_file::resolve(&session.source_path)
+        .unwrap_or_else(|| session.source_path.clone());
+    let meta = fs::metadata(&on_disk).ok()?;
+    meta.is_file()
+        .then(|| (on_disk, meta.len(), meta.modified().ok()))
 }
 
 #[cfg(test)]

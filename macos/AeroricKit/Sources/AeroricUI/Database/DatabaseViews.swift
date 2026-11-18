@@ -184,6 +184,7 @@ public struct ResultGrid: View {
                 }
                 .padding(8)
             }
+            .scrollIndicators(.hidden)
             HStack {
                 Button("上一页") {
                     if page > 1 {
@@ -279,6 +280,7 @@ public struct ImportExportSheet: View {
                     .font(.caption2.monospaced())
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.hidden)
             .frame(minHeight: 120)
             HStack {
                 Button("确认写入") { onConfirm() }
@@ -395,6 +397,7 @@ public struct ProductionConfirmationSheet: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.hidden)
             .frame(minHeight: 80)
             HStack {
                 Button("批准并执行") { onConfirm() }

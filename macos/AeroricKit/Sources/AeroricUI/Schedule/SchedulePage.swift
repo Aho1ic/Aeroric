@@ -51,6 +51,7 @@ public struct SchedulePage: View {
                         ForEach(store.rules) { rule in row(rule) }
                     }
                 }
+                .scrollIndicators(.hidden)
             }
         }
         .padding(AeroricSpace.l)

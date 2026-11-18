@@ -436,7 +436,7 @@ fn context_messages(
         .iter()
         .flat_map(|m| &m.content)
         .filter_map(|c| match c {
-            SessionContent::ToolResult { id, output } => Some((id.as_str(), output.as_str())),
+            SessionContent::ToolResult { id, output, .. } => Some((id.as_str(), output.as_str())),
             _ => None,
         })
         .collect();
@@ -1431,13 +1431,21 @@ fn configure(live: &Live, request: &Request) -> Frame {
         );
     }
     // N3 D4: the record follows, so the board and a later resume agree.
-    let Some((project, _)) = live.record(&p.task_id) else {
+    let Some((project, record)) = live.record(&p.task_id) else {
         return failure(
             request.id.clone(),
             ErrorCode::NotFound,
             "no task with that id in any known project",
         );
     };
+    // B1-1: a read-only role keeps its mode; any change would lift it.
+    if change.permission.is_some() && read_only_role(&record) {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "只读会话（讨论成员、代码审查、只读委派）不能改权限",
+        );
+    }
     let project_id = project
         .get("id")
         .and_then(Value::as_str)
@@ -1485,6 +1493,16 @@ fn configure(live: &Live, request: &Request) -> Frame {
         // No open session: the record carries it into the next resume.
         None => ok(request, json!({})),
     }
+}
+
+/// B1-1: a discussion member, a reviewer, or a delegate started read-only.
+fn read_only_role(record: &aeroric_core::storage::Record) -> bool {
+    let has = |key: &str| record.get(key).is_some_and(|v| !v.is_null());
+    has(discussion::DISCUSSION_OF_FIELD)
+        || has(review::REVIEW_OF_FIELD)
+        || (has(delegation::DELEGATE_OF_FIELD)
+            && record.get("permissionMode").and_then(Value::as_str)
+                == Some(aeroric_core::sessions::live::read_only::READ_ONLY_MODE))
 }
 
 fn command(live: &Live, request: &Request) -> Frame {
@@ -2253,5 +2271,30 @@ mod move_tests {
         let copied = copy_transcript(&rollout, &from, &to, ProtocolFamily::Codex).unwrap();
         assert_eq!(copied, to.join("sessions/2026/10/29/rollout-1.jsonl"));
         std::fs::remove_dir_all(root).ok();
+    }
+}
+
+#[cfg(test)]
+mod read_only_role_tests {
+    use super::*;
+
+    fn record(fields: Value) -> Record {
+        Record(fields.as_object().unwrap().clone())
+    }
+
+    /// B1-1: discussion members and reviewers are read-only whatever their
+    /// record says; a delegate only when it was started in `plan`.
+    #[test]
+    fn read_only_roles_are_told_apart() {
+        assert!(read_only_role(&record(json!({"discussionOf": "d1"}))));
+        assert!(read_only_role(&record(json!({"reviewOf": "t0"}))));
+        assert!(read_only_role(&record(
+            json!({"delegateOf": "t0", "permissionMode": "plan"})
+        )));
+        assert!(!read_only_role(&record(
+            json!({"delegateOf": "t0", "permissionMode": "auto_edit"})
+        )));
+        assert!(!read_only_role(&record(json!({"permissionMode": "plan"}))));
+        assert!(!read_only_role(&record(json!({"discussionOf": null}))));
     }
 }

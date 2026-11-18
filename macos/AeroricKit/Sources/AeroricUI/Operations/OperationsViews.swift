@@ -260,6 +260,7 @@ public struct NotificationCenterView: View {
                         }
                     }
                 }
+                .scrollIndicators(.hidden)
             }
         }
         .padding(16)
@@ -603,6 +604,7 @@ public struct DiagnosticsView: View {
                         }
                     }
                 }
+                .scrollIndicators(.hidden)
             }
         }
         .padding(16)

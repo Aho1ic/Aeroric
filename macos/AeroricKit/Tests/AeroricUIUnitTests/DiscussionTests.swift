@@ -81,6 +81,33 @@ final class DiscussionTests: XCTestCase {
         XCTAssertEqual(DiscussionText.member(two[1], targets: targets), "Codex 登录 · m")
     }
 
+    /// A4: a harness whose table says it cannot hold itself read-only is greyed
+    /// out with the reason; no table (older host) leaves the choice to the host.
+    func testAHarnessThatCannotStayReadOnlyIsGreyedOut() {
+        let targets = [
+            RerunTarget(id: "c1", title: "官方订阅", agent: "codex", models: []),
+            RerunTarget(id: "o1", title: "omp", agent: "omp", models: []),
+        ]
+        let why = "omp 没有能在启动时固定的只读档"
+        let tables = [
+            "codex": LiveCapabilities([LiveCapabilityEntry(feature: "strictReadOnly", state: "yes",
+                                                           note: "Codex 只读沙盒强制")]),
+            "omp": LiveCapabilities([LiveCapabilityEntry(feature: "strictReadOnly", state: "no", note: why)]),
+        ]
+        XCTAssertEqual(DiscussionText.harnesses(targets, capabilities: tables),
+                       ["codex": true, "claude": false, "dsh": false, "omp": false])
+        XCTAssertEqual(DiscussionText.harnesses(targets)["omp"], true)
+        XCTAssertEqual(DiscussionText.startHarness(preferred: "omp", targets: targets, capabilities: tables), "codex")
+        XCTAssertEqual(DiscussionText.harnessHelp("omp", targets: targets, capabilities: tables),
+                       "\(AgentConfigText.harnessTitle("omp"))：不能参加讨论（\(why)）")
+        XCTAssertEqual(DiscussionText.harnessHelp("claude", targets: targets, capabilities: tables),
+                       "\(AgentConfigText.harnessTitle("claude"))：没有能启动的配置")
+        XCTAssertNil(DiscussionText.readOnlyBlock(tables["codex"]))
+        XCTAssertNil(DiscussionText.readOnlyBlock(nil))
+        XCTAssertEqual(DiscussionText.readOnlyBlock(
+            LiveCapabilities([LiveCapabilityEntry(feature: "strictReadOnly", state: "unknown")])), "不能保证只读")
+    }
+
     /// The add panel: harness, then that harness's configurations, then models.
     func testTheAddPanelGoesFromHarnessToConfigurationToModel() {
         let targets = [
@@ -304,4 +331,26 @@ final class DiscussionTests: XCTestCase {
         XCTAssertEqual(DiscussionText.requirementPresets.map(\.title), ["简洁讨论", "方案对比", "深入分析"])
         XCTAssertEqual(DiscussionText.defaultRequirements, "观点要具体、说明理由，尽量在 600 字以内。")
     }
+
+    /// B2-5: a relay counts turns, not rounds: never `第 6 / 2 轮`.
+    func testARelaySaysWhichLapAndWhichTurn() {
+        let members = (1...3).map { LiveDiscussion.Member(taskId: "m\($0)", label: "M\($0)") }
+        let relay = LiveDiscussion(id: "d", members: members, maxRounds: 2, round: 5, format: "relay")
+        XCTAssertEqual(DiscussionText.formatTitle("relay"), "接力")
+        XCTAssertEqual(DiscussionText.state(relay), "第 2 / 2 圈 · 第 2 位 · 讨论中")
+        XCTAssertEqual(DiscussionText.roundTitle(relay, 1), "第 1 / 2 圈 · 第 1 位 · 开题")
+    }
+
+    /// B2-5: a derived or custom configuration is grouped under the harness it
+    /// runs on, not the agent it names.
+    func testConfigurationsAreGroupedByTheirHarness() {
+        let targets = [
+            RerunTarget(id: "claude_gpt55", title: "GPT 5.5 · Claude", agent: "claude_gpt55", models: [],
+                        harness: "codex"),
+            RerunTarget(id: "claude", title: "Claude Code", agent: "claude", models: []),
+        ]
+        XCTAssertEqual(DiscussionText.configurations(targets, harness: "codex").map(\.id), ["claude_gpt55"])
+        XCTAssertEqual(DiscussionText.harnesses(targets)["codex"], true)
+    }
+
 }

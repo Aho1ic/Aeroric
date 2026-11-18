@@ -391,6 +391,7 @@ struct TagManagerSheet: View {
                         ForEach(book.tags) { tag in row(tag) }
                     }
                 }
+                .scrollIndicators(.hidden)
                 .frame(maxHeight: 340)
             }
             Text("点圆点改颜色，点铅笔改名，回车保存。范围改为「仅某项目」时，其他地方的这个标签会被摘掉，会先确认。")

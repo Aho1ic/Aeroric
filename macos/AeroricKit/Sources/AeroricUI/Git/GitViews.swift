@@ -195,7 +195,7 @@ public struct StageActions: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("提交信息…", text: $commitMessage)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.capsule)
                 .accessibilityIdentifier("git.commit-message")
             HStack(spacing: 6) {
                 Button("Commit") {
@@ -277,6 +277,7 @@ public struct DiffView: View {
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollIndicators(.hidden)
         .accessibilityIdentifier("git.diff")
     }
 }
@@ -339,6 +340,7 @@ public struct BranchGraph: View {
                 .textSelection(.enabled)
                 .padding(8)
         }
+        .scrollIndicators(.hidden)
         .accessibilityIdentifier("git.branch-graph")
     }
 }
@@ -358,6 +360,7 @@ public struct BlameView: View {
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollIndicators(.hidden)
         .accessibilityIdentifier("git.blame")
     }
 }
@@ -381,7 +384,7 @@ public struct StashView: View {
             }
             HStack {
                 TextField("stash 信息…", text: $stashMessage)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.capsule)
                 Button("Stash") {
                     onAction?(.stashPush(message: stashMessage))
                     stashMessage = ""
@@ -442,9 +445,10 @@ public struct ConflictResolver: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.hidden)
             .frame(minHeight: 120)
             TextField("解决后的内容（或选择 ours/theirs）", text: $resolvedContent)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.capsule)
                 .accessibilityIdentifier("git.conflict.content")
             HStack(spacing: 8) {
                 Button("保留当前侧（ours）") {

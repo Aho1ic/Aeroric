@@ -45,6 +45,31 @@ public enum TurnLedgerText {
     }
 
     public static let footnote = "只恢复 git 能看到的文件；被忽略的文件和工作目录以外的改动不会回退。"
+
+    /// A7: the section of files already as the action would leave them.
+    public static func inPlaceTitle(_ action: String) -> String {
+        action == "restore" ? "已是这一轮的结果" : "已是撤销后的样子"
+    }
+
+    /// A7: what the sheet says when there is nothing to write; nil when
+    /// there is.
+    public static func nothingToWrite(_ plan: LiveTurnPlan, action: String) -> String? {
+        guard plan.files.isEmpty else { return nil }
+        guard !plan.inPlace.isEmpty else { return "没有可以恢复的文件。" }
+        return action == "restore"
+            ? "这些文件已经是这一轮的结果，确认后只把这一轮记回撤销前的状态。"
+            : "这些文件已经是撤销后的样子，确认后只把这一轮记为已撤销。"
+    }
+
+    /// A7: an undo (or taking it back) that could not write every file.
+    public static func halfDone(_ plan: LiveTurnPlan, action: String) -> String? {
+        guard let first = plan.failed.first else { return nil }
+        let what = action == "restore" ? "撤回撤销" : "撤销"
+        let done = plan.files.count + plan.inPlace.count
+        let kept = done > 0 ? "已改好的 \(done) 个文件保持现在的样子，" : ""
+        return "\(what)没做完：\(plan.failed.count) 个文件写不进去（\(first.path)：\(first.reason)）。"
+            + "\(kept)再\(what)一次会接着做完。"
+    }
     public static let running = "这一轮结束后可撤销"
 }
 
@@ -228,6 +253,12 @@ struct TurnUndoSheet: View {
                                     note: file.delete ? "（会删除）" : nil, warning: false)
                             }
                         }
+                        if !request.plan.inPlace.isEmpty {
+                            CheckpointSectionLabel(title: TurnLedgerText.inPlaceTitle(request.action))
+                            ForEach(request.plan.inPlace, id: \.self) { path in
+                                row(symbol: "checkmark", path: path, note: nil, warning: false)
+                            }
+                        }
                         if !request.plan.skipped.isEmpty {
                             CheckpointSectionLabel(title: "跳过")
                             ForEach(request.plan.skipped, id: \.self) { file in
@@ -235,13 +266,15 @@ struct TurnUndoSheet: View {
                                     note: "· \(file.reason)", warning: true)
                             }
                         }
-                        if request.plan.files.isEmpty {
-                            Text("没有可以恢复的文件。")
+                        if let empty = TurnLedgerText.nothingToWrite(request.plan, action: request.action) {
+                            Text(empty)
                                 .font(.system(size: AeroricType.secondary))
                                 .foregroundStyle(AeroricColor.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
+                .scrollIndicators(.hidden)
                 .frame(maxHeight: 280)
                 Text(TurnLedgerText.footnote)
                     .font(.system(size: AeroricType.caption))
@@ -254,7 +287,7 @@ struct TurnUndoSheet: View {
                         .keyboardShortcut(.cancelAction)
                     Button(confirmTitle) { onConfirm(); dismiss() }
                         .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
-                        .disabled(request.plan.files.isEmpty)
+                        .disabled(!request.plan.actionable)
                         .accessibilityIdentifier("session.turn.confirm")
                 }
             }
@@ -317,6 +350,7 @@ struct TurnPendingCapsule: View {
     var body: some View {
         Button(action: action) {
             Text("\(count) 轮待验收")
+                .monospacedDigit()
                 .font(.system(size: AeroricType.caption, weight: .medium))
                 .foregroundStyle(AeroricColor.warning)
                 .lineLimit(1)

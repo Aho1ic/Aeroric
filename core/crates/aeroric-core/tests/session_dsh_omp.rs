@@ -268,7 +268,7 @@ fn omp_parses_entry_tree_flat_with_message_ids() {
         panic!("toolCall");
     };
     assert_eq!(input, r#"{"cmd":"ls"}"#); // 对象 arguments → to_string 原文
-    let SessionContent::ToolResult { output, id } = &messages[3].content[0] else {
+    let SessionContent::ToolResult { output, id, .. } = &messages[3].content[0] else {
         panic!("toolResult");
     };
     assert_eq!((output.as_str(), id.as_str()), ("line1\nline2", "call-9"));

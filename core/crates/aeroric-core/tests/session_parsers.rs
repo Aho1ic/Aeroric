@@ -171,6 +171,7 @@ fn serde_wire_shape_is_pinned_for_every_content_variant() {
         SessionContent::ToolResult {
             id: "t1".into(),
             output: "ok".into(),
+            failed: false,
         },
         SessionContent::Thinking {
             thinking: "hmm".into(),
@@ -350,7 +351,9 @@ fn codex_multi_agent_calls_become_subagent_cards_with_their_child_s_report() {
             .iter()
             .flat_map(|m| m.content.iter())
             .find_map(|c| match c {
-                SessionContent::ToolResult { id, output } if id == wanted => Some(output.clone()),
+                SessionContent::ToolResult { id, output, .. } if id == wanted => {
+                    Some(output.clone())
+                }
                 _ => None,
             })
             .unwrap_or_default()
@@ -393,7 +396,7 @@ fn codex_multi_agent_calls_become_subagent_cards_with_their_child_s_report() {
     assert!(!uses[1].2.contains("gAAAAA"));
     assert!(
         v2.iter().flat_map(|m| m.content.iter()).any(
-            |c| matches!(c, SessionContent::ToolResult { id, output } if id == "c-send" && output.is_empty())
+            |c| matches!(c, SessionContent::ToolResult { id, output, .. } if id == "c-send" && output.is_empty())
         ),
         "输出为空也有结果记录，调用算完成而不是未完成"
     );
@@ -427,4 +430,39 @@ fn codex_multi_agent_calls_become_subagent_cards_with_their_child_s_report() {
         uses[1].1, "wait",
         "没有多代理命名空间的同名工具不当作子代理"
     );
+}
+
+/// Round-5 review (2026-11-18): a tool the host refused (Claude writes
+/// `is_error: true`) stays failed in history; a normal result carries no
+/// `failed` on the wire.
+#[test]
+fn a_refused_claude_tool_stays_failed_in_history() {
+    let lines = [
+        r#"{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"ExitPlanMode","input":{"plan":"p"}},{"type":"tool_use","id":"t2","name":"Read","input":{}}]}}"#,
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"这是只读会话：不能改文件、执行命令或交计划。"}]}}"#,
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"ok"}]}}"#,
+    ];
+    let messages = parse_claude_session(&lines);
+    let results: Vec<(&str, bool)> = messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|c| match c {
+            SessionContent::ToolResult { id, failed, .. } => Some((id.as_str(), *failed)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, [("t1", true), ("t2", false)]);
+    let wire: Vec<serde_json::Value> = messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter(|c| matches!(c, SessionContent::ToolResult { .. }))
+        .map(|c| serde_json::to_value(c).unwrap())
+        .collect();
+    assert_eq!(wire[0]["failed"], true);
+    assert!(wire[1].get("failed").is_none(), "{}", wire[1]);
+    let back: SessionContent = serde_json::from_value(wire[1].clone()).unwrap();
+    assert!(matches!(
+        back,
+        SessionContent::ToolResult { failed: false, .. }
+    ));
 }

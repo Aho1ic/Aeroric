@@ -75,7 +75,7 @@ struct LiveApprovalCard: View {
                     .accessibilityIdentifier("session.live.approval.summary")
                 if case let .denying(reason) = phase {
                     TextField("拒绝理由（可空，会告诉 Agent）", text: Binding(get: { reason }, set: onReason))
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.capsule)
                         .onSubmit { onDecide(.deny) }
                         .accessibilityIdentifier("session.live.approval.reason")
                 }

@@ -16,6 +16,20 @@ public struct LiveCapabilityEntry: Equatable, Sendable {
 }
 
 /// R1-3a: a family's capability table; empty when the host has none (older host).
+/// B2-4: the host answers `session.capabilities` for the Mac and for an SSH
+/// host separately (DSH cannot run remotely; delegates and reviewers there
+/// are unknown); a project's place picks which set applies.
+public enum CapabilityPlace {
+    public static func isRemote(projectPath: String?) -> Bool {
+        projectPath?.hasPrefix("ssh://") ?? false
+    }
+
+    public static func tables(projectPath: String?, local: [String: LiveCapabilities],
+                              remote: [String: LiveCapabilities]) -> [String: LiveCapabilities] {
+        isRemote(projectPath: projectPath) ? remote : local
+    }
+}
+
 public struct LiveCapabilities: Equatable, Sendable {
     public var entries: [String: LiveCapabilityEntry]
 

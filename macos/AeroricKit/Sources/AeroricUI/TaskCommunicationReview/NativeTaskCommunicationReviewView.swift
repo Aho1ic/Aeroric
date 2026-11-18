@@ -51,6 +51,7 @@ public struct NativeTaskCommunicationReviewView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.bottom, NativePanelGeometry.panelInset)
                 }
+                .scrollIndicators(.hidden)
             }
             .padding(NativePanelGeometry.panelInset)
             .foregroundStyle(AeroricColor.text)

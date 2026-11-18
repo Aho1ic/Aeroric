@@ -394,7 +394,7 @@ public struct TagBrowser: View {
             VStack(spacing: 12) {
                 Text("把 #\(tag.sample) 改名").font(.headline)
                 TextField("新标签（不含 #）", text: $newTag)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.capsule)
                     .frame(maxWidth: 220)
                 HStack {
                     Button("取消") { renameTarget = nil }

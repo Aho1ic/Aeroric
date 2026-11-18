@@ -38,6 +38,9 @@ struct ToolCallLine: View {
                     if call.state == .unfinished {
                         Text("未完成").font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)
                     }
+                    if call.state == .failed {
+                        Text("失败").font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.danger)
+                    }
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(AeroricColor.textTertiary)
@@ -62,6 +65,7 @@ struct ToolCallLine: View {
         switch call.state {
         case .running: "运行中"
         case .done: "完成"
+        case .failed: "失败"
         case .unfinished: "未完成"
         }
     }

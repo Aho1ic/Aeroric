@@ -223,6 +223,11 @@ async fn run_startup_with_secrets_inner(
     // before token/listener/ready so a failed migration cannot expose a host
     // that has announced readiness with incomplete connection data.
     if migrate_legacy_agent_settings {
+        // B5-2: settings, model discovery and upgrades use the omp home the
+        // sessions use (`executor::omp_agent_env_for`), not the legacy root.
+        aeroric_core::settings::configure_omp_home(
+            options.paths.data_dir().join("agent-homes").join("omp"),
+        );
         aeroric_core::agent_connections::migration::migrate_legacy_agent_settings(&context)
             .map_err(StartupError::DataCompat)?;
         migrate_omp_plaintext_keys(options.paths.data_dir());

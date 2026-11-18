@@ -156,14 +156,17 @@ public struct LiveAcceptanceItem: Equatable, Sendable {
 public enum LiveDelegateAgent: Equatable, Sendable, Hashable {
     case same
     case other
-    case named(agent: String, model: String? = nil)
+    /// B2-6: `agentConfigId` is the host's binding to an agent configuration;
+    /// a role saved without it would lose that binding.
+    case named(agent: String, agentConfigId: String? = nil, model: String? = nil)
 
     public var json: JSONValue {
         switch self {
         case .same: return .string("same")
         case .other: return .string("other")
-        case let .named(agent, model):
+        case let .named(agent, configID, model):
             var fields: [String: JSONValue] = ["agent": .string(agent)]
+            if let configID { fields["agentConfigId"] = .string(configID) }
             if let model { fields["model"] = .string(model) }
             return .object(fields)
         }
@@ -172,7 +175,8 @@ public enum LiveDelegateAgent: Equatable, Sendable, Hashable {
     public static func decode(_ value: JSONValue?) -> LiveDelegateAgent {
         if value?.stringValue == "other" { return .other }
         if let agent = value?.fields["agent"]?.stringValue {
-            return .named(agent: agent, model: value?.fields["model"]?.stringValue)
+            return .named(agent: agent, agentConfigId: value?.fields["agentConfigId"]?.stringValue,
+                          model: value?.fields["model"]?.stringValue)
         }
         return .same
     }

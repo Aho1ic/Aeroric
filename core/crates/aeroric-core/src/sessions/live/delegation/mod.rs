@@ -181,6 +181,8 @@ pub struct Delegations {
     deliveries: Mutex<Option<Weak<Deliveries>>>,
     state: Mutex<State>,
     me: Mutex<Weak<Delegations>>,
+    /// B5-3: one save of a parent's cards at a time, of the newest state.
+    writes: Mutex<()>,
 }
 
 /// A1: the source of the delivery carrying `ids`' results to `parent`.
@@ -204,6 +206,7 @@ impl Delegations {
             deliveries: Mutex::new(None),
             state: Mutex::default(),
             me: Mutex::new(Weak::new()),
+            writes: Mutex::new(()),
         });
         *this.me.lock() = Arc::downgrade(&this);
         this
@@ -1505,6 +1508,7 @@ impl Delegations {
 
     /// Save the parent's delegations and append the card to its log.
     fn publish(&self, parent: &str, id: &str) {
+        let write = self.writes.lock();
         let (cards, card) = {
             let state = self.state.lock();
             let Some(list) = state.by_parent.get(parent) else {
@@ -1522,6 +1526,7 @@ impl Delegations {
                 }
             }
         }
+        drop(write);
         let Some(card) = card else {
             return;
         };

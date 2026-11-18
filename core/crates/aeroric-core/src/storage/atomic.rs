@@ -284,7 +284,11 @@ fn temporary_name(directory: &Path, target: &Path) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
-    directory.join(format!(".{name}.{}-{nanos}.tmp", std::process::id()))
+    // B5-3: two writers in the same process within one clock tick (macOS
+    // gives microseconds) must not share a temp file.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    directory.join(format!(".{name}.{}-{nanos}-{n}.tmp", std::process::id()))
 }
 
 /// Remove temp files a crashed writer left in `directory`.

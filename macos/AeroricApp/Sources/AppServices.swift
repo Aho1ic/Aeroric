@@ -138,6 +138,18 @@ final class AppServices {
     var retryNeeds: [String: AttentionQueue.CheckFailure] = [:]
     /// R1-3a: each family's capability table (this Mac) and refused logins.
     var capabilityTables: [String: LiveCapabilities] = [:]
+    /// B2-4: the same tables as the host answers them for an SSH project.
+    var remoteCapabilityTables: [String: LiveCapabilities] = [:]
+
+    func projectPath(_ projectID: String?) -> String? {
+        projectID.flatMap { id in taskStore.projects.first { $0.id == id }?.path }
+    }
+
+    /// B2-4: the tables for a project's place.
+    func capabilityTables(projectID: String?) -> [String: LiveCapabilities] {
+        CapabilityPlace.tables(projectPath: projectPath(projectID), local: capabilityTables,
+                               remote: remoteCapabilityTables)
+    }
     var expiredLogins: [ExpiredLogin] = []
     /// B4-3 → A19: board owner → a decision waiting or a stale claim.
     var boardNeeds: [String: AttentionQueue.CheckFailure] = [:]
@@ -400,7 +412,10 @@ final class AppServices {
         guard ProcessInfo.processInfo.environment["AERORIC_TEST_OPEN_PROJECT"] != nil else { return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        process.arguments = ["-f", "aeroric-cli --data-dir \(dataDirectory.path)"]
+        // B5-4: the path is matched literally; `pkill -f` reads a regex, and a
+        // data dir with `.` or `+` would otherwise match other runs' serves.
+        let literal = NSRegularExpression.escapedPattern(for: dataDirectory.path)
+        process.arguments = ["-f", "aeroric-cli --data-dir \(literal)"]
         try? process.run()
         process.waitUntilExit()
         Thread.sleep(forTimeInterval: 0.3)
@@ -509,12 +524,17 @@ final class AppServices {
             attachmentPaths: draft.attachmentPaths
         )
         let returned = try await client.runTask(run)
+        // 2026-11-17: dated now, so the sidebar (newest first) shows it on top
+        // until task.list brings the host's own times.
+        let now = UInt64(Date().timeIntervalSince1970 * 1000)
         taskStore.upsertTask(TaskStore.TaskEntry(
             id: returned,
             projectID: projectID,
             title: draft.prompt.split(separator: "\n").first.map(String.init) ?? returned,
             status: "pending",
             agent: draft.agent,
+            createdAtMs: now,
+            updatedAtMs: now,
             prompt: draft.prompt
         ))
         return returned
@@ -529,7 +549,8 @@ final class AppServices {
             configurationReadStates[projectID] = .unavailable
             return
         }
-        guard configurationReadStates[projectID] != .loading else { return }
+        // B2-1: a newer read replaces one in flight (the view's task id
+        // changed); the older one's reply is dropped below by `read`.
         let read = UUID()
         configurationReads[projectID] = read
         configurationReadStates[projectID] = .loading
@@ -557,7 +578,8 @@ final class AppServices {
             configurationReadStates[projectID] = .loaded
         } catch {
             guard configurationReads[projectID] == read else { return }
-            configurationReadStates[projectID] = .failed(String(describing: error))
+            configurationReadStates[projectID] = WorkspaceReadState.after(
+                error, hasEarlierRead: projectConfigurations[projectID] != nil)
         }
     }
 

@@ -656,11 +656,6 @@ pub fn usage(
     })
 }
 
-/// Claude asks to leave plan mode with its plan; a discussion wants prose.
-fn is_plan_exit(kind: &str) -> bool {
-    kind == "ExitPlanMode"
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum DiscussionError {
     NotFound,
@@ -714,19 +709,24 @@ pub struct Discussions {
     dir: Mutex<Option<PathBuf>>,
     state: Mutex<State>,
     me: Mutex<Weak<Self>>,
+    /// B5-3: one save at a time, each of the state as it is when it writes,
+    /// so an older snapshot never lands after a newer one.
+    writes: Mutex<()>,
 }
 
 fn file(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.json"))
 }
 
+/// B5-3: through the shared atomic writer (unique temp name, synced, 0600).
 fn save(dir: &Path, discussion: &Discussion) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let bytes = serde_json::to_vec_pretty(discussion).map_err(|e| e.to_string())?;
-    let path = file(dir, &discussion.id);
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    crate::storage::atomic::write_atomic(
+        &file(dir, &discussion.id),
+        &bytes,
+        crate::storage::atomic::FileMode::Private,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Every saved discussion; one cut off by a restart is paused, its turns
@@ -780,6 +780,7 @@ impl Discussions {
             dir: Mutex::default(),
             state: Mutex::default(),
             me: Mutex::default(),
+            writes: Mutex::default(),
         });
         *this.me.lock() = Arc::downgrade(&this);
         this
@@ -1177,7 +1178,9 @@ impl Discussions {
 
     fn persist(&self, discussion: &Discussion) {
         if let Some(dir) = self.dir.lock().clone() {
-            let _ = save(&dir, discussion);
+            if let Err(error) = save(&dir, discussion) {
+                eprintln!("discussion: saving {} failed: {error}", discussion.id);
+            }
         }
     }
 
@@ -1198,10 +1201,15 @@ impl Discussions {
 
     /// Save, tell the host, and send what is due — off the lock.
     fn after_change(&self, id: &str, outbox: Outbox) {
-        let Some(discussion) = self.get(id) else {
-            return;
+        let discussion = {
+            // B5-3: read and write under one lock, newest state last.
+            let _write = self.writes.lock();
+            let Some(discussion) = self.get(id) else {
+                return;
+            };
+            self.persist(&discussion);
+            discussion
         };
-        self.persist(&discussion);
         let Some(host) = self.host() else {
             return;
         };
@@ -1587,25 +1595,11 @@ impl Discussions {
                     None => messages.push((message_id.clone(), text.clone())),
                 }
             }
-            SessionUpdateKind::PermissionRequest {
-                id, kind, summary, ..
-            } => {
-                let (task, request) = (task.clone(), id.clone());
-                if is_plan_exit(kind) {
-                    self.spawn(move |this| {
-                        if let Some(host) = this.host() {
-                            host.respond(
-                                &task,
-                                &request,
-                                Decision::Deny {
-                                    reason: Some(prompt::NO_PLAN.into()),
-                                },
-                            );
-                        }
-                    });
-                    return;
-                }
-                let summary = summary.clone();
+            // B1-1: a member is read-only (`plan`), so the host's
+            // `ReadOnlyGuard` denies every request it makes — leaving plan
+            // mode included; the member waits only until that lands.
+            SessionUpdateKind::PermissionRequest { summary, .. } => {
+                let (task, summary) = (task.clone(), summary.clone());
                 self.spawn(move |this| this.waiting(&task, Some(summary)));
             }
             SessionUpdateKind::Question { title, .. } => {

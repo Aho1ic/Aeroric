@@ -310,8 +310,11 @@ public struct GitSidebarPanel: View {
         let staged = store.stagedChanges.count
         let canCommit = staged > 0 && !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !busy
         return VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            // Round-2 review D1: the field itself is the capsule; the box
+            // around it and the buttons is gone (it read as one small-corner
+            // rectangle).
             TextField("提交说明", text: $message, axis: .vertical)
-                .textFieldStyle(.plain)
+                .textFieldStyle(.capsule)
                 .font(.system(size: AeroricType.secondary))
                 .lineLimit(1...5)
                 .accessibilityIdentifier("git.commit-message")
@@ -343,9 +346,8 @@ public struct GitSidebarPanel: View {
                 .accessibilityIdentifier("git.commit")
             }
         }
-        .padding(AeroricSpace.m)
-        .background(AeroricColor.layer2, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(AeroricColor.separator2))
+        .padding(.horizontal, AeroricSpace.s)
+        .padding(.vertical, AeroricSpace.xs)
     }
 
     @ViewBuilder private var changes: some View {

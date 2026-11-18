@@ -6,7 +6,7 @@
 |---|---|
 | Xcode / Swift | Xcode 27、Swift 6.4（开发机实测） |
 | Rust | `core/Cargo.toml` 的 `rust-version`（1.93） |
-| Node | 24+；只跑 `scripts/native/` 与笔记校验脚本，无 npm 依赖。`pnpm` 只是脚本入口 |
+| Node | 22.18+（笔记校验直接执行 `.ts`，需要默认的类型剥离；`native:doctor` 校验这一版本线），推荐 24；只跑 `scripts/native/` 与笔记校验脚本，无 npm 依赖。`pnpm` 只是脚本入口 |
 | XcodeGen | 2.46.0（`scripts/native/doctor.mjs` 校验版本） |
 | dbx | 仓库外的 `../dbx`，版本钉在 `scripts/dbx-ref.txt`；`scripts/prepare-dbx.sh` 打 `patches/dbx-security.patch` |
 

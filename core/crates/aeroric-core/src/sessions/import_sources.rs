@@ -967,6 +967,7 @@ fn cursor_ide_messages(path: &Path, composer: &str) -> Result<Vec<SessionMessage
                 content.push(SessionContent::ToolResult {
                     id,
                     output: result.to_string(),
+                    failed: false,
                 });
             }
         }
@@ -1185,7 +1186,11 @@ fn opencode_parts(items: &[Value]) -> Vec<SessionContent> {
                         (!text.is_empty()).then_some(text)
                     });
                 if let Some(output) = output {
-                    parts.push(SessionContent::ToolResult { id, output });
+                    parts.push(SessionContent::ToolResult {
+                        id,
+                        output,
+                        failed: false,
+                    });
                 }
             }
             _ => {}

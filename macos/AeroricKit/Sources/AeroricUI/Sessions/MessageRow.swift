@@ -31,7 +31,7 @@ public struct ContentBlock: View {
                               expanded: $expanded, identifier: "session.tool.\(id)") {
                 CodeText(input)
             }
-        case let .toolResult(id, output):
+        case let .toolResult(id, output, _):
             // The transcript pairs results with their calls; this is the fallback.
             FlatDisclosureRow(symbol: "arrow.turn.down.right", title: "结果", summary: Self.summary(output),
                               expanded: $expanded, identifier: "session.tool-result.\(id)") {
@@ -118,6 +118,7 @@ struct CodeText: View {
                 .fixedSize(horizontal: true, vertical: true)
                 .padding(10)
         }
+        .scrollIndicators(.hidden)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.m, style: .continuous))
     }
@@ -147,6 +148,7 @@ struct DiffText: View {
             .fixedSize(horizontal: true, vertical: true)
             .padding(.vertical, 8)
         }
+        .scrollIndicators(.hidden)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.m, style: .continuous))
     }
@@ -231,6 +233,7 @@ extension Theme {
                     }
                     .padding(10)
             }
+            .scrollIndicators(.hidden)
             .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.m, style: .continuous))
             .markdownMargin(top: 0, bottom: 8)
         }

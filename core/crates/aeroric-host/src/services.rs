@@ -3427,7 +3427,14 @@ pub(crate) fn task_run(
             .map(str::to_string),
         speed: None,
         dsh_agent_preset: None,
-        agent_config_id: None,
+        // 2026-11-17: a session opened for a todo may be pinned to a
+        // configuration; launch refuses one that is gone, never falls back.
+        agent_config_id: request
+            .params
+            .get("agentConfigId")
+            .and_then(Value::as_str)
+            .filter(|v| !v.trim().is_empty())
+            .map(str::to_string),
         images: Vec::new(),
         texts: Vec::new(),
     };
@@ -3963,15 +3970,39 @@ use aeroric_core::sessions::{
 
 /// 会话消息的家族分派——与宿主 `session.rs` 同一条四族链（P3-04 的 core 读侧）。
 pub(crate) fn parse_messages(lines: &[String], family: ProtocolFamily) -> Vec<SessionMessage> {
+    parse_messages_checked(lines, family).unwrap_or_default()
+}
+
+/// A6: like [`parse_messages`], but a file the family's parser refuses
+/// whole (DSH's unknown header version) says why instead of reading as an
+/// empty history.
+pub(crate) fn parse_messages_checked(
+    lines: &[String],
+    family: ProtocolFamily,
+) -> Result<Vec<SessionMessage>, String> {
     match family {
-        ProtocolFamily::Dsh => parse_dsh_session_lines(lines).unwrap_or_default(),
-        ProtocolFamily::Omp => parse_omp_session_lines(lines).unwrap_or_default(),
+        ProtocolFamily::Dsh => parse_dsh_session_lines(lines),
+        ProtocolFamily::Omp => parse_omp_session_lines(lines),
         other => {
             let mut messages = Vec::new();
             parse_session_lines(lines, other == ProtocolFamily::Codex, &mut messages);
-            messages
+            Ok(messages)
         }
     }
+}
+
+/// A6: what of a transcript could not be read: lines that are not JSON,
+/// and the parser's reason when it refused the whole file.
+pub(crate) fn unreadable_of(
+    lines: &[String],
+    window: aeroric_core::sessions::history::Window,
+    refused: Option<String>,
+) -> Option<aeroric_core::sessions::history::Unreadable> {
+    let mut found = aeroric_core::sessions::history::unreadable_lines(lines, window);
+    if let Some(reason) = refused {
+        found.get_or_insert_with(Default::default).reason = Some(reason);
+    }
+    found
 }
 
 /// 解析结果 → v1 `SessionPage`（客户端按 v1 契约解码）。文本与思考是
@@ -4032,8 +4063,13 @@ fn v1_message(index: usize, message: SessionMessage, family: ProtocolFamily) -> 
                     json!({ "name": name, "input": input }),
                 )
             }
-            SessionContent::ToolResult { id, output } => {
-                opaque("tool_result", Some(id), json!({ "output": output }))
+            SessionContent::ToolResult { id, output, failed } => {
+                let payload = if failed {
+                    json!({ "output": output, "failed": true })
+                } else {
+                    json!({ "output": output })
+                };
+                opaque("tool_result", Some(id), payload)
             }
             other => opaque(
                 "attachment",
@@ -4707,8 +4743,9 @@ fn session_history(
         }
         _ => None,
     };
+    // The text, and whether it is only the file's tail.
     let read = match (&path, &remote) {
-        (None, _) => Ok(String::new()),
+        (None, _) => Ok((String::new(), false)),
         (Some(path), Some(connection_id)) => crate::remote_sessions::read_remote_file(
             &context,
             connection_id,
@@ -4720,12 +4757,13 @@ fn session_history(
         // A Codex rollout compressed since is read from its `.zst`.
         (Some(path), None) => {
             aeroric_core::sessions::transcript_file::read_to_string(std::path::Path::new(path))
+                .map(|text| (text, false))
         }
     };
-    let raw = match read {
-        Ok(raw) => raw,
+    let (raw, cut) = match read {
+        Ok(read) => read,
         // A new session's transcript appears with its first message (N6a D3).
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), false),
         Err(e) => {
             return failure(
                 id,
@@ -4735,6 +4773,13 @@ fn session_history(
         }
     };
     let lines: Vec<String> = raw.lines().map(str::to_string).collect();
+    // A6: a remote read past the byte cap is the file's tail (B1-8: as the
+    // read says, not guessed from the decoded length).
+    let window = aeroric_core::sessions::history::Window {
+        numbered: !cut,
+        cut_head: cut,
+        ..aeroric_core::sessions::history::Window::whole(&raw)
+    };
     let agent = mutations::text(&record, "agent").unwrap_or_default();
     let family = families.session_family(agent);
     let session_id = recorded_id.unwrap_or_else(|| task_id.to_string());
@@ -4767,6 +4812,11 @@ fn session_history(
                 task_id,
             );
             aeroric_core::sessions::turn_outcome::grade(&mut stats.turns, &records);
+            // A3: a turn the agent ended on a state Aeroric does not know.
+            aeroric_core::sessions::turn_outcome::mark_unknown_ends(
+                &mut stats.turns,
+                &aeroric_core::sessions::turn_outcome::unknown_ends(&record),
+            );
             // 2026-11-14: the turn a host restart cut did not run.
             aeroric_core::sessions::turn_outcome::mark_restarts(
                 &mut stats.turns,
@@ -4786,8 +4836,17 @@ fn session_history(
             let size = serde_json::to_vec(&stats).map_or(0, |bytes| bytes.len());
             crate::imports_services::message_budget(size).map(|budget| (stats, budget))
         });
+    let (messages, refused) = match parse_messages_checked(&lines, family) {
+        Ok(messages) => (messages, None),
+        Err(reason) => (Vec::new(), Some(reason)),
+    };
+    // A6: said once, on the first page.
+    let unreadable = before
+        .is_none()
+        .then(|| unreadable_of(&lines, window, refused))
+        .flatten();
     let page = crate::imports_services::history_page_within(
-        session_page(session_id, family, parse_messages(&lines, family)),
+        session_page(session_id, family, messages),
         before,
         stats.as_ref().map_or_else(
             || crate::imports_services::message_budget(0).unwrap_or_default(),
@@ -4798,6 +4857,9 @@ fn session_history(
     reply["path"] = json!(path);
     if let Some((stats, _)) = stats {
         reply["stats"] = stats;
+    }
+    if let Some(unreadable) = unreadable {
+        reply["unreadable"] = serde_json::to_value(unreadable).unwrap_or_default();
     }
     ok(&request, reply)
 }
@@ -5587,5 +5649,40 @@ mod terminal_replay_tests {
         registry.runs.register("ssh:project:1:1", 1);
         let frame = terminal_active_task_ids(request(serde_json::json!({})), &registry);
         assert_eq!(result_of(frame), serde_json::json!(["task-a", "task-b"]));
+    }
+}
+
+#[cfg(test)]
+mod unreadable_history_tests {
+    use super::*;
+    use aeroric_core::sessions::history::{Unreadable, Window};
+
+    /// A6: DSH refusing a whole file (a newer log format) no longer reads
+    /// as an empty history; the reason rides along with any bad lines.
+    #[test]
+    fn a_file_the_parser_refuses_says_why() {
+        let text = "{\"type\":\"session\",\"version\":99}\nnot json\n";
+        let lines: Vec<String> = text.lines().map(str::to_string).collect();
+        let refused = parse_messages_checked(&lines, ProtocolFamily::Dsh).unwrap_err();
+        assert!(refused.contains("v99"), "{refused}");
+        let found = unreadable_of(&lines, Window::whole(text), Some(refused.clone())).unwrap();
+        assert_eq!(
+            found,
+            Unreadable {
+                count: 1,
+                first_line: Some(2),
+                reason: Some(refused)
+            }
+        );
+        // The lenient path keeps its old answer for the other callers.
+        assert!(parse_messages(&lines, ProtocolFamily::Dsh).is_empty());
+    }
+
+    #[test]
+    fn a_clean_codex_file_has_nothing_to_say() {
+        let text = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n";
+        let lines: Vec<String> = text.lines().map(str::to_string).collect();
+        assert!(parse_messages_checked(&lines, ProtocolFamily::Codex).is_ok());
+        assert_eq!(unreadable_of(&lines, Window::whole(text), None), None);
     }
 }

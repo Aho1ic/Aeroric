@@ -127,13 +127,18 @@ impl PushConfig {
 
     /// 从环境变量构造。缺 APNs 凭据时返回 `Err`(发送端**不**降级为「假装能推」)。
     pub fn from_env() -> Result<Self, String> {
-        let key_pem = std::env::var("APNS_KEY_PEM").or_else(|_| {
-            std::env::var("APNS_KEY_P8")
-                .map(|path| std::fs::read_to_string(path).unwrap_or_default())
-        });
-        let key_pem = key_pem.map_err(|_| {
-            "APNS_KEY_PEM (PEM text) or APNS_KEY_P8 (path to the .p8 file) is required".to_string()
-        })?;
+        // B4-5: a .p8 that cannot be read says why, not "is empty".
+        let key_pem = match std::env::var("APNS_KEY_PEM") {
+            Ok(pem) => pem,
+            Err(_) => {
+                let path = std::env::var("APNS_KEY_P8").map_err(|_| {
+                    "APNS_KEY_PEM (PEM text) or APNS_KEY_P8 (path to the .p8 file) is required"
+                        .to_string()
+                })?;
+                std::fs::read_to_string(&path)
+                    .map_err(|error| format!("APNS_KEY_P8 {path}: {error}"))?
+            }
+        };
         if key_pem.trim().is_empty() {
             return Err("APNS_KEY_PEM is empty".to_string());
         }

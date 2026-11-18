@@ -18,10 +18,10 @@ final class LiveSessionContractTests: XCTestCase {
 
     func testEveryUpdateKindInTheFixtureDecodesAsKnown() throws {
         let batch = try LiveUpdatesBatch.decode(try fixture()["updates"] ?? .null)
-        XCTAssertEqual(batch.updates.count, 30)
-        XCTAssertEqual(batch.latestSeq, 30)
+        XCTAssertEqual(batch.updates.count, 31)
+        XCTAssertEqual(batch.latestSeq, 31)
         XCTAssertNil(batch.gapOldestAvailable)
-        XCTAssertEqual(batch.updates.map(\.seq), Array(1...30))
+        XCTAssertEqual(batch.updates.map(\.seq), Array(1...31))
         let handoff = batch.updates.compactMap { update -> (String, LiveCheckpoint)? in
             if case let .handoff(reason, checkpoint) = update.kind { return (reason, checkpoint) } else { return nil }
         }.first
@@ -72,8 +72,11 @@ final class LiveSessionContractTests: XCTestCase {
         XCTAssertTrue(kinds.contains(.unknown(kind: "item/futureThing", payload: .object(["x": .number("1")]))))
         XCTAssertTrue(kinds.contains(.subagent(id: "s1", title: "检索", status: "running", detail: "读取 src/main.rs")))
         XCTAssertTrue(kinds.contains(.autoApproved(id: "8", toolCallId: "c2", kind: "bash", summary: "npm run lint", subject: "bash")))
-        XCTAssertTrue(kinds.contains(.question(LivePendingQuestion(id: "q1", style: "select", title: "用哪个测试框架？",
-                                                                  options: ["vitest", "jest"], timeoutMs: 30_000))))
+        // B2-6: a question without its own `askedAtMs` was asked at its update's time.
+        let asked = batch.updates.first { if case .question = $0.kind { return true } else { return false } }
+        XCTAssertEqual(asked?.kind, .question(LivePendingQuestion(id: "q1", style: "select", title: "用哪个测试框架？",
+                                                                  options: ["vitest", "jest"], timeoutMs: 30_000,
+                                                                  askedAtMs: asked?.atMs ?? 0)))
         XCTAssertTrue(kinds.contains(.questionResolved(id: "q1", outcome: "answered")))
         XCTAssertTrue(kinds.contains(.notice(level: "info", message: "上下文已自动压缩")))
         XCTAssertTrue(kinds.contains(.turnChanges(turnId: "u1", files: [
@@ -85,6 +88,9 @@ final class LiveSessionContractTests: XCTestCase {
                               summary: "2 项中 1 项失败", failures: ["test_add: assert 3 == 4"],
                               outputTail: "1 failed, 1 passed"),
         ])))
+        // A3: an end state Aeroric does not know arrives failed, with it kept.
+        XCTAssertTrue(kinds.contains(.turnEnded(turnId: "u0", reason: .failed,
+                                                error: "Codex 返回了没见过的结束状态：paused", rawStatus: "paused")))
         XCTAssertEqual(kinds.last, .turnEnded(turnId: "u1", reason: .completed, error: nil))
         // Only the fixture's deliberate `unknown` row is unknown: every other kind is understood.
         let unknown = kinds.filter { if case .unknown = $0 { true } else { false } }

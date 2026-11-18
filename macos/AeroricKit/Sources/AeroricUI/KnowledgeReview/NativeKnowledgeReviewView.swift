@@ -89,6 +89,7 @@ public struct NativeKnowledgeReviewView: View {
                     .padding(.horizontal, NativePanelGeometry.panelInset)
                     .padding(.bottom, NativePanelGeometry.panelInset)
                 }
+                .scrollIndicators(.hidden)
             }
             .coordinateSpace(name: "knowledgeReview.panels")
             .onPreferenceChange(KnowledgeReviewPanelFrameKey.self) { panelFrames = $0 }
@@ -1231,6 +1232,7 @@ private struct KnowledgeReviewAppearancePanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(NativePanelGeometry.panelInset)
             }
+            .scrollIndicators(.hidden)
             HStack {
                 Spacer()
                 Button("关闭预览", action: close)
@@ -1289,6 +1291,7 @@ private struct KnowledgeReviewSourcePanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(NativePanelGeometry.panelInset)
             }
+            .scrollIndicators(.hidden)
             .background(AeroricColor.layer1)
             HStack {
                 Spacer()
@@ -1332,12 +1335,12 @@ private struct KnowledgeReviewEditorPanel: View {
                         .accessibilityLabel("示例内容")
                         .accessibilityIdentifier("knowledgeReview.draft.content")
                     TextField("适用说明", text: $scope, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.capsule)
                         .lineLimit(2...4)
                         .accessibilityIdentifier("knowledgeReview.draft.scope")
                     if revision {
                         TextField("纠正依据（虚构示例）", text: $basis, axis: .vertical)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.capsule)
                             .lineLimit(2...4)
                             .accessibilityIdentifier("knowledgeReview.draft.basis")
                         Text("应用会保留旧版本和替代关联；Agent 猜测不自动改写用户确认。")
@@ -1351,6 +1354,7 @@ private struct KnowledgeReviewEditorPanel: View {
                 }
                 .padding(NativePanelGeometry.panelInset)
             }
+            .scrollIndicators(.hidden)
             HStack {
                 Button("取消", action: cancel)
                     .keyboardShortcut(.cancelAction)
@@ -1411,6 +1415,7 @@ private struct KnowledgeReviewConfigurationPanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(NativePanelGeometry.panelInset)
             }
+            .scrollIndicators(.hidden)
             HStack {
                 Button("取消", action: cancel)
                     .keyboardShortcut(.cancelAction)

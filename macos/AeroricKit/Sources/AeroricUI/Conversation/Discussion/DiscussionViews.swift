@@ -69,8 +69,19 @@ public enum DiscussionText {
         switch format {
         case "review": "起草评审"
         case "research": "分工调研"
+        case "relay": "接力"
         default: "圆桌"
         }
+    }
+
+    public static func isRelay(_ d: LiveDiscussion) -> Bool { d.format == "relay" }
+
+    /// B2-5: in a relay `round` counts turns (one member each) and
+    /// `maxRounds` laps of all members: `第 2 / 3 圈 · 第 1 位`.
+    static func relayPlace(_ d: LiveDiscussion, round: Int) -> String {
+        let size = max(d.members.count, 1)
+        let turn = max(round, 1) - 1
+        return "第 \(turn / size + 1) / \(d.maxRounds) 圈 · 第 \(turn % size + 1) 位"
     }
 
     public static func isReview(_ d: LiveDiscussion) -> Bool { d.format == "review" }
@@ -83,7 +94,7 @@ public enum DiscussionText {
     public static func state(_ d: LiveDiscussion) -> String {
         if isReview(d) { return reviewState(d) }
         if isResearch(d) { return researchState(d) }
-        let round = "第 \(d.round) / \(d.maxRounds) 轮"
+        let round = isRelay(d) ? relayPlace(d, round: d.round) : "第 \(d.round) / \(d.maxRounds) 轮"
         switch d.state {
         case "running":
             return d.posts.contains { $0.state == "waiting" } ? "\(round) · 有成员在等你确认" : "\(round) · 讨论中"
@@ -326,6 +337,7 @@ public enum DiscussionText {
 
     public static func roundTitle(_ d: LiveDiscussion, _ round: Int) -> String {
         if isResearch(d) { return round == 1 ? "主持人拆题" : "各自调研（互相看不到）" }
+        if isRelay(d) { return relayPlace(d, round: round) + (round == 1 ? " · 开题" : " · 接着说") }
         guard isReview(d) else { return roundTitle(round) }
         if round % 2 == 0 { return "第 \(version(round)) 版 · 评审（各自独立，互相看不到）" }
         return round == 1 ? "第 1 版 · 作者起草" : "第 \(version(round)) 版 · 作者修订"
@@ -340,20 +352,40 @@ public enum DiscussionText {
         return nil
     }
 
-    /// The harnesses the add panel can pick: those with a startable configuration.
-    public static func harnesses(_ targets: [RerunTarget]) -> [String: Bool] {
+    /// The harnesses the add panel can pick: those with a startable configuration
+    /// that can hold themselves read-only (A4).
+    public static func harnesses(_ targets: [RerunTarget],
+                                 capabilities: [String: LiveCapabilities] = [:]) -> [String: Bool] {
         Dictionary(uniqueKeysWithValues: NewSessionLayout.harnessOrder.map { harness in
-            (harness, targets.contains { $0.agent == harness })
+            (harness, targets.contains { $0.harnessKey == harness }
+                && readOnlyBlock(capabilities[harness]) == nil)
         })
     }
 
     /// Where the add panel opens: the single-session harness when it can start a member.
-    public static func startHarness(preferred: String, targets: [RerunTarget]) -> String {
-        NewSessionLayout.defaultHarness(preferred: preferred, availability: harnesses(targets))
+    public static func startHarness(preferred: String, targets: [RerunTarget],
+                                    capabilities: [String: LiveCapabilities] = [:]) -> String {
+        NewSessionLayout.defaultHarness(preferred: preferred,
+                                        availability: harnesses(targets, capabilities: capabilities))
+    }
+
+    /// A4: why a harness cannot join — its table says it cannot hold itself
+    /// read-only. Nil when it can, or when the host sent no table (it refuses then).
+    public static func readOnlyBlock(_ table: LiveCapabilities?) -> String? {
+        guard let entry = table?.entry("strictReadOnly"), entry.state != "yes" else { return nil }
+        return entry.note ?? "不能保证只读"
+    }
+
+    /// The slider's help for a harness.
+    public static func harnessHelp(_ harness: String, targets: [RerunTarget],
+                                   capabilities: [String: LiveCapabilities] = [:]) -> String {
+        let title = AgentConfigText.harnessTitle(harness)
+        if let block = readOnlyBlock(capabilities[harness]) { return "\(title)：不能参加讨论（\(block)）" }
+        return targets.contains { $0.harnessKey == harness } ? title : "\(title)：没有能启动的配置"
     }
 
     public static func configurations(_ targets: [RerunTarget], harness: String) -> [RerunTarget] {
-        targets.filter { $0.agent == harness }
+        targets.filter { $0.harnessKey == harness }
     }
 
     /// A configuration's models; one without a list offers its default model (nil).
@@ -397,6 +429,9 @@ public struct DiscussionPrefill: Equatable, Sendable {
 /// is the moderator; 1–5 rounds.
 struct DiscussionSetup: View {
     let targets: [RerunTarget]
+    /// A4: each harness's capability table; one that cannot hold itself
+    /// read-only is greyed out with the reason.
+    var capabilities: [String: LiveCapabilities] = [:]
     /// The harness the add panel opens on: the one picked for a single session.
     var preferredHarness = "codex"
     @Binding var members: [LiveDiscussionChoice]
@@ -438,22 +473,19 @@ struct DiscussionSetup: View {
                     Text("最多修订")
                         .font(.system(size: AeroricType.caption))
                         .foregroundStyle(AeroricColor.textTertiary)
-                    ForEach(Array(DiscussionText.revisions), id: \.self) { n in
-                        Button("\(n) 次") { revisions = n }
-                            .buttonStyle(AeroricChipStyle(selected: revisions == n))
-                            .accessibilityAddTraits(revisions == n ? .isSelected : [])
-                            .accessibilityIdentifier("discussion.revisions.\(n)")
-                    }
+                    // B3-3: adjacent exclusive choices slide.
+                    CapsuleSlider(selection: $revisions, groupTitle: "最多修订", mode: .titleOnly,
+                                  identifier: "discussion.revisions",
+                                  segments: DiscussionText.revisions.map { .init(value: $0, title: "\($0) 次") })
+                        .fixedSize()
                 } else {
                     Text("轮数")
                         .font(.system(size: AeroricType.caption))
                         .foregroundStyle(AeroricColor.textTertiary)
-                    ForEach(Array(DiscussionText.rounds), id: \.self) { n in
-                        Button("\(n)") { rounds = n }
-                            .buttonStyle(AeroricChipStyle(selected: rounds == n))
-                            .accessibilityAddTraits(rounds == n ? .isSelected : [])
-                            .accessibilityIdentifier("discussion.rounds.\(n)")
-                    }
+                    CapsuleSlider(selection: $rounds, groupTitle: "轮数", mode: .titleOnly,
+                                  identifier: "discussion.rounds",
+                                  segments: DiscussionText.rounds.map { .init(value: $0, title: "\($0)") })
+                        .fixedSize()
                 }
                 Button("匿名互评") { anonymous.toggle() }
                     .buttonStyle(AeroricChipStyle(selected: anonymous))
@@ -540,8 +572,9 @@ struct DiscussionSetup: View {
                 .lineLimit(1...3)
                 .padding(.horizontal, AeroricSpace.l)
                 .padding(.vertical, AeroricSpace.xs + 1)
-                .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                // B3-1: text fields are capsules.
+                .background(AeroricColor.layer1, in: Capsule(style: .continuous))
+                .overlay(Capsule(style: .continuous)
                     .strokeBorder(AeroricColor.separator1, lineWidth: 0.5))
                 .accessibilityIdentifier("discussion.requirements")
             if review {
@@ -560,15 +593,15 @@ struct DiscussionSetup: View {
                 Text("方式")
                     .font(.system(size: AeroricType.caption))
                     .foregroundStyle(AeroricColor.textTertiary)
-                ForEach(DiscussionText.FormatChoice.allCases, id: \.self) { choice in
-                    Button(choice == .auto ? "自动 · \(DiscussionText.formatTitle(recommended.format))"
-                           : DiscussionText.formatTitle(choice.rawValue)) {
-                        animate { format = choice }
-                    }
-                    .buttonStyle(AeroricChipStyle(selected: format == choice))
-                    .accessibilityAddTraits(format == choice ? .isSelected : [])
-                    .accessibilityIdentifier("discussion.format.\(choice.rawValue)")
-                }
+                CapsuleSlider(selection: Binding(get: { format }, set: { choice in animate { format = choice } }),
+                              groupTitle: "方式", mode: .titleOnly, identifier: "discussion.format",
+                              segments: DiscussionText.FormatChoice.allCases.map { choice in
+                                  .init(value: choice,
+                                        title: choice == .auto
+                                            ? "自动 · \(DiscussionText.formatTitle(recommended.format))"
+                                            : DiscussionText.formatTitle(choice.rawValue))
+                              })
+                    .fixedSize()
             }
             Text(format == .auto ? recommended.reason
                  : review ? "作者写，其他成员各自评审，作者看全部意见再改"
@@ -609,7 +642,8 @@ struct DiscussionSetup: View {
     }
 
     private var harness: String {
-        pickedHarness ?? DiscussionText.startHarness(preferred: preferredHarness, targets: targets)
+        pickedHarness ?? DiscussionText.startHarness(preferred: preferredHarness, targets: targets,
+                                                     capabilities: capabilities)
     }
 
     /// The picked configuration of the harness, else its first one.
@@ -659,7 +693,7 @@ struct DiscussionSetup: View {
     }
 
     private var harnessSlider: some View {
-        let usable = DiscussionText.harnesses(targets)
+        let usable = DiscussionText.harnesses(targets, capabilities: capabilities)
         return SlidingCapsulePicker(
             selection: Binding(get: { harness }, set: { value in
                 animate {
@@ -673,7 +707,8 @@ struct DiscussionSetup: View {
                 let enabled = usable[id] ?? false
                 return .init(value: id, title: title,
                              asset: NativeHarnessPicker.harnesses.first { $0.id == id }?.asset,
-                             isEnabled: enabled, help: enabled ? title : "\(title)：没有能启动的配置")
+                             isEnabled: enabled,
+                             help: DiscussionText.harnessHelp(id, targets: targets, capabilities: capabilities))
             }
         )
         .fixedSize()
@@ -833,6 +868,7 @@ public struct DiscussionView: View {
             .frame(maxWidth: 960, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        .scrollIndicators(.hidden)
     }
 
     /// 2026-11-13: speak to everyone, or `@` one member.
@@ -858,8 +894,9 @@ public struct DiscussionView: View {
                     .onSubmit { send(d) }
                     .padding(.horizontal, AeroricSpace.l)
                     .padding(.vertical, AeroricSpace.s)
-                    .background(AeroricColor.layer2, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous)
+                    // B3-1: text fields are capsules.
+                    .background(AeroricColor.layer2, in: Capsule(style: .continuous))
+                    .overlay(Capsule(style: .continuous)
                         .strokeBorder(AeroricColor.separator1, lineWidth: 1))
                     .accessibilityIdentifier("discussion.say.field")
                 Button(named.isEmpty ? "发送" : "只问 \(named.count) 位") { send(d) }

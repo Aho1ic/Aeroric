@@ -226,6 +226,7 @@ public struct NativeTaskDeliverablesReviewRefusalView: View {
                 .padding(NativePanelGeometry.panelInset * 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.hidden)
         }
         .frame(minWidth: 400, minHeight: 300)
     }

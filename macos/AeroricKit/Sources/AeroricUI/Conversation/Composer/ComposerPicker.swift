@@ -93,6 +93,7 @@ struct PickerMenuList: View {
             }
             .padding(AeroricSpace.xs)
         }
+        .scrollIndicators(.hidden)
         .frame(width: width)
         .frame(maxHeight: 360)
         .fixedSize(horizontal: false, vertical: true)

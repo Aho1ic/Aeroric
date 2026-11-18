@@ -1302,6 +1302,7 @@ struct MemoryChainSheet: View {
                     }
                 }
             }
+            .scrollIndicators(.hidden)
             .frame(height: 360)
             HStack {
                 Spacer()

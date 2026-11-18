@@ -463,6 +463,17 @@ public final class CompanionStore {
         resyncNeeded = false
         lastPushKind = nil
         lastEventSeq = 0
+        // B4-4 (2026-11-18): nor anything it was shown — project and task
+        // names, messages, file and git listings — nor what the Mac offered.
+        projects = []
+        tasks = []
+        selectedProjectId = nil
+        selectedTaskId = nil
+        sessionMessages = []
+        files = []
+        gitChanges = []
+        adapterCapabilities = .none
+        controlOutcomes = []
     }
 
     // MARK: - Push Hints (AP6: a notification is never an authorization)
@@ -546,19 +557,6 @@ public final class CompanionStore {
 
     private func requireMacOnline() throws -> String {
         return try requireEpoch()
-    }
-
-    private func unusedRequireMacOnlineLegacy() throws -> String {
-        switch connectionState {
-        case let .macOnline(epoch, _):
-            return epoch
-        case .revoked:
-            throw CompanionActionError.deviceRevoked
-        case .unpaired, .disconnected, .relayConnectedMacOffline:
-            throw CompanionActionError.macOfflineNoQueueing(
-                "Aeroric Mac is offline; iOS companion does not queue approvals, terminal input, or task mutations"
-            )
-        }
     }
 
     /// The one place that decides an epoch is acceptable. Revocation is checked

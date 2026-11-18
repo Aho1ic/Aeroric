@@ -26,6 +26,39 @@ final class ConversationModelTests: XCTestCase {
         XCTAssertTrue(text.contains("mystery"), "an unclaimed block is shown by kind, never dropped")
     }
 
+    /// Round-5 review (2026-11-18): a refused ExitPlanMode read "完成" once
+    /// history loaded. A failed result stays failed and is not folded into
+    /// a "已调用 n 个工具" group.
+    func testAFailedResultMakesAFailedToolRow() {
+        let failed = opaque("tool_result", sourceId: "x",
+                            payload: .object(["output": .string("这是只读会话"), "failed": .bool(true)]))
+        XCTAssertEqual(SessionBlockMapping.content(failed), .toolResult(id: "x", output: "这是只读会话", failed: true))
+        let messages = [
+            AeroricUI.SessionMessage(role: "assistant", content: [
+                .toolUse(id: "x", name: "ExitPlanMode", input: "{}"),
+                .toolUse(id: "y", name: "Read", input: "{}"),
+                .toolUse(id: "z", name: "Read", input: "{}"),
+            ], messageId: "a1"),
+            AeroricUI.SessionMessage(role: "user", content: [
+                .toolResult(id: "x", output: "这是只读会话", failed: true),
+                .toolResult(id: "y", output: "1"),
+                .toolResult(id: "z", output: "2"),
+            ], messageId: "r1"),
+        ]
+        let items = TranscriptBuilder.items(from: messages, taskRunning: false)
+        let standalone: [String: ToolCallState] = Dictionary(uniqueKeysWithValues: items.compactMap {
+            if case let .tool(call) = $0 { return (call.id, call.state) }
+            return nil
+        })
+        let grouped: [String: ToolCallState] = Dictionary(uniqueKeysWithValues: items.flatMap { item -> [(String, ToolCallState)] in
+            if case let .toolGroup(_, calls) = item { return calls.map { ($0.id, $0.state) } }
+            return []
+        })
+        XCTAssertEqual(standalone["x"], .failed, "shown on its own, not folded")
+        XCTAssertEqual(standalone["y"] ?? grouped["y"], .done)
+        XCTAssertEqual(ToolCallState.failed.activity, .failed)
+    }
+
     // MARK: - Tool call pairing and states
 
     private func messages() -> [AeroricUI.SessionMessage] {

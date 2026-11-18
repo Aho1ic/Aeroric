@@ -116,4 +116,11 @@ jobs:
         run: swift test --package-path macos/AeroricKit
 
       - name: Build and test AeroricCompanionKit (iOS)
-        run: swift build --package-path ios/AeroricCompanionKit
+        run: |
+          swift build --package-path ios/AeroricCompanionKit
+          swift test --package-path ios/AeroricCompanionKit
+
+      - name: Contracts and digest match their sources
+        run: |
+          node scripts/native/contracts.mjs --check
+          node scripts/native/digest.mjs --check

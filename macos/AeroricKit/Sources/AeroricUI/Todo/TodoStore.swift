@@ -9,7 +9,7 @@ public protocol TodoService {
     func save(_ todo: LiveTodo) async throws -> LiveTodo
     func delete(id: String) async throws
     /// A new session for the todo; the todo as it is now, and the session.
-    func assign(id: String, agent: String) async throws -> (LiveTodo, String)
+    func assign(id: String, to runner: LiveTodoRunner) async throws -> (LiveTodo, String)
     /// `accept` `cancel` `reopen` `take`.
     func decide(id: String, decision: String) async throws -> LiveTodo
     /// 第二批: run the 验收检查 now (重新检查).
@@ -51,11 +51,26 @@ public final class TodoStore {
         }
     }
 
+    /// B2-7: the id a save or delete is working on (a new todo's is its
+    /// draft id); a second click while it runs does nothing.
+    public private(set) var writing: Set<String> = []
+
+    /// Editors whose save went through: the sheet is still on screen while
+    /// it closes, and a second click of a double click that lands after the
+    /// first save finished must not make a second todo (round-2 review E1).
+    private var savedEditors: Set<UUID> = []
+
     /// Save a new or changed todo; `false` (with the reason) when refused.
-    public func save(_ todo: LiveTodo) async -> Bool {
-        guard let service else { return false }
+    /// `editor` names the open editor: once its save succeeded, it saves
+    /// nothing more.
+    public func save(_ todo: LiveTodo, from editor: UUID? = nil) async -> Bool {
+        guard let service, !writing.contains(todo.id) else { return false }
+        if let editor, savedEditors.contains(editor) { return false }
+        writing.insert(todo.id)
+        defer { writing.remove(todo.id) }
         do {
             _ = try await service.save(todo)
+            if let editor { savedEditors.insert(editor) }
             await reload()
             return true
         } catch {
@@ -65,7 +80,9 @@ public final class TodoStore {
     }
 
     public func delete(_ todo: LiveTodo) async {
-        guard let service else { return }
+        guard let service, !writing.contains(todo.id) else { return }
+        writing.insert(todo.id)
+        defer { writing.remove(todo.id) }
         do {
             try await service.delete(id: todo.id)
             await reload()
@@ -74,13 +91,13 @@ public final class TodoStore {
         }
     }
 
-    /// Hand the todo to `agent`; the new session's id, or nil (with the reason).
-    public func assign(_ todo: LiveTodo, agent: String) async -> String? {
+    /// Hand the todo to `runner`; the new session's id, or nil (with the reason).
+    public func assign(_ todo: LiveTodo, to runner: LiveTodoRunner) async -> String? {
         guard let service, busy == nil else { return nil }
         busy = todo.id
         defer { busy = nil }
         do {
-            let (_, task) = try await service.assign(id: todo.id, agent: agent)
+            let (_, task) = try await service.assign(id: todo.id, to: runner)
             await reload()
             return task
         } catch {
@@ -150,10 +167,34 @@ public enum TodoText {
         todo.state == "assigned" && ["notRun", "failed", "stopped", "missing"].contains(todo.progress ?? "")
     }
 
-    /// "交办 2 次 · 上次 Codex".
+    /// 2026-11-17: what the 交办 sheet starts with — the last hand-out's
+    /// configuration and model while they still exist; else the first
+    /// configuration of the last (or given) Agent, else the first one; its
+    /// first model (none for a configuration without a model list).
+    public static func defaultPick(_ todo: LiveTodo, targets: [RerunTarget],
+                                   fallbackAgent: String) -> (configuration: String, model: String?)? {
+        guard let first = targets.first else { return nil }
+        let last = todo.assignments.last
+        let target = last?.configurationId.flatMap { id in targets.first { $0.id == id } }
+            ?? targets.first { $0.agent == (last?.agent ?? fallbackAgent) }
+            ?? first
+        let kept = last.flatMap { $0.configurationId == target.id ? $0.model : nil }
+            .flatMap { target.models.contains($0) ? $0 : nil }
+        return (target.id, kept ?? target.models.first)
+    }
+
+    /// The line under the prompt in the 交办 sheet.
+    public static func assignHint(_ todo: LiveTodo, picksConfiguration: Bool) -> String {
+        let runs = picksConfiguration ? "会话用选的配置和模型，以及这个 Agent 的默认权限模式。"
+                                      : "会话用这个 Agent 的默认权限模式和模型。"
+        let check = todo.check.isEmpty ? "会话结束后待办变成“待验收”" : "这一轮结束后会运行验收检查；待办变成“待验收”"
+        return runs + check + "，你点“验收通过”才算完成。"
+    }
+
+    /// "交办 2 次 · 上次 Codex", or the configuration and model it ran with.
     public static func assignments(_ todo: LiveTodo, agentName: (String) -> String) -> String? {
         guard let last = todo.assignments.last else { return nil }
-        return "交办 \(todo.assignments.count) 次 · 上次 \(agentName(last.agent))"
+        return "交办 \(todo.assignments.count) 次 · 上次 \(last.label ?? agentName(last.agent))"
     }
 
     /// The 需要我处理 row: "待办：2 条待验收、1 条提议".

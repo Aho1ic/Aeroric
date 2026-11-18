@@ -91,6 +91,21 @@ use std::sync::RwLock;
 
 static DATA_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
 
+/// B5-2 (2026-11-18): the built-in omp's managed home as the host's sessions
+/// use it (`<data-dir>/agent-homes/omp`), so settings, model discovery and
+/// upgrades in the host process read and write that same home. Unset, the
+/// legacy root (`HOME/.aeroric/agent-homes/omp`) applies, as it always did.
+static OMP_HOME: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// The host's production startup sets it; nothing else does.
+pub fn configure_omp_home(home: impl Into<PathBuf>) {
+    *OMP_HOME.write().expect("omp home lock") = Some(home.into());
+}
+
+pub(crate) fn configured_omp_home() -> Option<PathBuf> {
+    OMP_HOME.read().expect("omp home lock").clone()
+}
+
 /// 宿主启动时注入数据根（`~/.aeroric`）；未注入时报错——core 不猜。
 pub fn configure_data_dir(base: impl Into<PathBuf>) {
     *DATA_DIR.write().expect("data dir lock") = Some(base.into());
@@ -673,7 +688,8 @@ pub fn login_shell_env() -> &'static [(String, String)] {
     get_login_shell_env()
 }
 
-/// The managed omp home (`~/.aeroric/agent-homes/omp`); never the user's `~/.omp`.
+/// The managed omp home (the host's `<data-dir>/agent-homes/omp` once the host
+/// configured it, else `~/.aeroric/agent-homes/omp`); never the user's `~/.omp`.
 pub fn managed_omp_home() -> Option<std::path::PathBuf> {
     omp_managed_home()
 }

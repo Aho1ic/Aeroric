@@ -34,7 +34,7 @@ public enum SessionActions {
             case let .toolUse(_, name, input):
                 return name.localizedCaseInsensitiveContains(trimmed)
                     || input.localizedCaseInsensitiveContains(trimmed)
-            case let .toolResult(_, output):
+            case let .toolResult(_, output, _):
                 return output.localizedCaseInsensitiveContains(trimmed)
             case let .thinking(thinking):
                 return thinking.localizedCaseInsensitiveContains(trimmed)

@@ -59,6 +59,7 @@ struct SessionInfoCard: View {
                         details
                     }
                 }
+                .scrollIndicators(.hidden)
                 .frame(maxHeight: asColumn ? .infinity : 420)
             }
         }

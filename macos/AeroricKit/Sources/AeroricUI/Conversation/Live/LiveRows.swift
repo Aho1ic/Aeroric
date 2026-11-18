@@ -350,6 +350,7 @@ struct LiveAutoCheckRow: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .textSelection(.enabled)
                             }
+                            .scrollIndicators(.hidden)
                             .frame(maxHeight: 160)
                         }
                     }

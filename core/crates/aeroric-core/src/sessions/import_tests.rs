@@ -503,3 +503,57 @@ fn a_continued_session_leaves_the_list_and_keeps_its_native_id() {
     assert!(store.visible().iter().all(|s| s.id != claude.id));
     assert_eq!(store.visible().len(), 1);
 }
+
+/// A6: a line of an imported file that is not JSON is counted, with where.
+#[test]
+fn an_unreadable_line_of_an_imported_file_is_counted() {
+    let scratch = Scratch::new("unreadable");
+    let text = format!("{}\nnot json\n", CLAUDE.trim_end_matches('\n'));
+    scratch.write(".claude/projects/-work-app/s1.jsonl", &text);
+    let store = scratch.store();
+    store
+        .grant(
+            ImportAgent::Claude,
+            ImportAgent::Claude.default_root(&scratch.home()),
+            1,
+        )
+        .unwrap();
+    store.scan(&projects()).unwrap();
+    let entry = store.index()[0].clone();
+    let (_, messages, unreadable) = store.messages_with_unreadable(&entry.id).unwrap();
+    assert!(messages.iter().any(|m| m.role == "assistant"));
+    let unreadable = unreadable.unwrap();
+    assert_eq!(unreadable.count, 1);
+    assert_eq!(unreadable.first_line, Some(text.lines().count()));
+}
+
+/// 目检 2026-11-17: pages of one imported file reuse its parse; a file that
+/// changed is read again, and revoking the agent still refuses at once.
+#[test]
+fn pages_of_one_file_reuse_its_parse_until_it_changes_or_is_revoked() {
+    let scratch = Scratch::new("parse-cache");
+    let path = ".claude/projects/-work-app/s1.jsonl";
+    scratch.write(path, CLAUDE);
+    let store = scratch.store();
+    let root = ImportAgent::Claude.default_root(&scratch.home());
+    store.grant(ImportAgent::Claude, root, 1).unwrap();
+    store.scan(&projects()).unwrap();
+    let id = store.index()[0].id.clone();
+    let (_, first, _) = store.messages_with_unreadable(&id).unwrap();
+    let (_, again, _) = store.messages_with_unreadable(&id).unwrap();
+    assert_eq!(first, again);
+
+    // The file grows: the next read sees the new line, not the old parse.
+    let grown = format!("{}\nnot json\n", CLAUDE.trim_end_matches('\n'));
+    scratch.write(path, &grown);
+    let (_, _, unreadable) = store.messages_with_unreadable(&id).unwrap();
+    assert_eq!(unreadable.map(|u| u.count), Some(1));
+
+    // Revoking drops the agent's sessions from the index too: refused, never
+    // served from the kept parse.
+    store.revoke(ImportAgent::Claude).unwrap();
+    assert!(matches!(
+        store.messages_with_unreadable(&id),
+        Err(ImportError::UnknownSession(_) | ImportError::NotGranted(_))
+    ));
+}

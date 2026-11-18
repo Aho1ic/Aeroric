@@ -39,6 +39,12 @@ struct HostLiveSessionActions: LiveSessionActions {
         return (page.messages.map(SessionBlockMapping.message), page.stats)
     }
 
+    func history(taskID: String, pages: Int) async throws -> LiveHistory {
+        let page = try await client().fullHistory(taskId: taskID, maxPages: pages)
+        return LiveHistory(messages: page.messages.map(SessionBlockMapping.message), stats: page.stats,
+                           hasEarlier: page.hasMore && page.nextCursor != nil, unreadable: page.unreadable)
+    }
+
     func prompt(taskID: String, text: String, afterTurn: Bool) async throws -> LivePromptReceipt {
         try await client().prompt(taskId: taskID, text: text, afterTurn: afterTurn)
     }
@@ -150,6 +156,13 @@ struct HostLiveSessionActions: LiveSessionActions {
 
     func capabilities(family: String) async throws -> LiveCapabilities {
         try await client().capabilities(family: family)
+    }
+
+    /// B2-4: an SSH project's session asks for the remote table.
+    func capabilities(taskID: String, family: String) async throws -> LiveCapabilities {
+        let project = services.taskStore.tasks.first { $0.id == taskID }?.projectID
+        let remote = CapabilityPlace.isRemote(projectPath: services.projectPath(project))
+        return try await client().capabilities(family: family, remote: remote)
     }
 
     func expiredLogin(taskID: String) async throws -> ExpiredLogin? {
@@ -374,12 +387,18 @@ extension AppServices {
         }
         // R1-3a: logins the agents refused, and (once) each family's table.
         if let expired = try? await client.loginState(), expired != expiredLogins { expiredLogins = expired }
-        if capabilityTables.isEmpty {
+        if capabilityTables.isEmpty || remoteCapabilityTables.isEmpty {
             var tables: [String: LiveCapabilities] = [:]
-            for family in ["codex", "claude", "omp"] {
+            var remote: [String: LiveCapabilities] = [:]
+            for family in ["codex", "claude", "dsh", "omp"] {
                 if let table = try? await client.capabilities(family: family), !table.isEmpty { tables[family] = table }
+                // B2-4: what the host says for an SSH project.
+                if let table = try? await client.capabilities(family: family, remote: true), !table.isEmpty {
+                    remote[family] = table
+                }
             }
             if !tables.isEmpty { capabilityTables = tables }
+            if !remote.isEmpty { remoteCapabilityTables = remote }
         }
         // B4-3: board decisions waiting for the user and stale claims, under the board's owner.
         if let items = try? await client.boardAttention() {
@@ -482,6 +501,8 @@ extension AppServices {
         let previous = task.status
         guard previous != status else { return }
         task.status = status
+        // 2026-11-17: a status change is activity; the sidebar sorts by it.
+        task.updatedAtMs = UInt64(Date().timeIntervalSince1970 * 1000)
         taskStore.upsertTask(task)
         if notificationGate.shouldNotify(taskID: taskID, previous: previous, current: status,
                                          appActive: NSApp.isActive) {
@@ -768,8 +789,10 @@ struct HostTodoService: TodoService {
         _ = try await call("todo.delete", ["id": .string(id)])
     }
 
-    func assign(id: String, agent: String) async throws -> (LiveTodo, String) {
-        let reply = try await call("todo.assign", ["id": .string(id), "agent": .string(agent)])
+    func assign(id: String, to runner: LiveTodoRunner) async throws -> (LiveTodo, String) {
+        var params = runner.params
+        params["id"] = .string(id)
+        let reply = try await call("todo.assign", params)
         guard let todo = reply["todo"].flatMap(LiveTodo.decode), let task = reply["taskId"]?.stringValue else {
             throw Incomplete()
         }

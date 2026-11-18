@@ -31,7 +31,7 @@ use remote_protocol::{
 };
 
 use crate::apns::{ApnsClient, ApnsOutcome, PushDelivery};
-use crate::auth::{now_ms, timestamp_in_window, CredentialStore, RateLimiter, ReplayGuard};
+use crate::auth::{now_ms, timestamp_in_window, CredentialStore, RateLimiter, Replay, ReplayGuard};
 use crate::bindings::BindingStore;
 use crate::config::PushConfig;
 
@@ -114,6 +114,8 @@ pub fn router(state: Arc<AppState>) -> Router {
                 },
             ),
         )
+        // B4-5: no route reads more than this.
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }
 
@@ -173,6 +175,9 @@ struct EnrollRequest {
     user: Option<String>,
 }
 
+/// The rate-limit bucket enrollment shares (no user id is known yet).
+const ENROLL_RATE_KEY: &str = "\u{0}enroll";
+
 /// 铸造一份 per-user 凭据。明文只在此响应里出现一次。
 pub fn handle_enroll(state: Arc<AppState>, body: String) -> Response {
     let Some(secret) = state.enroll_secret.as_deref() else {
@@ -185,10 +190,14 @@ pub fn handle_enroll(state: Arc<AppState>, body: String) -> Response {
         Ok(value) => value,
         Err(_) => return failure(PushErrorCode::BadRequest, "malformed enroll request"),
     };
+    // B4-5: guessing the enrollment secret is rate limited like any caller.
+    if state.rate.check(ENROLL_RATE_KEY).is_err() {
+        return failure(PushErrorCode::RateLimited, "too many enrollment attempts");
+    }
     if !constant_time_eq(secret.as_bytes(), parsed.secret.as_bytes()) {
         return failure(PushErrorCode::Unauthorized, "invalid enrollment secret");
     }
-    let minted = state.credentials.lock().enroll(parsed.user.as_deref());
+    let minted = state.credentials.lock().enroll_new(parsed.user.as_deref());
     match minted {
         Ok((user, credential)) => (
             StatusCode::CREATED,
@@ -229,12 +238,8 @@ fn authenticate(
             "unknown user or bad signature",
         )));
     }
-    if !state.replays.observe(nonce) {
-        return Err(Box::new(failure(
-            PushErrorCode::Replay,
-            "nonce already used",
-        )));
-    }
+    // B4-5: the rate limit before the replay table, so a flood of signed
+    // requests is cut off before it can fill the table.
     if let Err(retry_after_ms) = state.rate.check(user) {
         let mut response = failure(PushErrorCode::RateLimited, "per-user rate limit exceeded");
         response.headers_mut().insert(
@@ -247,19 +252,68 @@ fn authenticate(
         );
         return Err(Box::new(response));
     }
+    match state.replays.observe(user, nonce) {
+        Replay::Fresh => {}
+        Replay::Seen => {
+            return Err(Box::new(failure(
+                PushErrorCode::Replay,
+                "nonce already used",
+            )))
+        }
+        Replay::Full => {
+            return Err(Box::new(failure(
+                PushErrorCode::RateLimited,
+                "too many requests in the replay window; retry later",
+            )))
+        }
+    }
     Ok(Caller {
         user: user.to_string(),
     })
 }
 
+/// B4-5: both sides hashed first, so neither the comparison nor an early
+/// length check says how long the secret is.
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.is_empty() || left.len() != right.len() {
+    use sha2::{Digest, Sha256};
+    if left.is_empty() {
         return false;
     }
+    let (left, right) = (Sha256::digest(left), Sha256::digest(right));
     left.iter()
         .zip(right.iter())
         .fold(0_u8, |acc, (l, r)| acc | (l ^ r))
         == 0
+}
+
+/// B4-5: the largest request body any route reads.
+pub const MAX_BODY_BYTES: usize = 64 * 1024;
+/// B4-5: the most devices one push may name.
+pub const MAX_PUSH_DEVICES: usize = 32;
+
+/// B4-5: sizes checked before any hashing or locking.
+fn bounded(user: &str, nonce: &str, device_ids: &[&str]) -> Result<(), &'static str> {
+    let id = |s: &str, max: usize| {
+        !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_graphic())
+    };
+    if !id(user, 64) {
+        return Err("user out of range");
+    }
+    if !id(nonce, 128) {
+        return Err("nonce out of range");
+    }
+    if device_ids.len() > MAX_PUSH_DEVICES || device_ids.iter().any(|d| !id(d, 128)) {
+        return Err("device ids out of range");
+    }
+    Ok(())
+}
+
+/// B4-5: an APNs device token is hex — it ends up in the request path.
+fn valid_token(token: &str) -> bool {
+    let len = token.len();
+    (32..=512).contains(&len)
+        && len.is_multiple_of(2)
+        && token.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 ///// `/v1/bind`
@@ -273,6 +327,19 @@ pub async fn handle_bind(state: Arc<AppState>, body: String) -> Response {
             PushErrorCode::BadRequest,
             format!("unsupported push protocol version {}", request.v),
         );
+    }
+    if let Err(reason) = bounded(&request.user, &request.nonce, &[request.device_id.as_str()]) {
+        return failure(PushErrorCode::BadRequest, reason);
+    }
+    let token = request.token.trim();
+    if !token.is_empty() && !valid_token(token) {
+        return failure(PushErrorCode::BadRequest, "device token must be hex");
+    }
+    if request.platform.is_empty()
+        || request.platform.len() > 16
+        || !request.platform.chars().all(|c| c.is_ascii_alphanumeric())
+    {
+        return failure(PushErrorCode::BadRequest, "platform out of range");
     }
     let message = bind_signature_message(
         &request.user,
@@ -336,6 +403,10 @@ pub async fn handle_push(state: Arc<AppState>, body: String) -> Response {
             "envelope version/collapseKey out of range",
         );
     }
+    let named: Vec<&str> = request.device_ids.iter().map(String::as_str).collect();
+    if let Err(reason) = bounded(&request.user, &request.nonce, &named) {
+        return failure(PushErrorCode::BadRequest, reason);
+    }
     let message = push_signature_message(
         &request.user,
         &request.device_ids,
@@ -363,10 +434,11 @@ pub async fn handle_push(state: Arc<AppState>, body: String) -> Response {
             "no APNs provider key configured",
         );
     };
-    let targets = state
-        .bindings
-        .lock()
-        .tokens_for(&caller.user, &request.device_ids);
+    // B4-5: a device named twice gets one push.
+    let mut device_ids = request.device_ids.clone();
+    device_ids.sort();
+    device_ids.dedup();
+    let targets = state.bindings.lock().tokens_for(&caller.user, &device_ids);
     if targets.is_empty() {
         // 没有绑定 = 没有可投递目标。不是错误(设备可能刚撤销),但要如实回报。
         return (
@@ -565,7 +637,14 @@ mod tests {
         let stale = now - 10_000_000;
         let response = handle_bind(
             state.clone(),
-            bind_body("u1", "secret", "d1", "tok", stale, "n1"),
+            bind_body(
+                "u1",
+                "secret",
+                "d1",
+                "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+                stale,
+                "n1",
+            ),
         )
         .await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
@@ -574,7 +653,14 @@ mod tests {
         // 2) 未知 user 与错签名返回同一个状态码(不给枚举预言机)。
         let unknown = handle_bind(
             state.clone(),
-            bind_body("ghost", "secret", "d1", "tok", now, "n2"),
+            bind_body(
+                "ghost",
+                "secret",
+                "d1",
+                "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+                now,
+                "n2",
+            ),
         )
         .await;
         assert_eq!(unknown.status(), StatusCode::UNAUTHORIZED);
@@ -585,12 +671,19 @@ mod tests {
                 user: "u1".into(),
                 device_id: "d1".into(),
                 platform: "ios".into(),
-                token: "tok".into(),
+                token: "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0".into(),
                 issued_at_ms: now,
                 nonce: "n3".into(),
                 signature: sign(
                     "not-the-secret",
-                    &bind_signature_message("u1", "d1", "ios", "tok", now, "n3"),
+                    &bind_signature_message(
+                        "u1",
+                        "d1",
+                        "ios",
+                        "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+                        now,
+                        "n3",
+                    ),
                 ),
             })
             .expect("body"),
@@ -600,7 +693,14 @@ mod tests {
         assert_eq!(state.bindings.lock().len(), 0);
 
         // 3) 正确签名 → 绑定生效。
-        let body = bind_body("u1", "secret", "d1", "tok", now, "n4");
+        let body = bind_body(
+            "u1",
+            "secret",
+            "d1",
+            "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+            now,
+            "n4",
+        );
         assert_eq!(
             handle_bind(state.clone(), body.clone()).await.status(),
             StatusCode::OK
@@ -617,13 +717,23 @@ mod tests {
         assert_eq!(state.bindings.lock().len(), 1);
 
         // 5) 篡改 body 里的 token:签名不再匹配 → 401,且不改绑定。
-        let tampered =
-            bind_body("u1", "secret", "d1", "tok", now, "n5").replace("\"tok\"", "\"evil\"");
+        let tampered = bind_body(
+            "u1",
+            "secret",
+            "d1",
+            "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+            now,
+            "n5",
+        )
+        .replace(
+            "\"a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0\"",
+            "\"c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2\"",
+        );
         let response = handle_bind(state.clone(), tampered).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
             state.bindings.lock().tokens_for("u1", &["d1".to_string()])[0].1,
-            "tok"
+            "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
         );
     }
 
@@ -723,7 +833,14 @@ mod tests {
             let nonce = format!("n{index}");
             let response = handle_bind(
                 state.clone(),
-                bind_body("u1", "secret", "d1", "tok", now, &nonce),
+                bind_body(
+                    "u1",
+                    "secret",
+                    "d1",
+                    "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+                    now,
+                    &nonce,
+                ),
             )
             .await;
             assert_eq!(
@@ -734,7 +851,14 @@ mod tests {
         }
         let limited = handle_bind(
             state.clone(),
-            bind_body("u1", "secret", "d1", "tok", now, "n-limited"),
+            bind_body(
+                "u1",
+                "secret",
+                "d1",
+                "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+                now,
+                "n-limited",
+            ),
         )
         .await;
         assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -743,7 +867,14 @@ mod tests {
         assert_eq!(
             handle_bind(
                 state.clone(),
-                bind_body("u2", "secret", "d2", "tok2", now, "n-u2")
+                bind_body(
+                    "u2",
+                    "secret",
+                    "d2",
+                    "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+                    now,
+                    "n-u2"
+                )
             )
             .await
             .status(),
@@ -758,5 +889,23 @@ mod tests {
         key.to_pkcs8_pem(p256::pkcs8::LineEnding::LF)
             .expect("pem")
             .to_string()
+    }
+
+    /// B4-5: sizes and tokens are checked before anything else.
+    #[test]
+    fn requests_are_bounded_and_tokens_are_hex() {
+        assert!(bounded("u", "n", &["d"]).is_ok());
+        assert!(bounded("", "n", &[]).is_err());
+        assert!(bounded("u", &"n".repeat(129), &[]).is_err());
+        assert!(bounded("u", "n o", &[]).is_err());
+        let many: Vec<String> = (0..=MAX_PUSH_DEVICES).map(|i| format!("d{i}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert!(bounded("u", "n", &many).is_err());
+        assert!(valid_token(&"ab".repeat(32)));
+        assert!(!valid_token("abc"));
+        assert!(!valid_token(&format!("{}/../x", "ab".repeat(20))));
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(!constant_time_eq(b"secret", b"secreT"));
+        assert!(!constant_time_eq(b"", b""));
     }
 }

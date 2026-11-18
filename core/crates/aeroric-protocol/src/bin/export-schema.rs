@@ -1261,9 +1261,9 @@ fn main() -> Result<(), String> {
         documents.len(),
         base.display(),
         methods.len(),
+        aliases.len(),
         methods.iter().filter(|m| m["mutating"] == json!(true)).count(),
         methods.iter().filter(|m| m["requiresCapability"] != Value::Null).count(),
-        aliases.len(),
         events.len(),
         topics.len()
     );

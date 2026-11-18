@@ -141,9 +141,13 @@ impl Logins {
         let Ok(bytes) = serde_json::to_vec_pretty(&*self.expired.lock()) else {
             return;
         };
-        let temp = path.with_extension("json.tmp");
-        if std::fs::write(&temp, bytes).is_ok() {
-            let _ = std::fs::rename(&temp, &path);
+        // B5-3: through the shared atomic writer; a failure is said.
+        if let Err(error) = crate::storage::atomic::write_atomic(
+            &path,
+            &bytes,
+            crate::storage::atomic::FileMode::Private,
+        ) {
+            eprintln!("login: saving expired logins failed: {error}");
         }
     }
 }
@@ -238,6 +242,7 @@ mod tests {
                 turn_id: "u".into(),
                 reason,
                 error: error.map(str::to_string),
+                raw_status: None,
             },
         }
     }

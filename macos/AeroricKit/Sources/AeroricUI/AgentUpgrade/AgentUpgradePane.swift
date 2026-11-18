@@ -73,6 +73,7 @@ struct AgentUpgradePane: View {
 }
 
 private struct AgentUpgradeCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let harness: AgentUpgradeClient.Harness
     let book: AgentUpgradeBook
 
@@ -114,7 +115,8 @@ private struct AgentUpgradeCard: View {
         .padding(AeroricSpace.l)
         .configSurface(AeroricRadius.l)
         .clipShape(shape)
-        .animation(.easeOut(duration: AeroricMotion.standard), value: harness.job)
+        // B3-4: no animation when reduce motion is on.
+        .animation(reduceMotion ? nil : .easeOut(duration: AeroricMotion.standard), value: harness.job)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-upgrade.\(harness.agent)")
     }
@@ -142,7 +144,11 @@ private struct AgentUpgradeCard: View {
     }
 
     @ViewBuilder private var chip: some View {
-        if running {
+        if let waiting = harness.job?.waitingText {
+            // A11: another upgrade holds the same npm / Homebrew.
+            StatusChip(text: waiting, systemImage: "hourglass", tint: AeroricColor.textTertiary)
+                .help("和它用的是同一个安装程序，同时写会互相覆盖；它装完后自动开始")
+        } else if running {
             StatusChip(text: harness.job?.installing == true ? "安装中" : "升级中", tint: AeroricColor.running)
         } else if harness.job?.state == .failed {
             StatusChip(text: "失败", systemImage: "exclamationmark", tint: AeroricColor.danger)

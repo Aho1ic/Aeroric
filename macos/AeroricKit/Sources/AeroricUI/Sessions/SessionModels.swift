@@ -20,7 +20,9 @@ public struct SessionMessage: Equatable, Sendable {
 public enum SessionContent: Equatable, Sendable {
     case text(text: String)
     case toolUse(id: String, name: String, input: String)
-    case toolResult(id: String, output: String)
+    /// `failed`: the tool did not run or failed (a refused permission);
+    /// the wire omits it when false (round-5 review, 2026-11-18).
+    case toolResult(id: String, output: String, failed: Bool = false)
     case thinking(thinking: String)
     case attachment(name: String, mediaType: String, source: String)
 
@@ -28,7 +30,7 @@ public enum SessionContent: Equatable, Sendable {
     /// 用内容散列（跨页去重）。
     public var stableID: String {
         switch self {
-        case let .toolUse(id, _, _), let .toolResult(id, _):
+        case let .toolUse(id, _, _), let .toolResult(id, _, _):
             return id
         case let .text(text):
             return "text:\(text)"
@@ -195,7 +197,7 @@ public enum SessionMessageDecoder {
             } else {
                 output = ""
             }
-            return .toolResult(id: id, output: output)
+            return .toolResult(id: id, output: output, failed: item["failed"] as? Bool ?? false)
         case "thinking":
             guard let thinking = item["thinking"] as? String else { return nil }
             return .thinking(thinking: thinking)

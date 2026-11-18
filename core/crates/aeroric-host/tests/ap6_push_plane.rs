@@ -379,7 +379,7 @@ async fn task_events_reach_a_real_h2_fake_apns_through_a_real_sender_with_a_priv
             .expect("client"),
             "dev-1",
             "ios",
-            "aa11bb22",
+            "aa11bb22aa11bb22aa11bb22aa11bb22",
         ))
         .await
         .expect("register");
@@ -404,7 +404,7 @@ async fn task_events_reach_a_real_h2_fake_apns_through_a_real_sender_with_a_priv
         "task-status must produce exactly one APNs request"
     );
     let call = &calls[0];
-    assert_eq!(call.path, "/3/device/aa11bb22");
+    assert_eq!(call.path, "/3/device/aa11bb22aa11bb22aa11bb22aa11bb22");
     assert_eq!(
         call.headers.get("apns-topic").map(String::as_str),
         Some("com.aeroric.ios.companion")
@@ -491,12 +491,22 @@ async fn registration_revocation_and_invalidation_all_stop_future_pushes() {
     // 登记两台设备。
     harness
         .handle
-        .push_register(register_params(&client, "dev-1", "ios", "aaaa1111"))
+        .push_register(register_params(
+            &client,
+            "dev-1",
+            "ios",
+            "aaaa1111aaaa1111aaaa1111aaaa1111",
+        ))
         .await
         .expect("register dev-1");
     harness
         .handle
-        .push_register(register_params(&client, "dev-2", "ipados", "bbbb2222"))
+        .push_register(register_params(
+            &client,
+            "dev-2",
+            "ipados",
+            "bbbb2222bbbb2222bbbb2222bbbb2222",
+        ))
         .await
         .expect("register dev-2");
 
@@ -520,10 +530,10 @@ async fn registration_revocation_and_invalidation_all_stop_future_pushes() {
         .append("task-status", json!({"task_id": "t2", "status": "done"}));
     let calls = apns.calls();
     assert_eq!(calls.len(), 1, "revoked device must not be pushed");
-    assert_eq!(calls[0].path, "/3/device/bbbb2222");
+    assert_eq!(calls[0].path, "/3/device/bbbb2222bbbb2222bbbb2222bbbb2222");
 
     // APNs 判定 dev-2 的 token 失效 → 本地绑定自动失效,之后零请求。
-    apns.reject("bbbb2222", 410, "Unregistered");
+    apns.reject("bbbb2222bbbb2222bbbb2222bbbb2222", 410, "Unregistered");
     apns.calls.lock().clear();
     harness
         .log
@@ -571,7 +581,12 @@ async fn revoking_a_device_stops_its_push_at_both_ends() {
     .expect("client");
     harness
         .handle
-        .push_register(register_params(&client, "dev-revoke", "ios", "a1b2c3d4"))
+        .push_register(register_params(
+            &client,
+            "dev-revoke",
+            "ios",
+            "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4",
+        ))
         .await
         .expect("register");
 
@@ -604,7 +619,12 @@ async fn revoking_a_device_stops_its_push_at_both_ends() {
     // 就算有别的路径把本地绑定又写回来,发送端侧也已经解绑(两端都停才叫停)。
     harness
         .handle
-        .push_register(register_params(&client, "dev-revoke", "ios", "a1b2c3d4"))
+        .push_register(register_params(
+            &client,
+            "dev-revoke",
+            "ios",
+            "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4",
+        ))
         .await
         .expect("re-register");
     apns.calls.lock().clear();
@@ -706,7 +726,7 @@ async fn the_local_uds_surface_exposes_push_status_test_and_relay_diagnostics() 
         rpc_req(
             "s3",
             "remote.pushRegister",
-            json!({ "deviceId": "dev-uds", "platform": "ios", "token": "ccdd3344" }),
+            json!({ "deviceId": "dev-uds", "platform": "ios", "token": "ccdd3344ccdd3344ccdd3344ccdd3344" }),
         ),
         Arc::clone(&call),
     )

@@ -227,6 +227,7 @@ public struct NativeToolsConnectionsReviewRefusalView: View {
                 .padding(NativePanelGeometry.panelInset * 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.hidden)
         }
         .padding(NativePanelGeometry.panelInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

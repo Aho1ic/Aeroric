@@ -57,8 +57,8 @@ struct SessionStatsBar: View {
             .foregroundStyle(AeroricColor.textSecondary)
             .padding(.horizontal, AeroricSpace.m + 2)
             .frame(height: 24)
-            .background(open == panel ? AeroricColor.layer2 : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(open == panel ? AeroricColor.layer2 : .clear, in: Capsule(style: .continuous))
+            .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
         .popover(isPresented: binding(panel), arrowEdge: .top) { card() }
@@ -83,8 +83,8 @@ struct SessionStatsBar: View {
             .padding(.horizontal, AeroricSpace.m + 2)
             .frame(height: 24)
             .background(open == .context ? AeroricColor.layer2 : .clear,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        in: Capsule(style: .continuous))
+            .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
         .popover(isPresented: binding(.context), arrowEdge: .top) { contextCard(fraction) }

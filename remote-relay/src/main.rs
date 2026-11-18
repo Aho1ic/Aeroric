@@ -35,7 +35,7 @@ use config::{
     WEBSOCKET_HANDSHAKE_TIMEOUT,
 };
 use rate_limit::{source_ip as rate_limit_source_ip, try_acquire as try_acquire_rate_limit};
-use registry::{cleanup_host, try_insert_pending, try_register_host, Registry};
+use registry::{cleanup_host, try_insert_pending, try_register_host, DataConnection, Registry};
 use splice::splice;
 
 type Ws = WebSocketStream<TcpStream>;
@@ -76,8 +76,7 @@ async fn serve(listener: TcpListener, config: RelayConfig) {
         let registry = registry.clone();
         let config = config.clone();
         tokio::spawn(async move {
-            let _permit = permit;
-            handle_connection(stream, peer, registry, config).await;
+            handle_connection(stream, peer, registry, config, permit).await;
         });
     }
 }
@@ -87,6 +86,7 @@ async fn handle_connection(
     peer: SocketAddr,
     registry: Arc<Registry>,
     config: RelayConfig,
+    slot: tokio::sync::OwnedSemaphorePermit,
 ) {
     let ws_config = WebSocketConfig {
         max_message_size: Some(MAX_MESSAGE_BYTES),
@@ -114,9 +114,9 @@ async fn handle_connection(
     match parse_route(&path) {
         Some(RelayRoute::HostControl) => host_control(ws, registry, config).await,
         Some(RelayRoute::ClientConnect { host_id }) => {
-            client_connect(ws, host_id, peer, client_ip, registry).await
+            client_connect(ws, host_id, client_ip, registry).await
         }
-        Some(RelayRoute::HostData { conn_id }) => host_data(ws, conn_id, registry),
+        Some(RelayRoute::HostData { conn_id }) => host_data(ws, conn_id, registry, slot),
         None => {
             // 未知路径:直接关闭(不给探测者任何信息)
         }
@@ -173,7 +173,13 @@ async fn host_control(mut ws: Ws, registry: Arc<Registry>, config: RelayConfig) 
         let _ = ws.close(None).await;
         return;
     }
-    if host_id.is_empty() || host_id.len() > 128 {
+    // B4-2: an id of plain id characters only — it is written to the log.
+    if host_id.is_empty()
+        || host_id.len() > 128
+        || !host_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         let _ = ws
             .send(control_text(&RelayToHost::Error {
                 message: "invalid host id".to_string(),
@@ -246,13 +252,7 @@ async fn host_control(mut ws: Ws, registry: Arc<Registry>, config: RelayConfig) 
 }
 
 /// 手机接入:通知桌面拨数据连接,等到后逐帧对接。
-async fn client_connect(
-    ws: Ws,
-    host_id: String,
-    peer: SocketAddr,
-    client_ip: IpAddr,
-    registry: Arc<Registry>,
-) {
+async fn client_connect(ws: Ws, host_id: String, client_ip: IpAddr, registry: Arc<Registry>) {
     if !try_acquire_rate_limit(
         &registry.client_rate_limits,
         client_ip,
@@ -268,15 +268,18 @@ async fn client_connect(
         return;
     };
     let conn_id = uuid::Uuid::new_v4().to_string();
-    let (tx, rx) = oneshot::channel::<Ws>();
+    let (tx, rx) = oneshot::channel::<DataConnection>();
     if !try_insert_pending(&registry, &host_id, &conn_id, tx) {
         let mut ws = ws;
         let _ = ws.close(None).await;
         return;
     }
+    // B4-5: the client's own address (behind a proxy, the forwarded one):
+    // the desktop's per-client limits must not lump every phone together
+    // under the proxy's loopback address.
     let notify = control_text(&RelayToHost::ClientConnected {
         conn_id: conn_id.clone(),
-        peer: Some(peer.to_string()),
+        peer: Some(client_ip.to_string()),
     });
     if host_tx.try_send(notify).is_err() {
         registry.pending.lock().remove(&conn_id);
@@ -285,7 +288,8 @@ async fn client_connect(
         return;
     }
     match tokio::time::timeout(DIAL_TIMEOUT, rx).await {
-        Ok(Ok(host_ws)) => splice(ws, host_ws).await,
+        // The desktop's slot (in `host`) lives until the bridge ends.
+        Ok(Ok(host)) => splice(ws, host.ws).await,
         _ => {
             registry.pending.lock().remove(&conn_id);
             let mut ws = ws;
@@ -295,12 +299,21 @@ async fn client_connect(
 }
 
 /// 桌面数据连接:交给等待中的手机接入任务(由它执行 splice)。
-fn host_data(ws: Ws, conn_id: String, registry: Arc<Registry>) {
+fn host_data(
+    ws: Ws,
+    conn_id: String,
+    registry: Arc<Registry>,
+    slot: tokio::sync::OwnedSemaphorePermit,
+) {
     let Some(pending) = registry.pending.lock().remove(&conn_id) else {
         // 无人等待(超时/伪造 connId):直接丢弃连接
         return;
     };
-    let _ = pending.sender.send(ws);
+    // B4-2: the slot goes with the connection into the bridge.
+    let _ = pending.sender.send(DataConnection {
+        ws,
+        _slot: Some(slot),
+    });
 }
 
 #[cfg(test)]
@@ -355,7 +368,7 @@ mod tests {
     fn pending_connections_are_bounded_per_host() {
         let registry = Registry::default();
         for index in 0..MAX_PENDING_PER_HOST {
-            let (sender, _receiver) = oneshot::channel::<Ws>();
+            let (sender, _receiver) = oneshot::channel::<DataConnection>();
             assert!(try_insert_pending(
                 &registry,
                 "host-1",
@@ -363,7 +376,7 @@ mod tests {
                 sender,
             ));
         }
-        let (sender, _receiver) = oneshot::channel::<Ws>();
+        let (sender, _receiver) = oneshot::channel::<DataConnection>();
         assert!(!try_insert_pending(
             &registry,
             "host-1",
@@ -595,5 +608,60 @@ mod tests {
         })
         .await;
         assert!(closed.is_ok(), "forged data connection should be dropped");
+    }
+
+    async fn pair() -> (
+        Ws,
+        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = tokio::spawn(async move {
+            tokio_tungstenite::connect_async(format!("ws://{addr}/"))
+                .await
+                .unwrap()
+                .0
+        });
+        let (stream, _) = listener.accept().await.unwrap();
+        let server = tokio_tungstenite::accept_async(stream).await.unwrap();
+        (server, client.await.unwrap())
+    }
+
+    /// B4-2: the desktop closes while the phone stays silent and never answers
+    /// the Close: the bridge ends within the drain window, not never.
+    #[tokio::test]
+    async fn a_half_closed_bridge_ends_after_the_drain() {
+        let (phone, _phone_client) = pair().await;
+        let (desktop, mut desktop_client) = pair().await;
+        let started = Instant::now();
+        let bridge = tokio::spawn(splice::splice_within(
+            phone,
+            desktop,
+            Duration::from_secs(30),
+            Duration::from_millis(200),
+        ));
+        desktop_client.close(None).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), bridge)
+            .await
+            .expect("the bridge must end after the drain")
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    /// B4-2: a bridge where nobody says anything is dropped once idle.
+    #[tokio::test]
+    async fn an_idle_bridge_is_dropped() {
+        let (phone, _phone_client) = pair().await;
+        let (desktop, _desktop_client) = pair().await;
+        let bridge = tokio::spawn(splice::splice_within(
+            phone,
+            desktop,
+            Duration::from_millis(200),
+            Duration::from_secs(5),
+        ));
+        tokio::time::timeout(Duration::from_secs(3), bridge)
+            .await
+            .expect("an idle bridge must be dropped")
+            .unwrap();
     }
 }

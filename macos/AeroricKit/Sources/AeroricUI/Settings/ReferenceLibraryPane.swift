@@ -80,13 +80,13 @@ struct ReferenceLibraryPane: View {
         SettingsCard("添加 \(folder.path)") {
             SettingsRow("名称", detail: "Agent 用它指明在哪个库里读。") {
                 TextField("", text: $name)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.capsule)
                     .frame(width: 220)
                     .accessibilityIdentifier("settings.references.name")
             }
             SettingsRow("用途", detail: "可空，比如“YOLO 检测头和标签分配的写法”。") {
                 TextField("", text: $purpose)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.capsule)
                     .frame(width: 220)
                     .accessibilityIdentifier("settings.references.purpose")
             }

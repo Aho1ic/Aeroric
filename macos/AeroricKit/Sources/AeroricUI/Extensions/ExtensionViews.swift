@@ -209,6 +209,7 @@ public struct SkillDetail: View {
             }
             .padding()
         }
+        .scrollIndicators(.hidden)
         .accessibilityIdentifier("extensions.skillDetail")
     }
 }

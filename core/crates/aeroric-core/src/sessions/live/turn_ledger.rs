@@ -7,6 +7,12 @@
 //! snapshot straight into the working tree: the index, HEAD and every branch
 //! stay as they are. A file whose content is no longer what the turn left
 //! (a later turn, or the user, changed it) is skipped, never overwritten.
+//! A7 (2026-11-17): a file already as the undo would leave it is in place,
+//! not skipped; each write goes through a temporary file and a rename; a
+//! half-done undo is reported file by file and finished by trying again.
+//! B1-2 (2026-11-18): a path through a symlinked folder is never touched; a
+//! file is in place only when its content and its mode both match; a
+//! symlink is restored by a rename like a file.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -24,6 +30,9 @@ pub const KEEP_MS: u64 = 30 * 24 * 3600 * 1000;
 const REF_ROOT: &str = "refs/aeroric/turns";
 
 pub const SKIP_CHANGED: &str = "这一轮之后又改过";
+/// B1-2: the path leads through a symlink (or something that is not a
+/// folder), or out of the project; undo never writes or deletes through it.
+pub const SKIP_UNSAFE: &str = "路径经过符号链接或越出项目，没有动它";
 
 #[derive(Default)]
 pub struct TurnLedger {
@@ -203,8 +212,21 @@ impl TurnLedger {
                 TurnAction::Restore => (&members[first].before, &members[last].after),
                 _ => (&members[last].after, &members[first].before),
             };
-            if current(&top, &path) == blob(&top, expected, &path) {
-                let delete = blob(&top, target, &path).is_none();
+            if inside(&top, &path).is_err() {
+                out.plan.skipped.push(SkippedFile {
+                    path,
+                    reason: SKIP_UNSAFE.into(),
+                });
+                continue;
+            }
+            let now = current(&top, &path);
+            let wanted = entry(&top, target, &path);
+            if now == wanted {
+                // A7: already as the action would leave it — by hand, or by
+                // an earlier try that stopped half way.
+                out.plan.in_place.push(path);
+            } else if now == entry(&top, expected, &path) {
+                let delete = wanted.is_none();
                 out.plan.files.push(PlannedFile {
                     path: path.clone(),
                     delete,
@@ -221,7 +243,10 @@ impl TurnLedger {
     }
 
     /// Carry out `action`: write each planned file from the other snapshot.
-    /// Returns what was done (a blocked plan does nothing).
+    /// Returns what was done (a blocked plan does nothing). A7: every file is
+    /// tried; when any could not be written the result lists it in `failed`,
+    /// `files` holds only what was written, and the turns keep their state —
+    /// trying again finds the written ones `in_place` and finishes the rest.
     pub fn apply(
         &self,
         task_id: &str,
@@ -229,12 +254,24 @@ impl TurnLedger {
         action: TurnAction,
         running: bool,
     ) -> Result<TurnPlan, String> {
-        let planned = self.planned(task_id, turn_id, action, running);
+        let mut planned = self.planned(task_id, turn_id, action, running);
         if let Some(reason) = &planned.plan.blocked {
             return Err(reason.clone());
         }
-        for (path, tree, delete) in &planned.writes {
-            write_back(&planned.top, tree, path, *delete).map_err(|e| format!("{path}：{e}"))?;
+        let mut written = Vec::new();
+        for ((path, tree, delete), file) in planned.writes.iter().zip(planned.plan.files.drain(..))
+        {
+            match write_back(&planned.top, tree, path, *delete) {
+                Ok(()) => written.push(file),
+                Err(reason) => planned.plan.failed.push(SkippedFile {
+                    path: path.clone(),
+                    reason,
+                }),
+            }
+        }
+        planned.plan.files = written;
+        if !planned.plan.failed.is_empty() {
+            return Ok(planned.plan);
         }
         let group = (planned.members.len() > 1).then(|| planned.members[0].clone());
         let now = now_ms();
@@ -338,10 +375,14 @@ impl TurnLedger {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let tmp = path.with_extension("json.tmp");
+            // B5-3: through the shared atomic writer; a failure is said.
             if let Ok(bytes) = serde_json::to_vec_pretty(&list) {
-                if std::fs::write(&tmp, bytes).is_ok() {
-                    let _ = std::fs::rename(&tmp, &path);
+                if let Err(error) = crate::storage::atomic::write_atomic(
+                    &path,
+                    &bytes,
+                    crate::storage::atomic::FileMode::Private,
+                ) {
+                    eprintln!("turn ledger: saving {task_id} failed: {error}");
                 }
             }
         }
@@ -363,21 +404,36 @@ pub fn read_at(dir: &Path, task_id: &str) -> Vec<TurnRecord> {
         .unwrap_or_default()
 }
 
+/// Whether an undo's result is worth a note to the agent: something is now
+/// as the undo leaves it.
+pub fn worth_a_note(plan: &TurnPlan) -> bool {
+    !plan.files.is_empty() || !plan.in_place.is_empty()
+}
+
 /// The note for the agent's next message after an undo (or taking it back).
+/// A7: names what was written and what was already in place (a retry after
+/// a half-done undo names the first try's files too), and what failed.
 pub fn note(action: TurnAction, plan: &TurnPlan) -> String {
-    let files: Vec<&str> = plan
+    let all: Vec<&str> = plan
         .files
         .iter()
         .map(|f| f.path.as_str())
-        .take(20)
+        .chain(plan.in_place.iter().map(String::as_str))
         .collect();
-    let more = plan.files.len().saturating_sub(files.len());
-    let list = if more > 0 {
-        format!("{} 等 {} 个文件", files.join("、"), plan.files.len())
-    } else {
-        files.join("、")
-    };
+    let list = names(&all);
     let turns = plan.turns.len().max(1);
+    if !plan.failed.is_empty() {
+        let failed: Vec<&str> = plan.failed.iter().map(|f| f.path.as_str()).collect();
+        let what = if matches!(action, TurnAction::Restore) {
+            "撤回撤销"
+        } else {
+            "撤销改动"
+        };
+        return format!(
+            "用户{what}时只做完了一部分：这些文件已改好：{list}；这些没能改：{}，仍是原来的内容。",
+            names(&failed)
+        );
+    }
     match action {
         TurnAction::Undo | TurnAction::UndoFrom if turns > 1 => format!(
             "用户撤销了最近 {turns} 轮改动，这些文件已恢复到那几轮之前：{list}。不要假设那些改动还在。"
@@ -389,6 +445,16 @@ pub fn note(action: TurnAction, plan: &TurnPlan) -> String {
             format!("用户撤回了 {turns} 轮的撤销，这些文件回到了那几轮的结果：{list}。")
         }
         TurnAction::Restore => format!("用户撤回了撤销，这些文件回到了那一轮的结果：{list}。"),
+    }
+}
+
+/// `a、b` — the first 20, then `等 N 个文件`.
+fn names(paths: &[&str]) -> String {
+    let shown = &paths[..paths.len().min(20)];
+    if paths.len() > shown.len() {
+        format!("{} 等 {} 个文件", shown.join("、"), paths.len())
+    } else {
+        shown.join("、")
     }
 }
 
@@ -414,25 +480,111 @@ impl Planned {
     }
 }
 
-/// The blob id of `path` in `tree`, or `None` when it is not there.
-fn blob(top: &Path, tree: &str, path: &str) -> Option<String> {
-    git(
-        top,
-        &["rev-parse", "--verify", "-q", &format!("{tree}:{path}")],
-        None,
-    )
-    .map(|s| s.trim().to_string())
+/// What a path holds: its object id and git mode (`100644`, `100755`,
+/// `120000`). Content alone is not enough: a `chmod` or a file swapped for a
+/// symlink to the same text is a change too.
+type Entry = (String, String);
+
+/// `path` in `tree`, or `None` when it is not there.
+fn entry(top: &Path, tree: &str, path: &str) -> Option<Entry> {
+    let out = git(top, &["ls-tree", "-z", tree, "--", path], None)?;
+    let line = out.split('\0').next()?;
+    let (meta, _) = line.split_once('\t')?;
+    let mut parts = meta.split_whitespace();
+    let mode = parts.next()?.to_string();
+    let _kind = parts.next()?;
+    Some((parts.next()?.to_string(), mode))
 }
 
-/// The blob id the working tree's `path` would have; `None` when absent.
-fn current(top: &Path, path: &str) -> Option<String> {
+/// The working tree's `path` as `git add` would record it; `None` when
+/// absent. Something there that cannot be hashed (a folder, an unreadable
+/// file) matches no snapshot, so it is never mistaken for absent.
+fn current(top: &Path, path: &str) -> Option<Entry> {
     let full = top.join(path);
-    std::fs::symlink_metadata(&full).ok()?;
-    git(top, &["hash-object", "--", path], None).map(|s| s.trim().to_string())
+    let meta = std::fs::symlink_metadata(&full).ok()?;
+    let unknown = || Some(("?".to_string(), "?".to_string()));
+    if meta.file_type().is_symlink() {
+        // `hash-object <path>` would read through the link; git records the
+        // link's own text.
+        let Ok(target) = std::fs::read_link(&full) else {
+            return unknown();
+        };
+        return match hash_bytes(top, target.as_os_str().as_encoded_bytes()) {
+            Some(id) => Some((id, "120000".into())),
+            None => unknown(),
+        };
+    }
+    if !meta.file_type().is_file() {
+        return unknown();
+    }
+    // With the path's filters, as the snapshot's `git add` applied them.
+    let Some(id) = git(top, &["hash-object", "--", path], None) else {
+        return unknown();
+    };
+    #[cfg(unix)]
+    let exec = {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o100 != 0
+    };
+    #[cfg(not(unix))]
+    let exec = false;
+    let mode = if exec { "100755" } else { "100644" };
+    Some((id.trim().to_string(), mode.into()))
+}
+
+/// The blob id of `bytes`.
+fn hash_bytes(top: &Path, bytes: &[u8]) -> Option<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(top)
+        .args(["hash-object", "--stdin"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(bytes).ok()?;
+    let out = child.wait_with_output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// `path` under `top`, refused when it is absolute, climbs out, names
+/// `.git`, or passes through anything but a real folder: a folder swapped
+/// for a symlink after the turn would otherwise take the write (or the
+/// delete) outside the project.
+fn inside(top: &Path, path: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let parts: Vec<Component> = Path::new(path).components().collect();
+    if parts.is_empty() {
+        return Err(SKIP_UNSAFE.into());
+    }
+    let mut here = top.to_path_buf();
+    for (i, part) in parts.iter().enumerate() {
+        match part {
+            Component::Normal(name) if !name.eq_ignore_ascii_case(".git") => here.push(name),
+            _ => return Err(SKIP_UNSAFE.into()),
+        }
+        if i + 1 == parts.len() {
+            break;
+        }
+        match std::fs::symlink_metadata(&here) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => return Err(SKIP_UNSAFE.into()),
+            // Not there yet: it is created as a real folder.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(here)
 }
 
 fn write_back(top: &Path, tree: &str, path: &str, delete: bool) -> Result<(), String> {
-    let full = top.join(path);
+    let full = inside(top, path)?;
     if delete {
         return match std::fs::remove_file(&full) {
             Ok(()) => Ok(()),
@@ -440,34 +592,93 @@ fn write_back(top: &Path, tree: &str, path: &str, delete: bool) -> Result<(), St
             Err(e) => Err(e.to_string()),
         };
     }
-    let mode = git(top, &["ls-tree", tree, "--", path], None)
-        .and_then(|line| line.split_whitespace().next().map(str::to_string))
-        .unwrap_or_else(|| "100644".into());
+    let (_, mode) = entry(top, tree, path).ok_or("读不到快照里的内容")?;
     let bytes = git_bytes(top, &["cat-file", "blob", &format!("{tree}:{path}")])
         .ok_or("读不到快照里的内容")?;
     if let Some(parent) = full.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    // Again after creating folders: nothing may have slipped a link in.
+    let full = inside(top, path)?;
     if mode == "120000" {
-        let _ = std::fs::remove_file(&full);
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(String::from_utf8_lossy(&bytes).to_string(), &full)
-            .map_err(|e| e.to_string())?;
-        return Ok(());
+        return replace_link(&full, &bytes).map_err(|e| e.to_string());
     }
-    std::fs::write(&full, &bytes).map_err(|e| e.to_string())?;
+    replace_file(&full, &bytes, mode == "100755").map_err(|e| e.to_string())
+}
+
+/// A temporary name beside `full`.
+fn beside(full: &Path) -> PathBuf {
+    let parent = full.parent().unwrap_or(Path::new("."));
+    let name = full
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    parent.join(format!(
+        ".{name}.aeroric-undo-{}",
+        uuid::Uuid::new_v4().simple()
+    ))
+}
+
+/// B1-2: a symlink made beside `full` and renamed over it, so a failure
+/// leaves what was there.
+fn replace_link(full: &Path, target: &[u8]) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let exec = mode == "100755";
-        if let Ok(meta) = std::fs::metadata(&full) {
-            let mut perms = meta.permissions();
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = beside(full);
+        std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(target), &tmp)?;
+        let renamed = std::fs::rename(&tmp, full);
+        if renamed.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        renamed
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (full, target);
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+}
+
+/// A7: `bytes` into a temporary file beside `full`, then renamed over it, so
+/// an interrupted write leaves the old content or the new, never half. The
+/// file keeps its permission bits (a new one gets the default), with the
+/// executable bits as `exec` says. A symlink at `full` is replaced, not
+/// written through.
+fn replace_file(full: &Path, bytes: &[u8], exec: bool) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = beside(full);
+    let kept = std::fs::symlink_metadata(full)
+        .ok()
+        .filter(|meta| meta.file_type().is_file())
+        .map(|meta| meta.permissions());
+    let written = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = match &kept {
+                Some(perms) => perms.clone(),
+                None => file.metadata()?.permissions(),
+            };
             let bits = perms.mode();
             perms.set_mode(if exec { bits | 0o111 } else { bits & !0o111 });
-            let _ = std::fs::set_permissions(&full, perms);
+            file.set_permissions(perms)?;
         }
+        #[cfg(not(unix))]
+        let _ = (&kept, exec);
+        drop(file);
+        std::fs::rename(&tmp, full)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
-    Ok(())
+    written
 }
 
 fn ref_name(task_id: &str, turn_id: &str, side: &str) -> String {

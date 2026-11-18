@@ -185,12 +185,12 @@ struct DelegationPanelSection: View {
         case nil: return draft.role == nil ? "同族" : "按角色"
         case .same?: return "同族"
         case .other?: return "另一族"
-        case let .named(agent, _)?: return DelegationText.agentLabel(agent)
+        case let .named(agent, _, _)?: return DelegationText.agentLabel(agent)
         }
     }
 
     private var pickedAgent: String? {
-        if case let .named(agent, _)? = draft.agent { return agent }
+        if case let .named(agent, _, _)? = draft.agent { return agent }
         return nil
     }
 
@@ -341,6 +341,7 @@ struct RoleLibrarySheet: View {
                         }
                     }
                 }
+                .scrollIndicators(.hidden)
                 Button("新增角色") { editing = LiveDelegationRole(name: "") }
                     .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
                     .accessibilityIdentifier("roles.add")
@@ -430,7 +431,7 @@ private struct RoleEditor: View {
         switch role.agent {
         case .same: return "同族"
         case .other: return "另一族"
-        case let .named(agent, _): return DelegationText.agentLabel(agent)
+        case let .named(agent, _, _): return DelegationText.agentLabel(agent)
         }
     }
 }
@@ -442,7 +443,7 @@ public enum RoleText {
         switch role.agent {
         case .same: agent = "同族"
         case .other: agent = "另一族"
-        case let .named(name, _): agent = DelegationText.agentLabel(name)
+        case let .named(name, _, _): agent = DelegationText.agentLabel(name)
         }
         var parts = [agent, DelegationText.mode(role.contextMode),
                      DelegationText.workspace(role.workspace, permission: role.permission)]

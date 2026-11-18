@@ -65,8 +65,12 @@ struct Document {
 
 pub struct Todos {
     path: PathBuf,
-    lock: Mutex<()>,
+    /// B5-3: the host opens a `Todos` per request; the lock has to be the
+    /// process's, or two requests read-modify-write `todos.json` at once.
+    lock: &'static Mutex<()>,
 }
+
+static TODO_WRITES: Mutex<()> = Mutex::new(());
 
 /// How the latest session stands, and why when it did not go well.
 pub fn progress(view: Option<&SessionView>) -> (Progress, Option<String>) {
@@ -143,7 +147,7 @@ impl Todos {
     pub fn open(data_dir: &Path) -> Self {
         Self {
             path: data_dir.join("todos.json"),
-            lock: Mutex::new(()),
+            lock: &TODO_WRITES,
         }
     }
 
@@ -158,10 +162,13 @@ impl Todos {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let tmp = self.path.with_extension("json.tmp");
         let raw = serde_json::to_string_pretty(doc).map_err(|e| e.to_string())?;
-        std::fs::write(&tmp, raw).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())
+        crate::storage::atomic::write_atomic(
+            &self.path,
+            raw.as_bytes(),
+            crate::storage::atomic::FileMode::Private,
+        )
+        .map_err(|e| e.to_string())
     }
 
     /// The todos (of one project, or all), open and assigned first, newest
@@ -597,6 +604,35 @@ mod tests {
         Todos::open(&std::env::temp_dir().join(format!("aeroric-todos-{}", uuid::Uuid::new_v4())))
     }
 
+    /// B5-3: the host opens a `Todos` per request; saves from many at once
+    /// keep every todo (one read-modify-write at a time, unique temp files).
+    #[test]
+    fn concurrent_saves_from_separate_handles_lose_nothing() {
+        let dir = std::env::temp_dir().join(format!("aeroric-todos-c-{}", uuid::Uuid::new_v4()));
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    Todos::open(&dir)
+                        .save_todo(draft(&format!("t{i}")), i as u64)
+                        .unwrap();
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let saved = Todos::open(&dir).list(&Fake(HashMap::new()), None);
+        assert_eq!(saved.len(), 8);
+        let leftovers = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn draft(title: &str) -> Todo {
         Todo {
             id: String::new(),
@@ -621,6 +657,8 @@ mod tests {
             task_id: task.into(),
             agent: "codex".into(),
             model: None,
+            configuration_id: None,
+            label: None,
             at_ms,
             check: None,
             fixes: 0,
@@ -804,6 +842,8 @@ mod second_batch_tests {
                 task_id: task.into(),
                 agent: "codex".into(),
                 model: None,
+                configuration_id: None,
+                label: None,
                 at_ms: 1,
                 check: None,
                 fixes: 0,
@@ -862,6 +902,8 @@ mod second_batch_tests {
                     task_id: "x".into(),
                     agent: "codex".into(),
                     model: None,
+                    configuration_id: None,
+                    label: None,
                     at_ms: 6,
                     check: None,
                     fixes: 0,

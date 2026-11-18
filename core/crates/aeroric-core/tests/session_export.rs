@@ -79,6 +79,7 @@ fn markdown_structure_is_byte_golden() {
             vec![SessionContent::ToolResult {
                 id: "t1".to_string(),
                 output: "工具结果不进 md".to_string(),
+                failed: false,
             }],
         ),
     ];

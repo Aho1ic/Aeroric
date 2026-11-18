@@ -141,6 +141,7 @@ public struct CheckpointPanel: View {
             }
             .padding(AeroricSpace.l)
         }
+        .scrollIndicators(.hidden)
     }
 
     /// Settle an accepted criterion by hand (when no command decides it).

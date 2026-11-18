@@ -142,6 +142,31 @@ final class ApprovedSessionDraftTests: XCTestCase {
         XCTAssertEqual(draft.configurationVersion, "v1")
     }
 
+    /// Round-2 review C1: the reason says what to do, not that the host failed.
+    @MainActor func testAnUnmatchedConfigurationSaysWhatToDo() {
+        let config = SessionConfiguration(id: "p", version: "v1", title: "fixture", agent: "codex",
+            model: "m1", effort: nil,
+            options: .init(agents: ["codex"], models: ["m1"], efforts: [], permissionModes: ["ask"]))
+        func reason(_ draft: NewSessionDraft, _ configurations: [SessionConfiguration]) -> String? {
+            draft.blockingReasons(scope: .project("a"), configurations: configurations, projectExists: true).first
+        }
+        var draft = NewSessionDraft()
+        XCTAssertEqual(reason(draft, []), "宿主尚未提供 Agent 配置，当前不能发送。")
+        XCTAssertEqual(reason(draft, [config]), "请先选一个 Agent 配置。")
+        draft.selectHarness("codex")
+        draft.apply(config)
+        var renamed = config
+        renamed.id = "q"
+        XCTAssertEqual(reason(draft, [renamed]), "选的配置已不存在，请重新选择。")
+        XCTAssertEqual(ComposerPickerOptions.configurationTitle([renamed], draft: draft), "Agent")
+        XCTAssertEqual(ComposerPickerOptions.configurationTitle([config], draft: draft), "fixture")
+        // Round-3 review: an updated configuration keeps its name on the button.
+        var newer = config
+        newer.version = "v2"
+        XCTAssertEqual(reason(draft, [newer]), "选的配置已更新到新版本，请重新选一次。")
+        XCTAssertEqual(ComposerPickerOptions.configurationTitle([newer], draft: draft), "fixture（已更新，需重选）")
+    }
+
     func testNewSessionGeometryDoesNotOverwriteSharedTokens() {
         XCTAssertEqual(NewSessionGeometry.inputRadius(compact: false), 16)
         XCTAssertEqual(NewSessionGeometry.inputRadius(compact: true), 16)

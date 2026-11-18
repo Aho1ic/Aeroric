@@ -13,6 +13,10 @@ public struct TodoPage: View {
     @Bindable var store: TodoStore
     let projects: [(id: String, name: String)]
     let agents: [AgentChoice]
+    /// 2026-11-17: the configurations a project's session can start with,
+    /// and how to load them (the 交办 sheet picks one and a model).
+    let targets: (String) -> [RerunTarget]
+    let loadTargets: (String) async -> Void
     let onOpenTask: (String) -> Void
     @State private var editing: LiveTodo?
     @State private var assigning: LiveTodo?
@@ -22,10 +26,14 @@ public struct TodoPage: View {
     @State private var showOutput: Set<String> = []
 
     public init(store: TodoStore, projects: [(id: String, name: String)], agents: [AgentChoice],
+                targets: @escaping (String) -> [RerunTarget] = { _ in [] },
+                loadTargets: @escaping (String) async -> Void = { _ in },
                 onOpenTask: @escaping (String) -> Void) {
         self.store = store
         self.projects = projects
         self.agents = agents
+        self.targets = targets
+        self.loadTargets = loadTargets
         self.onOpenTask = onOpenTask
     }
 
@@ -59,6 +67,7 @@ public struct TodoPage: View {
                     VStack(alignment: .leading, spacing: AeroricSpace.s) {
                         if !store.proposals.isEmpty {
                             Text("Agent 提议（\(store.proposals.count)）")
+                                .monospacedDigit()
                                 .font(.system(size: AeroricType.secondary, weight: .medium))
                                 .foregroundStyle(AeroricColor.textSecondary)
                                 .accessibilityIdentifier("todo.proposals")
@@ -88,6 +97,7 @@ public struct TodoPage: View {
                         }
                     }
                 }
+                .scrollIndicators(.hidden)
             }
         }
         .padding(AeroricSpace.l)
@@ -106,7 +116,9 @@ public struct TodoPage: View {
             TodoEditorSheet(store: store, todo: todo, projects: projects) { editing = nil }
         }
         .sheet(item: $assigning) { todo in
-            TodoAssignSheet(store: store, todo: todo, agents: agents, onOpenTask: onOpenTask) { assigning = nil }
+            TodoAssignSheet(store: store, todo: todo, agents: agents, targets: targets(todo.projectId),
+                            onOpenTask: onOpenTask) { assigning = nil }
+                .task { await loadTargets(todo.projectId) }
         }
         .confirmationDialog("删除这个待办？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                             presenting: deleting) { todo in
@@ -222,6 +234,7 @@ public struct TodoPage: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .scrollIndicators(.hidden)
                 .frame(maxHeight: 160)
                 .padding(AeroricSpace.m)
                 .background(AeroricRadius.shape(AeroricRadius.m).fill(AeroricColor.layer2))
@@ -328,6 +341,8 @@ struct TodoEditorSheet: View {
     let projects: [(id: String, name: String)]
     let onClose: () -> Void
     @State private var draft: LiveTodo
+    /// This sheet, for `TodoStore.save(_:from:)`: one successful save each.
+    @State private var editor = UUID()
 
     init(store: TodoStore, todo: LiveTodo, projects: [(id: String, name: String)], onClose: @escaping () -> Void) {
         self.store = store
@@ -391,15 +406,18 @@ struct TodoEditorSheet: View {
                 Spacer()
                 Button("取消", action: onClose)
                     .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
-                Button("保存") {
+                Button(store.writing.contains(draft.id) ? "保存中…" : "保存") {
                     Task {
                         store.errorText = nil
-                        if await store.save(draft) { onClose() }
+                        if await store.save(draft, from: editor) { onClose() }
                     }
                 }
                 .buttonStyle(AeroricCapsuleButtonStyle(.primary))
                 .keyboardShortcut(.defaultAction)
-                .disabled(draft.title.trimmingCharacters(in: .whitespaces).isEmpty)
+                .fixedSize()
+                // B2-7: one save at a time, or a double click makes two todos.
+                .disabled(draft.title.trimmingCharacters(in: .whitespaces).isEmpty
+                          || store.writing.contains(draft.id))
                 .accessibilityIdentifier("todo.edit.save")
             }
         }
@@ -408,41 +426,78 @@ struct TodoEditorSheet: View {
     }
 }
 
-/// 交办: pick the Agent; the session gets the todo as its prompt, shown here.
+/// 交办: pick the configuration and model (2026-11-17; the Agent alone when
+/// the project's configurations are not at hand); the session gets the todo
+/// as its prompt, shown here.
 struct TodoAssignSheet: View {
     let store: TodoStore
     let todo: LiveTodo
     let agents: [AgentChoice]
+    let targets: [RerunTarget]
     let onOpenTask: (String) -> Void
     let onClose: () -> Void
     @State private var agent: String
+    @State private var configuration: String?
+    @State private var model: String?
 
-    init(store: TodoStore, todo: LiveTodo, agents: [AgentChoice], onOpenTask: @escaping (String) -> Void,
-         onClose: @escaping () -> Void) {
+    init(store: TodoStore, todo: LiveTodo, agents: [AgentChoice], targets: [RerunTarget],
+         onOpenTask: @escaping (String) -> Void, onClose: @escaping () -> Void) {
         self.store = store
         self.todo = todo
         self.agents = agents
+        self.targets = targets
         self.onOpenTask = onOpenTask
         self.onClose = onClose
         let last = todo.assignments.last?.agent
-        _agent = State(initialValue: agents.first { $0.id == last }?.id ?? agents.first?.id ?? "")
+        let agent = agents.first { $0.id == last }?.id ?? agents.first?.id ?? ""
+        _agent = State(initialValue: agent)
+        let pick = TodoText.defaultPick(todo, targets: targets, fallbackAgent: agent)
+        _configuration = State(initialValue: pick?.configuration)
+        _model = State(initialValue: pick?.model)
+    }
+
+    private var picked: RerunTarget? { targets.first { $0.id == configuration } }
+
+    private var runner: LiveTodoRunner? {
+        if targets.isEmpty { return agent.isEmpty ? nil : LiveTodoRunner(agent: agent) }
+        guard let picked else { return nil }
+        return LiveTodoRunner(agent: picked.agent, configurationId: picked.id, model: model)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.l) {
             Text(todo.assignments.isEmpty ? "交办给 Agent" : "重新交办")
                 .font(.system(size: AeroricType.title, weight: .semibold))
-            HStack(spacing: AeroricSpace.m) {
-                Text("Agent")
-                    .font(.system(size: AeroricType.secondary))
-                    .foregroundStyle(AeroricColor.textSecondary)
-                    .frame(width: 64, alignment: .leading)
-                CapsulePicker(title: agents.first { $0.id == agent }?.title ?? "选一个 Agent", systemImage: "cpu") {
-                    ForEach(agents) { choice in
-                        Button(choice.title) { agent = choice.id }
+            if targets.isEmpty {
+                row("Agent") {
+                    CapsulePicker(title: agents.first { $0.id == agent }?.title ?? "选一个 Agent", systemImage: "cpu") {
+                        ForEach(agents) { choice in
+                            Button(choice.title) { agent = choice.id }
+                        }
                     }
                 }
-                Spacer(minLength: 0)
+            } else {
+                row("配置") {
+                    CapsulePicker(title: picked.map { RerunText.title($0, among: targets) } ?? "选一个配置",
+                                  systemImage: "cpu") {
+                        ForEach(targets) { target in
+                            Button(RerunText.title(target, among: targets)) {
+                                configuration = target.id
+                                model = target.models.first
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("todo.assign.configuration")
+                }
+                row("模型") {
+                    CapsulePicker(title: model ?? "默认模型", systemImage: "sparkles") {
+                        ForEach(picked?.models ?? [], id: \.self) { choice in
+                            Button(choice) { model = choice }
+                        }
+                    }
+                    .disabled(picked?.models.isEmpty ?? true)
+                    .accessibilityIdentifier("todo.assign.model")
+                }
             }
             VStack(alignment: .leading, spacing: AeroricSpace.s) {
                 Text("会开一个新会话，名字是“\(todo.title)（待办）”，发出去的消息：")
@@ -455,9 +510,7 @@ struct TodoAssignSheet: View {
                     .padding(AeroricSpace.m)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(AeroricRadius.shape(AeroricRadius.m).fill(AeroricColor.layer1))
-                Text(todo.check.isEmpty
-                     ? "会话用这个 Agent 的默认权限模式和模型。会话结束后待办变成“待验收”，你点“验收通过”才算完成。"
-                     : "会话用这个 Agent 的默认权限模式和模型。这一轮结束后会运行验收检查；待办变成“待验收”，你点“验收通过”才算完成。")
+                Text(TodoText.assignHint(todo, picksConfiguration: !targets.isEmpty))
                     .font(.system(size: AeroricType.caption))
                     .foregroundStyle(AeroricColor.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -470,9 +523,10 @@ struct TodoAssignSheet: View {
                 Button("取消", action: onClose)
                     .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
                 Button(store.busy == todo.id ? "交办中…" : "交办") {
+                    guard let runner else { return }
                     Task {
                         store.errorText = nil
-                        if let task = await store.assign(todo, agent: agent) {
+                        if let task = await store.assign(todo, to: runner) {
                             onClose()
                             onOpenTask(task)
                         }
@@ -480,11 +534,29 @@ struct TodoAssignSheet: View {
                 }
                 .buttonStyle(AeroricCapsuleButtonStyle(.primary))
                 .keyboardShortcut(.defaultAction)
-                .disabled(agent.isEmpty || store.busy != nil)
+                .disabled(runner == nil || store.busy != nil)
                 .accessibilityIdentifier("todo.assign.go")
             }
         }
         .padding(AeroricSpace.xl)
         .frame(width: 520)
+        // The project's configurations may arrive after the sheet opened.
+        .onChange(of: targets) { _, targets in
+            guard configuration == nil || !targets.contains(where: { $0.id == configuration }) else { return }
+            let pick = TodoText.defaultPick(todo, targets: targets, fallbackAgent: agent)
+            configuration = pick?.configuration
+            model = pick?.model
+        }
+    }
+
+    private func row(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        HStack(spacing: AeroricSpace.m) {
+            Text(title)
+                .font(.system(size: AeroricType.secondary))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .frame(width: 64, alignment: .leading)
+            content()
+            Spacer(minLength: 0)
+        }
     }
 }

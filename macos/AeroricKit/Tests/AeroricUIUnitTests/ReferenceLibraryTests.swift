@@ -44,6 +44,33 @@ final class ReferenceLibraryTests: XCTestCase {
         XCTAssertFalse(store.isAvailable)
     }
 
+    /// Round-2 review D1: a failed first look is not final; the next
+    /// refresh (settings opening again) shows the pane.
+    func testALaterLookShowsThePaneAfterAFailedFirstOne() async {
+        let host = Host()
+        let failures = Failures()
+        let store = ReferenceLibraryStore()
+        store.attach(.init(
+            list: {
+                if await failures.take() { throw Refused() }
+                return await host.rows
+            },
+            add: { _, _, _ in throw Refused() }, remove: { _ in }, reindex: { _ in }))
+        await store.refresh()
+        XCTAssertFalse(store.isAvailable)
+        await store.refresh()
+        XCTAssertTrue(store.isAvailable)
+    }
+
+    private actor Failures {
+        var left = 1
+        func take() -> Bool {
+            guard left > 0 else { return false }
+            left -= 1
+            return true
+        }
+    }
+
     func testAddingLooksAgainUntilTheIndexIsDone() async throws {
         let host = Host()
         let store = ReferenceLibraryStore()

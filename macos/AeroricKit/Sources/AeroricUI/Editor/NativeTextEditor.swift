@@ -36,6 +36,9 @@ public struct NativeTextEditor: NSViewRepresentable {
         view.textContainer?.widthTracksTextView = true
         // 行号（ruler 挂在 enclosingScrollView；无滚动视图时由宿主容器挂）。
         if let scrollView = view.enclosingScrollView {
+            // B3-2: no interface shows a scroller; the ruler stays.
+            scrollView.hasVerticalScroller = false
+            scrollView.hasHorizontalScroller = false
             scrollView.hasVerticalRuler = true
             scrollView.verticalRulerView = LineNumberRulerView(textView: view)
             scrollView.rulersVisible = true
@@ -143,6 +146,7 @@ public struct MarkdownPreview: View {
             }
             .padding(12)
         }
+        .scrollIndicators(.hidden)
         .accessibilityIdentifier("editor.markdown-preview")
     }
 

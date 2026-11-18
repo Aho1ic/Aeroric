@@ -76,7 +76,16 @@ public enum TurnBillText {
         case "network": "连不上"
         case "rejected": "请求被拒"
         case "hostRestart": "Aeroric 重启"
+        case "unknownEnd": "结束状态不明"
         default: "出错"
+        }
+    }
+
+    /// What a not-run turn's hover says before the error itself.
+    public static func notRunHelp(_ reason: String) -> String {
+        switch reason {
+        case "unknownEnd": "Agent 报了 Aeroric 不认识的结束状态，这一轮不算完成，不跑检查和验收。"
+        default: "Agent 的 API 调用出错，这一轮没有跑完，不算模型答错。"
         }
     }
 
@@ -110,7 +119,7 @@ public enum TurnBillText {
         if let notRun = stat.notRun {
             let status = notRun.status.map { "HTTP \($0) · " } ?? ""
             return ("没跑成 · \(notRunReason(notRun.reason))",
-                    "Agent 的 API 调用出错，这一轮没有跑完，不算模型答错。\n\(status)\(notRun.message)", .danger)
+                    "\(notRunHelp(notRun.reason))\n\(status)\(notRun.message)", .danger)
         }
         if let failure = stat.productFailure {
             let what = failure.undone ? "已撤销" : "检查没过"
@@ -370,6 +379,9 @@ struct TurnBillCard: View {
                 }
             }
         }
+        // B3-2: a popover is its own window; the root's hidden indicators do
+        // not reach it.
+        .scrollIndicators(.hidden)
         .frame(maxHeight: 320)
     }
 

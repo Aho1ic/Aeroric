@@ -22,7 +22,9 @@ struct AgentUpdateCapsule: View {
             }
         }
         .padding(.top, AeroricSpace.m)
-        .animation(.spring(response: 0.38, dampingFraction: 0.86), value: reminder)
+        // B3-4: reduce motion keeps the fade only.
+        .animation(reduceMotion ? .easeOut(duration: AeroricMotion.quick)
+                   : .spring(response: 0.38, dampingFraction: 0.86), value: reminder)
     }
 
     @ViewBuilder
@@ -59,6 +61,9 @@ struct AgentUpdateCapsule: View {
                 ProgressView().controlSize(.small)
                 Text("正在升级 \(title)…")
                 ProgressView().progressViewStyle(.linear).frame(width: 90).tint(AeroricColor.accent)
+            case let .waiting(title, text):
+                Image(systemName: "hourglass").foregroundStyle(AeroricColor.textTertiary)
+                Text("\(title) 排队升级：\(text)").lineLimit(1).fixedSize()
             case let .done(title, version):
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(AeroricColor.success)
                 Text("已升级到 \(title) \(version)，新会话会使用新版本")

@@ -389,3 +389,11 @@ extension ConnectionError: LocalizedError {
         }
     }
 }
+
+/// 目检 2026-11-18 第四轮: 72 places write `"修改失败：\(error)"`, and string
+/// interpolation uses `description`, so the panel read
+/// "修改失败：refused(AeroricProtocol.FailureFrame(id: …, message: …))".
+/// The same words as `errorDescription`.
+extension ConnectionError: CustomStringConvertible {
+    public var description: String { errorDescription ?? "和宿主之间出错了" }
+}

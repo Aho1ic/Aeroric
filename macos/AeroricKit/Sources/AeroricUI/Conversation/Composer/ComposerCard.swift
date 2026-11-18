@@ -151,6 +151,7 @@ public struct ComposerCard<Footer: View>: View {
                 }
             }
         }
+        .scrollIndicators(.hidden)
     }
 
     @ViewBuilder private var sendButton: some View {

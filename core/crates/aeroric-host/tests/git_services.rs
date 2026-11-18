@@ -2663,8 +2663,13 @@ async fn git_discard_all_resets_worktree_and_trashes_untracked() {
     );
     let status = git_output(&repo, &["status", "--porcelain"]);
     // The surviving protected directory is itself untracked — the only thing
-    // left in porcelain is exactly that.
-    assert_eq!(status, "?? .aeroric/", "{status:?}");
+    // left in porcelain is exactly that. B5-4: Finder may drop a `.DS_Store`
+    // into a folder at any moment; it is not something discard_all left.
+    let status: Vec<&str> = status
+        .lines()
+        .filter(|line| !line.ends_with(".DS_Store"))
+        .collect();
+    assert_eq!(status, ["?? .aeroric/"], "{status:?}");
 
     // Unborn HEAD: `rm -r --cached` unstages, then the untracked pass trashes.
     let fresh = new_repo("aeroric-git-discard-all-unborn");

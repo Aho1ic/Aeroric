@@ -57,6 +57,7 @@ public struct NativeUsageStatisticsReviewView: View {
                     .padding(24)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .scrollIndicators(.hidden)
                 .background(AeroricColor.canvas, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
             .padding(NativePanelGeometry.panelInset)

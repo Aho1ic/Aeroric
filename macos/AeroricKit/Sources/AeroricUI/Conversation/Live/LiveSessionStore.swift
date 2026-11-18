@@ -12,6 +12,9 @@ public protocol LiveSessionActions {
     func history(taskID: String) async throws -> [SessionMessage]
     /// History plus the transcript's 统计栏 figures (2026-10-29).
     func historyWithStats(taskID: String) async throws -> (messages: [SessionMessage], stats: SessionTranscriptStats?)
+    /// A6: up to `pages` host pages of history, whether older ones are left,
+    /// and what of the transcript did not read.
+    func history(taskID: String, pages: Int) async throws -> LiveHistory
     /// R1-2b: queued; `afterTurn` waits for the running turn to end.
     func prompt(taskID: String, text: String, afterTurn: Bool) async throws -> LivePromptReceipt
     func interrupt(taskID: String) async throws
@@ -62,6 +65,9 @@ public protocol LiveSessionActions {
     func deliveries(taskID: String) async throws -> [LiveDelivery]
     /// R1-3a: the capability table of `family`.
     func capabilities(family: String) async throws -> LiveCapabilities
+    /// B2-4: the table for this task's place (an SSH project gets the
+    /// host's remote table). Defaults to the local one.
+    func capabilities(taskID: String, family: String) async throws -> LiveCapabilities
     /// R1-3a: this task's login, when the agent refused it.
     func expiredLogin(taskID: String) async throws -> ExpiredLogin?
     /// R2-1: the turns that changed files; plan or apply an undo; accept one.
@@ -112,6 +118,11 @@ extension LiveSessionActions {
         -> (messages: [SessionMessage], stats: SessionTranscriptStats?) {
         (try await history(taskID: taskID), nil)
     }
+    /// Hosts without paging hand everything over at once.
+    public func history(taskID: String, pages: Int) async throws -> LiveHistory {
+        let page = try await historyWithStats(taskID: taskID)
+        return LiveHistory(messages: page.messages, stats: page.stats)
+    }
     public func answer(taskID: String, questionID: String, value: String?, confirmed: Bool?, cancelled: Bool) async throws {
         throw LiveSessionError.unsupported("这个宿主不支持问答卡")
     }
@@ -155,6 +166,9 @@ extension LiveSessionActions {
     public func delegationCards(taskID: String) async throws -> [LiveDelegationCard] { [] }
     public func deliveries(taskID: String) async throws -> [LiveDelivery] { [] }
     public func capabilities(family: String) async throws -> LiveCapabilities { LiveCapabilities() }
+    public func capabilities(taskID: String, family: String) async throws -> LiveCapabilities {
+        try await capabilities(family: family)
+    }
     public func expiredLogin(taskID: String) async throws -> ExpiredLogin? { nil }
     public func turns(taskID: String) async throws -> [LiveTurnRecord] { [] }
     public func turnPlan(taskID: String, turnID: String, action: String, apply: Bool) async throws -> LiveTurnPlan {
@@ -201,6 +215,26 @@ public enum LiveSendResult: Equatable, Sendable {
     case clearedToNewSession
 }
 
+/// A6 (2026-11-17): one read of a session's history.
+public struct LiveHistory: Equatable, Sendable {
+    public var messages: [SessionMessage]
+    public var stats: SessionTranscriptStats?
+    /// Older messages were left unread (the page offers 加载更早的消息).
+    public var hasEarlier: Bool
+    public var unreadable: SessionUnreadable?
+
+    public init(messages: [SessionMessage], stats: SessionTranscriptStats? = nil, hasEarlier: Bool = false,
+                unreadable: SessionUnreadable? = nil) {
+        self.messages = messages
+        self.stats = stats
+        self.hasEarlier = hasEarlier
+        self.unreadable = unreadable
+    }
+
+    /// Host pages a session first reads; each 加载更早的消息 adds as many.
+    public static let pageStep = 24
+}
+
 /// One visible session: history + the live rows on top, polled while the page
 /// is on screen (N4 D2: 50ms while a turn runs or an approval waits, 500ms idle).
 @Observable
@@ -208,6 +242,12 @@ public enum LiveSendResult: Equatable, Sendable {
 public final class LiveSessionStore {
     public let taskID: String
     public private(set) var history: [SessionMessage] = []
+    /// A6: older messages were left unread; how many pages the reads take,
+    /// kept across the reload after each turn; what of the transcript did not read.
+    public private(set) var hasEarlierHistory = false
+    public private(set) var historyPages = LiveHistory.pageStep
+    public private(set) var historyUnreadable: SessionUnreadable?
+    public private(set) var loadingEarlier = false
     /// The whole session's usage and timing from its transcript.
     public private(set) var transcriptStats: SessionTranscriptStats?
     /// `history` as transcript items and as turns with their timing, rebuilt
@@ -312,8 +352,17 @@ public final class LiveSessionStore {
         }
     }
 
+    /// B2-2: bumped by `open()` and `resync()`; a poll that started before
+    /// one of them drops what it read instead of writing an older model back.
+    private var syncGeneration: UInt64 = 0
+    /// B2-2: bumped by each history read; only the latest one writes.
+    private var historyRead: UInt64 = 0
+    /// B2-2: the one loop that follows running reruns.
+    private var rerunPollTask: Task<Void, Never>?
+
     /// Snapshot + history; the cursor starts at the snapshot's seq.
     public func open() async {
+        syncGeneration &+= 1
         loading = true
         defer { loading = false }
         do {
@@ -346,8 +395,11 @@ public final class LiveSessionStore {
     @discardableResult
     public func poll() async -> Bool {
         guard var current = model else { return false }
+        let generation = syncGeneration
         do {
             let batch = try await actions.updates(taskID: taskID, after: current.cursor)
+            // B2-2: an open or resync while this waited holds the newer model.
+            guard generation == syncGeneration else { return false }
             // Only real changes are written: @Observable notifies on every
             // assignment, and this runs every 50–500ms.
             if connectionProblem != nil { connectionProblem = nil }
@@ -361,6 +413,10 @@ public final class LiveSessionStore {
                 if !wasActive && current.turnActive { baseline = LiveHistoryMerge.assistantCount(history) }
                 if current != model { model = current }
                 retainApprovals(pending: current.pending)
+                trimAnswering(current.questions, resolved: batch.updates.compactMap {
+                    if case let .questionResolved(id, _) = $0.kind { return id }
+                    return nil
+                })
                 syncSendFailures(current)
                 if turnEnded {
                     await settleTurn()
@@ -386,6 +442,7 @@ public final class LiveSessionStore {
     }
 
     private func resync() async {
+        syncGeneration &+= 1
         do {
             let state = try await actions.state(taskID: taskID)
             self.state = state
@@ -413,7 +470,7 @@ public final class LiveSessionStore {
     /// R1-3a: the capability table (once) and whether the login still holds.
     func refreshLogin() async {
         if capabilities.isEmpty, let family,
-           let table = try? await actions.capabilities(family: family) {
+           let table = try? await actions.capabilities(taskID: taskID, family: family) {
             capabilities = table
         }
         expiredLogin = (try? await actions.expiredLogin(taskID: taskID)) ?? nil
@@ -436,13 +493,28 @@ public final class LiveSessionStore {
     }
 
     /// R5-2: read the reruns again; while one still runs, again in a while.
+    /// B2-2: one loop at a time follows running reruns, however many reads
+    /// start it.
     public func refreshReruns() async {
         guard let groups = try? await actions.reruns(taskID: taskID) else { return }
         rerunGroups = groups
-        if RerunText.anyRunning(groups) {
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            if !Task.isCancelled { await refreshReruns() }
+        guard RerunText.anyRunning(groups), rerunPollTask == nil else { return }
+        rerunPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                guard let groups = try? await self.actions.reruns(taskID: self.taskID) else { continue }
+                self.rerunGroups = groups
+                if !RerunText.anyRunning(groups) { break }
+            }
+            self?.rerunPollTask = nil
         }
+    }
+
+    /// B2-2: stops following reruns (the page went away).
+    public func stopFollowingReruns() {
+        rerunPollTask?.cancel()
+        rerunPollTask = nil
     }
 
     /// R5-2: nil when the runs started (some may have been refused, said in
@@ -499,7 +571,16 @@ public final class LiveSessionStore {
     public func applyTurn(_ turnID: String, action: String) async -> Bool {
         defer { Task { await refreshTurns(again: false) } }
         do {
-            _ = try await actions.turnPlan(taskID: taskID, turnID: turnID, action: action, apply: true)
+            let done = try await actions.turnPlan(taskID: taskID, turnID: turnID, action: action, apply: true)
+            // A7: a half-done undo answers with what failed; it is not done.
+            if let halfDone = TurnLedgerText.halfDone(done, action: action) {
+                errorText = halfDone
+                return false
+            }
+            // 目检 2026-11-17: the turn's footer (产品失败 · 已撤销) is graded
+            // from the ledger when history is read; read it again, or a
+            // turn taken back keeps saying it was undone.
+            await reloadHistory()
             return true
         } catch {
             errorText = error.localizedDescription
@@ -551,16 +632,27 @@ public final class LiveSessionStore {
         if let state = try? await actions.state(taskID: taskID) { self.state = state }
     }
 
-    private func reloadHistory() async {
+    /// B2-2: true when the read landed; a newer read makes an older one's
+    /// reply moot.
+    @discardableResult
+    private func reloadHistory() async -> Bool {
+        historyRead &+= 1
+        let read = historyRead
         do {
-            let page = try await actions.historyWithStats(taskID: taskID)
+            let page = try await actions.history(taskID: taskID, pages: historyPages)
+            guard read == historyRead else { return false }
             history = page.messages
+            if hasEarlierHistory != page.hasEarlier { hasEarlierHistory = page.hasEarlier }
+            if historyUnreadable != page.unreadable { historyUnreadable = page.unreadable }
             if let stats = page.stats { transcriptStats = stats }
             historyItems = TranscriptBuilder.items(from: history, taskRunning: false)
             historyTurns = TranscriptTurns.attach(transcriptStats?.turns ?? [], to: TranscriptTurns.group(historyItems))
             if historyError != nil { historyError = nil }
+            return true
         } catch {
+            guard read == historyRead else { return false }
             historyError = "历史载入失败：\(error)"
+            return false
         }
     }
 
@@ -572,6 +664,21 @@ public final class LiveSessionStore {
 
     public func retryHistory() async {
         await reloadHistory()
+        baseline = LiveHistoryMerge.assistantCount(history)
+    }
+
+    /// A6: read `pageStep` more host pages, older first; later reloads keep
+    /// the depth.
+    public func loadEarlierHistory() async {
+        guard hasEarlierHistory, !loadingEarlier else { return }
+        loadingEarlier = true
+        defer { loadingEarlier = false }
+        historyPages += LiveHistory.pageStep
+        // B2-2: a failed read keeps the depth that was shown.
+        guard await reloadHistory() else {
+            historyPages -= LiveHistory.pageStep
+            return
+        }
         baseline = LiveHistoryMerge.assistantCount(history)
     }
 
@@ -791,6 +898,14 @@ public final class LiveSessionStore {
 
     /// Question cards being sent (disabled until the host resolves them).
     public private(set) var answering: Set<String> = []
+
+    /// B2-2: a card the host resolved, or no longer lists, is done; its id
+    /// may come back for a new question (`q1` again, even in the same batch)
+    /// and must be answerable.
+    private func trimAnswering(_ open: [LivePendingQuestion], resolved: [String]) {
+        let kept = answering.subtracting(resolved).intersection(open.map(\.id))
+        if kept != answering { answering = kept }
+    }
 
     public func answer(_ id: String, value: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false) async {
         answering.insert(id)

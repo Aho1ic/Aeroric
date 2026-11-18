@@ -278,6 +278,7 @@ fn parse_omp_tool_result_content(message: &Value) -> Vec<SessionContent> {
     vec![SessionContent::ToolResult {
         id: tool_call_id,
         output,
+        failed: false,
     }]
 }
 

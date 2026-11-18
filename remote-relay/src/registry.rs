@@ -20,7 +20,14 @@ pub(crate) struct Registry {
 
 pub(crate) struct PendingConnection {
     pub(crate) host_id: String,
-    pub(crate) sender: oneshot::Sender<Ws>,
+    pub(crate) sender: oneshot::Sender<DataConnection>,
+}
+
+/// B4-2: the desktop's data connection, with the connection slot it was
+/// accepted under: the slot is held for as long as the bridge runs.
+pub(crate) struct DataConnection {
+    pub(crate) ws: Ws,
+    pub(crate) _slot: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 pub(crate) fn try_register_host(
@@ -50,7 +57,7 @@ pub(crate) fn try_insert_pending(
     registry: &Registry,
     host_id: &str,
     conn_id: &str,
-    sender: oneshot::Sender<Ws>,
+    sender: oneshot::Sender<DataConnection>,
 ) -> bool {
     let mut pending = registry.pending.lock();
     if pending.len() >= MAX_PENDING_CONNECTIONS

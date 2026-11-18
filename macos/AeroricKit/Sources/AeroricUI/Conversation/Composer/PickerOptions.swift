@@ -54,6 +54,18 @@ public enum ComposerPickerOptions {
         }
     }
 
+    /// The configuration button's words. A configuration picked before and
+    /// since updated keeps its name, marked to pick again (round-3 review: the
+    /// button said "Agent" while the reason below said "选的配置已更新").
+    public static func configurationTitle(_ configurations: [SessionConfiguration],
+                                          draft: NewSessionDraft) -> String {
+        if let selected = selectedConfiguration(configurations, draft: draft) { return selected.title }
+        if let stale = configurations.first(where: { $0.id == draft.configurationID }) {
+            return "\(stale.title)（已更新，需重选）"
+        }
+        return "Agent"
+    }
+
     public static func workspaces(_ projects: [TaskStore.ProjectEntry], selectedID: String?) -> PickerMenu {
         let options = projects.map {
             PickerOption(id: $0.id, title: $0.name, detail: abbreviatedPath($0.path),

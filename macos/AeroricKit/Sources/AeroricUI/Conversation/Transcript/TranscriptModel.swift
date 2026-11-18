@@ -22,7 +22,8 @@ public enum SessionBlockMapping {
                 return .toolUse(id: opaque.sourceId ?? "", name: payload["name"]?.stringValue ?? "tool",
                                 input: payload["input"].map(jsonText) ?? "{}")
             case "tool_result":
-                return .toolResult(id: opaque.sourceId ?? "", output: payload["output"].map(jsonText) ?? "")
+                return .toolResult(id: opaque.sourceId ?? "", output: payload["output"].map(jsonText) ?? "",
+                                   failed: payload["failed"]?.boolValue ?? false)
             case "attachment":
                 return .attachment(name: payload["name"]?.stringValue ?? "附件",
                                    mediaType: payload["mediaType"]?.stringValue ?? "", source: "")
@@ -60,6 +61,9 @@ private extension JSONValue {
 public enum ToolCallState: Equatable, Sendable {
     case running
     case done
+    /// A result arrived saying the tool did not run or failed (a refused
+    /// permission, an error). Round-5 review: these read "完成".
+    case failed
     /// No result arrived and the task is no longer running.
     case unfinished
 
@@ -67,6 +71,7 @@ public enum ToolCallState: Equatable, Sendable {
         switch self {
         case .running: .running
         case .done: .done
+        case .failed: .failed
         case .unfinished: .idle
         }
     }
@@ -184,10 +189,14 @@ public enum TranscriptBuilder {
     /// into their call instead of rendering as empty user bubbles.
     public static func items(from messages: [SessionMessage], taskRunning: Bool) -> [TranscriptItem] {
         var results: [String: String] = [:]
+        var failed = Set<String>()
         var usedIDs = Set<String>()
         for message in messages {
             for case let .toolUse(id, _, _) in message.content { usedIDs.insert(id) }
-            for case let .toolResult(id, output) in message.content { results[id] = output }
+            for case let .toolResult(id, output, didFail) in message.content {
+                results[id] = output
+                if didFail { failed.insert(id) } else { failed.remove(id) }
+            }
         }
 
         var items: [TranscriptItem] = []
@@ -204,13 +213,15 @@ public enum TranscriptBuilder {
                 case let .toolUse(id, name, input):
                     flushProse()
                     let output = results[id]
-                    let state: ToolCallState = output != nil ? .done : (taskRunning ? .running : .unfinished)
+                    let state: ToolCallState = output == nil ? (taskRunning ? .running : .unfinished)
+                        : failed.contains(id) ? .failed : .done
                     items.append(.tool(ToolCall(id: id, name: name, input: input, output: output, state: state)))
-                case let .toolResult(id, output):
+                case let .toolResult(id, output, didFail):
                     // Orphan result (its call is on an older page): keep it visible.
                     if !usedIDs.contains(id) {
                         flushProse()
-                        items.append(.tool(ToolCall(id: id, name: "结果", input: "", output: output, state: .done)))
+                        items.append(.tool(ToolCall(id: id, name: "结果", input: "", output: output,
+                                                    state: didFail ? .failed : .done)))
                     }
                 default:
                     prose.append(block)

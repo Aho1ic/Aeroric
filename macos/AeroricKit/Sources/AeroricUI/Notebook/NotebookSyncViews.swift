@@ -245,7 +245,7 @@ public struct RAGSearchView: View {
         VStack(spacing: 0) {
             HStack {
                 TextField("在笔记库里问一句…", text: $query)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.capsule)
                     .onSubmit(runSearch)
                 Button("检索", action: runSearch)
                     .disabled(query.trimmingCharacters(in: .whitespaces).isEmpty)

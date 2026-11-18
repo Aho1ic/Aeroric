@@ -153,7 +153,8 @@ fn dsh_v4_sessions_are_imported_and_sub_agents_skipped() {
         messages[2].content,
         vec![SessionContent::ToolResult {
             id: "c1".into(),
-            output: "file body".into()
+            output: "file body".into(),
+            failed: false,
         }]
     );
 }
@@ -395,4 +396,51 @@ fn sources_are_read_only() {
     scratch.import(ImportAgent::OpenCode, &[]);
     assert_eq!(fs::read(&db).unwrap(), before);
     assert_eq!(fs::metadata(&db).unwrap().modified().unwrap(), modified);
+}
+
+/// B1-8: an imported omp file's bad lines are counted, and a DSH file whose
+/// format is too new says why instead of failing the import.
+#[test]
+fn imported_omp_and_dsh_files_say_what_could_not_be_read() {
+    let scratch = Scratch::new("omp-dsh-unreadable");
+    scratch.write(
+        ".omp/agent/sessions/-work-app/a.jsonl",
+        format!(
+            "{}\n{}\nnot json\n{}\n",
+            r#"{"type":"session","version":3,"id":"o1","timestamp":"2026-10-01T10:00:00Z","cwd":"/work/app","title":"t"}"#,
+            r#"{"type":"message","id":"e1","message":{"role":"user","content":"hi"}}"#,
+            r#"{"type":"message","id":"e2","message":{"role":"user","content":"again"}}"#,
+        )
+        .as_bytes(),
+    );
+    let store = scratch.import(ImportAgent::Omp, &[]);
+    let id = store.index()[0].id.clone();
+    let (_, messages, unreadable) = store.messages_with_unreadable(&id).unwrap();
+    assert!(!messages.is_empty());
+    let unreadable = unreadable.unwrap();
+    assert_eq!(unreadable.count, 1);
+    assert_eq!(unreadable.reason, None);
+
+    let scratch = Scratch::new("dsh-unreadable");
+    let lines = [
+        r#"{"type":"session","version":4,"id":"s1","createdAt":1761600000000,"cwd":"/work/app","delegationDepth":0}"#,
+        r#"{"type":"user/message","seq":1,"data":{"content":[{"type":"text","text":"hi"}],"source":{"kind":"user"},"role":"user"}}"#,
+    ]
+    .map(str::to_string);
+    let path = scratch.write(
+        ".dsh/sessions/--work-app--/session-1/session.v4.jsonl.zstd",
+        &zstd_lines(&lines),
+    );
+    let store = scratch.import(ImportAgent::Dsh, &[]);
+    let id = store.index()[0].id.clone();
+    // The format moves on after the scan: the file now says version 99.
+    let newer = [
+        lines[0].replace("\"version\":4", "\"version\":99"),
+        lines[1].clone(),
+    ];
+    fs::write(&path, zstd_lines(&newer)).unwrap();
+    let (_, messages, unreadable) = store.messages_with_unreadable(&id).unwrap();
+    assert!(messages.is_empty());
+    let reason = unreadable.unwrap().reason.unwrap();
+    assert!(reason.contains("99"), "{reason}");
 }

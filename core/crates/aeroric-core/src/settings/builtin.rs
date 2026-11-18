@@ -173,7 +173,14 @@ pub(crate) fn list_builtin_dsh_models() -> Vec<String> {
 }
 
 /// 内建 omp 的托管 home(`PI_CODING_AGENT_DIR` 目标),与用户自己的 `~/.omp` 隔离。
+///
+/// B5-2(2026-11-18):宿主生产启动时注入 `<data-dir>/agent-homes/omp`
+/// (`configure_omp_home`),与会话用的是同一个;未注入时仍是旧根
+/// `HOME/.aeroric/agent-homes/omp`。
 pub(crate) fn omp_managed_home() -> Option<PathBuf> {
+    if let Some(home) = crate::settings::configured_omp_home() {
+        return Some(home);
+    }
     crate::settings::home_dir().map(|home| home.join(".aeroric").join("agent-homes").join("omp"))
 }
 

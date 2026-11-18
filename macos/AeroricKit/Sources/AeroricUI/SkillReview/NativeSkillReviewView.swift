@@ -66,6 +66,7 @@ public struct NativeSkillReviewView: View {
                     }
                     .padding(NativePanelGeometry.panelInset)
                 }
+                .scrollIndicators(.hidden)
             }
         }
         .font(.system(size: AeroricType.body))
@@ -411,6 +412,7 @@ public struct NativeSkillReviewView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.headline).accessibilityIdentifier("skillReview.sheet.title")
             ScrollView { VStack(alignment: .leading, spacing: 12, content: content).frame(maxWidth: .infinity, alignment: .leading) }
+            .scrollIndicators(.hidden)
             action(closeTitle, "sheet.cancel") { store.cancelSheet() }
                 .keyboardShortcut(.cancelAction)
         }
@@ -433,6 +435,7 @@ public struct NativeSkillReviewView: View {
                 .accessibilityIdentifier("skillReview.\(identifier)")
                 .padding(8)
         }
+        .scrollIndicators(.hidden)
         .frame(minHeight: 120, maxHeight: 240)
         .background(AeroricColor.layer1, in: RoundedRectangle(cornerRadius: AeroricRadius.s))
     }
@@ -511,18 +514,19 @@ private struct SkillReviewEditSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("方法名（示例）", text: $draft.version.title)
-                        .textFieldStyle(.roundedBorder).accessibilityIdentifier("skillReview.edit.name")
+                        .textFieldStyle(.capsule).accessibilityIdentifier("skillReview.edit.name")
                     TextEditor(text: $draft.version.content)
                         .frame(minHeight: 180)
                         .background(AeroricColor.layer1)
                         .accessibilityLabel("方法正文（示例）")
                         .accessibilityIdentifier("skillReview.edit.content")
                     TextField("适用前提（示例）", text: $draft.version.conditions)
-                        .textFieldStyle(.roundedBorder).accessibilityIdentifier("skillReview.edit.conditions")
+                        .textFieldStyle(.capsule).accessibilityIdentifier("skillReview.edit.conditions")
                     TextField("验证要求（示例）", text: $draft.version.validation)
-                        .textFieldStyle(.roundedBorder).accessibilityIdentifier("skillReview.edit.validation")
+                        .textFieldStyle(.capsule).accessibilityIdentifier("skillReview.edit.validation")
                 }
             }
+            .scrollIndicators(.hidden)
             SkillReviewAction(title: "取消（不应用）", identifier: "skillReview.edit.cancel",
                               glass: surface == .glass) { store.cancelSheet() }.keyboardShortcut(.cancelAction)
             SkillReviewAction(title: "应用到内存（示例）", identifier: "skillReview.edit.apply",

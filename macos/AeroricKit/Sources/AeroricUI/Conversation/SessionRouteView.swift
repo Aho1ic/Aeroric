@@ -9,6 +9,8 @@ public protocol SessionRouteActions {
     /// History with the 统计栏 figures read from the transcript (2026-10-30,
     /// DeepSeek Harness); nil figures hide the bar.
     func loadPage(taskID: String) async throws -> (messages: [SessionMessage], stats: SessionTranscriptStats?)
+    /// A6: up to `pages` host pages, whether older ones are left, what did not read.
+    func history(taskID: String, pages: Int) async throws -> LiveHistory
     func send(taskID: String, text: String) async throws
     /// Ends the task (`task.cancel`); there is no per-turn interrupt yet (D3).
     func stop(taskID: String) async
@@ -19,6 +21,11 @@ public protocol SessionRouteActions {
 public extension SessionRouteActions {
     func loadPage(taskID: String) async throws -> (messages: [SessionMessage], stats: SessionTranscriptStats?) {
         (try await loadHistory(taskID: taskID), nil)
+    }
+
+    func history(taskID: String, pages: Int) async throws -> LiveHistory {
+        let page = try await loadPage(taskID: taskID)
+        return LiveHistory(messages: page.messages, stats: page.stats)
     }
 }
 
@@ -39,6 +46,12 @@ public struct SessionRouteView: View {
     @State private var draft = ""
     @State private var store: PendingRequestStore
     @State private var errorText: String?
+    /// A6: pages the read takes; older ones are left; what did not read.
+    @State private var pages = LiveHistory.pageStep
+    @State private var hasEarlier = false
+    @State private var unreadable: SessionUnreadable?
+    /// B2-3: only the newest read writes back.
+    @State private var reads = HistoryReads()
 
     public init(task: TaskStore.TaskEntry, actions: any SessionRouteActions, canSend: Bool,
                 pendingStore: PendingRequestStore = PendingRequestStore(), readOnlyNotice: String? = nil,
@@ -100,6 +113,16 @@ public struct SessionRouteView: View {
             }
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if hasEarlier || unreadable != nil {
+                EarlierHistoryBar(hasEarlier: hasEarlier, loading: loading, unreadable: unreadable) {
+                    let shown = pages
+                    pages += LiveHistory.pageStep
+                    load(keepingOnFailure: shown)
+                }
+                .padding(.vertical, AeroricSpace.s)
+            }
+        }
         .overlay(alignment: .topTrailing) {
             Menu {
                 Button("导出 Markdown", systemImage: "square.and.arrow.up") { export() }
@@ -128,15 +151,27 @@ public struct SessionRouteView: View {
         return canSend ? .ready : .blocked("当前只读")
     }
 
-    private func load() {
+    /// B2-3: a newer read replaces an older one; a failed "load earlier"
+    /// goes back to the depth that was shown (`keepingOnFailure`).
+    private func load(keepingOnFailure shown: Int? = nil) {
         loading = true
-        Task { @MainActor in
-            defer { loading = false }
-            do {
-                let page = try await actions.loadPage(taskID: task.id)
-                messages = page.messages
-                transcriptStats = page.stats
-            } catch { errorText = "读取历史失败：\(error)" }
+        let (actions, taskID, pages) = (actions, task.id, pages)
+        reads.begin { read in
+            Task { @MainActor in
+                do {
+                    let page = try await actions.history(taskID: taskID, pages: pages)
+                    guard reads.lands(read) else { return }
+                    messages = page.messages
+                    transcriptStats = page.stats
+                    hasEarlier = page.hasEarlier
+                    unreadable = page.unreadable
+                } catch {
+                    guard reads.lands(read) else { return }
+                    if let shown { self.pages = shown }
+                    if HistoryReads.shows(error) { errorText = "读取历史失败：\(error)" }
+                }
+                if reads.lands(read) { loading = false }
+            }
         }
     }
 

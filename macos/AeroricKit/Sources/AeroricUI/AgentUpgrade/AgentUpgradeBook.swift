@@ -18,7 +18,9 @@ public final class AgentUpgradeBook {
     @ObservationIgnored private var client: AgentUpgradeClient?
     @ObservationIgnored private var poll: Task<Void, Never>?
     @ObservationIgnored private var periodic: Task<Void, Never>?
-    @ObservationIgnored private var waiting: [String: [() -> Void]] = [:]
+    /// Held sends per agent, one per key (a session): a second click on 发送
+    /// replaces the first instead of sending twice.
+    @ObservationIgnored private var waiting: [String: [String: () -> Void]] = [:]
 
     public init() {}
 
@@ -26,6 +28,11 @@ public final class AgentUpgradeBook {
         self.client = capabilityEnabled ? client : nil
         isAvailable = capabilityEnabled && client != nil
         periodic?.cancel()
+        // B2-7: a new host (or none) starts clean: the old host's poll stops,
+        // and sends held for its upgrades are not fired by another host's.
+        poll?.cancel()
+        poll = nil
+        waiting = [:]
         guard isAvailable else {
             snapshot = nil
             return
@@ -77,9 +84,10 @@ public final class AgentUpgradeBook {
         (snapshot?.agents ?? []).filter { [.updateAvailable, .required].contains($0.status) && $0.job?.state != .running }
     }
 
-    /// Run `action` once `agent` has upgraded successfully (a held message).
-    public func whenUpgraded(_ agent: String, _ action: @escaping () -> Void) {
-        waiting[agent, default: []].append(action)
+    /// Run `action` once `agent` has upgraded successfully (a held message);
+    /// a later one with the same `key` replaces it.
+    public func whenUpgraded(_ agent: String, key: String, _ action: @escaping () -> Void) {
+        waiting[agent, default: [:]][key] = action
     }
 
     private func run(_ call: (AgentUpgradeClient) async throws -> AgentUpgradeClient.Snapshot) async {
@@ -98,8 +106,8 @@ public final class AgentUpgradeBook {
         for harness in next.agents {
             let was = before?.agents.first { $0.agent == harness.agent }?.job?.state
             if was == .running, harness.job?.state == .succeeded, harness.status != .required {
-                let actions = waiting.removeValue(forKey: harness.agent) ?? []
-                actions.forEach { $0() }
+                let actions = waiting.removeValue(forKey: harness.agent) ?? [:]
+                actions.values.forEach { $0() }
             }
         }
         let running = next.agents.contains { $0.job?.state == .running }
@@ -122,6 +130,8 @@ public enum AgentUpdateReminder: Equatable {
     case available(title: String, latest: String, installed: String)
     case required(title: String, installed: String, minimum: String)
     case upgrading(title: String)
+    /// B2-6: queued behind another upgrade through the same installer.
+    case waiting(title: String, text: String)
     case done(title: String, version: String)
     case failed(title: String, message: String)
 
@@ -131,7 +141,9 @@ public enum AgentUpdateReminder: Equatable {
         let title = harness.title
         if let job = harness.job {
             switch job.state {
-            case .running: return .upgrading(title: title)
+            case .running:
+                if let text = job.waitingText { return .waiting(title: title, text: text) }
+                return .upgrading(title: title)
             case .succeeded where job.finishedAtMs != dismissedJob:
                 return .done(title: title, version: harness.installed ?? harness.latest ?? "")
             case .failed where job.finishedAtMs != dismissedJob:

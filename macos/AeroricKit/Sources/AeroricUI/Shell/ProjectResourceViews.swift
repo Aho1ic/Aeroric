@@ -507,6 +507,7 @@ public struct CentralResourcePreview: View {
             .scrollTargetLayout()
             .padding(12)
         }
+        .scrollIndicators(.hidden)
         .scrollPosition(id: Binding(
             get: { scene.positions[target] },
             set: { book.rememberPosition($0, for: target) }

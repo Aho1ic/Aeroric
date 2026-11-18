@@ -6,6 +6,7 @@ import SwiftUI
 /// the user left out last time; a project's tick clears or fills all of its
 /// sessions; 导入 adds the missing projects and imports the ticked sessions.
 struct ImportPickerSheet: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var book: ImportBook
     @Environment(\.dismiss) private var dismiss
     /// Collapsed project cards (all open by default).
@@ -120,7 +121,7 @@ struct ImportPickerSheet: View {
         let count = group.sessions.filter { selected.contains($0.id) }.count
         return VStack(spacing: 0) {
             HStack(spacing: AeroricSpace.m) {
-                Button { withAnimation(.easeOut(duration: AeroricMotion.quick)) { pick.wrappedValue.toggle(group: group) } } label: {
+                Button { withAnimation(reduceMotion ? nil : .easeOut(duration: AeroricMotion.quick)) { pick.wrappedValue.toggle(group: group) } } label: {
                     TickMark(tick: tick, size: 16)
                 }
                 .buttonStyle(.plain)
@@ -159,7 +160,7 @@ struct ImportPickerSheet: View {
                     .font(.system(size: AeroricType.caption).monospacedDigit())
                     .foregroundStyle(AeroricColor.textTertiary)
                 Button {
-                    withAnimation(.easeOut(duration: AeroricMotion.standard)) {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: AeroricMotion.standard)) {
                         if open { collapsed.insert(group.id) } else { collapsed.remove(group.id) }
                     }
                 } label: {

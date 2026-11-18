@@ -1,3 +1,4 @@
+import AeroricProtocol
 import SwiftUI
 
 /// 2026-10-30: an imported session drawn like a live session's history —
@@ -16,6 +17,12 @@ struct ImportedTranscript<Footer: View>: View {
     @State private var loading = false
     @State private var errorText: String?
     @State private var expandedTurns: Set<String> = []
+    /// A6: how many host pages the read takes; older ones are left; what did not read.
+    @State private var pages = ImportBook.maxHistoryPages
+    @State private var hasEarlier = false
+    @State private var unreadable: SessionUnreadable?
+    /// B2-3: only the newest read writes back.
+    @State private var reads = HistoryReads()
 
     private static var bottomID: String { "imported.bottom" }
 
@@ -25,6 +32,13 @@ struct ImportedTranscript<Footer: View>: View {
             ScrollViewReader { scroller in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 40) {
+                        if hasEarlier || unreadable != nil {
+                            EarlierHistoryBar(hasEarlier: hasEarlier, loading: loading, unreadable: unreadable) {
+                                let shown = pages
+                                pages += ImportBook.maxHistoryPages
+                                load(keepingOnFailure: shown)
+                            }
+                        }
                         if turns.isEmpty {
                             AeroricEmptyState(systemImage: loading ? "hourglass" : "text.bubble",
                                               title: loading ? "正在读取会话历史…" : "这个会话没有可显示的内容",
@@ -109,14 +123,27 @@ struct ImportedTranscript<Footer: View>: View {
         .accessibilityIdentifier("session.more")
     }
 
-    private func load() {
+    /// B2-3: a newer read replaces an older one; a failed "load earlier"
+    /// goes back to the depth that was shown (`keepingOnFailure`).
+    private func load(keepingOnFailure shown: Int? = nil) {
         loading = true
-        Task { @MainActor in
-            defer { loading = false }
-            do {
-                messages = try await book.messages(id: sessionID)
-                turns = TranscriptTurns.group(TranscriptBuilder.items(from: messages, taskRunning: false))
-            } catch { errorText = "读取历史失败：\(error)" }
+        let (book, sessionID, pages) = (book, sessionID, pages)
+        reads.begin { read in
+            Task { @MainActor in
+                do {
+                    let history = try await book.history(id: sessionID, pages: pages)
+                    guard reads.lands(read) else { return }
+                    messages = history.messages
+                    hasEarlier = history.hasEarlier
+                    unreadable = history.unreadable
+                    turns = TranscriptTurns.group(TranscriptBuilder.items(from: messages, taskRunning: false))
+                } catch {
+                    guard reads.lands(read) else { return }
+                    if let shown { self.pages = shown }
+                    if HistoryReads.shows(error) { errorText = "读取历史失败：\(error)" }
+                }
+                if reads.lands(read) { loading = false }
+            }
         }
     }
 }

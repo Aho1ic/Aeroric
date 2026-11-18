@@ -242,7 +242,7 @@ fn spawn_card(rollout: &Path) -> String {
         .iter()
         .flat_map(|m| m.content.iter())
         .find_map(|c| match c {
-            SessionContent::ToolResult { id, output } if id == "parent-spawn" => {
+            SessionContent::ToolResult { id, output, .. } if id == "parent-spawn" => {
                 Some(output.clone())
             }
             _ => None,

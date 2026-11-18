@@ -439,6 +439,7 @@ fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
                     content: vec![SessionContent::ToolResult {
                         id: id.to_string(),
                         output,
+                        failed: false,
                     }],
                     message_id: None,
                 });
@@ -465,7 +466,11 @@ fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
                 }
                 messages.push(SessionMessage {
                     role: "user".to_string(),
-                    content: vec![SessionContent::ToolResult { id, output }],
+                    content: vec![SessionContent::ToolResult {
+                        id,
+                        output,
+                        failed: false,
+                    }],
                     message_id: None,
                 });
             }

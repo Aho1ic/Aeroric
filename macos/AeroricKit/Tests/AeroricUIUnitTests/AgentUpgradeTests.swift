@@ -46,6 +46,26 @@ final class AgentUpgradeTests: XCTestCase {
         XCTAssertEqual(codex?.status, .updateAvailable)
         XCTAssertEqual(codex?.job?.state, .running)
         XCTAssertEqual(codex?.job?.log, ["added 1 package"])
+        XCTAssertNil(codex?.job?.waitingText, "older hosts never say it")
+    }
+
+    /// A11 (2026-11-17): a job waiting for the installer another holds says
+    /// whom it waits for; once it runs, or ends, it says nothing.
+    func testAWaitingUpgradeSaysWhomItWaitsFor() {
+        let value = JSONValue.object(["agents": .array([.object([
+            "agent": .string("codex"), "title": .string("Codex"), "status": .string("updateAvailable"),
+            "job": .object(["state": .string("running"), "waitingFor": .string("Claude Code"),
+                            "startedAt": .number("1")]),
+        ])])])
+        let job = AgentUpgradeClient.decode(value).agents.first?.job
+        XCTAssertEqual(job?.waitingFor, "Claude Code")
+        XCTAssertEqual(job?.waitingText, "等 Claude Code 装完")
+        XCTAssertNil(AgentUpgradeClient.Job(state: .running).waitingText)
+        XCTAssertNil(AgentUpgradeClient.Job(state: .failed, waitingFor: "Claude Code").waitingText)
+        // B2-6: the session page's capsule says it waits instead of "正在升级".
+        XCTAssertEqual(AgentUpdateReminder.make(omp(.updateAvailable, job: .init(state: .running, waitingFor: "Codex")),
+                                                dismissedJob: nil),
+                       .waiting(title: "omp", text: "等 Codex 装完"))
     }
 
     @MainActor
@@ -60,4 +80,30 @@ final class AgentUpgradeTests: XCTestCase {
         XCTAssertEqual(book.upgradable.map(\.agent), ["codex", "omp"])
         XCTAssertNil(book.harness(forFamily: nil))
     }
+
+    /// B2-7: a send held for an upgrade is held once per session, and a new
+    /// host drops what the old one held.
+    @MainActor
+    func testHeldSendsAreOnePerSessionAndDroppedOnReattach() {
+        let book = AgentUpgradeBook()
+        var sent: [String] = []
+        let running = AgentUpgradeClient.Snapshot(agents: [omp(.required, job: .init(state: .running))])
+        let done = AgentUpgradeClient.Snapshot(agents: [omp(.upToDate, remind: false,
+                                                            job: .init(state: .succeeded, finishedAtMs: 1))])
+        book.load(running)
+        book.whenUpgraded("omp", key: "t1") { sent.append("first") }
+        book.whenUpgraded("omp", key: "t1") { sent.append("second") }
+        book.whenUpgraded("omp", key: "t2") { sent.append("other") }
+        book.load(done)
+        XCTAssertEqual(sent.sorted(), ["other", "second"])
+
+        sent = []
+        book.load(running)
+        book.whenUpgraded("omp", key: "t1") { sent.append("stale") }
+        book.attach(client: nil, capabilityEnabled: false)
+        book.load(running)
+        book.load(done)
+        XCTAssertEqual(sent, [])
+    }
+
 }

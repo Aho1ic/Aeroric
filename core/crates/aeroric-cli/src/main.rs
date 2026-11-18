@@ -11,8 +11,36 @@ use clap::Parser;
 use std::path::Path;
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> std::process::ExitCode {
+/// How long the exit waits for blocking work still running (a scan stuck in
+/// a slow folder, a git call). `#[tokio::main]` waited with no limit: on
+/// 2026-11-18 a review host's exit waited about two minutes on three scans
+/// in a slowly syncing folder, ignored SIGTERM and kept the data-directory
+/// lease, so the restarted app's host could not start.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+fn main() -> std::process::ExitCode {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("aeroric-cli: cannot start the async runtime: {error}");
+            return std::process::ExitCode::from(1);
+        }
+    };
+    run_then_stop(runtime, entry())
+}
+
+/// Run `work`, then stop the runtime, waiting at most `STOP_GRACE` for
+/// blocking tasks; whatever is still running is left to the process exit.
+fn run_then_stop<F: std::future::Future>(runtime: tokio::runtime::Runtime, work: F) -> F::Output {
+    let output = runtime.block_on(work);
+    runtime.shutdown_timeout(STOP_GRACE);
+    output
+}
+
+async fn entry() -> std::process::ExitCode {
     // SSH_ASKPASS mode (remote native sessions): ssh runs us with only the
     // prompt as argument and a one-time ticket in the environment.
     if let Ok(ticket) = std::env::var(aeroric_host::remote_sessions::TICKET_ENV) {
@@ -185,6 +213,44 @@ fn agent_config_external_home() -> Result<std::path::PathBuf, String> {
         })
 }
 
+/// Set to `1` by the CLI's integration tests: `serve` keeps credentials in
+/// memory instead of the OS keychain, which a scratch `HOME` cannot isolate.
+const MEMORY_SECRETS_ENV: &str = "AERORIC_TEST_MEMORY_SECRETS";
+
+/// Whether `serve` should keep credentials in memory. Only a data directory
+/// under a temporary folder may ask: on a real one the first settings write
+/// would move its plaintext credentials into memory and lose them, so the
+/// request is refused rather than honoured or ignored.
+fn memory_secrets_requested(data_dir: &Path) -> Result<bool, String> {
+    if std::env::var_os(MEMORY_SECRETS_ENV).as_deref() != Some(std::ffi::OsStr::new("1")) {
+        return Ok(false);
+    }
+    let here = std::fs::canonicalize(data_dir)
+        .or_else(|_| {
+            data_dir.parent().map_or(
+                Err(std::io::ErrorKind::NotFound.into()),
+                std::fs::canonicalize,
+            )
+        })
+        .map_err(|e| format!("{MEMORY_SECRETS_ENV}=1: cannot resolve the data directory: {e}"))?;
+    let scratch = [
+        std::env::temp_dir(),
+        std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from("/private/tmp"),
+    ];
+    let under_scratch = scratch
+        .iter()
+        .any(|root| std::fs::canonicalize(root).is_ok_and(|root| here.starts_with(&root)));
+    if under_scratch {
+        Ok(true)
+    } else {
+        Err(format!(
+            "{MEMORY_SECRETS_ENV}=1 is for tests; the data directory {} is not under a temporary folder",
+            data_dir.display()
+        ))
+    }
+}
+
 /// lock → data compat → runtime → listener → ready，然后常驻到 SIGINT/SIGTERM。
 /// token 明文在启动后立即登记进 Redactor：进程 stderr 上出现的任何错误文本
 /// （含 panic hook）先洗再写（Action 5 的脱敏半边）。
@@ -213,8 +279,16 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
     };
     // settings.json 的凭据字段落 OS 钥匙串（`settings::secret_fields`）。必须在
     // 第一次读 settings 之前装上：之后读到的明文会在下一次写盘时迁走。
+    // 集成测试拉起的 serve 用内存凭据：改 HOME 隔离不了钥匙串。
     let secrets: Arc<dyn aeroric_core::context::SecretStore> =
-        Arc::new(aeroric_host::platform_adapter::KeyringSecrets);
+        match memory_secrets_requested(data_dir) {
+            Ok(true) => Arc::new(aeroric_core::context::MemorySecrets::default()),
+            Ok(false) => Arc::new(aeroric_host::platform_adapter::KeyringSecrets),
+            Err(error) => {
+                eprintln!("aeroric-cli serve: {error}");
+                return exit::CONNECT;
+            }
+        };
     aeroric_core::settings::secret_fields::configure_secret_store(secrets.clone());
     // build/protocol 两个 hash：CLI 构建没有 git 元数据注入，如实给版本串
     // （supervisor 区分「不同 build」够用，不假装有 commit hash）。
@@ -934,6 +1008,33 @@ async fn approval(data_dir: &Path, cmd: ApprovalCmd) -> i32 {
 mod tests {
     use super::args::Cli;
     use clap::{CommandFactory, Parser};
+
+    /// A blocking task that never ends (a scan stuck in a slow folder) does
+    /// not hold the exit past `STOP_GRACE`.
+    #[test]
+    fn a_blocking_task_that_never_ends_does_not_hold_the_exit() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let output = super::run_then_stop(runtime, async {
+            drop(tokio::task::spawn_blocking(|| {
+                std::thread::sleep(std::time::Duration::from_secs(120))
+            }));
+            7
+        });
+        assert_eq!(output, 7);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= super::STOP_GRACE,
+            "waited for the grace: {elapsed:?}"
+        );
+        assert!(
+            elapsed < super::STOP_GRACE + std::time::Duration::from_secs(5),
+            "did not wait for the blocking task: {elapsed:?}"
+        );
+    }
 
     /// 命令树是 Action 1 的逐字契约：`--help` 列真实参数、每个具名子命令
     /// 可解析、全局 `--data-dir` 必填。

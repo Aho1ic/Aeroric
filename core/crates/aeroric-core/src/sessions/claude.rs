@@ -119,8 +119,17 @@ pub fn claude_user_content(content: Option<&serde_json::Value>) -> Vec<SessionCo
                             Some(value) => serde_json::to_string_pretty(value).unwrap_or_default(),
                             None => String::new(),
                         };
-                        (!output.trim().is_empty())
-                            .then_some(SessionContent::ToolResult { id, output })
+                        // A refused or failed tool says so (round-5 review: a
+                        // denied ExitPlanMode read "完成" once history loaded).
+                        let failed = block
+                            .get("is_error")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false);
+                        (!output.trim().is_empty()).then_some(SessionContent::ToolResult {
+                            id,
+                            output,
+                            failed,
+                        })
                     }
                     Some("image") | Some("document") | Some("attachment") => {
                         attachment_from_value(block)

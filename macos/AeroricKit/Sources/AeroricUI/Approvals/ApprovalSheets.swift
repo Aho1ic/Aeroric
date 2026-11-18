@@ -165,7 +165,7 @@ private struct QuestionBlock: View {
                 .accessibilityIdentifier("question.option.\(index).\(option)")
             }
             TextField("自定义回答（可选）", text: $custom)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.capsule)
                 .accessibilityIdentifier("question.custom.\(index)")
         }
     }

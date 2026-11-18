@@ -214,6 +214,7 @@ public struct NativeWorkArrangementsReviewRefusalView: View {
                 .padding(NativePanelGeometry.panelInset * 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.hidden)
             .background(
                 AeroricColor.layer1,
                 in: RoundedRectangle(cornerRadius: NativePanelGeometry.panelRadius, style: .continuous)

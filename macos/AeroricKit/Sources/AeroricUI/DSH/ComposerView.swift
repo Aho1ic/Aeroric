@@ -88,13 +88,14 @@ public struct ComposerView: View {
                         }
                     }
                 }
+                .scrollIndicators(.hidden)
                 .accessibilityIdentifier("composer.attachments")
             }
             HStack(alignment: .bottom, spacing: 8) {
                 Button("附件") { showingAttachmentPicker = true }
                     .accessibilityIdentifier("composer.attachment.add")
                 TextField("消息…（/ 为斜杠命令）", text: $draft, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.capsule)
                     .lineLimit(1...5)
                     .onSubmit { send() }
                     .accessibilityIdentifier("composer.text")
@@ -261,6 +262,7 @@ public struct TrajectoryView: View {
             }
             .padding(8)
         }
+        .scrollIndicators(.hidden)
         .accessibilityIdentifier("trajectory.view")
     }
 }

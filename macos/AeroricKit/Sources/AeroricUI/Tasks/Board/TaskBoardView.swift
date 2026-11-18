@@ -112,6 +112,7 @@ public struct TaskBoardView: View {
             .padding(AeroricSpace.xl)
             .frame(maxHeight: .infinity, alignment: .top)
         }
+        .scrollIndicators(.hidden)
     }
 
     /// T1/T2 (2026-10-28): groups → projects → capsule rows, the way the
@@ -217,6 +218,7 @@ private struct BoardColumn<Menu: View>: View {
                     }
                 }
             }
+            .scrollIndicators(.hidden)
         }
         .frame(width: Self.width)
         .frame(maxHeight: .infinity, alignment: .top)

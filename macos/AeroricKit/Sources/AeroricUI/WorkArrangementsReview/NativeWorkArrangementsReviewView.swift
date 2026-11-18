@@ -46,6 +46,7 @@ public struct NativeWorkArrangementsReviewView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.bottom, NativePanelGeometry.panelInset)
                 }
+                .scrollIndicators(.hidden)
             }
             .padding(NativePanelGeometry.panelInset)
             .background {
@@ -785,7 +786,7 @@ private struct WAReviewTodoSheet: View {
     var body: some View {
         WAReviewSheetLayout(title: "新建目标 · 只保存示例记录", id: "draft.todo", presentation: presentation) {
             TextField("目标（不会自动交办或运行）", text: $draft.title, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.capsule)
                 .accessibilityIdentifier("workArrangementsReview.draft.todo.title")
             Picker("虚构来源", selection: $draft.source) {
                 ForEach(WAReviewSource.allCases, id: \.self) { source in
@@ -1183,6 +1184,7 @@ private struct WAReviewSheetLayout<Content: View, Actions: View>: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, NativePanelGeometry.panelInset)
             }
+            .scrollIndicators(.hidden)
             Divider()
             WAReviewActions { actions }
         }

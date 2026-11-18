@@ -321,6 +321,12 @@ public struct LiveSessionView: View {
                                 store.dismissHistoryError()
                             }
                         }
+                        if store.hasEarlierHistory || store.historyUnreadable != nil {
+                            EarlierHistoryBar(hasEarlier: store.hasEarlierHistory, loading: store.loadingEarlier,
+                                              unreadable: store.historyUnreadable) {
+                                Task { await store.loadEarlierHistory() }
+                            }
+                        }
                         if historyItems.isEmpty && liveItems.isEmpty && store.pending.isEmpty && openingPrompt == nil
                             && store.historyError == nil {
                             AeroricEmptyState(systemImage: store.loading ? "hourglass" : "text.bubble",
@@ -661,9 +667,8 @@ public struct LiveSessionView: View {
     private var hashList: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(hashSuggestions, id: \.self) { name in
-                Button {
-                    draft = "#\(name) "
-                } label: {
+                // B3-3: hover shows the capsule every list row uses.
+                HoverCapsuleRow(selected: false, height: 26, action: { draft = "#\(name) " }) {
                     HStack {
                         Text("#\(name)").font(AeroricType.mono(AeroricType.code))
                         Text(store.delegationRoles.first { $0.name == name }?.description ?? "交给这个 Harness 做")
@@ -672,11 +677,7 @@ public struct LiveSessionView: View {
                         Spacer()
                     }
                     .font(.system(size: AeroricType.secondary))
-                    .padding(.horizontal, AeroricSpace.m)
-                    .frame(height: 26)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
             }
         }
         .padding(AeroricSpace.s)
@@ -826,7 +827,7 @@ public struct LiveSessionView: View {
         // Below the native-session minimum the agent cannot run: keep the draft
         // and send it once the one-click upgrade succeeds.
         if let upgrades, let harness = upgrades.harness(forFamily: store.family), harness.status == .required {
-            upgrades.whenUpgraded(harness.agent) { send() }
+            upgrades.whenUpgraded(harness.agent, key: store.taskID) { send(afterTurn: afterTurn) }
             store.errorText = "\(harness.title) 需要先升级，升级完成后会自动发送这条消息"
             return
         }

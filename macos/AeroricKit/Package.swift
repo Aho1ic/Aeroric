@@ -18,13 +18,13 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/migueldeicaza/SwiftTerm.git",
-            .exact("1.2.5")
+            exact: "1.2.5"
         ),
         // Redesign 01 (Q23): Markdown rendering for the conversation view.
         // MIT, pinned exactly like SwiftTerm.
         .package(
             url: "https://github.com/gonzalezreal/swift-markdown-ui.git",
-            .exact("2.4.1")
+            exact: "2.4.1"
         ),
     ],
     targets: [

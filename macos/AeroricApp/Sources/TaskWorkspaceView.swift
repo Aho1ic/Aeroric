@@ -606,6 +606,7 @@ struct TaskWorkspaceView: View {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollIndicators(.hidden)
         .accessibilityIdentifier("auxiliary.details")
     }
 
@@ -926,6 +927,14 @@ struct TaskWorkspaceView: View {
                 TodoPage(store: services.todoStore,
                          projects: services.taskStore.projects.map { (id: $0.id, name: $0.name) },
                          agents: services.agentChoices(projectID: ""),
+                         // 2026-11-17: 交办 picks a configuration that can start, and a model.
+                         targets: { projectID in
+                             services.sessionConfigurations(projectID: projectID)
+                                 .filter { $0.blockedReasons.isEmpty }
+                                 .map { RerunTarget(id: $0.id, title: $0.title, agent: $0.agent,
+                                                    models: $0.options.models, harness: $0.harness) }
+                         },
+                         loadTargets: { await services.loadSessionConfigurations(projectID: $0) },
                          onOpenTask: { selection = SessionNavigation.task($0) })
                     .opacity(previewActive ? 0 : 1)
                     .allowsHitTesting(!previewActive)
@@ -1325,10 +1334,11 @@ struct TaskWorkspaceView: View {
             },
             // S5: the project's 默认 Harness, else the global default.
             preferredHarness: projectHarness(scope.projectID) ?? defaultHarness,
-            capabilities: services.capabilityTables,
+            capabilities: services.capabilityTables(projectID: scope.projectID),
             expiredLogins: services.expiredLogins,
             discussionTargets: configurations.filter { $0.blockedReasons.isEmpty }.map {
-                RerunTarget(id: $0.id, title: $0.title, agent: $0.agent, models: $0.options.models)
+                RerunTarget(id: $0.id, title: $0.title, agent: $0.agent, models: $0.options.models,
+                            harness: $0.harness)
             },
             onStartDiscussion: { start in await startDiscussion(scope, start) },
             discussionPrefill: discussionPrefill,
@@ -1768,6 +1778,13 @@ struct HostSessionRouteActions: SessionRouteActions {
         guard let sessions = services.sessionsClient else { throw AppServices.ProjectError.notConnected }
         let page = try await sessions.fullHistory(taskId: taskID)
         return (page.messages.map(SessionBlockMapping.message), page.stats)
+    }
+
+    func history(taskID: String, pages: Int) async throws -> LiveHistory {
+        guard let sessions = services.sessionsClient else { throw AppServices.ProjectError.notConnected }
+        let page = try await sessions.fullHistory(taskId: taskID, maxPages: pages)
+        return LiveHistory(messages: page.messages.map(SessionBlockMapping.message), stats: page.stats,
+                           hasEarlier: page.hasMore && page.nextCursor != nil, unreadable: page.unreadable)
     }
 
     func send(taskID: String, text: String) async throws {

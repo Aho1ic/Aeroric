@@ -62,11 +62,20 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
                 // 2026-10-29: the column is centred in the pane (was pinned left).
                 .frame(maxWidth: .infinity, alignment: .center)
             }
+            .scrollIndicators(.hidden)
             .background(AeroricColor.canvas)
         }
         .frame(minWidth: 680, minHeight: 460)
         // Owner preference: no scroll bars anywhere (2026-10-29).
         .scrollIndicators(.hidden)
+        // Round-2 review D1: the one look at connect can fail (the host is
+        // busy starting) and then 参考代码库 never showed; ask again each
+        // time settings opens.
+        .task {
+            if let references = state.settingsReferences, !references.isAvailable {
+                await references.refresh()
+            }
+        }
     }
 
     @ViewBuilder private func content(_ pane: SettingsPane) -> some View {

@@ -412,6 +412,7 @@ public struct NativeVisualFoundationReviewView: View {
                     }
                 }
             }
+            .scrollIndicators(.hidden)
             .frame(maxHeight: .infinity)
             .padding(NativePanelGeometry.panelInset)
             .background(AeroricColor.layer1, in: readingShape)
@@ -609,6 +610,7 @@ public struct NativeVisualFoundationReviewView: View {
             }
             .padding(.horizontal, AeroricSpace.m)
         }
+        .scrollIndicators(.hidden)
         .frame(height: NativePanelGeometry.statusBarHeight)
     }
 

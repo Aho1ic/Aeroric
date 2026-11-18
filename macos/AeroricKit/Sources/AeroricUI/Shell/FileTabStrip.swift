@@ -45,6 +45,7 @@ public struct FileTabStrip: View {
                 .padding(.horizontal, AeroricSpace.m)
                 .padding(.vertical, AeroricSpace.xs)
             }
+            .scrollIndicators(.hidden)
             .onChange(of: active) { _, target in
                 guard let target else { return }
                 withAnimation { proxy.scrollTo(target) }

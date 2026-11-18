@@ -153,7 +153,7 @@ public struct NewSessionDraft: Equatable, Sendable {
         guard let configuration = configurations.first(where: {
             $0.id == configurationID && $0.version == configurationVersion && $0.agent == task.agent
         }) else {
-            reasons.append("宿主尚未提供匹配的 Agent 配置及版本，当前不能发送。")
+            reasons.append(Self.unmatchedReason(configurationID: configurationID, configurations: configurations))
             return reasons + unsupportedReasons
         }
         reasons += configuration.blockedReasons
@@ -175,6 +175,18 @@ public struct NewSessionDraft: Equatable, Sendable {
             reasons.append("此配置不支持已选推理强度；请明确重新选择。")
         }
         return reasons + unsupportedReasons
+    }
+
+    /// Why no configuration matches, in the words of what the person can do
+    /// (round-2 review C1: a project whose draft never picked one read as if
+    /// the host were broken).
+    static func unmatchedReason(configurationID: String?, configurations: [SessionConfiguration]) -> String {
+        if configurations.isEmpty { return "宿主尚未提供 Agent 配置，当前不能发送。" }
+        guard let configurationID else { return "请先选一个 Agent 配置。" }
+        if configurations.contains(where: { $0.id == configurationID }) {
+            return "选的配置已更新到新版本，请重新选一次。"
+        }
+        return "选的配置已不存在，请重新选择。"
     }
 
     private var unsupportedReasons: [String] {

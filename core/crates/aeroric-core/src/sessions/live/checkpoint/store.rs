@@ -63,7 +63,9 @@ pub fn read_task_file(dir: &Path, task_id: &str) -> Result<Option<Vec<u8>>, Stor
 pub fn write_task_file(dir: &Path, task_id: &str, bytes: &[u8]) -> Result<(), StoreError> {
     let path = path(dir, task_id)?;
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".{task_id}.tmp"));
+    // B5-3: unique per write; delegations and checkpoints of one task may
+    // write at the same moment.
+    let tmp = dir.join(format!(".{task_id}.{}.tmp", uuid::Uuid::new_v4().simple()));
     {
         let mut file = std::fs::File::create(&tmp)?;
         file.write_all(bytes)?;

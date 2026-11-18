@@ -653,6 +653,7 @@ public struct NativeEvolutionReviewView: View {
             }
             .padding(.horizontal, AeroricSpace.m)
         }
+        .scrollIndicators(.hidden)
         .frame(height: NativePanelGeometry.statusBarHeight)
     }
 
@@ -815,6 +816,7 @@ private struct EvolutionReviewPhaseDetailPanel: View {
             .padding(NativePanelGeometry.panelInset)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollIndicators(.hidden)
         .id("\(store.scenario.id)/\(store.selectedPhaseID ?? "none")")
     }
 
@@ -1292,6 +1294,7 @@ private struct EvolutionReviewDetailContent: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollIndicators(.hidden)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -1330,6 +1333,7 @@ private struct EvolutionReviewRoleSheet: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .scrollIndicators(.hidden)
             .frame(maxHeight: .infinity)
 
             HStack(spacing: AeroricSpace.m) {

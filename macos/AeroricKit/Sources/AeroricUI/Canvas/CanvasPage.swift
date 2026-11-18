@@ -611,14 +611,15 @@ struct SessionPickerSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.m) {
             Text("添加会话卡").font(.system(size: AeroricType.headline, weight: .semibold))
-            TextField("搜索会话…", text: $query).textFieldStyle(.roundedBorder)
+            TextField("搜索会话…", text: $query).textFieldStyle(.capsule)
             List {
                 let tasks = resolver.allTasks().filter(matches)
                 if !tasks.isEmpty {
                     Section("任务") {
                         ForEach(tasks) { task in
-                            Button { onPick(.task(task.id)) } label: { row(task.title, task.agent, task.status) }
-                                .buttonStyle(.plain)
+                            HoverCapsuleRow(selected: false, action: { onPick(.task(task.id)) }) {
+                                row(task.title, task.agent, task.status)
+                            }
                         }
                     }
                 }
@@ -626,8 +627,9 @@ struct SessionPickerSheet: View {
                 if !imported.isEmpty {
                     Section("已导入") {
                         ForEach(imported) { session in
-                            Button { onPick(.imported(session.id)) } label: { row(session.title, session.agent, "done") }
-                                .buttonStyle(.plain)
+                            HoverCapsuleRow(selected: false, action: { onPick(.imported(session.id)) }) {
+                                row(session.title, session.agent, "done")
+                            }
                         }
                     }
                 }
