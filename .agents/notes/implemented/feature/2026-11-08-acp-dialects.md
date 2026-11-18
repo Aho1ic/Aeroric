@@ -80,9 +80,11 @@ DSH 以前不走原生会话：新建会话在 PTY 里跑 `dsh`，界面只有�
 
 - `session/prompt` 的回答经同一条有序通道送到驱动：转发任务用 `biased` 选择，先送完 Agent 在回答之前写出的所有消息，再送回答。目检时发现这一轮的结束跑到了最后一段消息和用量前面。
 - `session/prompt` 的回答就是这一轮的结束：
+  - `end_turn` 记为完成；
   - `cancelled` 记为中断；
   - `refusal` 记为失败；
-  - `max_tokens`、`max_turn_requests` 记为完成，另给一条提示。
+  - `max_tokens`、`max_turn_requests` 记为失败（"<Agent> 到了单轮上限（…），这一轮没做完"），不再另给提示；
+  - 规范之外的值和缺失的 `stopReason` 记为失败并带原值（`rawStatus`）。后三条是 2026-11-17 A3 改的，理由见 [A3](../bug-fix/2026-11-17-a3-unknown-turn-end-is-not-done.md)。
 - 回执：Agent 发来第一条更新，或这一轮正常结束，就算送达。请求出错算拒绝。
 - 一轮进行中发来的消息先收下（回执"已接收"），这一轮结束后作为下一轮发出。ACP 没有插话。
 - 进程在一轮中退出，这一轮记为失败（"DSH 进程已退出"）。传输先断、迟到的失败回答不会再结束一次这一轮。

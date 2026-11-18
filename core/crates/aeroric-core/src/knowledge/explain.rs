@@ -5,7 +5,9 @@
 //! The model sees excerpts with their line numbers; every claim must cite a
 //! `path:line` inside an excerpt or a `note:<path>` it was shown. A claim
 //! with no such cite is dropped, never shown. What it wrote is marked as
-//! inferred on the page, and goes stale when a file it read changes.
+//! inferred on the page, and goes stale when a file it read changes. A9
+//! (2026-11-17): or is deleted; a file that could not be read this time is
+//! said so and leaves the page as it is.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -53,15 +55,77 @@ pub struct Explanation {
     pub dropped: u32,
 }
 
+/// A9 (2026-11-17): how a file an explanation read stands now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceState {
+    /// It is there with other content.
+    Changed,
+    /// It is not there (deleted, or no longer in this module).
+    Removed,
+    /// It is there but could not be read this time; nothing is known.
+    Unreadable,
+}
+
 impl Explanation {
-    /// Files read for it that have changed since, given the current blobs.
-    pub fn changed(&self, current: &BTreeMap<String, String>) -> Vec<String> {
+    /// A9: each file read for it that is no longer as it was read. `current`
+    /// maps a path to its blob now, or to `None` when it is there but could
+    /// not be read this time; a path not in it is gone.
+    pub fn sources_now(
+        &self,
+        current: &BTreeMap<String, Option<String>>,
+    ) -> Vec<(String, SourceState)> {
         self.versions
             .iter()
-            .filter(|(path, blob)| current.get(*path).is_some_and(|now| now != *blob))
-            .map(|(path, _)| path.clone())
+            .filter_map(|(path, blob)| {
+                let state = match current.get(path) {
+                    Some(Some(now)) if now == blob => return None,
+                    Some(Some(_)) => SourceState::Changed,
+                    Some(None) => SourceState::Unreadable,
+                    None => SourceState::Removed,
+                };
+                Some((path.clone(), state))
+            })
             .collect()
     }
+}
+
+/// A9: worth writing again — something it read changed or went away. A file
+/// that could not be read this time is no reason: the page stays as it is.
+pub fn needs_rewrite(states: &[(String, SourceState)]) -> bool {
+    states.iter().any(|(_, s)| *s != SourceState::Unreadable)
+}
+
+/// A9: the lines above an explanation saying why it may be out of date, each
+/// reason on its own: `> 可能过时：生成后 `a` 改过；`b` 被删了或移出了这个模块。`
+/// and `> 待核对：`c` 这次读不到，没有据此改写。`; empty when nothing is.
+pub fn stale_lines(states: &[(String, SourceState)]) -> String {
+    let named = |state: SourceState| -> Option<String> {
+        let paths: Vec<&str> = states
+            .iter()
+            .filter(|(_, s)| *s == state)
+            .map(|(p, _)| p.as_str())
+            .collect();
+        match paths.as_slice() {
+            [] => None,
+            [one] => Some(format!("`{one}` ")),
+            [one, ..] => Some(format!("`{one}` 等 {} 个文件", paths.len())),
+        }
+    };
+    let mut out = String::new();
+    let mut why = Vec::new();
+    if let Some(files) = named(SourceState::Changed) {
+        why.push(format!("{files}改过"));
+    }
+    if let Some(files) = named(SourceState::Removed) {
+        why.push(format!("{files}被删了或移出了这个模块"));
+    }
+    if !why.is_empty() {
+        out.push_str(&format!("> 可能过时：生成后 {}。\n\n", why.join("；")));
+    }
+    if let Some(files) = named(SourceState::Unreadable) {
+        out.push_str(&format!("> 待核对：{files}这次读不到，没有据此改写。\n\n"));
+    }
+    out
 }
 
 /// One generation, for the cost line and the daily limit.

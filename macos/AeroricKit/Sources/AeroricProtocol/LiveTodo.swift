@@ -14,22 +14,50 @@ public struct LiveTodoCheck: Equatable, Sendable {
     }
 }
 
+/// 2026-11-17: what a todo is handed out to — an Agent, or a configuration
+/// of the project's session catalog (which names its Agent) and a model.
+public struct LiveTodoRunner: Equatable, Sendable {
+    public var agent: String
+    public var configurationId: String?
+    public var model: String?
+
+    public init(agent: String, configurationId: String? = nil, model: String? = nil) {
+        self.agent = agent
+        self.configurationId = configurationId
+        self.model = model
+    }
+
+    /// `todo.assign`'s params beside the todo's id.
+    public var params: [String: JSONValue] {
+        var params: [String: JSONValue] = ["agent": .string(agent)]
+        if let configurationId { params["configurationId"] = .string(configurationId) }
+        if let model { params["model"] = .string(model) }
+        return params
+    }
+}
+
 /// 2026-11-15 工作安排第一批: one hand-out of a 待办 — the session it opened.
 public struct LiveTodoAssignment: Equatable, Sendable {
     public var taskId: String
     public var agent: String
     public var model: String?
+    /// 2026-11-17: the session catalog's configuration it ran with, and
+    /// "配置名 · 模型" for the list; absent when only the Agent was picked.
+    public var configurationId: String?
+    public var label: String?
     public var atMs: UInt64
     /// 第二批: the latest 验收检查 of this session, and the failing ones
     /// sent back into it.
     public var check: LiveTodoCheck?
     public var fixes: Int
 
-    public init(taskId: String, agent: String, model: String? = nil, atMs: UInt64 = 0,
-                check: LiveTodoCheck? = nil, fixes: Int = 0) {
+    public init(taskId: String, agent: String, model: String? = nil, configurationId: String? = nil,
+                label: String? = nil, atMs: UInt64 = 0, check: LiveTodoCheck? = nil, fixes: Int = 0) {
         self.taskId = taskId
         self.agent = agent
         self.model = model
+        self.configurationId = configurationId
+        self.label = label
         self.atMs = atMs
         self.check = check
         self.fixes = fixes
@@ -98,6 +126,8 @@ public struct LiveTodo: Equatable, Sendable, Identifiable {
                                      atMs: c["atMs"]?.numberText.flatMap { UInt64($0) } ?? 0)
             }
             return LiveTodoAssignment(taskId: task, agent: a["agent"]?.stringValue ?? "", model: a["model"]?.stringValue,
+                                      configurationId: a["configurationId"]?.stringValue,
+                                      label: a["label"]?.stringValue,
                                       atMs: a["atMs"]?.numberText.flatMap { UInt64($0) } ?? 0, check: check,
                                       fixes: a["fixes"]?.numberText.flatMap { Int($0) } ?? 0)
         }

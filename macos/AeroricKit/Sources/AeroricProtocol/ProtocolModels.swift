@@ -200,6 +200,8 @@ public struct SessionPage: Equatable, Sendable {
     /// The whole session's 统计栏 figures, read from its transcript (first
     /// page only; Codex and Claude).
     public var stats: SessionTranscriptStats? = nil
+    /// A6: what of the transcript could not be read (first page only).
+    public var unreadable: SessionUnreadable? = nil
 
     public static func decode(_ value: JSONValue) -> SessionPage? {
         guard let fields = value.objectValue,
@@ -219,8 +221,40 @@ public struct SessionPage: Equatable, Sendable {
             sessionId: sessionId, family: family, messages: messages,
             nextCursor: fields["nextCursor"]?.stringValue,
             hasMore: fields["hasMore"]?.boolValue ?? false,
-            stats: fields["stats"].flatMap(SessionTranscriptStats.decode)
+            stats: fields["stats"].flatMap(SessionTranscriptStats.decode),
+            unreadable: fields["unreadable"].flatMap(SessionUnreadable.decode)
         )
+    }
+}
+
+/// A6 (2026-11-17): lines of a transcript that are not JSON, and the reason
+/// when the parser refused the whole file.
+public struct SessionUnreadable: Equatable, Sendable {
+    public var count: Int
+    /// 1-based line in the file; nil when only a tail of the file was read.
+    public var firstLine: Int?
+    public var reason: String?
+
+    public init(count: Int, firstLine: Int? = nil, reason: String? = nil) {
+        self.count = count
+        self.firstLine = firstLine
+        self.reason = reason
+    }
+
+    public static func decode(_ value: JSONValue) -> SessionUnreadable? {
+        guard let fields = value.objectValue else { return nil }
+        let count = fields["count"]?.numberText.flatMap { Int($0) } ?? 0
+        let reason = fields["reason"]?.stringValue
+        guard count > 0 || reason != nil else { return nil }
+        return SessionUnreadable(count: count, firstLine: fields["firstLine"]?.numberText.flatMap { Int($0) },
+                                 reason: reason)
+    }
+
+    /// "历史文件里有 2 行读不出来（第一处在第 17 行）".
+    public var text: String {
+        if let reason { return "历史读不出来：\(reason)" }
+        let where_ = firstLine.map { "（第一处在第 \($0) 行）" } ?? "（在读到的末尾部分里）"
+        return "历史文件里有 \(count) 行读不出来\(where_)"
     }
 }
 

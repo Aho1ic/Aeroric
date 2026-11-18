@@ -56,6 +56,15 @@ final class DelegationTextTests: XCTestCase {
                                       sent: true)
         XCTAssertEqual(DelegationText.state(card).0, "已回报 · 已发送（没有投递记录）")
         XCTAssertFalse(card.canSend, "an old card that went is not offered again")
+        // 2026-11-17: an expert's answer is taken by `ask_expert`, never queued.
+        var expert = LiveDelegationCard(delegationId: "dg-2", origin: "session", roleName: "专家", harnessLabel: "Codex",
+                                        contract: LiveDelegationContract(instruction: "问", role: "expert"),
+                                        state: "failed", sent: true)
+        XCTAssertEqual(DelegationText.state(expert).0, "失败 · 主会话已取走")
+        expert.state = "reported"
+        XCTAssertEqual(DelegationText.state(expert).0, "已回报 · 主会话已取走")
+        expert.sent = false
+        XCTAssertEqual(DelegationText.state(expert).0, "已回报")
         let words: [(String, String)] = [
             ("waiting", "已入队"), ("sending", "正在发送"), ("accepted", "对方已收下"), ("delivered", "已送达"),
             ("failed", "没送到"), ("unknown", "结果不明"), ("paused", "已暂停"), ("withdrawn", "已撤回"),

@@ -5,8 +5,14 @@
 //! permission at start; Claude takes a steer as its next turn. DSH runs
 //! over ACP (2026-11-13): its own sandbox holds the tier, fixed at start,
 //! and a write outside it asks first; local workspaces only.
+//!
+//! A4 (2026-11-17): a read-only session (`plan`) counts as read-only only
+//! when the harness itself holds it there — Codex's and DSH's read-only
+//! sandboxes, Claude's plan mode. omp gets `always-ask` for `plan`, which
+//! leaves every write to the user's refusal, so it is not.
 
 use aeroric_protocol::live_capability::{CapabilityEntry, Feature, Place, SupportState};
+use aeroric_protocol::project::ProjectTarget;
 
 use crate::tasks::ProtocolFamily;
 
@@ -49,6 +55,12 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
         (P::Dsh, F::Steer) => degraded("DSH 会作为下一轮发出"),
         (P::Dsh, F::DelegateChild | F::Reviewer) => no("还没加进审查者和子会话的候选"),
         (P::Dsh, F::Effort | F::Receipts) => yes(None),
+        (P::Dsh, F::StrictReadOnly) => yes(Some("DSH 只读沙盒强制 · 越权写入先问你")),
+        (P::Codex, F::StrictReadOnly) => yes(Some("Codex 只读沙盒强制 · 越权写入先问你")),
+        (P::Claude, F::StrictReadOnly) => yes(Some("Claude 的 plan 模式把关 · 无沙盒")),
+        (P::Omp, F::StrictReadOnly) => {
+            no("omp 没有能在启动时固定的只读档：只读会话会落到“每次都问”，写入只能靠你拒绝")
+        }
         (_, F::PermAsk | F::PermAutoEdit | F::PermFullAccess) => yes(Some(enforced)),
         (P::Omp, F::PermChange) => degraded("omp 启动时固定权限：下次启动生效"),
         (P::Codex | P::Claude, F::PermChange) => yes(None),
@@ -73,6 +85,23 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
         state,
         note,
     }
+}
+
+/// Where a project's sessions run, for the table.
+pub fn place_of(target: &ProjectTarget) -> Place {
+    match target {
+        ProjectTarget::Ssh { .. } => Place::Remote,
+        ProjectTarget::Local { .. } | ProjectTarget::Wsl { .. } => Place::Local,
+    }
+}
+
+/// A4: why a read-only (`plan`) session of `family` at `place` cannot be
+/// held read-only, or `None` when the harness itself holds it. Discussion
+/// members and read-only delegations are refused on `Some`.
+pub fn read_only_refusal(family: ProtocolFamily, place: Place) -> Option<String> {
+    let entry = support(family, place, Feature::StrictReadOnly);
+    (entry.state != SupportState::Yes)
+        .then(|| entry.note.unwrap_or_else(|| "还没核对它能不能只读".into()))
 }
 
 /// One family's whole table at `place`.
@@ -144,5 +173,54 @@ mod tests {
             support(ProtocolFamily::Dsh, Place::Remote, Feature::Receipts).state,
             SupportState::No
         );
+    }
+
+    /// A4: `Yes` only where the launch mapping for `plan` really hands the
+    /// harness a read-only mode; these are the mappings the table rests on.
+    #[test]
+    fn strict_read_only_rests_on_the_plan_mappings() {
+        use crate::sessions::live::{acp::dialect, claude::map as claude, codex::map as codex};
+        assert_eq!(claude::claude_permission_mode("plan"), "plan");
+        let policy = codex::codex_policy("plan");
+        assert_eq!(policy.sandbox_mode, "read-only");
+        assert_eq!(policy.sandbox_policy["type"], "readOnly");
+        assert_eq!(
+            dialect::DSH.pin("plan").unwrap().env,
+            vec![("DSH_PERMISSION_MODE".to_string(), "read-only".to_string())]
+        );
+        // omp's `plan` is its ask-everything tier: nothing it holds itself.
+        assert_eq!(
+            crate::agents::launch::omp_permission_flag("plan"),
+            Some("always-ask")
+        );
+
+        for family in [
+            ProtocolFamily::Codex,
+            ProtocolFamily::Claude,
+            ProtocolFamily::Dsh,
+        ] {
+            assert_eq!(read_only_refusal(family, Place::Local), None, "{family:?}");
+        }
+        let omp = read_only_refusal(ProtocolFamily::Omp, Place::Local).unwrap();
+        assert!(omp.contains("omp") && omp.contains("每次都问"), "{omp}");
+        let remote = read_only_refusal(ProtocolFamily::Dsh, Place::Remote).unwrap();
+        assert!(remote.contains("本机"), "{remote}");
+        assert_eq!(
+            read_only_refusal(ProtocolFamily::Codex, Place::Remote),
+            None
+        );
+    }
+
+    #[test]
+    fn only_an_ssh_project_is_remote() {
+        let ssh = ProjectTarget::Ssh {
+            connection_id: "c1".into(),
+            remote_path: "/srv/app".into(),
+        };
+        assert_eq!(place_of(&ssh), Place::Remote);
+        let local = ProjectTarget::Local {
+            path: "/tmp/p".into(),
+        };
+        assert_eq!(place_of(&local), Place::Local);
     }
 }

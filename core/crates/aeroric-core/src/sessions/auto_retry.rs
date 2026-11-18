@@ -162,6 +162,7 @@ pub fn reason_words(reason: NotRunReason) -> &'static str {
         NotRunReason::Model => "模型不可用",
         NotRunReason::Rejected => "请求被拒",
         NotRunReason::HostRestart => "Aeroric 重启",
+        NotRunReason::UnknownEnd => "结束状态不明",
         NotRunReason::Other => "出错",
     }
 }

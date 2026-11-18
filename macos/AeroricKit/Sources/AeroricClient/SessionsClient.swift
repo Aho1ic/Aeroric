@@ -74,12 +74,19 @@ public struct SessionsClient: Sendable {
         return page
     }
 
+    /// Pages of history a session first opens with; "加载更早的消息" asks for
+    /// this many more each time (A6).
+    public static let historyPageStep = 24
+
     /// Every page of `session.history`, oldest first (the host pages to fit one
-    /// frame). Stops after `maxPages`, keeping the newest.
-    public func fullHistory(taskId: String, maxPages: Int = 24) async throws -> SessionPage {
+    /// frame). Stops after `maxPages`, keeping the newest; then `hasMore` and
+    /// `nextCursor` say older messages remain (A6: the page offers them).
+    /// `stats` and `unreadable` are the first page's.
+    public func fullHistory(taskId: String, maxPages: Int = historyPageStep) async throws -> SessionPage {
         var page = try await historyPage(taskId: taskId, cursor: nil)
         var messages = page.messages
         let stats = page.stats
+        let unreadable = page.unreadable
         var pages = 1
         while page.hasMore, let cursor = page.nextCursor, pages < maxPages {
             page = try await historyPage(taskId: taskId, cursor: cursor)
@@ -88,6 +95,7 @@ public struct SessionsClient: Sendable {
         }
         page.messages = messages
         page.stats = stats
+        page.unreadable = unreadable
         return page
     }
 

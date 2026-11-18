@@ -6,6 +6,7 @@
 
 use std::sync::{Arc, Weak};
 
+use aeroric_core::sessions::live::capabilities;
 use aeroric_core::sessions::live::delegation::{
     Child, DelegationError, DelegationHost, ParentInfo, WriterRef,
 };
@@ -290,6 +291,13 @@ impl DelegationHost for HostDelegations {
         let project_id = field(&project, "id").ok_or("会话的项目没有 id")?;
         let (agent, family, label, model, config) =
             self.pick(&live, &project, &record, &card.contract.agent)?;
+        // A4: a read-only child only where the harness holds it read-only.
+        if card.contract.permission == "plan" {
+            let place = capabilities::place_of(&aeroric_core::projects::resolve_location(&project));
+            if let Some(why) = capabilities::read_only_refusal(family, place) {
+                return Err(not_read_only(label, &why));
+            }
+        }
         let suffix = match &card.role_name {
             Some(role) => format!("委派·{role}"),
             None => "委派".into(),
@@ -423,6 +431,11 @@ impl DelegationHost for HostDelegations {
 }
 
 /// A record's real local directory; `None` for a remote project.
+/// A4: why a harness cannot take a read-only delegation.
+fn not_read_only(label: &str, why: &str) -> String {
+    format!("{label} 不能保证只读，不能接只读委派（{why}）")
+}
+
 fn real_directory(record: &Record, project: &Record) -> Option<std::path::PathBuf> {
     match working_directory(record, project)? {
         aeroric_core::tasks::executor::WorkingDirectory::Local { path } => {

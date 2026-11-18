@@ -30,14 +30,24 @@ public struct AgentUpgradeClient: Sendable {
         public var log: [String]
         public var message: String?
         public var finishedAtMs: UInt64?
+        /// A11 (2026-11-17): the harness whose upgrade holds the installer
+        /// this one needs (the same npm or Homebrew); it starts after.
+        public var waitingFor: String?
 
         public init(state: JobState, installing: Bool = false, log: [String] = [], message: String? = nil,
-                    finishedAtMs: UInt64? = nil) {
+                    finishedAtMs: UInt64? = nil, waitingFor: String? = nil) {
             self.state = state
             self.installing = installing
             self.log = log
             self.message = message
             self.finishedAtMs = finishedAtMs
+            self.waitingFor = waitingFor
+        }
+
+        /// A11: `等 Claude Code 装完` while waiting, else nil.
+        public var waitingText: String? {
+            guard state == .running, let waitingFor else { return nil }
+            return "等 \(waitingFor) 装完"
         }
     }
 
@@ -113,7 +123,8 @@ public struct AgentUpgradeClient: Sendable {
                 return Job(state: state, installing: fields["installing"]?.boolValue ?? false,
                            log: (fields["log"]?.arrayValue ?? []).compactMap(\.stringValue),
                            message: fields["message"]?.stringValue,
-                           finishedAtMs: number(fields["finishedAt"]))
+                           finishedAtMs: number(fields["finishedAt"]),
+                           waitingFor: fields["waitingFor"]?.stringValue)
             }
             return Harness(agent: agent, title: row["title"]?.stringValue ?? agent,
                            installed: row["installed"]?.stringValue, latest: row["latest"]?.stringValue,

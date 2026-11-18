@@ -259,6 +259,7 @@ impl LiveStatusSink for TrackingSink {
                 turn_id,
                 reason,
                 error,
+                ..
             } => self
                 .0
                 .turn_ended(&update.task_id, turn_id, *reason, error.clone()),
@@ -445,6 +446,81 @@ mod tests {
         run(&dir, &["add", "-A"]);
         run(&dir, &["commit", "-q", "-m", "init"]);
         dir
+    }
+
+    struct Quiet;
+    impl LiveStatusSink for Quiet {
+        fn status(&self, _: &str, _: &str, _: u64, _: TaskStatus, _: Option<String>) {}
+        fn session(&self, _: &str, _: &str, _: ProtocolFamily, _: &str, _: &str, _: Option<&str>) {}
+    }
+
+    /// A3: a turn the agent ended on a state Aeroric does not know arrives
+    /// as `failed` with its raw state; it changed files, yet only the turn
+    /// that explicitly completed starts the checks.
+    #[test]
+    fn only_an_explicitly_completed_turn_starts_the_checks() {
+        let dir = repo();
+        let tracker = TurnChangeTracker::new(Arc::new(Quiet), Arc::default());
+        tracker.checks.set_extra(Arc::new(|_| {
+            vec![super::super::auto_check::CheckSpec {
+                kind: "tests",
+                profile: "shell".into(),
+                label: "Shell".into(),
+                program: "sh".into(),
+                args: vec!["-c".into(), "true".into()],
+            }]
+        }));
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        tracker.set_hook(Arc::new(move |settled| {
+            let _ = tx.lock().send(settled);
+        }));
+        tracker.watch("t", "p", dir.to_str().unwrap());
+        let sink = TrackingSink(Arc::clone(&tracker));
+        let update = |seq: u64, kind| SessionUpdate {
+            task_id: "t".into(),
+            seq,
+            at_ms: seq,
+            kind,
+        };
+        let mut seq = 0;
+        let mut turn = |reason: TurnEndReason, raw: Option<&str>| {
+            seq += 1;
+            let turn_id = format!("u{seq}");
+            sink.update(&update(
+                seq,
+                SessionUpdateKind::TurnStarted {
+                    turn_id: turn_id.clone(),
+                },
+            ));
+            // Wait for the turn's first snapshot before changing a file.
+            let (before, started) = tracker.started.lock().remove("t").unwrap();
+            let tree = before.recv_timeout(GIT_TIMEOUT).unwrap();
+            let (again, before) = mpsc::channel();
+            again.send(tree).unwrap();
+            tracker.started.lock().insert("t".into(), (before, started));
+            std::fs::write(dir.join("src/a.rs"), format!("turn {seq}\n")).unwrap();
+            sink.update(&update(
+                seq,
+                SessionUpdateKind::TurnEnded {
+                    turn_id,
+                    reason,
+                    error: raw.map(|raw| format!("Codex 返回了没见过的结束状态：{raw}")),
+                    raw_status: raw.map(str::to_string),
+                },
+            ));
+            rx.recv_timeout(Duration::from_secs(30)).unwrap()
+        };
+        for raw in ["paused", ""] {
+            let settled = turn(TurnEndReason::Failed, Some(raw));
+            assert!(settled.diff.is_some(), "the turn changed a file");
+            assert!(!settled.checking, "{raw:?}: no checks on an unknown end");
+        }
+        let settled = turn(TurnEndReason::Completed, None);
+        assert!(settled.diff.is_some());
+        assert!(settled.checking, "an explicit completion starts them");
+        tracker.checks.cancel("t");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

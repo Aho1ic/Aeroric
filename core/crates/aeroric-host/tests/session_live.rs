@@ -46,14 +46,16 @@ impl StorageLocationProbe for LocalProbe {
     }
 }
 
-/// `claude` is the Claude family; every other agent is Codex.
+/// `claude` is the Claude family and `omp` is omp (A4: the read-only check
+/// reads the launch family; no test here starts an omp task); every other
+/// agent is Codex.
 struct Families;
 
 fn family_of(agent: &str) -> ProtocolFamily {
-    if agent == "claude" {
-        ProtocolFamily::Claude
-    } else {
-        ProtocolFamily::Codex
+    match agent {
+        "claude" => ProtocolFamily::Claude,
+        "omp" => ProtocolFamily::Omp,
+        _ => ProtocolFamily::Codex,
     }
 }
 
@@ -774,6 +776,78 @@ async fn a_refused_login_is_marked_until_a_turn_completes() {
     host.until("done", |h| h.record()["status"] == "done").await;
     let cleared = host.call("login.state", json!({})).await.unwrap();
     assert_eq!(cleared["expired"], json!([]), "{cleared}");
+}
+
+/// A3: Codex ending a turn on a state its schema does not list fails the
+/// task instead of settling it done; the state is kept on the record, and
+/// the history grades that turn "没跑成 · 结束状态不明" even though Codex's
+/// own rollout says it completed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unknown_end_state_fails_the_turn_and_its_history_says_not_run() {
+    let mut host = Host::start(true).await;
+    let rollout = host._root.join("th-1.jsonl");
+    std::fs::write(
+        &rollout,
+        [
+            json!({"timestamp": "2026-01-01T00:00:00.000Z", "type": "event_msg",
+                "payload": {"type": "task_started"}}),
+            json!({"timestamp": "2026-01-01T00:00:03.000Z", "type": "event_msg",
+                "payload": {"type": "token_count", "info": {
+                    "total_token_usage": {"input_tokens": 10, "output_tokens": 2},
+                    "last_token_usage": {"input_tokens": 10, "total_tokens": 12},
+                    "model_context_window": 1000}}}),
+            json!({"timestamp": "2026-01-01T00:00:05.000Z", "type": "event_msg",
+                "payload": {"type": "task_complete"}}),
+        ]
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n"),
+    )
+    .unwrap();
+    host.start_task("hi");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th-1", "path": rollout.to_string_lossy()}}),
+    );
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": "u1", "status": "paused"}}),
+    );
+    host.until("failed and kept", |h| {
+        h.record()["status"] == "failed" && h.record()["unknownTurnEnds"].is_array()
+    })
+    .await;
+    let record = host.record();
+    assert_eq!(
+        record["failureReason"], "Codex 返回了没见过的结束状态：paused",
+        "{record}"
+    );
+    let ends = record["unknownTurnEnds"].as_array().unwrap();
+    assert_eq!(ends.len(), 1, "{record}");
+    assert_eq!(ends[0]["status"], "paused");
+
+    let history = host
+        .call("session.history", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    let turn = &history["stats"]["turns"][0];
+    assert_eq!(turn["notRun"]["reason"], "unknownEnd", "{history}");
+    assert_eq!(
+        turn["notRun"]["message"],
+        "Codex 返回了没见过的结束状态：paused"
+    );
+    assert_eq!(turn["failed"], true);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2454,6 +2528,69 @@ async fn a_todo_is_handed_out_and_accepted_by_the_user() {
     assert_eq!(unknown["code"], "NOT_FOUND");
 }
 
+/// 2026-11-17 交办选配置: a configuration that cannot run is refused before
+/// any session opens; one that can pins the session (`task.run`'s
+/// `agentConfigId` lands on the task).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_todo_is_handed_out_only_with_a_configuration_that_can_run() {
+    let host = Host::start(true).await;
+    let saved = host
+        .call(
+            "todo.save",
+            json!({"todo": {"id": "", "projectId": "project-1", "title": "换个模型做"}}),
+        )
+        .await
+        .unwrap();
+    let id = saved["todo"]["id"].as_str().unwrap().to_string();
+    let tasks = |host: &Host| host.service.load("project-1").unwrap().records.len();
+    let before = tasks(&host);
+    for (configuration, words) in [("agent-config:gone", "配置不存在"), ("omp", "现在不能用")]
+    {
+        let refused = host
+            .call(
+                "todo.assign",
+                json!({"id": id, "configurationId": configuration}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused["code"], "INVALID_ARGUMENT", "{refused}");
+        assert!(
+            refused["message"].as_str().unwrap().contains(words),
+            "{refused}"
+        );
+    }
+    assert_eq!(tasks(&host), before, "nothing opened");
+    let listed = host.call("todo.list", json!({})).await.unwrap();
+    assert_eq!(listed["todos"][0]["state"], "open");
+
+    // The pin reaches the task whatever the launch makes of it.
+    let path = host
+        .project
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
+    let _ = host
+        .call(
+            "task.run",
+            json!({"projectPath": path, "agent": "codex", "prompt": "x",
+                   "taskId": "task-pinned", "agentConfigId": "deepseek"}),
+        )
+        .await;
+    let record = host
+        .service
+        .load("project-1")
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|r| r.get("id").and_then(Value::as_str) == Some("task-pinned"))
+        .expect("task.run made the task");
+    assert_eq!(
+        record.get("agentConfigId").and_then(Value::as_str),
+        Some("deepseek")
+    );
+}
+
 /// 2026-11-15 待办第二批: an Agent's proposal waits until the user takes it;
 /// a 验收检查 is kept with the todo and runs only after the session's turn.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3129,4 +3266,118 @@ async fn the_expert_is_set_from_the_choices_before_an_agent_can_ask() {
         .call("context.expertAvailable", json!({"token": "nope"}))
         .await;
     assert!(bad.is_err());
+}
+
+/// A4 (2026-11-17): a discussion's members only read, so a harness that
+/// cannot hold itself read-only (omp: its `plan` is "ask every time") is
+/// refused before anything is made; the capability table says the same.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_discussion_takes_only_members_that_hold_themselves_read_only() {
+    let host = Host::start(true).await;
+    let strict = |table: &Value| {
+        table["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["feature"] == "strictReadOnly")
+            .unwrap()["state"]
+            .clone()
+    };
+    let omp = host
+        .call("session.capabilities", json!({"family": "omp"}))
+        .await
+        .unwrap();
+    assert_eq!(strict(&omp), "no", "{omp}");
+    let codex = host
+        .call("session.capabilities", json!({"family": "codex"}))
+        .await
+        .unwrap();
+    assert_eq!(strict(&codex), "yes", "{codex}");
+
+    let tasks = |host: &Host| host.service.load("project-1").unwrap().records.len();
+    let before = tasks(&host);
+    let refused = host
+        .call(
+            "discussion.start",
+            json!({"projectId": "project-1", "topic": "Tabs or spaces?",
+                   "members": [{"configurationId": "codex"}, {"configurationId": "omp"}]}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refused["code"], "INVALID_ARGUMENT", "{refused}");
+    let message = refused["message"].as_str().unwrap();
+    assert!(
+        message.contains("不能保证只读") && message.contains("每次都问"),
+        "{refused}"
+    );
+    assert_eq!(tasks(&host), before, "nothing made");
+}
+
+/// A6 (2026-11-17): a line of the transcript that is not JSON used to vanish
+/// without a word; the first history page now says how many and where.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_transcript_line_that_does_not_read_is_reported() {
+    let mut host = Host::start(true).await;
+    let rollout = host._root.join("th-1.jsonl");
+    let good = |text: &str| {
+        json!({"timestamp": "2026-01-01T00:00:00.000Z", "type": "response_item",
+            "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": text}]}})
+        .to_string()
+    };
+    std::fs::write(
+        &rollout,
+        format!(
+            "{}\n{{\"type\": \"respon\n{}\n",
+            good("first"),
+            good("second")
+        ),
+    )
+    .unwrap();
+    host.start_task("hi");
+    let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let init = peer.expect("initialize").await;
+    peer.reply(&init, json!({}));
+    peer.expect("initialized").await;
+    let start = peer.expect("thread/start").await;
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th-1", "path": rollout.to_string_lossy()}}),
+    );
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-1", "turn": {"id": "u1", "status": "completed"}}),
+    );
+    host.until("done", |h| h.record()["status"] == "done").await;
+
+    let history = host
+        .call("session.history", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        history["unreadable"],
+        json!({"count": 1, "firstLine": 2}),
+        "{history}"
+    );
+    let texts: Vec<_> = history["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["blocks"][0]["text"].as_str())
+        .collect();
+    assert_eq!(texts, ["first", "second"], "{history}");
+    // Said once: an older page carries no repeat.
+    let older = host
+        .call(
+            "session.history",
+            json!({"taskId": "task-1", "cursor": "1"}),
+        )
+        .await
+        .unwrap();
+    assert!(older.get("unreadable").is_none(), "{older}");
 }

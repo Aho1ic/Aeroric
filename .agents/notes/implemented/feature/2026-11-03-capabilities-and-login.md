@@ -20,6 +20,7 @@ Status: implemented
   - 状态有四种：支持、不支持（写原因）、降级（写差异）、未知（标"未确认"）。
   - 事实来自各驱动：Codex 有 OS 沙盒；Claude 和 omp 由自己把关；omp 启动时固定权限；Claude 的插话会变成下一轮；`/review` 只有 Codex 有。远程环境下的委派和审查先标"未知"。
   - 宿主提供 `session.capabilities`。
+  - 2026-11-17（A4）新增一项"严格只读"（`strictReadOnly`）：`plan` 下由 Harness 自己强制只读的族才算支持（Codex、Claude、本机 DSH），omp 不支持。讨论成员和只读委派按这一项放行，见 [A4](../bug-fix/2026-11-17-a4-discussion-read-only-must-be-enforced.md)。App 读能力表时也读 DSH 的。
 - **界面**：
   - 权限选项右侧写明谁负责强制执行，不支持的选项灰掉；
   - 斜杠菜单和 `/review` 的拦截都改为读表；

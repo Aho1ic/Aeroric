@@ -67,20 +67,31 @@ pub fn map_notification(
         "turn/completed" => {
             let turn = params.get("turn").cloned().unwrap_or(Value::Null);
             let turn_id = string(&turn, "id");
-            let reason = match s(&turn, "status") {
-                Some("interrupted") => TurnEndReason::Interrupted,
-                Some("failed") => TurnEndReason::Failed,
-                _ => TurnEndReason::Completed,
-            };
-            let error = turn
+            let reported = turn
                 .pointer("/error/message")
                 .and_then(Value::as_str)
                 .map(str::to_string);
+            // A3: only an explicit `completed` completed the turn; a state
+            // the schema does not list, or none, is a failure that keeps it.
+            let (reason, error, raw_status) = match s(&turn, "status") {
+                Some("completed") => (TurnEndReason::Completed, reported, None),
+                Some("interrupted") => (TurnEndReason::Interrupted, reported, None),
+                Some("failed") => (TurnEndReason::Failed, reported, None),
+                _ => {
+                    let (raw, why) = super::super::unknown_end("Codex", turn.get("status"));
+                    let error = match reported {
+                        Some(detail) => format!("{why}（{detail}）"),
+                        None => why,
+                    };
+                    (TurnEndReason::Failed, Some(error), Some(raw))
+                }
+            };
             (
                 vec![K::TurnEnded {
                     turn_id: turn_id.clone(),
                     reason,
                     error: error.clone(),
+                    raw_status,
                 }],
                 Some(TurnSignal::Ended {
                     turn_id,

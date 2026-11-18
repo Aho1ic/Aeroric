@@ -448,8 +448,8 @@ fn history(request: Request, env: Arc<Env>) -> Frame {
         .get("before")
         .and_then(Value::as_str)
         .and_then(|cursor| cursor.parse::<usize>().ok());
-    match store(context).messages(id) {
-        Ok((session, messages)) => {
+    match store(context).messages_with_unreadable(id) {
+        Ok((session, messages, unreadable)) => {
             // Qoder writes Claude's format; Cursor and OpenCode are shown
             // through the Claude rendering (read-only, `agent` tells them apart).
             let family = match session.agent {
@@ -466,6 +466,10 @@ fn history(request: Request, env: Arc<Env>) -> Frame {
             page["origin"] = json!("imported");
             page["agent"] = json!(session.agent.as_str());
             page["title"] = json!(session.title);
+            // A6: lines of the file that are not JSON, said on the first page.
+            if let Some(unreadable) = unreadable.filter(|_| before.is_none()) {
+                page["unreadable"] = serde_json::to_value(unreadable).unwrap_or_default();
+            }
             ok(&request, page)
         }
         Err(ImportError::UnknownSession(id)) => failure(

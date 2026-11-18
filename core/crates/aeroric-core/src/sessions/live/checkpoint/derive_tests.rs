@@ -56,6 +56,7 @@ fn end() -> SessionUpdateKind {
         turn_id: "u".into(),
         reason: TurnEndReason::Completed,
         error: None,
+        raw_status: None,
     }
 }
 

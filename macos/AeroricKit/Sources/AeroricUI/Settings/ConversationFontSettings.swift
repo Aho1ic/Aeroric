@@ -64,11 +64,38 @@ struct ConversationFontSettingsRow: View {
                 label(ok: family != nil, text: family != nil ? "本机已安装" : "本机没有这个字体，按苹方显示")
             }
         case .mono, .maple:
-            if let family {
-                label(ok: true, text: "已启用：\(family)")
-            } else if let package = FontPackage.of(choice) {
-                download(package)
+            if let package = FontPackage.of(choice) {
+                preset(package)
             }
+        }
+    }
+
+    /// A10 (2026-11-17): a preset whose files are on disk but did not
+    /// register says why, with 重试 (register again, no download) and 删除 —
+    /// never "未下载". A download under way, or one that failed, shows as
+    /// before.
+    @ViewBuilder private func preset(_ package: FontPackage) -> some View {
+        let state = FontPackage.installState(choice: package.choice, family: family,
+                                             filesPresent: FontDownloads.filesPresent(package.choice),
+                                             failure: downloads.failures[package.choice])
+        switch (downloads.phase(package.choice), state) {
+        case (.idle, let .active(name)):
+            label(ok: true, text: "已启用：\(name)")
+        case (.idle, let .notRegistered(text)):
+            HStack(spacing: AeroricSpace.s) {
+                label(ok: false, text: text)
+                    .help(text)
+                Button("重试") { downloads.retryRegistration(package.choice) }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .fixedSize()
+                    .accessibilityIdentifier("settings.appearance.cjk-font.retry-register")
+                Button("删除") { downloads.remove(package.choice) }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .fixedSize()
+                    .accessibilityIdentifier("settings.appearance.cjk-font.remove")
+            }
+        default:
+            download(package)
         }
     }
 

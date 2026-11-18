@@ -83,8 +83,10 @@ fn apply(live: &Live, request: &Request) -> Frame {
     };
     let ledger = live.executor.turn_ledger();
     match ledger.apply(&p.task_id, turn, action, running(live, &p.task_id)) {
+        // A7: a half-done undo still answers with its plan (`failed` says
+        // what was not written) and still tells the agent what was.
         Ok(done) => {
-            if !done.files.is_empty() {
+            if turn_ledger::worth_a_note(&done) {
                 live.executor
                     .checkpoints()
                     .arm_note(&p.task_id, turn_ledger::note(action, &done));

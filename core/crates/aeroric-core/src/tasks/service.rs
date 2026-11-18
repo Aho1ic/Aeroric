@@ -2189,6 +2189,21 @@ impl TaskService {
         })
     }
 
+    /// A3: an agent ended one of this task's turns on a state Aeroric does
+    /// not know ([`reducer::note_unknown_turn_end`]).
+    pub fn note_unknown_turn_end(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        end: &crate::sessions::turn_outcome::UnknownEnd,
+    ) -> Result<Applied, TaskError> {
+        self.serial(|| {
+            self.metadata_one(project_id, task_id, Persist::Commit, |records| {
+                reducer::note_unknown_turn_end(records, task_id, end)
+            })
+        })
+    }
+
     /// 交接换来源：清掉任务记下的会话，下一条消息起新会话（[`reducer::detach_session`]）。
     pub fn detach_session(&self, project_id: &str, task_id: &str) -> Result<Applied, TaskError> {
         self.serial(|| {

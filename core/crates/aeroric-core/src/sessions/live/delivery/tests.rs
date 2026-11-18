@@ -86,6 +86,7 @@ fn turn_ended(queue: &Deliveries, task: &str) {
             turn_id: "u".into(),
             reason: aeroric_protocol::session_live::TurnEndReason::Completed,
             error: None,
+            raw_status: None,
         },
     ));
 }

@@ -509,8 +509,8 @@ fn module_of(page: &aeroric_protocol::wiki::WikiPage) -> Option<String> {
 /// says it may be stale; the buttons are not held back.
 const AUTO_REGENERATE_AFTER_MS: u64 = 24 * 3600 * 1000;
 
-/// Module ids whose explanation is missing or read a file that changed
-/// since (the page's overview sources carry the current versions), stale
+/// Module ids whose explanation is missing or read a file that changed or
+/// went since (the page's overview sources carry the current versions), stale
 /// ones first; a stale one generated less than `cooldown_ms` ago is left
 /// out.
 fn wanted(live: &Live, project_id: &str, cooldown_ms: u64) -> Vec<String> {
@@ -536,18 +536,20 @@ fn wanted(live: &Live, project_id: &str, cooldown_ms: u64) -> Vec<String> {
         match explanations.get(&id) {
             None => missing.push(id),
             Some(e) => {
-                let current: std::collections::BTreeMap<String, String> = page
+                // A9: a source without a version is a file that could not
+                // be read this time — not a reason to write it again.
+                let current: std::collections::BTreeMap<String, Option<String>> = page
                     .blocks
                     .iter()
                     .find(|b| b.key.ends_with("#overview"))
                     .map(|b| {
                         b.sources
                             .iter()
-                            .filter_map(|s| Some((s.target.clone(), s.version.clone()?)))
+                            .map(|s| (s.target.clone(), s.version.clone()))
                             .collect()
                     })
                     .unwrap_or_default();
-                if !e.changed(&current).is_empty()
+                if aeroric_core::knowledge::explain::needs_rewrite(&e.sources_now(&current))
                     && now_ms().saturating_sub(e.at_ms) >= cooldown_ms
                 {
                     stale.push(id);

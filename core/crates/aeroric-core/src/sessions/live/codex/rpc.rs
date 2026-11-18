@@ -47,6 +47,8 @@ impl Transport {
             .kill_on_drop(true);
         crate::runtime::subprocess::configure_terminable_tokio_process_tree(&mut command);
         let mut child = command.spawn()?;
+        let started = std::time::Instant::now();
+        let tail: StderrTail = Arc::default();
         let mut stdin = child
             .stdin
             .take()
@@ -56,7 +58,9 @@ impl Transport {
             .take()
             .ok_or_else(|| std::io::Error::other("no stdout"))?;
         // 2026-11-05: an agent that dies says why on stderr; the first lines
-        // go to the host log (redacted there) instead of nowhere.
+        // go to the host log (redacted there) instead of nowhere. 2026-11-17:
+        // each with how long after the start it came, and the last ones kept
+        // for a handshake that fails ([`ChildGuard::stderr_tail`]).
         if let Some(stderr) = child.stderr.take() {
             let name = command
                 .as_std()
@@ -66,15 +70,25 @@ impl Transport {
                 .next()
                 .unwrap_or("agent")
                 .to_string();
+            let tail = Arc::clone(&tail);
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 let mut said = 0;
                 while let Ok(Some(line)) = lines.next_line().await {
-                    if said < 40 && !line.trim().is_empty() {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let line: String = line.chars().take(300).collect();
+                    let line = format!("+{}ms {line}", started.elapsed().as_millis());
+                    if said < 40 {
                         said += 1;
-                        let line: String = line.chars().take(300).collect();
                         eprintln!("[{name} stderr] {line}");
                     }
+                    let mut kept = tail.lock();
+                    if kept.len() == STDERR_TAIL {
+                        kept.pop_front();
+                    }
+                    kept.push_back(line);
                 }
             });
         }
@@ -101,6 +115,11 @@ impl Transport {
         Ok((
             Transport { outgoing, incoming },
             ChildGuard {
+                watch: ProcessWatch {
+                    pid: child.id(),
+                    started,
+                    tail,
+                },
                 child: Some(child),
                 cleanup: None,
             },
@@ -108,12 +127,49 @@ impl Transport {
     }
 }
 
+/// The last stderr lines of a process, each with `+<ms since start>`.
+type StderrTail = Arc<Mutex<std::collections::VecDeque<String>>>;
+
+/// Stderr lines [`ChildGuard::stderr_tail`] keeps.
+const STDERR_TAIL: usize = 20;
+
+/// 2026-11-17: what the host log says of a process — its id, its age and
+/// its last stderr lines. Shared, so a handshake can hold it across awaits
+/// (the guard itself is not `Sync`).
+#[derive(Clone)]
+pub struct ProcessWatch {
+    pid: Option<u32>,
+    started: std::time::Instant,
+    tail: StderrTail,
+}
+
+impl ProcessWatch {
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
+    /// How long ago the process was started.
+    pub fn age(&self) -> std::time::Duration {
+        self.started.elapsed()
+    }
+
+    /// Its last stderr lines (at most 20), oldest first.
+    pub fn stderr_tail(&self) -> Vec<String> {
+        self.tail.lock().iter().cloned().collect()
+    }
+}
+
 pub struct ChildGuard {
     child: Option<tokio::process::Child>,
     cleanup: Option<Box<dyn FnOnce() + Send>>,
+    watch: ProcessWatch,
 }
 
 impl ChildGuard {
+    pub fn watch(&self) -> ProcessWatch {
+        self.watch.clone()
+    }
+
     /// Run `cleanup` once the process is gone (killed here, or already exited):
     /// e.g. revoke the credentials it was started with.
     pub fn with_cleanup(mut self, cleanup: impl FnOnce() + Send + 'static) -> Self {
@@ -293,6 +349,39 @@ impl RpcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2026-11-17: a process's last stderr lines are kept, timed from its
+    /// start, for a handshake that fails; only the last 20.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_last_stderr_lines_of_a_process_are_kept() {
+        let mut command = tokio::process::Command::new("sh");
+        command.args([
+            "-c",
+            "i=0; while [ $i -lt 25 ]; do echo line$i >&2; i=$((i+1)); done; echo; sleep 5",
+        ]);
+        let (_transport, guard) = Transport::spawn(command).unwrap();
+        let guard = guard.watch();
+        assert!(guard.pid().is_some());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while guard
+            .stderr_tail()
+            .last()
+            .is_none_or(|l| !l.ends_with("line24"))
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{:?}",
+                guard.stderr_tail()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let tail = guard.stderr_tail();
+        assert_eq!(tail.len(), STDERR_TAIL);
+        assert!(tail[0].ends_with(" line5"), "{tail:?}");
+        assert!(tail.iter().all(|l| l.starts_with('+') && l.contains("ms ")));
+        assert!(guard.age() < std::time::Duration::from_secs(5));
+    }
 
     #[tokio::test]
     async fn requests_get_their_own_response_and_the_rest_is_inbound() {

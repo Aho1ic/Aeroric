@@ -409,7 +409,7 @@ public struct LiveSessionModel: Equatable, Sendable {
         case .turnStarted:
             turnActive = true
             turnToolSignatures = []
-        case let .turnEnded(_, reason, error):
+        case let .turnEnded(_, reason, error, _):
             turnActive = false
             pending.removeAll()
             questions.removeAll()

@@ -870,10 +870,7 @@ impl Actor {
                 }
             }
             "turn/completed" => {
-                let status = params
-                    .pointer("/turn/status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("completed");
+                let status = params.pointer("/turn/status");
                 let (card, title, files, others) = {
                     let mut state = self.state.lock();
                     let entry = state.children.entry(child.clone()).or_default();
@@ -897,10 +894,20 @@ impl Actor {
                     Some(ANSWER_ENDED_WITH_TURN),
                 );
                 if let Some(card) = card {
-                    let (word, done) = match status {
-                        "failed" => ("失败", ToolStatus::Failed),
-                        "interrupted" => ("中断", ToolStatus::Failed),
-                        _ => ("完成", ToolStatus::Completed),
+                    // A3: only an explicit `completed` reads as done.
+                    let (word, done) = match status.and_then(Value::as_str) {
+                        Some("completed") => ("完成".to_string(), ToolStatus::Completed),
+                        Some("failed") => ("失败".to_string(), ToolStatus::Failed),
+                        Some("interrupted") => ("中断".to_string(), ToolStatus::Failed),
+                        _ => {
+                            let (raw, _) = super::super::unknown_end("Codex", status);
+                            let word = if raw.trim().is_empty() {
+                                "结束状态不明".to_string()
+                            } else {
+                                format!("结束状态不明（{raw}）")
+                            };
+                            (word, ToolStatus::Failed)
+                        }
                     };
                     let changed = if files.is_empty() {
                         String::new()
@@ -1204,6 +1211,7 @@ impl Actor {
                 turn_id,
                 reason: TurnEndReason::Failed,
                 error: Some(message.clone()),
+                raw_status: None,
             });
             self.status(TaskStatus::Failed, Some(message));
         }
@@ -1259,6 +1267,7 @@ impl Actor {
                 turn_id,
                 reason: TurnEndReason::Interrupted,
                 error: None,
+                raw_status: None,
             });
         }
     }

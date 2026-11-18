@@ -111,4 +111,18 @@ final class TurnBillTests: XCTestCase {
             message: #"{"error":{"message":"Codex: Lite requires `reasoning.context` to be `all_turns`.","type":"invalid_request_error"}}"#)
         XCTAssertEqual(TurnBillText.notRunDetail(body), "Codex: Lite requires `reasoning.context` to be `all_turns`.")
     }
+
+    /// A3: a turn the agent ended on a state Aeroric does not know reads as
+    /// not run, says why, and keeps the raw state in its hover.
+    func testAnUnknownEndStateIsNotRunAndSaysWhy() throws {
+        var stat = SessionTranscriptStats.TurnStat(startedAt: 1, endedAt: 2, tokens: 0, failed: true)
+        stat.notRun = .init(reason: "unknownEnd", message: "Codex 返回了没见过的结束状态：paused")
+        let outcome = try XCTUnwrap(TurnBillText.outcome(stat))
+        XCTAssertEqual(outcome.text, "没跑成 · 结束状态不明")
+        XCTAssertEqual(outcome.tone, .danger)
+        XCTAssertEqual(outcome.help,
+                       "Agent 报了 Aeroric 不认识的结束状态，这一轮不算完成，不跑检查和验收。\nCodex 返回了没见过的结束状态：paused")
+        XCTAssertEqual(TurnBillText.notRunDetail(stat.notRun!), "Codex 返回了没见过的结束状态：paused")
+        XCTAssertTrue(TurnBillText.notRunHelp("quota").hasPrefix("Agent 的 API 调用出错"))
+    }
 }

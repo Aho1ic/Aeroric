@@ -98,6 +98,13 @@ pub struct Assignment {
     pub agent: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 2026-11-17: the session catalog's configuration it was handed out
+    /// with (`codex`, `agent-config:…`); absent when only the Agent was picked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_id: Option<String>,
+    /// "配置名 · 模型", for the list; absent with no configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub at_ms: u64,
     /// The latest 验收检查 of this hand-out's session.
     #[serde(default, skip_serializing_if = "Option::is_none")]

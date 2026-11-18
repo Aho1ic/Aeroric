@@ -7,6 +7,7 @@
 use std::sync::{Arc, Weak};
 
 use aeroric_core::projects::ProjectService;
+use aeroric_core::sessions::live::capabilities;
 use aeroric_core::sessions::live::discussion::{
     self as core, Discussion, DiscussionError, DiscussionHost, Member, DEFAULT_ROUNDS,
 };
@@ -40,7 +41,8 @@ pub(super) const DISCUSSION_FIELD: &str = "discussion";
 /// The record field naming the discussion a member speaks in.
 pub(super) const DISCUSSION_OF_FIELD: &str = "discussionOf";
 
-/// Members only read: every harness's plan or read-only mode.
+/// Members only read: every harness's plan or read-only mode. A4: only a
+/// family whose table says `strictReadOnly: yes` may join.
 const READ_ONLY: &str = "plan";
 
 struct HostDiscussions {
@@ -222,6 +224,11 @@ fn labels(names: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// A4: why a member cannot join a read-only discussion.
+fn not_read_only(name: &str, why: &str) -> String {
+    format!("{name}：不能保证只读，不能参加讨论（{why}）")
+}
+
 fn first_line(text: &str, max: usize) -> String {
     let line = text
         .lines()
@@ -269,6 +276,7 @@ fn start(live: &Live, request: &Request) -> Frame {
             Err(reason) => return fail(ErrorCode::InvalidArgument, &reason),
         };
     // Every member is checked before anything is made.
+    let place = capabilities::place_of(&aeroric_core::projects::resolve_location(&project));
     let mut picked = Vec::new();
     for member in &p.members {
         let Some(configuration) = catalog
@@ -288,6 +296,15 @@ fn start(live: &Live, request: &Request) -> Frame {
                     &format!("{}：不支持模型 {model}", configuration.display_name),
                 );
             }
+        }
+        // A4: members only read, and only a harness that holds itself
+        // read-only may join.
+        let family = live.families.launch_family(&configuration.agent);
+        if let Some(why) = capabilities::read_only_refusal(family, place) {
+            return fail(
+                ErrorCode::InvalidArgument,
+                &not_read_only(&configuration.display_name, &why),
+            );
         }
         let name = match &member.model {
             Some(model) => format!("{} · {model}", configuration.display_name),

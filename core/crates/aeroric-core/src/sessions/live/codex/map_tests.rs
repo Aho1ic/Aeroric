@@ -38,6 +38,82 @@ fn turns_start_and_end_with_their_reason() {
     }
 }
 
+/// A3: only an explicit `completed` completes a turn. A state the schema
+/// does not list (`cancelled` is not Codex's), `inProgress` on an ended
+/// turn, an empty or missing one, or a non-string fails it and keeps it.
+#[test]
+fn an_unknown_or_missing_end_state_is_a_failure_that_keeps_it() {
+    let end = |status: Option<Value>, error: Value| {
+        let mut turn = json!({"id": "u1", "items": [], "error": error});
+        if let Some(status) = status {
+            turn["status"] = status;
+        }
+        let (updates, signal) =
+            map_notification("turn/completed", &json!({"threadId": "th", "turn": turn}));
+        let Some(TurnSignal::Ended { reason, error, .. }) = signal else {
+            panic!("a turn end");
+        };
+        let [SessionUpdateKind::TurnEnded {
+            reason: shown,
+            error: told,
+            raw_status,
+            ..
+        }] = updates.as_slice()
+        else {
+            panic!("one TurnEnded: {updates:?}");
+        };
+        assert_eq!((*shown, told), (reason, &error), "update and signal agree");
+        (reason, error, raw_status.clone())
+    };
+    use TurnEndReason::{Completed, Failed, Interrupted};
+    assert_eq!(
+        end(Some(json!("completed")), Value::Null),
+        (Completed, None, None)
+    );
+    assert_eq!(
+        end(Some(json!("interrupted")), Value::Null),
+        (Interrupted, None, None)
+    );
+    assert_eq!(
+        end(Some(json!("failed")), json!({"message": "boom"})),
+        (Failed, Some("boom".into()), None)
+    );
+    let unknown = |raw: &str| {
+        (
+            Failed,
+            Some(format!("Codex 返回了没见过的结束状态：{raw}")),
+            Some(raw.to_string()),
+        )
+    };
+    let missing = (
+        Failed,
+        Some("Codex 没有说这一轮是怎么结束的".to_string()),
+        Some(String::new()),
+    );
+    assert_eq!(end(None, Value::Null), missing);
+    assert_eq!(end(Some(json!("")), Value::Null), missing);
+    assert_eq!(end(Some(Value::Null), Value::Null), missing);
+    assert_eq!(
+        end(Some(json!("cancelled")), Value::Null),
+        unknown("cancelled")
+    );
+    assert_eq!(
+        end(Some(json!("inProgress")), Value::Null),
+        unknown("inProgress")
+    );
+    assert_eq!(end(Some(json!("paused")), Value::Null), unknown("paused"));
+    assert_eq!(end(Some(json!(7)), Value::Null), unknown("7"));
+    assert_eq!(
+        end(Some(json!("paused")), json!({"message": "boom"})),
+        (
+            Failed,
+            Some("Codex 返回了没见过的结束状态：paused（boom）".into()),
+            Some("paused".into())
+        ),
+        "the agent's own error is kept beside it"
+    );
+}
+
 #[test]
 fn text_and_reasoning_stream_as_chunks() {
     let (updates, _) = map_notification(

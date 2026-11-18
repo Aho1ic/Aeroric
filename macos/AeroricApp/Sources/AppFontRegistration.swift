@@ -8,6 +8,9 @@ import AeroricUI
 enum AppFontRegistration {
     static let bundled = ["JetBrainsMono-Variable", "Fredoka-Variable"]
 
+    /// Main actor: what the downloaded fonts' registration says is kept for
+    /// Settings (A10, 2026-11-17); App.init runs here anyway.
+    @MainActor
     static func registerBundledFonts() {
         // Chinese fonts the user downloaded in Settings (2026-10-29).
         FontDownloads.registerInstalled()

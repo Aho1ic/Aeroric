@@ -4,6 +4,8 @@
 //! between and HEAD at both ends. A pending turn can be accepted or undone;
 //! an undone turn's undo can be taken back. Undo only restores files whose
 //! content is still what the turn left, and never touches the index or HEAD.
+//! A7: a file already back as the undo would leave it is `in_place`, not a
+//! conflict.
 
 use serde::{Deserialize, Serialize};
 
@@ -106,6 +108,16 @@ pub struct TurnPlan {
     /// R2-3a: the turns this covers, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub turns: Vec<String>,
+    /// A7 (2026-11-17): files already as the action would leave them (the
+    /// user put them back by hand, or an earlier try wrote them); nothing to
+    /// write, not a conflict.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub in_place: Vec<String>,
+    /// A7: carrying it out, the files that could not be written, and why.
+    /// When any did, the turn's state is left as it was, `files` lists only
+    /// what was written, and trying again finishes the rest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<SkippedFile>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

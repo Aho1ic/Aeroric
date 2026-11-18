@@ -6,7 +6,7 @@
 //! subscription first — the sampler's readings when one is under
 //! `QUOTA_FRESH_MS` old, else a read now; no reading runs as usual.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aeroric_core::metrics::quota_pace::{self, QuotaState};
@@ -69,8 +69,11 @@ impl ScheduleEnv for Env<'_> {
         open_session(
             self.live,
             &rule.project_id,
-            &rule.agent,
-            rule.model.as_deref(),
+            &Runner {
+                agent: &rule.agent,
+                model: rule.model.as_deref(),
+                agent_config_id: None,
+            },
             prompt,
             &format!("{}（定时）", rule.name),
             &format!("schedule-{}", rule.id),
@@ -108,29 +111,46 @@ pub(super) fn project_dir(live: &Live, project_id: &str) -> Option<PathBuf> {
     path.is_dir().then_some(path)
 }
 
+/// Who runs a session [`open_session`] opens.
+pub(super) struct Runner<'a> {
+    pub agent: &'a str,
+    pub model: Option<&'a str>,
+    /// The task's `agentConfigId` (a catalog id without its prefix); `None`
+    /// leaves the Agent's default source (2026-11-17, 交办选配置).
+    pub agent_config_id: Option<&'a str>,
+}
+
+/// `task.run`'s params for [`open_session`].
+pub(super) fn run_params(dir: &Path, task_id: &str, runner: &Runner, prompt: &str) -> Value {
+    let mut params = json!({
+        "projectPath": dir.to_string_lossy(),
+        "agent": runner.agent,
+        "prompt": prompt,
+        "taskId": task_id,
+    });
+    if let Some(model) = runner.model {
+        params["selectedModel"] = json!(model);
+    }
+    if let Some(config) = runner.agent_config_id {
+        params["agentConfigId"] = json!(config);
+    }
+    params
+}
+
 /// Open a new session in a local project the way the 新会话 button does
 /// (`task.run`, the Agent's default permission mode), named `name` in the
 /// sidebar; its task id. Used by 定时任务 and 待办 (2026-11-15).
 pub(super) fn open_session(
     live: &Live,
     project_id: &str,
-    agent: &str,
-    model: Option<&str>,
+    runner: &Runner,
     prompt: &str,
     name: &str,
     request_id: &str,
 ) -> Result<String, String> {
     let dir = project_dir(live, project_id).ok_or("项目不在本机或已移除")?;
     let task_id = format!("task-{}", uuid::Uuid::new_v4().simple());
-    let mut params = json!({
-        "projectPath": dir.to_string_lossy(),
-        "agent": agent,
-        "prompt": prompt,
-        "taskId": task_id,
-    });
-    if let Some(model) = model {
-        params["selectedModel"] = json!(model);
-    }
+    let params = run_params(&dir, &task_id, runner, prompt);
     let request: Request = serde_json::from_value(json!({
         "v": 1,
         "id": request_id,
@@ -256,4 +276,39 @@ fn schedule_runs(live: &Live, request: &Request) -> Frame {
         Err(frame) => return *frame,
     };
     ok(request, json!({ "runs": schedules(live).runs(&p.id) }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_session_is_opened_with_its_model_and_configuration() {
+        let dir = Path::new("/p");
+        let plain = run_params(
+            dir,
+            "task-1",
+            &Runner {
+                agent: "codex",
+                model: None,
+                agent_config_id: None,
+            },
+            "做事",
+        );
+        assert_eq!(plain["agent"], "codex");
+        assert!(plain.get("selectedModel").is_none() && plain.get("agentConfigId").is_none());
+        let pinned = run_params(
+            dir,
+            "task-1",
+            &Runner {
+                agent: "codex",
+                model: Some("deepseek-v4"),
+                agent_config_id: Some("deepseek"),
+            },
+            "做事",
+        );
+        assert_eq!(pinned["selectedModel"], "deepseek-v4");
+        assert_eq!(pinned["agentConfigId"], "deepseek");
+        assert_eq!(pinned["taskId"], "task-1");
+    }
 }

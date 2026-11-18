@@ -221,6 +221,7 @@ impl Rig {
                 turn_id: turn.into(),
                 reason: TurnEndReason::Completed,
                 error: None,
+                raw_status: None,
             },
         );
         self.d.turn_settled(TurnSettled {
@@ -439,6 +440,7 @@ fn a_busy_parent_gets_the_results_when_its_turn_ends() {
             turn_id: "u9".into(),
             reason: TurnEndReason::Completed,
             error: None,
+            raw_status: None,
         },
     );
     wait("returned", || rig.sent_to("p").len() == 1);
@@ -513,6 +515,7 @@ fn over_budget_interrupts_and_asks_the_user() {
             turn_id: "t1".into(),
             reason: TurnEndReason::Interrupted,
             error: None,
+            raw_status: None,
         },
     );
     assert_eq!(rig.card(&id).state, DelegationState::OverBudget);
@@ -696,6 +699,7 @@ fn a_settle_that_overtakes_the_turns_end_still_reads_the_text() {
             turn_id: "t1".into(),
             reason: TurnEndReason::Completed,
             error: None,
+            raw_status: None,
         },
     );
     assert_eq!(rig.card(&id).state, DelegationState::Reported);
@@ -1189,6 +1193,7 @@ fn an_expert_answer_taken_by_the_tool_is_whole_and_not_sent_again() {
             turn_id: "u1".into(),
             reason: TurnEndReason::Completed,
             error: None,
+            raw_status: None,
         },
     );
     std::thread::sleep(Duration::from_millis(30));

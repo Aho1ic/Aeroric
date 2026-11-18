@@ -39,6 +39,10 @@ pub enum Feature {
     Reviewer,
     /// The agent acknowledges what was delivered (R1-2).
     Receipts,
+    /// A read-only session (`plan`: discussion members, read-only
+    /// delegations) is held read-only by the harness itself, not by the
+    /// user refusing each write (A4, 2026-11-17).
+    StrictReadOnly,
 }
 
 impl Feature {
@@ -56,6 +60,7 @@ impl Feature {
         Feature::DelegateChild,
         Feature::Reviewer,
         Feature::Receipts,
+        Feature::StrictReadOnly,
     ];
 }
 

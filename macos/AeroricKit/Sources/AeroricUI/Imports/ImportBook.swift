@@ -96,18 +96,25 @@ public final class ImportBook {
     }
 
     public func messages(id: String) async throws -> [SessionMessage] {
+        try await history(id: id, pages: Self.maxHistoryPages).messages
+    }
+
+    /// The host pages long sessions so each reply fits one frame; walk the
+    /// cursor back up to `pages` pages. A6: whether older ones are left, and
+    /// what of the file did not read (said on the first page).
+    public func history(id: String, pages limit: Int) async throws -> LiveHistory {
         guard let client else { throw ImportsClient.MalformedReply.malformed("imports unavailable") }
-        // The host pages long sessions so each reply fits one frame; walk the
-        // cursor back to the start (bounded, a few MB at most).
         var page = try await client.history(id: id)
+        let unreadable = page.unreadable
         var messages = page.messages
         var pages = 1
-        while page.hasMore, let cursor = page.nextCursor, pages < Self.maxHistoryPages {
+        while page.hasMore, let cursor = page.nextCursor, pages < limit {
             page = try await client.history(id: id, before: cursor)
             messages.insert(contentsOf: page.messages, at: 0)
             pages += 1
         }
-        return messages.map(SessionBlockMapping.message)
+        return LiveHistory(messages: messages.map(SessionBlockMapping.message),
+                           hasEarlier: page.hasMore && page.nextCursor != nil, unreadable: unreadable)
     }
 
     public func session(id: String) -> ImportsClient.ImportedSession? {

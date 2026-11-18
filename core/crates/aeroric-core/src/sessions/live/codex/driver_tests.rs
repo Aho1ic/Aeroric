@@ -869,6 +869,47 @@ async fn a_subagent_s_turn_is_a_line_on_its_card_and_leaves_the_session_s_status
     assert!(!h.sink.update_types().contains(&"turnEnded".to_string()));
 }
 
+/// A3: a subagent's turn that ended on a state the schema does not list, or
+/// on none, is not "完成" on its card.
+#[tokio::test]
+async fn a_subagent_s_unknown_end_state_is_not_done_on_its_card() {
+    let mut h = start(spec());
+    let peer = running(&mut h).await;
+    spawn_worker(&peer);
+    let sink = Arc::clone(&h.sink);
+    until("started line", move || !card_lines(&sink).is_empty()).await;
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-kid", "turn": {"id": "ku1", "status": "paused"}}),
+    );
+    let sink = Arc::clone(&h.sink);
+    until("finished line", move || card_lines(&sink).len() == 2).await;
+    assert_eq!(
+        card_lines(&h.sink)[1],
+        (
+            ToolStatus::Failed,
+            "子代理 worker 结束状态不明（paused）\n".to_string()
+        )
+    );
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th-kid", "turn": {"id": "ku2"}}),
+    );
+    peer.notify(
+        "turn/completed",
+        json!({"threadId": "th-kid", "turn": {"id": "ku2"}}),
+    );
+    let sink = Arc::clone(&h.sink);
+    until("missing state line", move || card_lines(&sink).len() == 4).await;
+    assert_eq!(
+        card_lines(&h.sink)[3],
+        (
+            ToolStatus::Failed,
+            "子代理 worker 结束状态不明\n".to_string()
+        )
+    );
+}
+
 #[tokio::test]
 async fn a_running_subagent_keeps_the_session_up_and_its_late_approval_returns_to_done() {
     let mut h = start(spec());

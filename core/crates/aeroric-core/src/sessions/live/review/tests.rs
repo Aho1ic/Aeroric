@@ -120,6 +120,7 @@ impl Rig {
                 turn_id: turn.into(),
                 reason: TurnEndReason::Completed,
                 error: None,
+                raw_status: None,
             },
         );
     }
@@ -277,6 +278,7 @@ fn adopting_without_changing_anything_settles() {
             turn_id: "u2".into(),
             reason: TurnEndReason::Completed,
             error: None,
+            raw_status: None,
         },
     );
     assert_eq!(rig.state(), ReviewState::Settled);

@@ -627,6 +627,35 @@ pub fn settle_orphaned_sessions(
     (next, settled)
 }
 
+/// A3 (2026-11-17): the turns an agent ended on a state Aeroric does not know
+/// (`{at, status, message}`, the last few), so `session.history` grades each
+/// as not run even when the agent's own transcript says nothing of it.
+pub const UNKNOWN_TURN_ENDS_FIELD: &str = "unknownTurnEnds";
+const UNKNOWN_TURN_ENDS_KEPT: usize = 20;
+
+pub fn note_unknown_turn_end(
+    records: &[Record],
+    task_id: &str,
+    end: &crate::sessions::turn_outcome::UnknownEnd,
+) -> (Vec<Record>, bool) {
+    let mut next = records.to_vec();
+    let Some(updated) = next.iter_mut().find(|r| r.id() == Some(task_id)) else {
+        return (records.to_vec(), false);
+    };
+    let mut ends: Vec<Value> = updated
+        .get(UNKNOWN_TURN_ENDS_FIELD)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    ends.push(serde_json::to_value(end).expect("an unknown end is JSON"));
+    let extra = ends.len().saturating_sub(UNKNOWN_TURN_ENDS_KEPT);
+    ends.drain(..extra);
+    updated
+        .0
+        .insert(UNKNOWN_TURN_ENDS_FIELD.to_string(), Value::Array(ends));
+    (next, true)
+}
+
 /// #11（`useAppStartup.ts:67` + `appProjectState.ts:171-210`）：启动修复，规则全部在这里，
 /// 宿主交出来的只有事实（`live_task_ids`＝还挂着活子进程的 id、`is_dsh`＝宿主家族表对
 /// `agent` 的回答）。四条判据与旧客户端一字不差：活孩子还在 ⇒ 非 `detached` 的行改
@@ -1367,5 +1396,39 @@ mod tests {
         // A session with a driver is not an orphan and keeps its status.
         let (_, none) = settle_orphaned_sessions(&[task(json!({}))], &|_| false, 1);
         assert!(none.is_empty());
+    }
+
+    /// A3: an unknown turn end is kept on the record, the last few only,
+    /// and survives the failed status that follows it.
+    #[test]
+    fn unknown_turn_ends_are_kept_on_the_record() {
+        use crate::sessions::turn_outcome::UnknownEnd;
+        let end = |at: u64| UnknownEnd {
+            at,
+            status: "paused".into(),
+            message: "Codex 返回了没见过的结束状态：paused".into(),
+        };
+        let (next, changed) = note_unknown_turn_end(&[task(json!({}))], "t1", &end(7));
+        assert!(changed);
+        assert_eq!(
+            next[0].0[UNKNOWN_TURN_ENDS_FIELD],
+            json!([{"at": 7, "status": "paused", "message": "Codex 返回了没见过的结束状态：paused"}])
+        );
+        let failed = apply_status_transition(&next, "t1", TaskStatus::Failed, None, None, 9);
+        assert_eq!(
+            crate::sessions::turn_outcome::unknown_ends(&failed.records[0]),
+            vec![end(7)]
+        );
+
+        let (_, changed) = note_unknown_turn_end(&[task(json!({}))], "nope", &end(7));
+        assert!(!changed, "no such task");
+
+        let mut records = vec![task(json!({}))];
+        for at in 0..25 {
+            records = note_unknown_turn_end(&records, "t1", &end(at)).0;
+        }
+        let ends = records[0].0[UNKNOWN_TURN_ENDS_FIELD].as_array().unwrap();
+        assert_eq!(ends.len(), UNKNOWN_TURN_ENDS_KEPT);
+        assert_eq!(ends.last().unwrap()["at"], json!(24));
     }
 }

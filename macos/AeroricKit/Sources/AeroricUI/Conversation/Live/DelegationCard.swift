@@ -216,8 +216,12 @@ public enum DelegationText {
     /// delivery it follows; nil while nothing was handed over.
     public static func delivery(_ card: LiveDelegationCard) -> (String, Color)? {
         guard let follow = card.returnDelivery else {
+            guard card.sent else { return nil }
+            // 2026-11-17: an expert's answer is not queued; the parent's
+            // `ask_expert` call takes it, which is what `sent` records.
+            if card.contract.role == "expert" { return ("主会话已取走", AeroricColor.success) }
             // Written before A1: it went, with no record to prove it arrived.
-            return card.sent ? ("已发送（没有投递记录）", AeroricColor.textSecondary) : nil
+            return ("已发送（没有投递记录）", AeroricColor.textSecondary)
         }
         switch follow.state {
         case "waiting": return ("已入队", AeroricColor.accent)

@@ -90,6 +90,7 @@ pub(super) fn turns(live: &Live, record: &Record) -> Vec<TurnStat> {
     let mut turns = stats.map(|s| s.turns).unwrap_or_default();
     let id = field(record, "id").unwrap_or_default();
     turn_outcome::grade(&mut turns, &ledger(live, &id));
+    turn_outcome::mark_unknown_ends(&mut turns, &turn_outcome::unknown_ends(record));
     turn_outcome::mark_restarts(&mut turns, &turn_outcome::host_restarts(record));
     turns
 }

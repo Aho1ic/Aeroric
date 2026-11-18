@@ -659,7 +659,15 @@ async fn attempt_target(
                 }
             }
             if policy.cache_injection_enabled {
-                cache_injector::inject(json);
+                let injected = cache_injector::inject(json);
+                // A8: say so when the request brought its own markers — they
+                // count against the four, so fewer (or none) are added.
+                if injected.existing > 0 {
+                    eprintln!(
+                        "[router] 缓存断点：请求里已有 {} 个，新加 {} 个",
+                        injected.existing, injected.added
+                    );
+                }
                 current_body = serde_json::to_vec(json).unwrap_or(current_body);
             }
         }
