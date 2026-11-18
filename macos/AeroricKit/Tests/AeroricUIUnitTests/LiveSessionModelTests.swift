@@ -202,6 +202,31 @@ final class LiveSessionModelTests: XCTestCase {
         XCTAssertEqual(model.lastAutoCheck?.isStale(given: model.lastTurnChanges), true)
     }
 
+    /// B4: each check shows its raw verdict, and a run with a cut output or
+    /// a check that did not finish says the result may be incomplete.
+    func testACheckShowsItsRawVerdictAndWhenItMayBeIncomplete() {
+        let cut = LiveAutoCheckItem(kind: "tests", profile: "cargo", label: "cargo test", state: "failed",
+                                    summary: "10 项中 3 项失败", exitCode: 101, issues: 3, durationMs: 2400,
+                                    truncated: true)
+        XCTAssertEqual(LiveAutoCheck.facts(cut), "退出码 101 · 3 个问题 · 2.4 秒 · 输出被截断")
+        let optional = LiveAutoCheckItem(kind: "diagnostics", profile: "ruff", label: "ruff", state: "failed",
+                                         summary: "1 个错误", optional: true)
+        XCTAssertEqual(LiveAutoCheck.facts(optional), "可选")
+        XCTAssertTrue(LiveAutoCheck(turnId: "u1", state: "failed", items: [cut]).incomplete)
+        XCTAssertFalse(LiveAutoCheck(turnId: "u1", state: "failed", items: [optional]).incomplete)
+        let decoded = try? LiveSessionUpdate.decode(.object([
+            "taskId": .string("t"), "seq": .number("1"), "atMs": .number("0"),
+            "type": .string("autoCheck"), "turnId": .string("u1"), "state": .string("failed"),
+            "items": .array([.object(["kind": .string("tests"), "profile": .string("cargo"), "label": .string("cargo test"),
+                                      "state": .string("timedOut"), "summary": .string("超时"),
+                                      "durationMs": .number("600000"), "truncated": .bool(true)])]),
+        ]))
+        guard case let .autoCheck(_, _, items, _)? = decoded?.kind else { return XCTFail("decodes") }
+        XCTAssertEqual(items.first?.durationMs, 600000)
+        XCTAssertEqual(items.first?.exitCode, nil)
+        XCTAssertEqual(items.first?.truncated, true)
+    }
+
     /// A14: quiet turns are flagged at 5 and 15 minutes; waiting on the user is not a stall.
     func testStallLevels() {
         let minute: UInt64 = 60_000

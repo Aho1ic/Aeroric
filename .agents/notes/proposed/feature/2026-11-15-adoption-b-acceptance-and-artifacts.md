@@ -87,6 +87,8 @@ id 既然是预先定好的，义务可以在启动之前就写入。
 
 ### B4 检查结果保留原始判定
 
+2026-11-18 已实现，见 [B4 实现笔记](../../implemented/feature/2026-11-18-b4-checks-keep-raw-verdicts.md)。可选项的规则已就位，目前没有哪类检查是可选的。
+
 **用户会看到：** 检查失败时除了"测试 3 项失败"，还能看到原始退出码、发现的问题数、哪些是必须项、检查时数据是否完整。
 
 **现状：** `core/crates/aeroric-protocol/src/turn_ledger.rs:63` 的 `TurnCheck` 只有 `passed` 和一句 `summary`。`auto_check.rs` 里的 `CheckSpec`、`CheckFailure` 有更多信息，但没有带到协议（动手前复核具体字段）。

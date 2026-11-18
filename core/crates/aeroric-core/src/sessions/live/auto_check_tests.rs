@@ -32,6 +32,7 @@ fn shell(script: &str) -> CheckSpec {
         label: "Shell".into(),
         program: "sh".into(),
         args: vec!["-c".into(), script.into()],
+        optional: false,
     }
 }
 
@@ -114,6 +115,7 @@ fn failing_pytest_output_names_the_failed_tests() {
             "-c".into(),
             "echo 'FAILED tests/test_calc.py::test_add - assert 3 == 4'; echo '1 failed, 1 passed in 0.01s'; exit 1".into(),
         ],
+        optional: false,
     };
     let item = run_check(
         &spec,
@@ -138,6 +140,7 @@ fn diagnostics_fail_only_on_errors() {
         label: "tsc".into(),
         program: "sh".into(),
         args: vec!["-c".into(), script.into()],
+        optional: false,
     };
     let error = run_check(
         &diagnostics("echo \"src/a.ts(3,5): error TS2322: Type 'string' is not assignable to type 'number'.\"; exit 2"),
@@ -210,6 +213,11 @@ fn the_overall_state_is_the_worst_item() {
         summary: String::new(),
         failures: Vec::new(),
         output_tail: String::new(),
+        exit_code: None,
+        issues: None,
+        duration_ms: None,
+        optional: false,
+        truncated: false,
     };
     assert_eq!(overall(&[item("passed"), item("passed")]), "passed");
     assert_eq!(overall(&[item("passed"), item("timedOut")]), "failed");
@@ -225,6 +233,11 @@ fn checked(kind: &str, state: &str, failures: usize) -> AutoCheckItem {
         summary: String::new(),
         failures: (0..failures).map(|i| format!("case {i}")).collect(),
         output_tail: String::new(),
+        exit_code: None,
+        issues: None,
+        duration_ms: None,
+        optional: false,
+        truncated: false,
     }
 }
 
@@ -282,4 +295,63 @@ fn only_the_latest_failed_run_is_remembered() {
     );
     remember(&mut failures, "task", &update("cancelled", vec![]), 5);
     assert!(failures.is_empty(), "so does a cancelled one");
+}
+
+/// B4: each check keeps its raw verdict: exit code, problems found, how
+/// long it ran, and whether its output was cut.
+#[test]
+fn a_check_keeps_its_exit_code_issues_duration_and_cuts() {
+    let failed = run(&shell("echo bad >&2; exit 3"), CHECK_TIMEOUT);
+    assert_eq!(failed.exit_code, Some(3));
+    assert!(failed.duration_ms.is_some());
+    assert!(!failed.truncated);
+    let passed = run(&shell("echo fine"), CHECK_TIMEOUT);
+    assert_eq!(passed.exit_code, Some(0));
+    let long = run(&shell("yes x | head -c 9000"), CHECK_TIMEOUT);
+    assert!(long.truncated, "more than the tail keeps");
+    let slow = run(&shell("sleep 5"), Duration::from_millis(300));
+    assert_eq!((slow.state.as_str(), slow.exit_code), ("timedOut", None));
+}
+
+/// B4: the run passes when every required check passed; an optional
+/// failure is shown but does not fail it; a required timeout fails it and
+/// the record says the result may be incomplete.
+#[test]
+fn only_required_checks_decide_and_a_cut_run_is_incomplete() {
+    let item = |state: &str, optional: bool| AutoCheckItem {
+        kind: "tests".into(),
+        profile: "p".into(),
+        label: format!("{state}{}", if optional { "?" } else { "" }),
+        state: state.into(),
+        summary: String::new(),
+        failures: Vec::new(),
+        output_tail: String::new(),
+        exit_code: None,
+        issues: None,
+        duration_ms: None,
+        optional,
+        truncated: false,
+    };
+    let mixed = [item("passed", false), item("failed", true)];
+    assert_eq!(overall(&mixed), "passed");
+    let record = turn_check(overall(&mixed), &mixed);
+    assert!(record.passed);
+    assert_eq!(record.items.len(), 2);
+    assert!(!record.items[1].required);
+    assert_eq!(record.items[1].verdict, "failed");
+    assert!(!record.incomplete);
+
+    let timed_out = [item("passed", false), item("timedOut", false)];
+    assert_eq!(overall(&timed_out), "failed");
+    let record = turn_check(overall(&timed_out), &timed_out);
+    assert!(!record.passed);
+    assert!(record.incomplete, "a check that did not finish");
+
+    let mut cut = item("passed", false);
+    cut.truncated = true;
+    let record = turn_check(
+        overall(std::slice::from_ref(&cut)),
+        std::slice::from_ref(&cut),
+    );
+    assert!(record.passed && record.incomplete);
 }

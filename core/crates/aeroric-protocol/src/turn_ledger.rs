@@ -63,10 +63,37 @@ pub struct TurnRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnCheck {
+    /// Every required item passed (an item that timed out, errored or did
+    /// not run did not pass).
     pub passed: bool,
     /// e.g. `测试 3 项失败，诊断 2 个错误`; empty when passed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
+    /// B4: each check's own verdict; empty on records from before B4.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<TurnCheckItem>,
+    /// B4: some output was cut or a check could not finish: "结果可能不完整".
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub incomplete: bool,
+}
+
+/// B4: one check of a turn, as it was judged.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnCheckItem {
+    pub name: String,
+    /// `false`: its failure does not fail the turn.
+    pub required: bool,
+    /// `passed` | `failed` | `error` | `timedOut` | `cancelled` | `notRun`.
+    pub verdict: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issues: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

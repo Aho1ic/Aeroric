@@ -171,6 +171,23 @@ public struct LiveAutoCheck: Equatable, Sendable {
 
     public var failing: [LiveAutoCheckItem] { items.filter { $0.state != "passed" && $0.state != "cancelled" } }
 
+    /// B4: some output was cut or a check did not finish: the verdict may
+    /// rest on less than it seems.
+    public var incomplete: Bool {
+        items.contains { $0.truncated || $0.state == "error" || $0.state == "timedOut" }
+    }
+
+    /// B4: one item's raw verdict in a line: `退出码 1 · 3 个问题 · 2.4 秒`.
+    public static func facts(_ item: LiveAutoCheckItem) -> String? {
+        var parts: [String] = []
+        if item.optional { parts.append("可选") }
+        if let code = item.exitCode { parts.append("退出码 \(code)") }
+        if let issues = item.issues, issues > 0 { parts.append("\(issues) 个问题") }
+        if let ms = item.durationMs { parts.append(String(format: "%.1f 秒", Double(ms) / 1000)) }
+        if item.truncated { parts.append("输出被截断") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     /// A later turn changed files again, so this verdict no longer describes the tree.
     /// B2: a check of a turn without changes comes after the last changes,
     /// so the order of the updates decides, not the turn ids.

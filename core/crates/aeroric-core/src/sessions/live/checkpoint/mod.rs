@@ -88,6 +88,7 @@ impl CheckpointSink {
                     label: o.text.clone(),
                     program: "/bin/sh".into(),
                     args: vec!["-c".into(), o.check.clone()?],
+                    optional: false,
                 })
             })
             .collect()

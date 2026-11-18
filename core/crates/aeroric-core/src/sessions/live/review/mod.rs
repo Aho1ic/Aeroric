@@ -793,8 +793,35 @@ fn checks_summary(run: &str, items: &[super::update::AutoCheckItem]) -> String {
         _ => "已取消",
     };
     let mut out = word.to_string();
+    // B4: the reviewer reads each check's own verdict, not only the total.
+    if items
+        .iter()
+        .any(|i| i.truncated || matches!(i.state.as_str(), "error" | "timedOut"))
+    {
+        out.push_str("（结果可能不完整）");
+    }
     for item in items {
-        out.push_str(&format!("\n- {}：{}", item.label, item.summary));
+        let mut facts: Vec<String> = Vec::new();
+        if item.optional {
+            facts.push("可选".into());
+        }
+        if let Some(code) = item.exit_code {
+            facts.push(format!("退出码 {code}"));
+        }
+        match item.state.as_str() {
+            "timedOut" => facts.push("超时".into()),
+            "error" => facts.push("没跑完".into()),
+            _ => {}
+        }
+        if item.truncated {
+            facts.push("输出被截断".into());
+        }
+        let facts = if facts.is_empty() {
+            String::new()
+        } else {
+            format!("（{}）", facts.join("，"))
+        };
+        out.push_str(&format!("\n- {}：{}{facts}", item.label, item.summary));
         for failure in item.failures.iter().take(5) {
             out.push_str(&format!("\n  - {failure}"));
         }

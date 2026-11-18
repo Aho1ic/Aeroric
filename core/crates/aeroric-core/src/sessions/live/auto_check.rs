@@ -66,6 +66,9 @@ pub struct CheckSpec {
     pub label: String,
     pub program: String,
     pub args: Vec<String>,
+    /// B4: its failure does not fail the run (none are optional yet; the
+    /// rule is in `overall`).
+    pub optional: bool,
 }
 
 /// Diagnostics first (fast), then tests.
@@ -80,6 +83,7 @@ pub fn discover(cwd: &Path, selection: AutoCheckSelection) -> Vec<CheckSpec> {
                     label: label.into(),
                     program,
                     args,
+                    optional: false,
                 });
             }
         }
@@ -101,6 +105,7 @@ pub fn discover(cwd: &Path, selection: AutoCheckSelection) -> Vec<CheckSpec> {
                     label: profile.label,
                     program,
                     args,
+                    optional: false,
                 });
             }
         }
@@ -111,6 +116,8 @@ pub fn discover(cwd: &Path, selection: AutoCheckSelection) -> Vec<CheckSpec> {
 enum Exit {
     Finished {
         success: bool,
+        /// B4: `None` when a signal ended it.
+        code: Option<i32>,
         stdout: String,
         stderr: String,
     },
@@ -177,6 +184,7 @@ fn execute(
     };
     Exit::Finished {
         success: status.is_some_and(|s| s.success()),
+        code: status.and_then(|s| s.code()),
         stdout: stdout.join().unwrap_or_default(),
         stderr: stderr.join().unwrap_or_default(),
     }
@@ -190,34 +198,61 @@ pub fn run_check(
     cancel: &AtomicBool,
     timeout: Duration,
 ) -> AutoCheckItem {
-    let item = |state: &str, summary: String, failures: Vec<String>, output: &str| AutoCheckItem {
-        kind: spec.kind.into(),
-        profile: spec.profile.clone(),
-        label: spec.label.clone(),
-        state: state.into(),
-        summary,
-        failures: failures
-            .into_iter()
-            .take(MAX_FAILURES)
-            .map(|f| head(&f, MAX_FAILURE_CHARS))
-            .collect(),
-        output_tail: tail(output, OUTPUT_TAIL_CHARS),
+    let started = Instant::now();
+    let exit = execute(spec, cwd, envs, cancel, timeout);
+    let duration_ms = Some(started.elapsed().as_millis() as u64);
+    let exit_code = match &exit {
+        Exit::Finished { code, .. } => *code,
+        _ => None,
     };
-    let (success, stdout, stderr) = match execute(spec, cwd, envs, cancel, timeout) {
+    // B4: the raw verdict travels with the summary.
+    let item =
+        |state: &str, summary: String, failures: Vec<String>, output: &str, issues: Option<u64>| {
+            let truncated =
+                failures.len() > MAX_FAILURES || output.chars().count() > OUTPUT_TAIL_CHARS;
+            AutoCheckItem {
+                kind: spec.kind.into(),
+                profile: spec.profile.clone(),
+                label: spec.label.clone(),
+                state: state.into(),
+                summary,
+                failures: failures
+                    .into_iter()
+                    .take(MAX_FAILURES)
+                    .map(|f| head(&f, MAX_FAILURE_CHARS))
+                    .collect(),
+                output_tail: tail(output, OUTPUT_TAIL_CHARS),
+                exit_code,
+                issues,
+                duration_ms,
+                optional: spec.optional,
+                truncated,
+            }
+        };
+    let (success, stdout, stderr) = match exit {
         Exit::Finished {
             success,
             stdout,
             stderr,
+            ..
         } => (success, stdout, stderr),
         Exit::TimedOut(output) => {
             let summary = match timeout.as_secs() {
                 secs if secs >= 60 => format!("超过 {} 分钟未结束，已停止", secs / 60),
                 secs => format!("超过 {secs} 秒未结束，已停止"),
             };
-            return item("timedOut", summary, Vec::new(), &output);
+            return item("timedOut", summary, Vec::new(), &output, None);
         }
-        Exit::Cancelled => return item("cancelled", "新一轮开始，已取消".into(), Vec::new(), ""),
-        Exit::SpawnFailed(message) => return item("error", message, Vec::new(), ""),
+        Exit::Cancelled => {
+            return item(
+                "cancelled",
+                "新一轮开始，已取消".into(),
+                Vec::new(),
+                "",
+                None,
+            )
+        }
+        Exit::SpawnFailed(message) => return item("error", message, Vec::new(), "", None),
     };
     let raw = format!("{stdout}{stderr}");
     if spec.kind == "diagnostics" {
@@ -230,20 +265,28 @@ pub fn run_check(
             .map(|d| format!("{}:{}:{} {}", d.file, d.line, d.column, d.message))
             .collect();
         let warnings = result.diagnostics.len() - errors.len();
+        let count = Some(errors.len() as u64);
         return if !errors.is_empty() {
             let summary = format!("{} 个错误，{warnings} 个警告", errors.len());
-            item("failed", summary, errors, &raw)
+            item("failed", summary, errors, &raw, count)
         } else if !success && result.diagnostics.is_empty() {
-            item("error", "命令失败，未解析出诊断".into(), Vec::new(), &raw)
+            item(
+                "error",
+                "命令失败，未解析出诊断".into(),
+                Vec::new(),
+                &raw,
+                None,
+            )
         } else if warnings > 0 {
             item(
                 "passed",
                 format!("无错误，{warnings} 个警告"),
                 Vec::new(),
                 &raw,
+                count,
             )
         } else {
-            item("passed", "无错误".into(), Vec::new(), &raw)
+            item("passed", "无错误".into(), Vec::new(), &raw, count)
         };
     }
     let result = match spec.profile.as_str() {
@@ -251,8 +294,16 @@ pub fn run_check(
         "python" => tests_face::parse_pytest_output(cwd, &raw),
         "vitest" => tests_face::parse_vitest_json(cwd, &stdout),
         // A profile with no parser is judged by its exit status.
-        _ if success => return item("passed", "通过".into(), Vec::new(), &raw),
-        _ => return item("failed", "命令以非零状态退出".into(), Vec::new(), &raw),
+        _ if success => return item("passed", "通过".into(), Vec::new(), &raw, None),
+        _ => {
+            return item(
+                "failed",
+                "命令以非零状态退出".into(),
+                Vec::new(),
+                &raw,
+                None,
+            )
+        }
     };
     let failures: Vec<String> = result
         .failures
@@ -262,13 +313,14 @@ pub fn run_check(
     if result.failed > 0 || !failures.is_empty() {
         let failed = result.failed.max(failures.len());
         let summary = format!("{} 项中 {failed} 项失败", result.total.max(failed));
-        item("failed", summary, failures, &raw)
+        item("failed", summary, failures, &raw, Some(failed as u64))
     } else if !success {
         item(
             "error",
             "测试命令失败（可能没编译通过）".into(),
             Vec::new(),
             &raw,
+            None,
         )
     } else {
         item(
@@ -276,18 +328,58 @@ pub fn run_check(
             format!("{} 项全部通过", result.total),
             Vec::new(),
             &raw,
+            Some(0),
         )
     }
 }
 
-/// The overall state of a finished run.
+/// The overall state of a finished run. B4: `passed` when every required
+/// item passed; an optional item's failure is shown but does not fail the
+/// run, and a timeout, an error or a check that did not run never passes.
 pub fn overall(items: &[AutoCheckItem]) -> &'static str {
     if items.iter().any(|i| i.state == "cancelled") {
         "cancelled"
-    } else if items.iter().all(|i| i.state == "passed") {
+    } else if items
+        .iter()
+        .filter(|i| !i.optional)
+        .all(|i| i.state == "passed")
+    {
         "passed"
     } else {
         "failed"
+    }
+}
+
+/// B4: the ledger's record of a run: each item's own verdict, and whether
+/// the run may rest on less than it seems (cut output, a check that errored
+/// or timed out).
+pub fn turn_check(
+    state: &str,
+    items: &[AutoCheckItem],
+) -> aeroric_protocol::turn_ledger::TurnCheck {
+    let passed = state == "passed";
+    aeroric_protocol::turn_ledger::TurnCheck {
+        passed,
+        summary: if passed {
+            String::new()
+        } else {
+            failure_summary(items)
+        },
+        items: items
+            .iter()
+            .map(|i| aeroric_protocol::turn_ledger::TurnCheckItem {
+                name: i.label.clone(),
+                required: !i.optional,
+                verdict: i.state.clone(),
+                exit_code: i.exit_code,
+                issues: i.issues,
+                duration_ms: i.duration_ms,
+                truncated: i.truncated,
+            })
+            .collect(),
+        incomplete: items
+            .iter()
+            .any(|i| i.truncated || matches!(i.state.as_str(), "error" | "timedOut")),
     }
 }
 
@@ -468,19 +560,7 @@ impl AutoChecker {
             if let (Some(ledger), "passed" | "failed") =
                 (self.ledger.lock().clone(), state.as_str())
             {
-                let passed = state == "passed";
-                ledger.set_check(
-                    task_id,
-                    turn_id,
-                    aeroric_protocol::turn_ledger::TurnCheck {
-                        passed,
-                        summary: if passed {
-                            String::new()
-                        } else {
-                            failure_summary(items)
-                        },
-                    },
-                );
+                ledger.set_check(task_id, turn_id, turn_check(state, items));
             }
         }
         if let Some(log) = self.registry.log(task_id) {

@@ -57,15 +57,19 @@ public struct LiveTurnCheck: Equatable, Sendable {
     public var passed: Bool
     /// Empty when it passed.
     public var summary: String
+    /// B4: some output was cut or a check did not finish.
+    public var incomplete: Bool
 
-    public init(passed: Bool, summary: String = "") {
+    public init(passed: Bool, summary: String = "", incomplete: Bool = false) {
         self.passed = passed
         self.summary = summary
+        self.incomplete = incomplete
     }
 
     static func decode(_ value: JSONValue) -> LiveTurnCheck? {
         guard case let .bool(passed)? = value.fields["passed"] else { return nil }
-        return LiveTurnCheck(passed: passed, summary: value.fields["summary"]?.stringValue ?? "")
+        return LiveTurnCheck(passed: passed, summary: value.fields["summary"]?.stringValue ?? "",
+                             incomplete: value.fields["incomplete"]?.boolValue ?? false)
     }
 }
 

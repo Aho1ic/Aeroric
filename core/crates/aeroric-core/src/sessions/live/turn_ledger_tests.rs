@@ -372,6 +372,8 @@ fn a_turns_check_is_kept_with_it() {
     let failed = aeroric_protocol::turn_ledger::TurnCheck {
         passed: false,
         summary: "测试 1 项失败".into(),
+        items: Vec::new(),
+        incomplete: false,
     };
     ledger.set_check("task-1", "turn-1", failed.clone());
     ledger.set_check("task-1", "no-such-turn", failed.clone());

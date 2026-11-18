@@ -449,6 +449,8 @@ mod tests {
         let failed = TurnCheck {
             passed: false,
             summary: "测试 3 项失败".into(),
+            items: Vec::new(),
+            incomplete: false,
         };
         let records = [
             record("a", 1_000, TurnState::Undone, None),
@@ -460,6 +462,8 @@ mod tests {
                 Some(TurnCheck {
                     passed: true,
                     summary: String::new(),
+                    items: Vec::new(),
+                    incomplete: false,
                 }),
             ),
         ];

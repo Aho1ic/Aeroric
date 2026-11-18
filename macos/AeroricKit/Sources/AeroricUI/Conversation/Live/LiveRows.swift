@@ -337,6 +337,12 @@ struct LiveAutoCheckRow: View {
                         Text("\(item.label)：\(item.summary)")
                             .font(.system(size: AeroricType.caption, weight: .medium))
                             .foregroundStyle(item.state == "passed" ? AeroricColor.textSecondary : AeroricColor.danger)
+                        if let facts = LiveAutoCheck.facts(item) {
+                            Text(facts)
+                                .font(.system(size: AeroricType.caption))
+                                .foregroundStyle(AeroricColor.textTertiary)
+                                .monospacedDigit()
+                        }
                         ForEach(Array(item.failures.enumerated()), id: \.offset) { _, failure in
                             Text(failure)
                                 .font(.system(size: AeroricType.caption, design: .monospaced))
@@ -364,7 +370,9 @@ struct LiveAutoCheckRow: View {
             .padding(.top, AeroricSpace.xs)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Label(stale ? "\(check.title)（之后又有改动，结果已过时）" : check.title, systemImage: icon)
+                Label(stale ? "\(check.title)（之后又有改动，结果已过时）"
+                      : check.incomplete ? "\(check.title)（结果可能不完整）" : check.title,
+                      systemImage: icon)
                     .font(.system(size: AeroricType.secondary))
                     .foregroundStyle(tint)
                 if let note = check.note {

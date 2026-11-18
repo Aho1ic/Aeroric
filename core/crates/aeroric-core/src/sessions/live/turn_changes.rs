@@ -487,6 +487,7 @@ mod tests {
                 label: "Shell".into(),
                 program: "sh".into(),
                 args: vec!["-c".into(), "true".into()],
+                optional: false,
             }]
         }));
         let (tx, rx) = mpsc::channel();
@@ -615,6 +616,7 @@ mod tests {
                     label: "true".into(),
                     program: "sh".into(),
                     args: vec!["-c".into(), "true".into()],
+                    optional: false,
                 }]
             }));
             let (tx, rx) = mpsc::channel();

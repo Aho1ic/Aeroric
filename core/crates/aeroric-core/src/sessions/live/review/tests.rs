@@ -391,6 +391,11 @@ fn a_turn_with_checks_waits_for_them_in_either_order() {
         summary: "3 项中 1 项失败".into(),
         failures: vec!["retry_caps".into()],
         output_tail: String::new(),
+        exit_code: None,
+        issues: None,
+        duration_ms: None,
+        optional: false,
+        truncated: false,
     };
     rig.settled("t1", "u1", Some(diff(&["src/a.rs"])), true);
     std::thread::sleep(Duration::from_millis(30));

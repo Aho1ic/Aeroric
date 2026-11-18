@@ -122,6 +122,21 @@ pub struct AutoCheckItem {
     /// The last 4000 characters of the command's output.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub output_tail: String,
+    /// B4: the command's exit code, when it ran to the end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// B4: problems found (failed tests, errors), when the output says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issues: Option<u64>,
+    /// B4: how long it ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// B4: not required: its failure does not fail the run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
+    /// B4: output or failures were cut, so the verdict may rest on less.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -716,6 +731,11 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
                 summary: "2 项中 1 项失败".into(),
                 failures: vec!["test_add: assert 3 == 4".into()],
                 output_tail: "1 failed, 1 passed".into(),
+                exit_code: None,
+                issues: None,
+                duration_ms: None,
+                optional: false,
+                truncated: false,
             }],
         },
         K::Handoff {

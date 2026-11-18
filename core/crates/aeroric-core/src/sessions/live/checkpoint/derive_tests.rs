@@ -296,6 +296,11 @@ fn an_acceptance_check_result_settles_its_obligation() {
                 summary: "通过".into(),
                 failures: vec![],
                 output_tail: String::new(),
+                exit_code: None,
+                issues: None,
+                duration_ms: None,
+                optional: false,
+                truncated: false,
             }],
         },
     });

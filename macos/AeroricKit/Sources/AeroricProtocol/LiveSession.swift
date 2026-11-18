@@ -130,9 +130,17 @@ public struct LiveAutoCheckItem: Equatable, Sendable {
     public var summary: String
     public var failures: [String]
     public var outputTail: String
+    /// B4: the raw verdict: exit code, problems found, run time, whether it
+    /// is required, and whether its output was cut.
+    public var exitCode: Int?
+    public var issues: Int?
+    public var durationMs: UInt64?
+    public var optional: Bool
+    public var truncated: Bool
 
     public init(kind: String, profile: String, label: String, state: String, summary: String,
-                failures: [String] = [], outputTail: String = "") {
+                failures: [String] = [], outputTail: String = "", exitCode: Int? = nil, issues: Int? = nil,
+                durationMs: UInt64? = nil, optional: Bool = false, truncated: Bool = false) {
         self.kind = kind
         self.profile = profile
         self.label = label
@@ -140,6 +148,11 @@ public struct LiveAutoCheckItem: Equatable, Sendable {
         self.summary = summary
         self.failures = failures
         self.outputTail = outputTail
+        self.exitCode = exitCode
+        self.issues = issues
+        self.durationMs = durationMs
+        self.optional = optional
+        self.truncated = truncated
     }
 }
 
@@ -412,7 +425,12 @@ extension LiveUpdateKind {
                       let itemState = string(g, "state"), let summary = string(g, "summary") else { return nil }
                 return LiveAutoCheckItem(kind: kind, profile: profile, label: label, state: itemState, summary: summary,
                                          failures: g["failures"]?.arrayValue?.compactMap(\.stringValue) ?? [],
-                                         outputTail: string(g, "outputTail") ?? "")
+                                         outputTail: string(g, "outputTail") ?? "",
+                                         exitCode: g["exitCode"]?.numberText.flatMap { Int($0) },
+                                         issues: g["issues"]?.numberText.flatMap { Int($0) },
+                                         durationMs: g["durationMs"]?.numberText.flatMap { UInt64($0) },
+                                         optional: g["optional"]?.boolValue ?? false,
+                                         truncated: g["truncated"]?.boolValue ?? false)
             }
             guard decoded.count == items.count else { return nil }
             return .autoCheck(turnId: id, state: state, items: decoded, note: string(f, "note"))
