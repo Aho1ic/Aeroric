@@ -146,3 +146,122 @@ pub fn read_session_tail(path: &Path) -> Result<(Vec<String>, bool), String> {
 
     Ok((Vec::from(tail), detected_codex))
 }
+
+/// A6 (2026-11-17): what of a transcript could not be read. Every family's
+/// parser skips a line that is not JSON without a word, and DSH's and omp's
+/// refuse a whole file (an unknown header version) that the page then showed
+/// as an empty history; this says so instead.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Unreadable {
+    /// Lines that are not JSON.
+    pub count: usize,
+    /// 1-based line in the file of the first one; absent when the lines read
+    /// are a tail whose numbers are not the file's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_line: Option<usize>,
+    /// The whole file was refused, and why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Which lines of a file `lines` are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Window {
+    /// `lines` start at the file's first line, so their index is its number.
+    pub numbered: bool,
+    /// The read began mid-file (a byte tail): the first line may be a
+    /// fragment and is not judged.
+    pub cut_head: bool,
+    /// The file does not end in a newline: its last line may still be being
+    /// written and is not judged.
+    pub open_tail: bool,
+}
+
+impl Window {
+    /// A whole file read as text.
+    pub fn whole(text: &str) -> Self {
+        Window {
+            numbered: true,
+            cut_head: false,
+            open_tail: !text.is_empty() && !text.ends_with('\n'),
+        }
+    }
+}
+
+/// The lines of `lines` that are not JSON, blank lines aside; `None` when
+/// every line reads.
+pub fn unreadable_lines<S: AsRef<str>>(lines: &[S], window: Window) -> Option<Unreadable> {
+    let last = lines.len().checked_sub(1);
+    let mut count = 0usize;
+    let mut first = None;
+    for (index, line) in lines.iter().enumerate() {
+        // B1-8: a UTF-8 byte order mark before the first line is not damage.
+        let line = line.as_ref().trim_start_matches('\u{feff}').trim();
+        if line.is_empty()
+            || (window.cut_head && index == 0)
+            || (window.open_tail && Some(index) == last)
+            || serde_json::from_str::<serde_json::Value>(line).is_ok()
+        {
+            continue;
+        }
+        count += 1;
+        first.get_or_insert(index + 1);
+    }
+    (count > 0).then(|| Unreadable {
+        count,
+        first_line: first.filter(|_| window.numbered),
+        reason: None,
+    })
+}
+
+#[cfg(test)]
+mod unreadable_tests {
+    use super::*;
+
+    #[test]
+    fn a_line_that_is_not_json_is_counted_with_its_line_number() {
+        let text = "{\"a\":1}\n\nnot json\n{\"b\":2}\n{\"c\":\n";
+        let lines: Vec<&str> = text.lines().collect();
+        let found = unreadable_lines(&lines, Window::whole(text)).unwrap();
+        assert_eq!(found.count, 2);
+        assert_eq!(found.first_line, Some(3));
+        assert_eq!(found.reason, None);
+    }
+
+    #[test]
+    fn a_last_line_still_being_written_is_not_judged() {
+        let text = "{\"a\":1}\n{\"b\":";
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(unreadable_lines(&lines, Window::whole(text)), None);
+        // Once the line ends, a broken one counts.
+        let ended = "{\"a\":1}\n{\"b\":\n";
+        let lines: Vec<&str> = ended.lines().collect();
+        assert_eq!(
+            unreadable_lines(&lines, Window::whole(ended))
+                .unwrap()
+                .first_line,
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_tail_gives_a_count_without_a_line_number_and_skips_its_fragment() {
+        let lines = ["\":1}", "{\"a\":1}", "oops", "{\"b\":2}"];
+        let window = Window {
+            numbered: false,
+            cut_head: true,
+            open_tail: false,
+        };
+        let found = unreadable_lines(&lines, window).unwrap();
+        assert_eq!((found.count, found.first_line), (1, None));
+    }
+
+    #[test]
+    fn a_clean_file_has_nothing_to_say() {
+        let text = "{\"a\":1}\n\n{\"b\":2}\n";
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(unreadable_lines(&lines, Window::whole(text)), None);
+        assert_eq!(unreadable_lines::<&str>(&[], Window::whole("")), None);
+    }
+}

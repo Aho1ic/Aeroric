@@ -5,9 +5,6 @@
 
 use super::{version_of, Discussion, Format, PostKind};
 
-/// Claude's plan, refused: a discussion wants the answer in prose.
-pub const NO_PLAN: &str = "这是只读讨论，不需要交计划。请直接用文字回答。";
-
 const READ_ONLY: &str =
     "这是只读讨论：可以读项目里的代码佐证，但不要修改任何文件，也不要执行会改动东西的命令。";
 

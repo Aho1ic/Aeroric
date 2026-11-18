@@ -14,7 +14,7 @@ owner 让其他 Agent 调研了 207 个热门开源项目，并统计了它们�
 
 本篇是总纲：写清楚哪些调研结论已在当前源码里核实、哪些已经做过不必再做、剩下的按什么顺序做、每一片怎么交给实现模型。具体切片写在四篇批次笔记里：
 
-- [批次 A：状态与回执说真话](../bug-fix/2026-11-15-adoption-a-truthful-state.md)
+- [批次 A：状态与回执说真话](../../implemented/bug-fix/2026-11-15-adoption-a-truthful-state.md)
 - [批次 B：验收、证据与产物](../feature/2026-11-15-adoption-b-acceptance-and-artifacts.md)
 - [批次 C：闭合记忆、网关、技能与 Harness 能力清单](../feature/2026-11-15-adoption-c-memory-gateway-skills.md)
 - [批次 D：新入口（GitHub、浏览器、手机、有限协作）](../feature/2026-11-15-adoption-d-new-surfaces.md)
@@ -55,7 +55,7 @@ owner 让其他 Agent 调研了 207 个热门开源项目，并统计了它们�
 | 审批回应发送失败后仍然发布"已处理" | `core/crates/aeroric-core/src/sessions/live/claude/driver.rs:636–646`；Codex、OMP 驱动里同形的位置 | A2 |
 | Codex 的 `turn/completed` 只要不是 `failed`、`interrupted` 就当完成，缺失和未知状态也算 | `core/crates/aeroric-core/src/sessions/live/codex/map.rs` 的 `turn/completed` 分支（`_ => TurnEndReason::Completed`） | A3 |
 | 讨论成员统一写 `plan`，但没有按族核实只读是否真的生效 | `core/crates/aeroric-host/src/session_live_services/discussion.rs:41`、`:379`；Claude 映射在 `claude/map.rs:610`，Codex 在 `codex/map.rs:430`，OMP 的非测试代码里搜不到 `plan` 映射 | A4 |
-| 随手记 RAG：Swift 调 `notebook.rag.search/stats/neighbors`，宿主方法是 `notebook.rag_search/rag_stats/rag_neighbors`；工作区创建搜索视图时没传回调 | `macos/AeroricKit/Sources/AeroricClient/NotebookClient.swift:855–877`；`macos/AeroricApp/Sources/TaskWorkspaceView.swift:1498` | A5 |
+| 随手记 RAG：Swift 调 `notebook.rag.search/stats/neighbors`，宿主方法是 `notebook.rag_search/rag_stats/rag_neighbors`；工作区创建搜索视图时没传回调（2026-11-17 A5 复核：同类漂移共 17 个，已改；笔记页本来就隐藏，视图接线推迟到它上线） | `macos/AeroricKit/Sources/AeroricClient/NotebookClient.swift:855–877`；`macos/AeroricApp/Sources/TaskWorkspaceView.swift:1498` | A5 |
 | 历史最多取 24 页；Claude 历史遇到坏 JSON 行直接跳过，没有诊断 | `macos/AeroricKit/Sources/AeroricClient/SessionsClient.swift:79`；`core/crates/aeroric-core/src/sessions/claude.rs:31–34` | A6 |
 | 撤销时，当前内容已经等于目标的文件被标成"这一轮之后又改过"；写回是原地覆盖 | `core/crates/aeroric-core/src/sessions/live/turn_ledger.rs:200–218`、`:458` | A7 |
 | 缓存断点注入只数自己新加的，不数请求里已有的 | `core/crates/aeroric-core/src/local_router/cache_injector.rs:21–73` | A8 |

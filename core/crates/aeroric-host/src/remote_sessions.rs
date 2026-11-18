@@ -1041,7 +1041,7 @@ pub fn read_remote_file(
     connection_id: &str,
     path: &str,
     max_bytes: u64,
-) -> Result<Option<String>, String> {
+) -> Result<Option<(String, bool)>, String> {
     let connection = load_connection(context, connection_id)?;
     let (spec, ticket) = ssh_spec(
         &ssh_program(context),
@@ -1055,7 +1055,15 @@ pub fn read_remote_file(
     }
     let output = output.map_err(|e| format!("无法运行 ssh：{e}"))?;
     match output.status.code() {
-        Some(0) => Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned())),
+        // The text, and whether it is only the file's tail.
+        Some(0) => Ok(Some((
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            false,
+        ))),
+        Some(remote::READ_CUT_EXIT) => Ok(Some((
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            true,
+        ))),
         // The read command's own "no such file" (a new session's transcript).
         Some(3) => Ok(None),
         _ => {

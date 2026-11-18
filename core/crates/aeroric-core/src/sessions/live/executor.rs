@@ -269,6 +269,12 @@ impl StructuredExecutor {
         )));
         let sink: Arc<dyn LiveStatusSink> =
             Arc::new(super::turn_changes::TrackingSink(Arc::clone(&turn_changes)));
+        // B1-1: on top, so every read-only session's request is denied
+        // whichever role (discussion, review, delegate) started it.
+        let sink: Arc<dyn LiveStatusSink> = Arc::new(super::read_only::ReadOnlyGuard::new(
+            sink,
+            Arc::clone(&registry),
+        ));
         let executor = Arc::new(Self {
             inner,
             routing,

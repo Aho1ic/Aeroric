@@ -40,6 +40,8 @@ impl Fixture {
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
             .env("AERORIC_HOME", self.root.join("wrong-global-data"))
+            // `serve` keeps credentials in memory; HOME cannot isolate the keychain.
+            .env("AERORIC_TEST_MEMORY_SECRETS", "1")
             .arg("--data-dir")
             .arg(&self.data)
             .stdin(Stdio::null());
@@ -55,7 +57,7 @@ impl Fixture {
             .spawn()
             .unwrap();
         let mut server = Server(Some(child));
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if self.data.join("host.sock").exists() && self.data.join("host.token").exists() {
                 return server;

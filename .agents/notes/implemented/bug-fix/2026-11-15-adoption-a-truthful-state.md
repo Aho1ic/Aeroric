@@ -1,10 +1,10 @@
 # Agent Note: 调研落地批次 A：状态与回执说真话
 
-Status: proposed
+Status: implemented
 
 ## Problem
 
-[落地总纲](../architecture/2026-11-15-research-adoption-roadmap.md) 把 207 项目调研里能在当前源码指到行号的缺口归成批次 A。它们是同一类问题：**界面显示的状态比实际发生的事情走得快，或者把"不知道"算成了"成功"。**
+[落地总纲](../../proposed/architecture/2026-11-15-research-adoption-roadmap.md) 把 207 项目调研里能在当前源码指到行号的缺口归成批次 A。它们是同一类问题：**界面显示的状态比实际发生的事情走得快，或者把"不知道"算成了"成功"。**
 
 用户会遇到的情形：
 
@@ -20,7 +20,7 @@ Status: proposed
 
 所有位置都是 `main@8d4391c3` 上的。开工前按总纲 §4 第 2 步复核。标"动手前复核"的片，调研给了位置，但这次没有逐行读过。
 
-## Proposal
+## Decision
 
 ### A1 委派结果卡跟随投递回执
 
@@ -215,6 +215,22 @@ Status: proposed
 
 **完成条件：** 同一前缀任意时刻最多一个安装进程。
 
+### 2026-11-17 锚点复核
+
+A1、A2 已落地（见 [A1](./2026-11-16-a1-delegation-card-follows-delivery.md)、[A2](./2026-11-16-a2-approval-answer-must-arrive.md)）。2026-11-16 另一条工作线（ACP/DSH、讨论第二到四批、待办、定时任务等 11 个提交）合进了 main。2026-11-17 在 `main@9603b442` 加未提交的"交办选配置"改动上，按内容重新定位了 A3–A11 的锚点。问题都还在，变化如下：
+
+| 片 | 现在的位置 | 和上面的说明相比 |
+|---|---|---|
+| A3 | `codex/map.rs:73`（`_ => TurnEndReason::Completed`） | 行号同。**新增**：合并进来的 ACP 驱动 `acp/driver.rs:1285–1302` 同样兜底，`stopReason` 缺失时默认 `end_turn`，`cancelled`、`refusal` 以外的值（含没见过的）都记 `Completed`；`max_tokens`、`max_turn_requests` 记完成并另发一条提醒。Claude 的 `result` 分支按 `is_error` 判断，没有这个兜底；OMP 的结束状态由驱动自己传入（`omp/driver.rs:1072–1078`），没有外部未知值，A3 会话再确认。**A3 再确认（2026-11-17）：不成立**，`prompt_result.status` 来自 omp 的帧，缺失默认 `completed`、未知值记完成，已随 A3 一并改，见 [A3](./2026-11-17-a3-unknown-turn-end-is-not-done.md) |
+| A4 | `discussion.rs:44`（`READ_ONLY`）、`:314`、`:425`；`claude/map.rs:610`；`codex/map.rs:430` | 行号变了。**变化**：DSH 现在经 ACP 驱动接入，`acp/dialect.rs:68` 把 `ask` 和 `plan` 都映射成 DSH 的 `read-only` 环境；A4 要判断这是否算 Harness 自己强制的只读，原说明里"DSH 的权限通道不接受 `plan`"已不成立。**A4 落地（2026-11-17）**：DSH 的只读沙盒算 Harness 强制，本机"支持"；omp 的 `plan` 是 `always-ask`，"不支持"。委派子会话和审查者的候选只有 Claude、Codex（`review.rs` 的 `REVIEWERS`），所以委派那处检查今天不会触发，是给以后的保险；委派表单不置灰。见 [A4](./2026-11-17-a4-discussion-read-only-must-be-enforced.md) |
+| A5 | `NotebookClient.swift:855`、`:867`、`:877`；`TaskWorkspaceView.swift:1542`（`RAGSearchView()`） | 视图行号变了；宿主方法名仍是 `notebook.rag_stats/rag_search/rag_neighbors`（`notebook_services.rs:187–191`）。**A5 落地（2026-11-17）**：漂移共 17 个（RAG、同步、存储连接、嵌入密钥），都已改；笔记页从 2026-10-30 起隐藏、App 没有 `NotebookClient`，"用户会看到"不成立，视图接线推迟到笔记页上线；检查改为对照 Rust 源码里的字符串，因为契约文件和 command-map 漏了 238 个现行方法。见 [A5](./2026-11-17-a5-client-method-names-follow-the-host.md) |
+| A6 | `SessionsClient.swift:79`（`maxPages: Int = 24`）；调用点 `LiveSessions.swift:38`、`TaskWorkspaceView.swift:1777`；`sessions/claude.rs:32–33` | 调用点行号变了。**A6 落地（2026-11-17）**：读不出的行改在宿主读文件处统一计数、放在第一页回复的 `unreadable` 里，不分别改四个解析器；另外发现 DSH 整份被拒（日志版本太新）时宿主把它当成空历史，一并说出原因；提示放在会话顶部而不是会话信息里；导入会话和 DSH 终端会话页也接上了。见 [A6](./2026-11-17-a6-earlier-history-and-unreadable-lines.md) |
+| A7 | `turn_ledger.rs:200–218`（`SKIP_CHANGED` 在 `:216`）、`:458`（`std::fs::write`）、`:341–344`（临时文件加改名） | 未变。**A7 落地（2026-11-17）**：计划加 `inPlace`；写回改成同目录临时文件加改名，符号链接不再被写穿；中途失败时把文件全部试一遍，结果里 `failed` 逐个写明，回合状态不变、再撤销一次接着做完。没有加"部分撤销"状态：`TurnState` 有多处在读，续做已经够用。见 [A7](./2026-11-17-a7-undo-in-place-and-whole-writes.md) |
+| A8 | `local_router/cache_injector.rs:17–59`（`MAX_BREAKPOINTS`、`inject`） | 未变。**A8 落地（2026-11-17）**：按结构数已有标记（tools、system、消息内容块、`tool_result` 里那一层），工具 schema 和调用参数里的同名字段不算；没有额度时请求体不动；返回 `Injected { existing, added }`，请求自带标记时宿主日志记一行。见 [A8](./2026-11-17-a8-cache-breakpoints-count-existing.md) |
+| A9 | `knowledge/explain.rs:58–64`（`changed`） | 未变。**A9 落地（2026-11-17）**：`changed` 换成 `sources_now`，分改过、被删、读不到；扫描逐文件记 `unreadable`、`too_large`，没加整体完整性标记；读不到只写"待核对"，不重写，模块文件全读不到时页面保留；原因写在页面引用块里，Swift 不用改；NR-06 已在 R1-1 修过。见 [A9](./2026-11-17-a9-wiki-sources-deleted-or-unreadable.md) |
+| A10 | `FontDownloads.swift:79–81`（`register`，`CTFontManagerRegisterFontsForURL`） | 位置确认；MCP 保存仍要动手前复核。**A10 复核与落地（2026-11-17）**：字体成立但和调研说的不同——会话本来就按苹方回退，真正的问题是设置项把"文件在、没装上"显示成"未下载"，点了会重下；现在写明原因，给"重试"（只重新注册）和"删除"。MCP 保存已不成立：App 没有 MCP 设置页（扩展区是"即将推出"，`MCPSettingsView` 没有调用方，宿主没有保存方法），记为后续。见 [A10](./2026-11-17-a10-font-registration-and-mcp-save.md) |
+| A11 | `agents/upgrade.rs:495`（开始升级）、`:359`（`jobs` 按 Harness） | 行号 `:496` → `:495`。**A11 复核与落地（2026-11-17）**：成立。锁的对象是步骤的安装程序（规范化后的 npm、brew 或官方二进制路径），没去求 `npm prefix -g`；一个升级一次拿齐所需的全部安装程序，否则整体等；等待时 `waitingFor` 写明在等谁，设置 › Agent 升级显示"等 X 装完"；排队只在内存里。见 [A11](./2026-11-17-a11-upgrades-share-an-installer-take-turns.md) |
+
 ## Alternatives considered
 
 **把这 11 片合成一次"状态真实性第二轮"大改。** 它最强的理由是这些问题同源，一起改能统一术语和界面文字。没选它，因为各片落在不同的子系统（委派、驱动、网关、Wiki、随手记、撤销），合在一起既没法独立验收，也让一次会话的改动面过大。
@@ -225,7 +241,9 @@ Status: proposed
 
 **A3 给 `TurnEndReason` 加 `Unknown`。** 它最强的理由是语义最准确。没选它，原因写在 A3 里：穷举匹配点多，而业务处理与失败相同。
 
-## Acceptance criteria
+## Consequences
+
+### 验收标准（提出时）
 
 - 每片有对应的失败测试先行，改后通过。
 - `cargo test --manifest-path core/Cargo.toml --workspace`、`cd core && cargo fmt --check`、`swift test --package-path macos/AeroricKit` 通过；A2 另跑 `swift test --package-path ios/AeroricCompanionKit`。
@@ -233,10 +251,11 @@ Status: proposed
 - 界面文字和状态变化逐片记入路线文档 §8 待目检清单。
 - 每片落地时，对应的已落地笔记原地更新事实：A1 更新 [委派](../../implemented/feature/2026-10-31-delegation.md) 与 [投递队列](../../implemented/feature/2026-11-02-delivery-queue.md)，A4 更新 [讨论模式](../../implemented/feature/2026-11-12-discussion.md) 与 [能力表与登录](../../implemented/feature/2026-11-03-capabilities-and-login.md)，A7 更新 [回合撤销](../../implemented/feature/2026-11-04-turn-undo.md)，A9 更新 [Wiki 模块说明](../../implemented/feature/2026-11-10-wiki-module-explanations.md)。
 
-## Risks
+### 风险（提出时）
 
 - **A1 会改变自动回传的时序。** 现在是"标已发送后立即发"，改后是"入队后由队列决定何时发"。主会话忙时结果会排在回合之后，这是投递队列的既有行为，但委派卡上要说清楚"在排队"。
 - **A2 可能让审批卡停留更久。** 连接已断但宿主还没察觉的窗口里，卡片会显示"没送出去"。要给这种卡一个明确的结束条件（回合结束或连接关闭事件）。
 - **A3 可能把上游新增的正常状态判成失败。** Codex 以后若新增表示成功的状态值，会被记为"没跑成"。原始状态已保留在记录里，发现后加一行映射即可；相比之下，把异常算成完成的代价更高。
 - **A4 可能让 OMP、DSH 成员暂时不能参加讨论。** 这是如实的结果；补上真正的只读模式后再放开。
 - **A5 的方法名检查可能一次暴露多处不一致。** 发现的每一处都要判断是客户端写错还是宿主缺方法，不能只为了让检查通过去改名。
+- **2026-11-18 全量审查**：A2–A4、A6–A9、A11 的边界遗漏已按审查交接单补上，逐条见 [全量审查 Batch 1](./2026-11-18-review-batch-1-core-gaps.md)。本篇随之从 proposed 迁入 implemented。

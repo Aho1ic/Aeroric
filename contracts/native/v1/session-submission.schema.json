@@ -238,6 +238,9 @@
         "configurationVersion": {
           "type": "string"
         },
+        "copyFrom": {
+          "type": "string"
+        },
         "evolution": {
           "type": "boolean"
         },

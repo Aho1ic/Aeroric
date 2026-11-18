@@ -13,8 +13,9 @@ Status: implemented
 - **`.agents/notes/`**：决策与取舍，遵循 `.agents/skills/write-notes-like-deepseek/SKILL.md`，路径 `{proposed,implemented,rejected,archived}/{class}/yyyy-mm-dd-topic.md`，不建 `INDEX.md`。原 ADR 中仍有效的决定按主题合并改写为 implemented 笔记；只服务于已删除的 Tauri/React 客户端的决定（例如按平台分批移交写者角色）不再保留。
 - 过程稿（评审、检查点、交接、迁移计划、术语表）直接删除，留在 git 历史里：提交 `e3836e62` 是删除前的最后快照。`docs/research/` 的调研底稿与 `docs/archive/` 中的一半文件曾被 `.gitignore` 排除、从未入库，整理时被误删且无法恢复；`.gitignore` 因此改为 `docs/` 全部入库，删除前必须先确认目标已入库。
 - `docs/backlog.md` 是产品候选库，不得删除或覆盖。
+- `docs/frontier-roadmap.md` 和 `backlog.md` 一样是规划文档：它记录前沿调研、批次排序和 owner 的逐条确认，§8 是批量目检的待目检清单。两者都不受 300 行和变迁词限制（owner 2026-11-17 定），相对链接照常检查。
 - `export-schema` 对 `event-topics.json` 中 `pending: <task>` 行的校验从"迁移计划里存在该 Task 标题"改为"任务 id 格式合法"，生成的契约字节不变。
-- 校验：`pnpm verify-notes` 依次跑笔记树、格式与归档封印三个脚本（Node 24 直接执行 `.ts`，无 npm 依赖）；`pnpm verify-docs`（`scripts/native/verify-docs.mjs`）检查 `docs/` 每篇不超过 300 行（`docs/native/` 与 `backlog.md` 除外）、正文没有"以前/不再/曾经/原先/如今"等变迁词、所有 `AGENTS.md`/`CLAUDE.md`/`docs/` 的相对链接可解析。两者在 CI 的 `docs-and-notes` job 里运行（`.github/workflows/checks.yml`）。
+- 校验：`pnpm verify-notes` 依次跑笔记树、格式与归档封印三个脚本（Node 24 直接执行 `.ts`，无 npm 依赖）；`pnpm verify-docs`（`scripts/native/verify-docs.mjs`）检查 `docs/` 每篇不超过 300 行（`docs/native/` 与两份规划文档除外）、正文没有"以前/不再/曾经/原先/如今"等变迁词（两份规划文档除外）、所有 `AGENTS.md`/`CLAUDE.md`/`docs/` 的相对链接可解析。两者在 CI 的 `docs-and-notes` job 里运行（`.github/workflows/checks.yml`）。
 
 ### 旧编号对照
 
@@ -51,6 +52,8 @@ Status: implemented
 - **1:1 把每篇 ADR 转成一篇笔记**：可追溯性最好。否掉是因为同一机制（运行世代、事件权威）会继续散落在多篇里互相修订。
 
 - **变迁词只靠评审把关，不做词法扫描**：没有误伤（例如合法地描述"失败后不再重试"）。否掉是因为对 agent 而言散文里的规矩等于没有规矩，变迁叙事正是这批文档腐化的主要形态；误伤时改写成现在时而不是加豁免。扫描只对 `docs/` 正文生效，代码块与行内代码不扫。
+
+- **把 `frontier-roadmap.md` 迁进笔记或拆成几篇不超过 300 行的页面**（2026-11-17 审查交接单 B0-2 的建议）：最强的理由是 `docs/` 从此只剩当前事实，没有整篇豁免。没选：它和 `backlog.md` 一样是规划，本来就是按时间累积的确认与排序；十几篇笔记链接到它的章节号，迁移或拆分要改全部链接，还会打断 §8 待目检清单的用法。豁免整篇规划文档，比在现状页里逐词加豁免更清楚。
 
 ## Consequences
 

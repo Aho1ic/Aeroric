@@ -105,6 +105,127 @@ fn level(c: Option<Confidence>) -> &'static str {
     }
 }
 
+/// A note links other notes by their file path; on the wiki those notes are
+/// `decision-*` pages next to this one, so such a link is pointed at the page.
+/// Any other relative link (a source file, a doc) would not resolve from the
+/// wiki folder, so it becomes its label followed by the path in code. URLs,
+/// in-page anchors, code spans and fenced code are left alone.
+pub(crate) fn relink(text: &str, from: &str, pages: &HashMap<String, String>) -> String {
+    let dir = from.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let mut out = String::with_capacity(text.len());
+    let mut fenced = false;
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            out.push_str(line);
+        } else if fenced {
+            out.push_str(line);
+        } else {
+            relink_line(line, dir, pages, &mut out);
+        }
+    }
+    out
+}
+
+fn relink_line(line: &str, dir: &str, pages: &HashMap<String, String>, out: &mut String) {
+    let mut rest = line;
+    while let Some(at) = rest.find(['`', '[']) {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        if tail.starts_with('`') {
+            let ticks = tail.len() - tail.trim_start_matches('`').len();
+            match tail[ticks..].find(&tail[..ticks]) {
+                Some(end) => {
+                    let stop = ticks + end + ticks;
+                    out.push_str(&tail[..stop]);
+                    rest = &tail[stop..];
+                }
+                None => {
+                    out.push_str(tail);
+                    rest = "";
+                }
+            }
+            continue;
+        }
+        match link_at(tail) {
+            Some((label, target, len)) => {
+                let image = out.ends_with('!');
+                match relinked(label, target, dir, pages) {
+                    Some(link) => out.push_str(&link),
+                    None => {
+                        if image {
+                            out.pop();
+                        }
+                        out.push_str(&format!("{label}（`{target}`）"));
+                    }
+                }
+                rest = &tail[len..];
+            }
+            None => {
+                out.push('[');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+}
+
+/// `[label](target)` at the start of `s`: the label, the target and the length.
+fn link_at(s: &str) -> Option<(&str, &str, usize)> {
+    let close = s.find("](")?;
+    let label = &s[1..close];
+    if label.contains('[') {
+        return None;
+    }
+    let after = &s[close + 2..];
+    let end = after.find(')')?;
+    let target = &after[..end];
+    if target.is_empty() || target.contains(char::is_whitespace) {
+        return None;
+    }
+    Some((label, target, close + 2 + end + 1))
+}
+
+/// The link as it should read on the wiki, or `None` when it is a relative
+/// link that leads nowhere from there.
+fn relinked(
+    label: &str,
+    target: &str,
+    dir: &str,
+    pages: &HashMap<String, String>,
+) -> Option<String> {
+    if target.starts_with('#') || target.contains(':') {
+        return Some(format!("[{label}]({target})"));
+    }
+    let (path, anchor) = match target.split_once('#') {
+        Some((path, anchor)) => (path, Some(anchor)),
+        None => (target, None),
+    };
+    let slug = resolve(dir, path).and_then(|path| pages.get(&path))?;
+    Some(match anchor {
+        Some(anchor) => format!("[{label}]({slug}.md#{anchor})"),
+        None => format!("[{label}]({slug}.md)"),
+    })
+}
+
+/// `dir` joined with the relative `path`, `/`-separated; `None` above the root.
+fn resolve(dir: &str, path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
 /// The pages the sources call for, index last.
 pub fn target(sources: &Sources) -> Vec<WikiPage> {
     target_keeping(sources, &[])
@@ -124,13 +245,27 @@ pub fn target_with(
 ) -> Vec<WikiPage> {
     let mut pages = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
-    for note in &sources.notes {
-        let mut slug = decision_slug(&note.path);
-        let n = seen.entry(slug.clone()).or_insert(0);
-        *n += 1;
-        if *n > 1 {
-            slug = format!("{slug}-{n}");
-        }
+    let slugs: Vec<String> = sources
+        .notes
+        .iter()
+        .map(|note| {
+            let slug = decision_slug(&note.path);
+            let n = seen.entry(slug.clone()).or_insert(0);
+            *n += 1;
+            if *n > 1 {
+                format!("{slug}-{n}")
+            } else {
+                slug
+            }
+        })
+        .collect();
+    let by_path: HashMap<String, String> = sources
+        .notes
+        .iter()
+        .zip(&slugs)
+        .map(|(note, slug)| (note.path.clone(), slug.clone()))
+        .collect();
+    for (note, slug) in sources.notes.iter().zip(slugs) {
         let file = note
             .path
             .rsplit('/')
@@ -144,7 +279,7 @@ pub fn target_with(
                 block(
                     format!("note:{}#{heading}", note.path),
                     Some(heading.clone()),
-                    text.clone(),
+                    relink(text, &note.path, &by_path),
                     Some(SourceRef {
                         kind: SourceKind::Note,
                         target: format!("{}#{heading}", note.path),
@@ -346,9 +481,23 @@ fn module_pages(code: &CodeIndex, explanations: &HashMap<String, Explanation>) -
             first.clone(),
         );
         b.sources = all.clone();
+        let explanation = explanations
+            .get(&m.id)
+            .map(|e| (e, current_for(e, m, code)));
+        // A9: a file its explanation read that could not be read this time
+        // stays among the sources, without a version, so the idle pass
+        // tells it from one that is gone.
+        if let Some((_, current)) = &explanation {
+            for (path, _) in current.iter().filter(|(_, blob)| blob.is_none()) {
+                b.sources.push(SourceRef {
+                    version: None,
+                    ..code_ref(path, "")
+                });
+            }
+        }
         let mut blocks = vec![b];
-        if let Some(e) = explanations.get(&m.id) {
-            blocks.extend(explained(e, m, &key));
+        if let Some((e, current)) = &explanation {
+            blocks.extend(explained(e, current, &key));
         }
         if !m.entries.is_empty() {
             let mut b = block(
@@ -483,25 +632,39 @@ fn module_pages(code: &CodeIndex, explanations: &HashMap<String, Explanation>) -
     pages
 }
 
-/// R4-2: the "职责（推断）" and "常见坑（推断）" blocks: what the model
-/// wrote, each claim with its checked cites; marked possibly stale when a
-/// file it read has changed since. The sources are the files it read, at
-/// the versions it read.
-fn explained(e: &Explanation, m: &Module, key: &dyn Fn(&str) -> String) -> Vec<WikiBlock> {
-    let current: std::collections::BTreeMap<String, String> = m
+/// A9 (2026-11-17): the files `e` read as they stand now — the module's
+/// files at their blobs, one the scan could not read as `None`, one grown
+/// past the size limit as changed; a file in none of these is gone.
+fn current_for(e: &Explanation, m: &Module, code: &CodeIndex) -> BTreeMap<String, Option<String>> {
+    let mut current: BTreeMap<String, Option<String>> = m
         .files
         .iter()
-        .map(|f| (f.path.clone(), f.blob.clone()))
+        .map(|f| (f.path.clone(), Some(f.blob.clone())))
         .collect();
-    let changed = e.changed(&current);
-    let stale = match changed.as_slice() {
-        [] => String::new(),
-        [one] => format!("> 可能过时：生成后 `{one}` 改过。\n\n"),
-        [one, ..] => format!(
-            "> 可能过时：生成后 `{one}` 等 {} 个文件改过。\n\n",
-            changed.len()
-        ),
-    };
+    for path in e.versions.keys() {
+        if current.contains_key(path) {
+            continue;
+        }
+        if code.unreadable.contains(path) {
+            current.insert(path.clone(), None);
+        } else if code.too_large.contains(path) {
+            current.insert(path.clone(), Some(String::new()));
+        }
+    }
+    current
+}
+
+/// R4-2: the "职责（推断）" and "常见坑（推断）" blocks: what the model
+/// wrote, each claim with its checked cites; marked possibly stale when a
+/// file it read has changed or gone since, and to be checked when one could
+/// not be read this time (A9). The sources are the files it read, at the
+/// versions it read.
+fn explained(
+    e: &Explanation,
+    current: &BTreeMap<String, Option<String>>,
+    key: &dyn Fn(&str) -> String,
+) -> Vec<WikiBlock> {
+    let stale = explain::stale_lines(&e.sources_now(current));
     let read: Vec<SourceRef> = e
         .versions
         .iter()

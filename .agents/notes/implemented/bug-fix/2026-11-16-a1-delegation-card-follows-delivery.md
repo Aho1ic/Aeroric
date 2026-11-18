@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[批次 A](../../proposed/bug-fix/2026-11-15-adoption-a-truthful-state.md) 的 A1。2026-11-16 在 `main@d5126573` 上复核，位置与 `8d4391c3` 相同：
+[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A1。2026-11-16 在 `main@d5126573` 上复核，位置与 `8d4391c3` 相同：
 
 - `core/crates/aeroric-core/src/sessions/live/delegation/mod.rs:658`（`send`）和 `:1046`（`try_return` 自动回传）先写 `card.sent = true` 并发布，再另起线程调 `host.prompt`。
 - `core/crates/aeroric-host/src/session_live_services/delivery.rs:92–114`：`enqueue_internal` 把入队返回的 `Delivery` 丢掉（`.map(|_| ())`），`source_ref` 传 `None`。
@@ -38,7 +38,7 @@ Status: implemented
 | [委派与契约](../feature/2026-10-31-delegation.md) | 被本篇修改 | 已原地更新"回传主会话"和委派卡按钮的事实 |
 | [统一投递队列](../feature/2026-11-02-delivery-queue.md) | 被本篇修改 | 已原地补上 `enqueue_once`、观察者回调和委派结果的入队位置 |
 | [先落盘、先送达](./2026-11-08-ack-after-persisted.md) | 部分取代 | 它的"发送失败就 `unsend`"已缩小为"入队失败才 `unsend`"，测试名同步，互链 |
-| [批次 A](../../proposed/bug-fix/2026-11-15-adoption-a-truthful-state.md)、[落地总纲](../../proposed/architecture/2026-11-15-research-adoption-roadmap.md) | 上级方案 | 不动；A1 状态和待目检项已回写路线文档 §8 |
+| [批次 A](./2026-11-15-adoption-a-truthful-state.md)、[落地总纲](../../proposed/architecture/2026-11-15-research-adoption-roadmap.md) | 上级方案 | 不动；A1 状态和待目检项已回写路线文档 §8 |
 
 ## Alternatives considered
 
@@ -56,7 +56,7 @@ Status: implemented
 - **代价**：
   - 自动回传的时序变了：入队后由队列决定何时发。主会话忙时卡片停在"已入队"，脚注写明在等这一轮结束。
   - 合批记录的"再发一次"整批重发：点任意一张卡都会重发同一批的全部结果，它们本来就在同一条消息里。
-  - 旧卡片（A1 之前）只能写"已发送（没有投递记录）"，不能再发。
+  - 旧卡片（A1 之前）只能写"已发送（没有投递记录）"，不能再发。专家卡的回答由 `ask_expert` 取走、不走投递队列，2026-11-17 起写"主会话已取走"，见[侧栏新会话与专家卡](./2026-11-17-sidebar-new-session-and-expert-badge.md)。
   - 宿主启动时如果委派卡在投递库打开之前被读回，找不到记录会被记成"投递记录不见了"。现在两者都在宿主装配阶段完成、先于任何请求，没有观察到这种顺序。
   - 审查回环的投递仍不被卡片跟随（不在 A1 范围）。
 - **验证**（2026-11-16，Mac 上跑）：

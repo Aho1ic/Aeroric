@@ -19,6 +19,7 @@ pub mod executor;
 pub mod isolated_copy;
 pub mod login;
 pub mod omp;
+pub mod read_only;
 pub mod remote;
 pub mod review;
 pub mod staleness;
@@ -73,6 +74,24 @@ pub const ANSWER_ENDED_WITH_TURN: &str = "审批没送出去：这次请求已�
 /// A2: the reason on `PermissionSendFailed { state: failed }`.
 pub fn answer_not_written(agent: &str, error: impl std::fmt::Display) -> String {
     format!("审批没送出去：写不进 {agent} 的输入（{error}）")
+}
+
+/// A3: a turn that ended on a state Aeroric does not know, or on none, did
+/// not complete. Returns the state as the agent sent it (`rawStatus`: empty
+/// when missing, a non-string as its JSON) and the reason the user reads.
+pub fn unknown_end(agent: &str, status: Option<&serde_json::Value>) -> (String, String) {
+    use serde_json::Value;
+    let raw = match status {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+    };
+    let reason = if raw.trim().is_empty() {
+        format!("{agent} 没有说这一轮是怎么结束的")
+    } else {
+        format!("{agent} 返回了没见过的结束状态：{raw}")
+    };
+    (raw, reason)
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

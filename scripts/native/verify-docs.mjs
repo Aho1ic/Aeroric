@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Docs gate: docs/ states current facts only. Checks, for every Markdown file
 // under docs/ plus every AGENTS.md / CLAUDE.md in the tree:
-//   - length: at most MAX_LINES lines (docs/native/ artefacts and docs/backlog.md exempt);
-//   - change narrative: none of NARRATIVE_WORDS (docs/ only; AGENTS files may cite dates);
+//   - length: at most MAX_LINES lines (docs/native/ artefacts and the two planning
+//     documents, docs/backlog.md and docs/frontier-roadmap.md, exempt);
+//   - change narrative: none of NARRATIVE_WORDS (docs/ only; AGENTS files may cite dates;
+//     the same planning documents exempt);
 //   - relative Markdown links resolve to an existing file.
 // Rationale: .agents/notes/implemented/process/2026-10-27-docs-notes-split.md
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -11,8 +13,9 @@ import { fileURLToPath } from "node:url";
 
 export const MAX_LINES = 300;
 export const NARRATIVE_WORDS = ["以前", "不再", "曾经", "原先", "如今", "no longer", "used to", "previously"];
-const LENGTH_EXEMPT = [/^docs\/native\//, /^docs\/backlog\.md$/];
-const NARRATIVE_EXEMPT = [/^docs\/native\//, /^docs\/backlog\.md$/, /^docs\/cookbook\/reference-provenance\.md$/];
+const PLANNING = [/^docs\/backlog\.md$/, /^docs\/frontier-roadmap\.md$/];
+const LENGTH_EXEMPT = [/^docs\/native\//, ...PLANNING];
+const NARRATIVE_EXEMPT = [/^docs\/native\//, ...PLANNING, /^docs\/cookbook\/reference-provenance\.md$/];
 const SKIP_DIRS = new Set([".git", "node_modules", "target", ".build", "DerivedData", ".artifacts", ".claude", ".trellis", ".agents", "vendor"]);
 
 function walk(root, rel, out) {

@@ -34,6 +34,33 @@ use parking_lot::Mutex;
 use compile::{hash, Sources};
 use store::Store;
 
+/// A9 (2026-11-17): a module page whose module the scan did not find while
+/// one of the files it lists could not be read — the module may be there
+/// and unread, not gone.
+fn unread_module(page: &WikiPage, sources: &Sources) -> bool {
+    let Some(code) = sources.code.as_ref().filter(|c| c.available) else {
+        return false;
+    };
+    if !code.incomplete() {
+        return false;
+    }
+    let id = page
+        .blocks
+        .first()
+        .and_then(|b| b.key.strip_prefix("module:"))
+        .and_then(|k| k.rsplit_once('#'))
+        .map(|(id, _)| id);
+    if id.is_some_and(|id| code.modules.iter().any(|m| m.id == id)) {
+        return false;
+    }
+    // B1-9: a file too large to read, or in a folder (or package) this
+    // read could not see, keeps its page as well.
+    page.blocks
+        .iter()
+        .flat_map(|b| &b.sources)
+        .any(|s| code.unsure_of(&s.target))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WikiError {
     Unavailable(String),
@@ -254,7 +281,9 @@ impl Wikis {
     }
 
     /// R1-1: `compile`, keeping the decision pages whose sources `gaps` says
-    /// could not be read. Only a confirmed removal takes a page away.
+    /// could not be read. Only a confirmed removal takes a page away. A9
+    /// (2026-11-17): likewise a module page whose module the scan no longer
+    /// has while one of its files could not be read this time.
     pub fn compile_checked(
         &self,
         project: &str,
@@ -274,6 +303,7 @@ impl Wikis {
                     // R4-1: the project folder could not be read; its module
                     // pages stay as they are.
                     || (p.kind == WikiPageKind::Module && gaps.all)
+                    || (p.kind == WikiPageKind::Module && unread_module(p, sources))
             })
             .collect();
         let explanations = store.explanations()?;

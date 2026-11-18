@@ -374,3 +374,21 @@ fn background_commands_hidden_tasks_and_what_still_runs() {
         m.map(&json!({"type": "system", "subtype": "session_state_changed", "state": "idle"}));
     assert_eq!(idle, Some(ClaudeSignal::SessionIdle));
 }
+
+/// B1-7: a result that does not say it succeeded is a failure, and its text
+/// (the reply) is not passed off as the error.
+#[test]
+fn a_result_without_a_subtype_fails_the_turn() {
+    let mut m = ClaudeMapper::default();
+    let (_, signal) = m.map(
+        &json!({"type": "result", "is_error": false, "session_id": "s",
+        "result": "Here is the answer."}),
+    );
+    assert_eq!(
+        signal,
+        Some(ClaudeSignal::TurnResult {
+            failed: true,
+            error: Some("Claude 结束这一轮时没有说结果（缺少 subtype），按失败记".into())
+        })
+    );
+}

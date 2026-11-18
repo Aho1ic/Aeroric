@@ -18,7 +18,7 @@ use sha1::{Digest, Sha1};
 /// page each, largest first, until it fits.
 pub const MAX_MODULES: usize = 60;
 const MAX_FILES: usize = 8000;
-const MAX_FILE_BYTES: u64 = 512 * 1024;
+pub const MAX_FILE_BYTES: u64 = 512 * 1024;
 /// Symbols a module page lists.
 pub const MAX_SYMBOLS: usize = 20;
 /// Skipped by the walk outside git.
@@ -152,6 +152,35 @@ pub struct CodeIndex {
     pub omitted: usize,
     /// Whether the project folder could be read at all.
     pub available: bool,
+    /// A9 (2026-11-17): listed files that are there but could not be read
+    /// this time — not the same as gone.
+    pub unreadable: BTreeSet<String>,
+    /// A9: listed files past [`MAX_FILE_BYTES`], left out of the index.
+    pub too_large: BTreeSet<String>,
+    /// B1-9 (2026-11-18): folders, as `dir/` prefixes (`""` for the project
+    /// itself), whose files this read may have missed — a folder that could
+    /// not be listed, or a package manifest that could not be read and so
+    /// moved its files to other modules.
+    pub unreadable_dirs: BTreeSet<String>,
+}
+
+impl CodeIndex {
+    /// Whether `path` may be there without this read having seen it.
+    pub fn unsure_of(&self, path: &str) -> bool {
+        self.unreadable.contains(path)
+            || self.too_large.contains(path)
+            || self
+                .unreadable_dirs
+                .iter()
+                .any(|dir| path.starts_with(dir.as_str()))
+    }
+
+    /// Whether any read this time came up short.
+    pub fn incomplete(&self) -> bool {
+        !self.unreadable.is_empty()
+            || !self.too_large.is_empty()
+            || !self.unreadable_dirs.is_empty()
+    }
 }
 
 pub fn blob_hash(bytes: &[u8]) -> String {
@@ -176,8 +205,9 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
 }
 
 /// Relative paths of the project's files that could be source or a
-/// package manifest.
-fn list_files(dir: &Path) -> (Vec<String>, bool) {
+/// package manifest, whether they came from git, and (B1-9) the folders a
+/// walk outside git could not list, as `dir/` prefixes.
+fn list_files(dir: &Path) -> (Vec<String>, bool, BTreeSet<String>) {
     // Third-party code kept in the repository is not the project's.
     let vendored = |path: &str| {
         path.split('/')
@@ -199,13 +229,27 @@ fn list_files(dir: &Path) -> (Vec<String>, bool) {
             .collect();
         files.sort();
         files.truncate(MAX_FILES);
-        return (files, true);
+        return (files, true, BTreeSet::new());
     }
     let mut files = Vec::new();
+    let mut unlisted = BTreeSet::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&current) else {
-            continue;
+        let entries = match std::fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    if let Ok(rel) = current.strip_prefix(dir) {
+                        let rel = rel.to_string_lossy().replace('\\', "/");
+                        unlisted.insert(if rel.is_empty() {
+                            rel
+                        } else {
+                            format!("{rel}/")
+                        });
+                    }
+                }
+                continue;
+            }
         };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -226,13 +270,13 @@ fn list_files(dir: &Path) -> (Vec<String>, bool) {
         }
     }
     files.sort();
-    (files, false)
+    (files, false, unlisted)
 }
 
 /// Changes when a file is added, removed or written: paths, sizes and
 /// modification times, no reading.
 pub fn fingerprint(dir: &Path) -> String {
-    let (files, _) = list_files(dir);
+    let (files, _, _) = list_files(dir);
     let mut hasher = Sha1::new();
     for rel in &files {
         hasher.update(rel.as_bytes());
@@ -306,7 +350,9 @@ fn manifest_name(text: &str, manifest: Manifest) -> Option<String> {
     }
 }
 
-fn packages(dir: &Path, files: &[String]) -> Vec<Package> {
+/// The packages `files` declare. A manifest there but unreadable goes into
+/// `unreadable` (B1-9): its files land in other modules this time.
+fn packages(dir: &Path, files: &[String], unreadable: &mut BTreeSet<String>) -> Vec<Package> {
     let mut out = Vec::new();
     let file_set: BTreeSet<&str> = files.iter().map(String::as_str).collect();
     for rel in files {
@@ -318,7 +364,15 @@ fn packages(dir: &Path, files: &[String]) -> Vec<Package> {
             _ => continue,
         };
         let pdir = parent(rel).to_string();
-        let text = std::fs::read_to_string(dir.join(rel)).unwrap_or_default();
+        let text = match std::fs::read_to_string(dir.join(rel)) {
+            Ok(text) => text,
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    unreadable.insert(rel.clone());
+                }
+                String::new()
+            }
+        };
         let name = match manifest {
             // A workspace-only Cargo.toml is not a crate.
             Manifest::Cargo => match manifest_name(&text, manifest) {
@@ -771,16 +825,27 @@ pub fn scan(dir: &Path) -> CodeIndex {
     if !dir.is_dir() {
         return CodeIndex::default();
     }
-    let (files, in_git) = list_files(dir);
+    let (files, in_git, mut unreadable_dirs) = list_files(dir);
     let commit = in_git
         .then(|| git(dir, &["rev-parse", "HEAD"]))
         .flatten()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    let packages = packages(dir, &files);
+    let mut unread_manifests = BTreeSet::new();
+    let packages = packages(dir, &files, &mut unread_manifests);
+    for manifest in &unread_manifests {
+        let folder = parent(manifest);
+        unreadable_dirs.insert(if folder.is_empty() {
+            String::new()
+        } else {
+            format!("{folder}/")
+        });
+    }
     let mut modules: BTreeMap<String, Module> = BTreeMap::new();
     // module id → its files' imports, resolved once every module is known.
     let mut imports: Vec<(String, Lang, String, Vec<(String, u32)>, Package)> = Vec::new();
+    let mut unreadable = unread_manifests;
+    let mut too_large = BTreeSet::new();
     for rel in &files {
         // The manifest is the package's, not a module's file.
         if rel.ends_with("Package.swift") {
@@ -790,14 +855,30 @@ pub fn scan(dir: &Path) -> CodeIndex {
             continue;
         };
         let full = dir.join(rel);
-        let Ok(meta) = std::fs::metadata(&full) else {
-            continue;
+        // A9: a file that is there but cannot be read is said so; only
+        // one that is not there is gone.
+        let gone = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
+        let meta = match std::fs::metadata(&full) {
+            Ok(meta) => meta,
+            Err(e) => {
+                if !gone(&e) {
+                    unreadable.insert(rel.clone());
+                }
+                continue;
+            }
         };
         if meta.len() > MAX_FILE_BYTES {
+            too_large.insert(rel.clone());
             continue;
         }
-        let Ok(bytes) = std::fs::read(&full) else {
-            continue;
+        let bytes = match std::fs::read(&full) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                if !gone(&e) {
+                    unreadable.insert(rel.clone());
+                }
+                continue;
+            }
         };
         let (package, name) = place(rel, &packages);
         let id = module_id(&package, name.as_deref());
@@ -847,6 +928,9 @@ pub fn scan(dir: &Path) -> CodeIndex {
         modules: Vec::new(),
         omitted: 0,
         available: true,
+        unreadable,
+        too_large,
+        unreadable_dirs,
     };
     let mut modules: Vec<Module> = modules.into_values().collect();
     // A module folded away answers for the page it went into.

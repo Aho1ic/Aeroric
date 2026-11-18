@@ -52,6 +52,8 @@ pub type ClaudeLauncher =
     Arc<dyn Fn(&ClaudeStart) -> Result<(Transport, Option<ChildGuard>), String> + Send + Sync>;
 
 const CRASH_WINDOW_MS: u64 = 60_000;
+/// B1-4: how long the start handshake may wait for an answer.
+const HANDSHAKE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Where Claude writes a session's transcript. The file appears with the
 /// first message, so the path may not exist yet when it is recorded. Claude
@@ -512,12 +514,21 @@ impl Actor {
             }
             let _ = inbox.send((epoch, None));
         });
-        if let Err(error) = client
-            .request(json!({"subtype": "initialize", "hooks": null}))
-            .await
-        {
-            self.crashes.push_back(now_ms());
-            return Err(format!("Claude 握手失败：{error}"));
+        // B1-4: a Claude that never answers does not hold the session.
+        let initialize = client.request(json!({"subtype": "initialize", "hooks": null}));
+        match tokio::time::timeout(HANDSHAKE, initialize).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                self.crashes.push_back(now_ms());
+                return Err(format!("Claude 握手失败：{error}"));
+            }
+            Err(_) => {
+                self.crashes.push_back(now_ms());
+                return Err(format!(
+                    "Claude 握手超时：initialize {} 秒没有回答",
+                    HANDSHAKE.as_secs()
+                ));
+            }
         }
         self.process = Some(Process {
             client: Arc::clone(&client),
@@ -845,6 +856,7 @@ impl Actor {
                 turn_id,
                 reason,
                 error: error.clone().filter(|_| reason == TurnEndReason::Failed),
+                raw_status: None,
             });
         }
         match reason {
@@ -973,6 +985,7 @@ impl Actor {
                 turn_id,
                 reason: TurnEndReason::Failed,
                 error: Some(message.clone()),
+                raw_status: None,
             });
             self.status(TaskStatus::Failed, Some(message));
         }
@@ -1012,6 +1025,7 @@ impl Actor {
                 turn_id,
                 reason: TurnEndReason::Interrupted,
                 error: None,
+                raw_status: None,
             });
         }
     }

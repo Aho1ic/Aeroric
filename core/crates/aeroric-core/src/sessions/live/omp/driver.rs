@@ -50,6 +50,8 @@ pub type OmpLauncher =
     Arc<dyn Fn(&OmpStart) -> Result<(Transport, Option<ChildGuard>), String> + Send + Sync>;
 
 const CRASH_WINDOW_MS: u64 = 60_000;
+/// B1-4: how long the start handshake may wait for an answer.
+const HANDSHAKE: std::time::Duration = std::time::Duration::from_secs(30);
 const CRASH_LIMIT: usize = 3;
 pub const LOCKED_PERMISSION: &str = "omp 的权限在会话开始时确定，想换档请新建会话";
 
@@ -409,6 +411,31 @@ struct Actor {
     own_turn: bool,
 }
 
+/// How a prompt's turn ended: `(reason, error, rawStatus)`. omp's
+/// `PromptStatus` is `completed | aborted | error`; A3: anything else, or
+/// none, is a failure that keeps what omp sent. A stop the person asked for
+/// stays an interruption.
+fn prompt_outcome(
+    status: Option<&Value>,
+    error: Option<String>,
+    interrupted: bool,
+) -> (TurnEndReason, Option<String>, Option<String>) {
+    match status.and_then(Value::as_str) {
+        _ if interrupted => (TurnEndReason::Interrupted, error, None),
+        Some("aborted") => (TurnEndReason::Interrupted, error, None),
+        Some("completed") => (TurnEndReason::Completed, error, None),
+        Some("error") => (TurnEndReason::Failed, error, None),
+        _ => {
+            let (raw, why) = super::super::unknown_end("omp", status);
+            let error = match error {
+                Some(detail) => format!("{why}（{detail}）"),
+                None => why,
+            };
+            (TurnEndReason::Failed, Some(error), Some(raw))
+        }
+    }
+}
+
 fn s<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
 }
@@ -538,13 +565,22 @@ impl Actor {
         let _ = client
             .command("set_subagent_subscription", json!({"level": "progress"}))
             .await;
-        let state = match client.command("get_state", json!({})).await {
-            Ok(state) => state,
-            Err(error) => {
-                self.crashes.push_back(now_ms());
-                return Err(format!("omp 握手失败：{error}"));
-            }
-        };
+        // B1-4: an omp that never answers does not hold the session.
+        let state =
+            match tokio::time::timeout(HANDSHAKE, client.command("get_state", json!({}))).await {
+                Ok(Ok(state)) => state,
+                Ok(Err(error)) => {
+                    self.crashes.push_back(now_ms());
+                    return Err(format!("omp 握手失败：{error}"));
+                }
+                Err(_) => {
+                    self.crashes.push_back(now_ms());
+                    return Err(format!(
+                        "omp 握手超时：get_state {} 秒没有回答",
+                        HANDSHAKE.as_secs()
+                    ));
+                }
+            };
         self.process = Some(Process {
             client: Arc::clone(&client),
             _guard: guard,
@@ -763,7 +799,7 @@ impl Actor {
                 // A prompt omp handled without the model (e.g. an omp slash
                 // command) has no `prompt_result`.
                 if data.get("agentInvoked").and_then(Value::as_bool) == Some(false) {
-                    self.turn_result("completed", None).await;
+                    self.turn_result(Some(json!("completed")), None).await;
                 }
             }
             Err(error) => {
@@ -831,23 +867,33 @@ impl Actor {
         self.resume_running();
     }
 
+    /// B1-3 (A2): the question stays open until the answer is written; one
+    /// that could not be written can be answered again.
     fn answer(&mut self, id: String, answer: Answer) {
-        let found = {
-            let mut state = self.state.lock();
-            let index = state.questions.iter().position(|q| q.id == id);
-            index.map(|i| state.questions.remove(i))
-        };
-        let (Some(_), Some(client)) = (found, self.client()) else {
+        if !self.state.lock().questions.iter().any(|q| q.id == id) {
             return;
-        };
+        }
         let (payload, outcome) = match answer {
             Answer::Value(value) => (json!({"value": value}), "answered"),
             Answer::Confirmed(confirmed) => (json!({"confirmed": confirmed}), "answered"),
             Answer::Cancelled => (json!({"cancelled": true}), "cancelled"),
         };
+        let Some(client) = self.client() else {
+            // The connection is gone, and the question with it.
+            self.state.lock().questions.retain(|q| q.id != id);
+            self.recoverable("回答没送出去：这个问题已随连接结束".to_string());
+            self.push(SessionUpdateKind::QuestionResolved {
+                id,
+                outcome: "cancelled".into(),
+            });
+            self.resume_running();
+            return;
+        };
         if let Err(error) = client.answer_ui(&id, payload) {
-            self.recoverable(format!("回答未送达：{error}"));
+            self.recoverable(format!("回答没送出去：{error}；问题还在，可以再答一次"));
+            return;
         }
+        self.state.lock().questions.retain(|q| q.id != id);
         self.push(SessionUpdateKind::QuestionResolved {
             id,
             outcome: outcome.into(),
@@ -872,15 +918,21 @@ impl Actor {
     async fn receive(&mut self, frame: Value) {
         match s(&frame, "type").unwrap_or("") {
             "prompt_result" => {
-                if s(&frame, "id").is_some() && s(&frame, "id") == self.prompt_id.as_deref() {
-                    let status = s(&frame, "status").unwrap_or("completed").to_string();
+                // B1-7: one without an id still ends the prompt that is
+                // waiting, or the turn would run for ever.
+                let ours = match s(&frame, "id") {
+                    Some(id) => Some(id) == self.prompt_id.as_deref(),
+                    None => self.prompt_id.is_some(),
+                };
+                if ours {
+                    let status = frame.get("status").cloned();
                     let error = s(&frame, "error").map(str::to_string);
                     // Absent on older omp: nothing to wait for then.
                     self.state.lock().settled = frame
                         .get("sessionSettled")
                         .and_then(Value::as_bool)
                         .unwrap_or(true);
-                    self.turn_result(&status, error).await;
+                    self.turn_result(status, error).await;
                 }
             }
             "session_settled" => {
@@ -898,7 +950,7 @@ impl Actor {
                 self.begin_turn();
                 self.own_turn = true;
             }
-            "agent_end" if self.own_turn => self.turn_result("completed", None).await,
+            "agent_end" if self.own_turn => self.turn_result(Some(json!("completed")), None).await,
             "extension_ui_request" => self.ui_request(frame),
             "response" => {}
             kind => {
@@ -1060,7 +1112,9 @@ impl Actor {
         }
     }
 
-    async fn turn_result(&mut self, status: &str, error: Option<String>) {
+    /// `status` is `prompt_result.status`, or `completed` for a turn the
+    /// driver itself knows ended (no model run, omp's own turn).
+    async fn turn_result(&mut self, status: Option<Value>, error: Option<String>) {
         self.prompt_id = None;
         self.own_turn = false;
         let turn = {
@@ -1069,18 +1123,13 @@ impl Actor {
             state.active_turn.take()
         };
         self.drop_waiting(ANSWER_ENDED_WITH_TURN);
-        let reason = if self.interrupted || status == "aborted" {
-            TurnEndReason::Interrupted
-        } else if status == "error" {
-            TurnEndReason::Failed
-        } else {
-            TurnEndReason::Completed
-        };
+        let (reason, error, raw_status) = prompt_outcome(status.as_ref(), error, self.interrupted);
         if let Some(turn_id) = turn {
             self.push(SessionUpdateKind::TurnEnded {
                 turn_id,
                 reason,
                 error: error.clone().filter(|_| reason == TurnEndReason::Failed),
+                raw_status,
             });
         }
         match reason {
@@ -1188,6 +1237,7 @@ impl Actor {
                 turn_id,
                 reason: TurnEndReason::Failed,
                 error: Some(message.clone()),
+                raw_status: None,
             });
             self.status(TaskStatus::Failed, Some(message));
         }
@@ -1227,6 +1277,7 @@ impl Actor {
                 turn_id,
                 reason: TurnEndReason::Interrupted,
                 error: None,
+                raw_status: None,
             });
         }
     }

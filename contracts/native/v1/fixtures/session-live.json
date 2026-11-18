@@ -88,7 +88,7 @@
     "turnActive": true
   },
   "updates": {
-    "latestSeq": 30,
+    "latestSeq": 31,
     "updates": [
       {
         "atMs": 1761350400000,
@@ -529,8 +529,18 @@
       },
       {
         "atMs": 1761350400029,
-        "reason": "completed",
+        "error": "Codex 返回了没见过的结束状态：paused",
+        "rawStatus": "paused",
+        "reason": "failed",
         "seq": 30,
+        "taskId": "task-1",
+        "turnId": "u0",
+        "type": "turnEnded"
+      },
+      {
+        "atMs": 1761350400030,
+        "reason": "completed",
+        "seq": 31,
         "taskId": "task-1",
         "turnId": "u1",
         "type": "turnEnded"

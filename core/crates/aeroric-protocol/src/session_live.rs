@@ -139,6 +139,11 @@ pub enum SessionUpdateKind {
         reason: TurnEndReason,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// A3: the agent's own end state when Aeroric does not know it (or
+        /// it was missing: an empty string); the turn is then `failed`.
+        /// Absent for every state Aeroric maps.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw_status: Option<String>,
     },
     MessageChunk {
         message_id: String,
@@ -832,9 +837,16 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
             text: Some("我来看看".into()),
         },
         K::TurnEnded {
+            turn_id: "u0".into(),
+            reason: TurnEndReason::Failed,
+            error: Some("Codex 返回了没见过的结束状态：paused".into()),
+            raw_status: Some("paused".into()),
+        },
+        K::TurnEnded {
             turn_id: "u1".into(),
             reason: TurnEndReason::Completed,
             error: None,
+            raw_status: None,
         },
     ];
     kinds
@@ -1014,6 +1026,7 @@ pub fn schema() -> Value {
                 "plan": {"type": "array", "items": {"$ref": "#/$defs/planEntry"}},
                 "model": opt_string, "permission": opt_string, "effort": opt_string,
                 "contextUsed": opt_u64, "contextLimit": opt_u64, "inputTokens": opt_u64, "outputTokens": opt_u64,
+                "cachedInputTokens": opt_u64,
                 "latestSeq": {"type": "integer", "minimum": 0}, "resumeBlocked": s,
                 "questions": {"type": "array", "items": {"type": "object", "required": ["id", "style", "title"], "properties": {
                     "id": s, "style": s, "title": s, "message": opt_string, "options": {"type": "array", "items": s},
@@ -1025,7 +1038,8 @@ pub fn schema() -> Value {
         update_variant(
             "turnEnded",
             json!(["turnId", "reason"]),
-            json!({"turnId": s, "reason": {"enum": ["completed", "interrupted", "failed"]}, "error": s}),
+            json!({"turnId": s, "reason": {"enum": ["completed", "interrupted", "failed"]}, "error": s,
+                "rawStatus": s}),
         ),
         update_variant(
             "messageChunk",
@@ -1105,7 +1119,8 @@ pub fn schema() -> Value {
             "usage",
             json!([]),
             json!({"contextUsed": {"type": "integer"}, "contextLimit": {"type": "integer"},
-            "inputTokens": {"type": "integer"}, "outputTokens": {"type": "integer"}}),
+            "inputTokens": {"type": "integer"}, "outputTokens": {"type": "integer"},
+            "cachedInputTokens": {"type": "integer"}}),
         ),
         update_variant(
             "configChanged",
@@ -1236,7 +1251,7 @@ pub fn schema() -> Value {
                 "questionId": s, "value": opt_string, "confirmed": {"type": ["boolean", "null"]}, "cancelled": {"type": "boolean"}})), "result": empty},
             REVOKE_GRANT_METHOD: {"mutating": true, "params": params(json!(["taskId", "subject"]), json!({"subject": s})), "result": empty},
             CONFIGURE_METHOD: {"mutating": true, "params": params(json!(["taskId"]), json!({
-                "model": opt_string, "permission": {"enum": ["ask", "auto_edit", "full_access", null]}, "effort": opt_string})), "result": empty},
+                "model": opt_string, "permission": {"enum": ["ask", "auto_edit", "full_access", "plan", null]}, "effort": opt_string})), "result": empty},
             COMMAND_METHOD: {"mutating": true, "params": params(json!(["taskId", "command"]), json!({"command": {"enum": ["compact", "review"]}})), "result": empty},
             CLOSE_METHOD: {"mutating": true, "params": params(json!(["taskId"]), json!({})), "result": empty},
             STATE_METHOD: {"mutating": false, "params": params(json!(["taskId"]), json!({})), "result": {"$ref": "#/$defs/state"}},

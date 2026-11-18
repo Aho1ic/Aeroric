@@ -498,7 +498,8 @@ impl ClaudeMapper {
             .get("is_error")
             .and_then(Value::as_bool)
             .unwrap_or(false)
-            || s(message, "subtype").is_some_and(|subtype| subtype != "success");
+            // B1-7: a result that does not say it succeeded did not.
+            || s(message, "subtype") != Some("success");
         let error = failed.then(|| {
             message
                 .get("errors")
@@ -515,12 +516,15 @@ impl ClaudeMapper {
                         .join("；")
                 })
                 .filter(|text| !text.is_empty())
-                .or_else(|| s(message, "result").map(str::to_string))
-                .unwrap_or_else(|| {
-                    format!(
-                        "Claude 这一轮失败了（{}）",
-                        s(message, "subtype").unwrap_or("error")
-                    )
+                // Without a subtype the text is the reply, not an error.
+                .or_else(|| {
+                    s(message, "subtype")
+                        .and(s(message, "result"))
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| match s(message, "subtype") {
+                    Some(subtype) => format!("Claude 这一轮失败了（{subtype}）"),
+                    None => "Claude 结束这一轮时没有说结果（缺少 subtype），按失败记".to_string(),
                 })
         });
         self.streaming = None;

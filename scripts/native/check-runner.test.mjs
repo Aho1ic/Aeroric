@@ -376,22 +376,42 @@ test("a red required case still fails the module even when an opt-in case is ski
   }
 });
 
-test("in the committed gate no case is opt-in, and the two former real-home writers run by default on a scratch root", () => {
+test("in the committed gate no case is opt-in, and any case that names a data root names a scratch one", () => {
   // G39 收口（P3-06，2026-09-30）：止血期的 opt-in 形态已被根覆盖变量取代——
-  // `storage::aeroric_dir()` 认测试 SLOT > `AERORIC_HOME` > 真实家，runner 对
-  // 这两条注入 `AERORIC_HOME=<scratch>`（每轮 mkdtemp、跑后清理）。
-  // pin 的是集合与形状：新增 opt-in 或丢掉 scratch 注入都必须在这里红。
+  // `storage::aeroric_dir()` 认测试 SLOT > `AERORIC_HOME` > 真实家。当年两条 real-home
+  // writer 随 Tauri 栈一起退役（2026-11-17 核对 checks.json 已无 tauri-adapter），
+  // 这里钉的是形状：新增 opt-in，或某个 case 把 AERORIC_HOME 指向 `<scratch>` 以外的路径，都必须红。
   const flagged = [];
+  const realRoots = [];
   for (const [module, entry] of Object.entries(committed.modules)) {
     for (const testCase of entry.cases ?? []) {
       if (testCase.optInEnv) flagged.push(`${testCase.name}@${module}`);
+      if (testCase.env && "AERORIC_HOME" in testCase.env && testCase.env.AERORIC_HOME !== "<scratch>") {
+        realRoots.push(`${testCase.name}@${module}`);
+      }
     }
   }
   assert.deepEqual(flagged, [], "opt-in 通道已退役：任何 case 再挂 optInEnv 即门禁失牙");
-  for (const name of ["src-tauri-lib-tests", "adapter-acceptance-real-kernel"]) {
-    const testCase = committed.modules["tauri-adapter"].cases.find((c) => c.name === name);
-    assert.equal(testCase.env?.AERORIC_HOME, "<scratch>", `${name} 必须带 scratch 注入`);
-    assert.ok(committed.runner.floors[`${name}@tauri-adapter`] >= testCase.minCases, `${name} floor must stay declared`);
+  assert.deepEqual(realRoots, [], "AERORIC_HOME 只能是 <scratch>：门禁不得指向真实或固定的数据根");
+});
+
+test("a case asking for a scratch root gets a fresh one that is removed after it ran", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "aeroric-scratch-test-"));
+  const marker = path.join(dir, "home");
+  try {
+    const result = runGateAgainst("scratch_root", {
+      cases: [{
+        name: "records-its-home", kind: "gate",
+        argv: [process.execPath, "-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, process.env.AERORIC_HOME || "")`],
+        env: { AERORIC_HOME: "<scratch>" },
+      }],
+    }, { AERORIC_HOME: "/must/not/leak" });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const home = readFileSync(marker, "utf8");
+    assert.match(path.basename(home), /^aeroric-scratch-/, "the case must see the injected scratch root, not the caller's");
+    assert.equal(existsSync(home), false, "the scratch root must be cleaned up after the case");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 ;

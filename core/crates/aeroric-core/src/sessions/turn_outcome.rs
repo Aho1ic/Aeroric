@@ -36,6 +36,9 @@ pub enum NotRunReason {
     Rejected,
     /// 2026-11-14: Aeroric's host restarted while the turn ran.
     HostRestart,
+    /// A3 (2026-11-17): the agent ended the turn on a state Aeroric does not
+    /// know, or on none; the message keeps what it sent.
+    UnknownEnd,
     Other,
 }
 
@@ -179,6 +182,8 @@ pub fn mark_restarts(turns: &mut [TurnStat], cuts: &[u64]) {
         let aborted = turn.interrupted && at_cut.contains(&index);
         if never_ended || aborted {
             turn.interrupted = false;
+            // Not run, so not graded: an undo of it is no product failure.
+            turn.product_failure = None;
             turn.not_run = Some(NotRun {
                 reason: NotRunReason::HostRestart,
                 status: None,
@@ -186,6 +191,55 @@ pub fn mark_restarts(turns: &mut [TurnStat], cuts: &[u64]) {
             });
         }
     }
+}
+
+/// A3: the turns the agent ended on a state Aeroric does not know
+/// (`unknownTurnEnds` on the task's record, written as the turn ended): the
+/// turn running then — the last one started by that time — did not run to a
+/// known end. A turn the transcript already says did not run keeps that,
+/// more specific, reason.
+pub fn mark_unknown_ends(turns: &mut [TurnStat], ends: &[UnknownEnd]) {
+    for end in ends {
+        let Some(turn) = turns.iter_mut().rev().find(|t| t.started_at <= end.at) else {
+            continue;
+        };
+        if turn.not_run.is_some() {
+            continue;
+        }
+        turn.interrupted = false;
+        turn.failed = true;
+        turn.product_failure = None;
+        turn.not_run = Some(NotRun {
+            reason: NotRunReason::UnknownEnd,
+            status: None,
+            message: end.message.chars().take(MESSAGE_CHARS).collect(),
+        });
+    }
+}
+
+/// A3: one `unknownTurnEnds` entry on a task's record.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnknownEnd {
+    /// When the turn ended, in ms.
+    pub at: u64,
+    /// The state as the agent sent it; empty when it sent none.
+    pub status: String,
+    /// What the user reads: `Codex 返回了没见过的结束状态：paused`.
+    pub message: String,
+}
+
+/// The unknown ends recorded on the task (`unknownTurnEnds`).
+pub fn unknown_ends(record: &crate::storage::Record) -> Vec<UnknownEnd> {
+    record
+        .get(crate::tasks::reducer::UNKNOWN_TURN_ENDS_FIELD)
+        .and_then(Value::as_array)
+        .map(|ends| {
+            ends.iter()
+                .filter_map(|end| serde_json::from_value(end.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Mark the turns the user undid or whose checks failed, matched to the
@@ -494,5 +548,97 @@ mod tests {
                 .clone(),
         );
         assert_eq!(host_restarts(&record), vec![5, 7]);
+    }
+
+    /// A3: the turn running when the agent ended on a state Aeroric does not
+    /// know did not run; a turn already graded from the transcript keeps
+    /// its reason, and turns after it are untouched.
+    #[test]
+    fn a_turn_that_ended_on_an_unknown_state_did_not_run() {
+        let turn = |started_at: u64| TurnStat {
+            started_at,
+            ended_at: Some(started_at + 50),
+            ..TurnStat::default()
+        };
+        let mut turns = vec![
+            turn(100),
+            TurnStat {
+                interrupted: true,
+                product_failure: Some(ProductFailure {
+                    undone: true,
+                    check: None,
+                }),
+                ..turn(200)
+            },
+            TurnStat {
+                not_run: Some(codex_not_run(&json!({
+                    "message": "429", "codex_error_info": "usage_limit_exceeded"
+                }))),
+                failed: true,
+                ..turn(300)
+            },
+            turn(400),
+        ];
+        let end = |at: u64, status: &str, message: &str| UnknownEnd {
+            at,
+            status: status.into(),
+            message: message.into(),
+        };
+        mark_unknown_ends(
+            &mut turns,
+            &[
+                end(260, "paused", "Codex 返回了没见过的结束状态：paused"),
+                end(360, "", "Codex 没有说这一轮是怎么结束的"),
+                end(50, "x", "before any turn"),
+            ],
+        );
+        assert!(turns[0].not_run.is_none() && !turns[0].failed);
+        let unknown = turns[1].not_run.as_ref().unwrap();
+        assert_eq!(unknown.reason, NotRunReason::UnknownEnd);
+        assert_eq!(unknown.message, "Codex 返回了没见过的结束状态：paused");
+        assert!(turns[1].failed && !turns[1].interrupted);
+        assert_eq!(turns[1].product_failure, None, "not run, not graded");
+        assert_eq!(
+            turns[2].not_run.as_ref().map(|n| n.reason),
+            Some(NotRunReason::Quota),
+            "the transcript's reason is more specific"
+        );
+        assert!(turns[3].not_run.is_none());
+
+        let record = crate::storage::Record(
+            json!({ "id": "t", "unknownTurnEnds": [
+                {"at": 5, "status": "paused", "message": "m"},
+                {"at": "bad"},
+            ] })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        assert_eq!(unknown_ends(&record), vec![end(5, "paused", "m")]);
+        assert_eq!(
+            serde_json::to_value(NotRunReason::UnknownEnd).unwrap(),
+            json!("unknownEnd")
+        );
+    }
+
+    /// B1-7: a turn graded "not run" at a restart carries no product
+    /// failure.
+    #[test]
+    fn restarts_clear_the_product_failure() {
+        let mut turns = vec![TurnStat {
+            started_at: 100,
+            ended_at: None,
+            product_failure: Some(ProductFailure {
+                undone: true,
+                check: None,
+            }),
+            ..TurnStat::default()
+        }];
+        mark_restarts(&mut turns, &[150]);
+        assert_eq!(
+            turns[0].not_run.as_ref().map(|n| n.reason),
+            Some(NotRunReason::HostRestart)
+        );
+        assert_eq!(turns[0].product_failure, None);
     }
 }

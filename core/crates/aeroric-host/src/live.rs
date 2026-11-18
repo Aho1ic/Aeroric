@@ -36,7 +36,9 @@ use aeroric_core::sessions::live::omp::driver::{
     version_supported as omp_version_supported, OmpLauncher, OmpStart,
 };
 use aeroric_core::sessions::live::remote;
+use aeroric_core::sessions::live::update::{SessionUpdate, SessionUpdateKind};
 use aeroric_core::sessions::live::LiveStatusSink;
+use aeroric_core::sessions::turn_outcome::UnknownEnd;
 use aeroric_core::settings::get_login_shell_env;
 use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
 use aeroric_core::tasks::{ProtocolFamily, TaskService, TaskStatus};
@@ -127,6 +129,40 @@ impl LiveStatusSink for TaskServiceSink {
             session_path,
         ) {
             eprintln!("[aeroric-host] cannot attach session {session_id} to {task_id}: {error}");
+        }
+    }
+
+    /// A3: a turn the agent ended on a state Aeroric does not know is kept on
+    /// the task's record, so its history grades it as not run.
+    fn update(&self, update: &SessionUpdate) {
+        let SessionUpdateKind::TurnEnded {
+            raw_status: Some(status),
+            error,
+            ..
+        } = &update.kind
+        else {
+            return;
+        };
+        let Some(service) = self.service() else {
+            return;
+        };
+        let task_id = &update.task_id;
+        let project_id = match service.project_of(task_id) {
+            Ok(Some(project_id)) => project_id,
+            other => {
+                eprintln!(
+                    "[aeroric-host] unknown turn end of {task_id} not kept: no project ({other:?})"
+                );
+                return;
+            }
+        };
+        let end = UnknownEnd {
+            at: update.at_ms,
+            status: status.clone(),
+            message: error.clone().unwrap_or_default(),
+        };
+        if let Err(error) = service.note_unknown_turn_end(&project_id, task_id, &end) {
+            eprintln!("[aeroric-host] unknown turn end of {task_id} not kept: {error}");
         }
     }
 }
@@ -1068,11 +1104,15 @@ pub fn claude_args(start: &ClaudeStart, passes_model: bool) -> Vec<String> {
         "stdio",
         "--permission-mode",
         claude_permission_mode(&start.permission),
-        "--allow-dangerously-skip-permissions",
     ]
     .into_iter()
     .map(str::to_string)
     .collect();
+    // B1-1: what lets a later `session.configure` switch to bypass. A
+    // read-only session (`plan`) never gets it, so nothing can lift it.
+    if start.permission != aeroric_core::sessions::live::read_only::READ_ONLY_MODE {
+        args.push("--allow-dangerously-skip-permissions".to_string());
+    }
     if let (true, Some(model)) = (
         passes_model,
         start.model.as_deref().filter(|m| !m.trim().is_empty()),

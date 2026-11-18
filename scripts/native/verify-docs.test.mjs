@@ -25,13 +25,27 @@ test("a clean tree passes, and the scan really reads the files (positive control
   }
 });
 
-test("over-long pages fail except the exempt backlog and docs/native artefacts", () => {
+test("over-long pages fail except the exempt planning documents and docs/native artefacts", () => {
   const long = "x\n".repeat(MAX_LINES + 1);
-  const root = fixture({ "docs/long.md": long, "docs/backlog.md": long, "docs/native/m.md": long });
+  const root = fixture({
+    "docs/long.md": long,
+    "docs/backlog.md": long,
+    "docs/frontier-roadmap.md": long,
+    "docs/native/m.md": long,
+  });
   try {
     const errors = verifyDocs(root);
     assert.equal(errors.length, 1);
     assert.match(errors[0], /^docs\/long\.md: /);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the planning documents may tell their history; other pages may not", () => {
+  const root = fixture({ "docs/frontier-roadmap.md": "以前这样排。\n", "docs/backlog.md": "不再做。\n", "docs/p.md": "以前是这样。\n" });
+  try {
+    assert.deepEqual(verifyDocs(root).map((e) => e.split(":")[0]), ["docs/p.md"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

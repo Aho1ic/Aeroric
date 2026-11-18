@@ -6,6 +6,11 @@
 //! there). Upgrade commands come from `settings::plan_agent_upgrade`, which picks
 //! the channel of the active installation; omp runs with the managed home
 //! (`PI_CODING_AGENT_DIR`) and never sees the user's `~/.omp`.
+//!
+//! A11 (2026-11-17): jobs whose steps run the same installer (one npm, so
+//! one global prefix; one Homebrew) take turns; the one waiting says whom
+//! it waits for. Nothing is queued across a host restart — jobs live in
+//! memory only.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -16,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::future::BoxFuture;
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::settings::AgentUpgradeStep;
@@ -215,6 +220,9 @@ pub struct JobView {
     pub log: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// A11: the harness whose job holds the installer this one needs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_for: Option<&'static str>,
     pub started_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<u64>,
@@ -339,6 +347,7 @@ struct Job {
     installing: bool,
     log: VecDeque<String>,
     message: Option<String>,
+    waiting_for: Option<Harness>,
     started_at: u64,
     finished_at: Option<u64>,
 }
@@ -350,6 +359,96 @@ struct Latest {
     error: Option<String>,
 }
 
+/// A11: which job holds each installer (keyed by [`installer_key`]); a job
+/// takes all the installers it needs at once, or waits.
+#[derive(Default)]
+struct Installers {
+    held: Mutex<HashMap<String, Harness>>,
+    freed: Condvar,
+}
+
+impl Installers {
+    /// Take every one of `keys` for `harness`, waiting while any is held;
+    /// `waiting` hears whom it waits for (`None` once it has them). They go
+    /// back when the returned guard drops, a panicking job included.
+    fn take<'a>(
+        &'a self,
+        keys: &[String],
+        harness: Harness,
+        waiting: impl Fn(Option<Harness>),
+    ) -> HeldInstallers<'a> {
+        let mut held = self.held.lock();
+        loop {
+            match keys.iter().find_map(|key| held.get(key).copied()) {
+                None => {
+                    for key in keys {
+                        held.insert(key.clone(), harness);
+                    }
+                    waiting(None);
+                    return HeldInstallers {
+                        installers: self,
+                        keys: keys.to_vec(),
+                    };
+                }
+                Some(other) => {
+                    waiting(Some(other));
+                    self.freed.wait(&mut held);
+                }
+            }
+        }
+    }
+
+    fn give_back(&self, keys: &[String]) {
+        let mut held = self.held.lock();
+        for key in keys {
+            held.remove(key);
+        }
+        self.freed.notify_all();
+    }
+}
+
+/// Installers a job holds; dropping it gives them back and wakes the jobs
+/// waiting for them.
+struct HeldInstallers<'a> {
+    installers: &'a Installers,
+    keys: Vec<String>,
+}
+
+impl Drop for HeldInstallers<'_> {
+    fn drop(&mut self) {
+        self.installers.give_back(&self.keys);
+    }
+}
+
+/// A job's thread ends with the job in a final state: one that unwinds
+/// before writing it leaves `Failed`, not `Running` for ever.
+struct JobEnds {
+    jobs: Arc<Mutex<HashMap<Harness, Job>>>,
+    harness: Harness,
+}
+
+impl Drop for JobEnds {
+    fn drop(&mut self) {
+        if let Some(job) = self.jobs.lock().get_mut(&self.harness) {
+            if job.state == JobState::Running {
+                job.state = JobState::Failed;
+                job.waiting_for = None;
+                job.message = Some("升级中途出错，没有完成；可以重试".to_string());
+                job.finished_at = Some(now_ms());
+            }
+        }
+    }
+}
+
+/// A11: the installer a step writes with — its program, resolved. Steps that
+/// run the same npm write the same global prefix; the same Homebrew, the
+/// same Cellar. A native updater is its own harness's binary.
+fn installer_key(step: &AgentUpgradeStep) -> String {
+    let program = Path::new(&step.program);
+    let resolved = std::fs::canonicalize(program).unwrap_or_else(|_| program.to_path_buf());
+    resolved.to_string_lossy().into_owned()
+}
+
 /// The process-wide upgrade state behind `agents.*`.
 pub struct UpgradeCenter {
     prefs_path: PathBuf,
@@ -358,6 +457,7 @@ pub struct UpgradeCenter {
     installed: Mutex<HashMap<Harness, Option<String>>>,
     jobs: Arc<Mutex<HashMap<Harness, Job>>>,
     check: tokio::sync::Mutex<()>,
+    installers: Installers,
 }
 
 impl UpgradeCenter {
@@ -369,6 +469,7 @@ impl UpgradeCenter {
             installed: Mutex::new(HashMap::new()),
             jobs: Arc::new(Mutex::new(HashMap::new())),
             check: tokio::sync::Mutex::new(()),
+            installers: Installers::default(),
         })
     }
 
@@ -463,6 +564,7 @@ impl UpgradeCenter {
                     installing: job.installing,
                     log: job.log.iter().cloned().collect(),
                     message: job.message.clone(),
+                    waiting_for: job.waiting_for.map(Harness::title),
                     started_at: job.started_at,
                     finished_at: job.finished_at,
                 });
@@ -494,34 +596,67 @@ impl UpgradeCenter {
 
     /// Start upgrading (or installing) `harness` in the background. Blocking while planning.
     pub fn start(self: &Arc<Self>, harness: Harness) -> Result<(), String> {
-        if self
-            .jobs
-            .lock()
-            .get(&harness)
-            .is_some_and(|job| job.state == JobState::Running)
-        {
-            return Ok(());
-        }
-        let previous = self.installed_version(harness);
-        let (steps, installing) = match (self.deps.plan)(harness)? {
-            Some(steps) => (steps, false),
-            None => ((self.deps.install)(harness)?, true),
+        // Claim the harness in the same lock that checks it: two quick clicks
+        // must not both get past the check and start two installs.
+        let before = {
+            let mut jobs = self.jobs.lock();
+            if jobs
+                .get(&harness)
+                .is_some_and(|job| job.state == JobState::Running)
+            {
+                return Ok(());
+            }
+            jobs.insert(
+                harness,
+                Job {
+                    state: JobState::Running,
+                    installing: false,
+                    log: VecDeque::new(),
+                    message: None,
+                    waiting_for: None,
+                    started_at: now_ms(),
+                    finished_at: None,
+                },
+            )
         };
-        self.jobs.lock().insert(
-            harness,
-            Job {
-                state: JobState::Running,
-                installing,
-                log: VecDeque::new(),
-                message: None,
-                started_at: now_ms(),
-                finished_at: None,
-            },
-        );
+        let planned = (self.deps.plan)(harness).and_then(|plan| match plan {
+            Some(steps) => Ok((steps, false)),
+            None => (self.deps.install)(harness).map(|steps| (steps, true)),
+        });
+        let (steps, installing) = match planned {
+            Ok(planned) => planned,
+            Err(error) => {
+                // Nothing started: the harness shows what it showed before.
+                let mut jobs = self.jobs.lock();
+                match before {
+                    Some(before) => jobs.insert(harness, before),
+                    None => jobs.remove(&harness),
+                };
+                return Err(error);
+            }
+        };
+        let previous = self.installed_version(harness);
+        if let Some(job) = self.jobs.lock().get_mut(&harness) {
+            job.installing = installing;
+        }
         let center = Arc::clone(self);
         let env = (self.deps.env)(harness);
+        let mut keys: Vec<String> = steps.iter().map(installer_key).collect();
+        keys.sort();
+        keys.dedup();
         std::thread::spawn(move || {
+            let _ends = JobEnds {
+                jobs: Arc::clone(&center.jobs),
+                harness,
+            };
+            // A11: one job per installer at a time.
+            let held = center.installers.take(&keys, harness, |other| {
+                if let Some(job) = center.jobs.lock().get_mut(&harness) {
+                    job.waiting_for = other;
+                }
+            });
             let outcome = run_steps(&steps, &env, &center.jobs, harness);
+            drop(held);
             (center.deps.forget_versions)();
             center.installed.lock().remove(&harness);
             let current = center.installed_version(harness);
@@ -543,11 +678,15 @@ impl UpgradeCenter {
                     (_, Some(new)) => (JobState::Succeeded, format!("已升级到 {new}")),
                 },
             };
-            if let Some(job) = center.jobs.lock().get_mut(&harness) {
+            // Let go before `_ends` looks: a guard left as the closure's tail
+            // temporary would outlive it and deadlock.
+            let mut jobs = center.jobs.lock();
+            if let Some(job) = jobs.get_mut(&harness) {
                 job.state = state;
                 job.message = Some(message);
                 job.finished_at = Some(now_ms());
             }
+            drop(jobs);
         });
         Ok(())
     }

@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[批次 A](../../proposed/bug-fix/2026-11-15-adoption-a-truthful-state.md) 的 A2。2026-11-16 在 `main@d5126573`（加 A1 未提交的工作区改动，A1 没碰这三个驱动）上复核，位置与 `8d4391c3` 相同：
+[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A2。2026-11-16 在 `main@d5126573`（加 A1 未提交的工作区改动，A1 没碰这三个驱动）上复核，位置与 `8d4391c3` 相同：
 
 - Claude `core/crates/aeroric-core/src/sessions/live/claude/driver.rs:627–653`：actor 的 `respond` 先把请求从 `pending` 里取走；`client.respond` 失败时推一条 `Error`（"审批未送达"），随后**照常**推 `PermissionResolved`，再把任务状态改回 `running`。`self.client()` 为空时请求被静默丢掉，什么也不推。
 - Codex `codex/driver.rs:669–700`：同形，失败后照常推 `PermissionResolved`，拒绝理由的 steer 也照发。`:1024`（`drop_pending`）和 `:1122`（`server_exited`）是撤回和进程退出时的清理，推 `cancelled`。
@@ -61,7 +61,7 @@ Status: implemented
 
 | 笔记 | 分类 | 处理 |
 |---|---|---|
-| [批次 A](../../proposed/bug-fix/2026-11-15-adoption-a-truthful-state.md)、[落地总纲](../../proposed/architecture/2026-11-15-research-adoption-roadmap.md) | 上级方案 | 不动；A2 状态和待目检项已回写路线文档 §8 |
+| [批次 A](./2026-11-15-adoption-a-truthful-state.md)、[落地总纲](../../proposed/architecture/2026-11-15-research-adoption-roadmap.md) | 上级方案 | 不动；A2 状态和待目检项已回写路线文档 §8 |
 | [结构化协议](../architecture/2026-10-25-structured-agent-protocols.md) | 被本篇补充 | 原地补一句"内嵌审批写成功才结算" |
 | [故障注入](../feature/2026-11-04-fault-injection.md) | 被本篇补充 | 原地补上 A2 的故障场景和 `Peer::deafen` |
 | [A1 委派结果卡](./2026-11-16-a1-delegation-card-follows-delivery.md) | 无关 | 不动 |
@@ -92,3 +92,4 @@ Status: implemented
   - protocol：夹具含 `permissionSendFailed`。
   - Swift：`LiveSessionModelTests.testAnAnswerThatDidNotArriveKeepsTheCardOrSaysItEnded`、`testApprovalMachineTellsNotSentFromNotKnownFromAnsweredElsewhere`；合同测试解码 30 条更新。iOS `testAnApprovalWaitsForTheMacsWordAndTheFirstAnswerWins`，原有流程测试改为先 `submitting` 再 `resolved`。
   - 界面行为未目检，记在路线文档 §8 待目检清单。
+- **2026-11-18 补强**：DSH（ACP）驱动和 omp 的问答回答补上同样的送达规则（B1-3），见 [全量审查 Batch 1](./2026-11-18-review-batch-1-core-gaps.md)。

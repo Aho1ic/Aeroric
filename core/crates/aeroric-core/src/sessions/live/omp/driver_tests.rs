@@ -503,3 +503,149 @@ async fn a_held_answer_wins_once_and_ends_unsent_when_omp_exits() {
         .iter()
         .any(|a| matches!(a, SessionUpdateKind::PermissionResolved { .. })));
 }
+
+/// A3: omp's `PromptStatus` is `completed | aborted | error`; anything else,
+/// or none, fails the turn and keeps what omp sent.
+#[test]
+fn only_a_completed_prompt_result_completes_the_turn() {
+    use TurnEndReason::{Completed, Failed, Interrupted};
+    let detail = || Some("boom".to_string());
+    let cases: Vec<(
+        Option<Value>,
+        Option<String>,
+        bool,
+        TurnEndReason,
+        Option<&str>,
+        Option<&str>,
+    )> = vec![
+        (Some(json!("completed")), None, false, Completed, None, None),
+        (Some(json!("aborted")), None, false, Interrupted, None, None),
+        (
+            Some(json!("completed")),
+            None,
+            true,
+            Interrupted,
+            None,
+            None,
+        ),
+        (Some(json!("paused")), None, true, Interrupted, None, None),
+        (
+            Some(json!("error")),
+            detail(),
+            false,
+            Failed,
+            Some("boom"),
+            None,
+        ),
+        (
+            None,
+            None,
+            false,
+            Failed,
+            Some("omp 没有说这一轮是怎么结束的"),
+            Some(""),
+        ),
+        (
+            Some(json!("cancelled")),
+            None,
+            false,
+            Failed,
+            Some("omp 返回了没见过的结束状态：cancelled"),
+            Some("cancelled"),
+        ),
+        (
+            Some(json!("cost_cap")),
+            detail(),
+            false,
+            Failed,
+            Some("omp 返回了没见过的结束状态：cost_cap（boom）"),
+            Some("cost_cap"),
+        ),
+    ];
+    for (status, error, interrupted, reason, want, raw) in cases {
+        let what = format!("{status:?} interrupted={interrupted}");
+        assert_eq!(
+            prompt_outcome(status.as_ref(), error, interrupted),
+            (reason, want.map(str::to_string), raw.map(str::to_string)),
+            "{what}"
+        );
+    }
+}
+
+/// A3: a `prompt_result` with a status omp's protocol does not list fails
+/// the turn instead of settling it done.
+#[tokio::test]
+async fn an_unknown_prompt_status_fails_the_turn() {
+    let mut h = start();
+    let (mut peer, id) = running(&mut h).await;
+    peer.result(&id, "paused");
+    peer.state(json!([])).await;
+    wait_status(&h.sink, TaskStatus::Failed).await;
+    let ended: Vec<_> = h
+        .sink
+        .updates
+        .lock()
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::TurnEnded {
+                reason, raw_status, ..
+            } => Some((*reason, raw_status.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        ended,
+        vec![(TurnEndReason::Failed, Some("paused".to_string()))]
+    );
+}
+
+/// B1-7: a `prompt_result` without an id still ends the prompt waiting for
+/// one, instead of leaving the turn running for ever.
+#[tokio::test]
+async fn a_prompt_result_without_an_id_ends_the_waiting_turn() {
+    let mut h = start();
+    let (peer, _id) = running(&mut h).await;
+    peer.send(
+        json!({"type": "prompt_result", "agentInvoked": true, "status": "error",
+        "error": "boom", "sessionSettled": true}),
+    );
+    wait_status(&h.sink, TaskStatus::Failed).await;
+    let ended = h
+        .sink
+        .updates
+        .lock()
+        .iter()
+        .filter(|u| matches!(u.kind, SessionUpdateKind::TurnEnded { .. }))
+        .count();
+    assert_eq!(ended, 1);
+}
+
+/// B1-3 (A2): an answer omp's input does not take keeps the question open
+/// to be answered again, instead of settling it.
+#[tokio::test]
+async fn an_answer_that_is_not_written_keeps_the_question() {
+    let mut h = start();
+    let (peer, _id) = running(&mut h).await;
+    peer.send(json!({"type": "extension_ui_request", "id": "q1", "method": "confirm", "title": "继续？", "message": "会覆盖文件"}));
+    wait_status(&h.sink, TaskStatus::InputRequired).await;
+    let Peer {
+        to_client,
+        from_client,
+        ..
+    } = peer;
+    drop(from_client);
+    h.session.answer("q1", Answer::Confirmed(true)).unwrap();
+    let session = Arc::clone(&h.session);
+    let sink = Arc::clone(&h.sink);
+    until("an error", move || {
+        sink.update_types().iter().any(|t| t == "error")
+    })
+    .await;
+    assert!(!h
+        .sink
+        .update_types()
+        .iter()
+        .any(|t| t == "questionResolved"));
+    assert_eq!(session.snapshot().questions.len(), 1, "still open");
+    drop(to_client);
+}

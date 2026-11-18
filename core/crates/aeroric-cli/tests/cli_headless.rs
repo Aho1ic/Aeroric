@@ -97,6 +97,7 @@ fn approval_and_task_lifecycle_real_cli_e2e() {
     std::fs::create_dir_all(&data_dir).expect("create data dir");
 
     let server = Command::new(env!("CARGO_BIN_EXE_aeroric-cli"))
+        .env("AERORIC_TEST_MEMORY_SECRETS", "1")
         .env("HOME", &scratch.0)
         .arg("--data-dir")
         .arg(&data_dir)
@@ -334,6 +335,7 @@ fn sigterm_killed_attach_restores_the_local_termios() {
     let data_dir = scratch.0.join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
     let server = Command::new(env!("CARGO_BIN_EXE_aeroric-cli"))
+        .env("AERORIC_TEST_MEMORY_SECRETS", "1")
         .env("HOME", &scratch.0)
         .arg("--data-dir")
         .arg(&data_dir)
@@ -549,6 +551,7 @@ fn serve_sigterm_kills_running_task_children_even_hup_immune() {
     let data_dir = scratch.0.join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
     let server = Command::new(env!("CARGO_BIN_EXE_aeroric-cli"))
+        .env("AERORIC_TEST_MEMORY_SECRETS", "1")
         .arg("--data-dir")
         .arg(&data_dir)
         .arg("serve")
@@ -689,6 +692,7 @@ fn hundred_mode_switches_leave_the_task_protocol_untouched() {
     let data_dir = scratch.0.join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
     let server = Command::new(env!("CARGO_BIN_EXE_aeroric-cli"))
+        .env("AERORIC_TEST_MEMORY_SECRETS", "1")
         .arg("--data-dir")
         .arg(&data_dir)
         .arg("serve")
@@ -901,4 +905,25 @@ fn hundred_mode_switches_leave_the_task_protocol_untouched() {
         .expect("base64");
     let text = String::from_utf8_lossy(&decoded);
     assert!(text.contains("switch-output"), "原始输出仍在场：{text}");
+}
+
+#[test]
+fn memory_credentials_are_refused_outside_a_temporary_folder() {
+    // A data directory outside the temporary folders (cargo's per-target tmp
+    // lives under `target/`); the refusal comes before the lock or any write.
+    let data_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("not-scratch-{}", uuid::Uuid::new_v4()));
+    let output = Command::new(env!("CARGO_BIN_EXE_aeroric-cli"))
+        .env("AERORIC_TEST_MEMORY_SECRETS", "1")
+        .arg("--data-dir")
+        .arg(&data_dir)
+        .arg("serve")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("AERORIC_TEST_MEMORY_SECRETS=1"), "{stderr}");
+    assert!(!data_dir.join("host.token").exists());
+    let _ = std::fs::remove_dir_all(&data_dir);
 }

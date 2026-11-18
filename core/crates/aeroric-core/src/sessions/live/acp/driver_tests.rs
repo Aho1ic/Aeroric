@@ -526,3 +526,252 @@ fn models_and_efforts_are_picked_from_what_the_agent_offers() {
     assert_eq!(shown_value("[\"aeroric\",\"glm-5\"]"), "glm-5");
     assert_eq!(shown_value("plain"), "plain");
 }
+
+/// 2026-11-17: a handshake that went through is one line with each step's
+/// time; one that stopped says where, how long it waited, how long the
+/// process had run, and the process's last stderr lines.
+#[test]
+fn a_handshake_is_logged_step_by_step() {
+    let mut handshake = Handshake::default();
+    handshake.record("启动", Duration::from_millis(12));
+    handshake.record("initialize", Duration::from_millis(3980));
+    handshake.record("session/new", Duration::from_millis(218));
+    assert_eq!(
+        handshake.summary("DSH", "t1", Some(4242)),
+        "[acp] DSH task=t1 pid=4242 握手 4210ms：启动 12ms · initialize 3980ms · session/new 218ms"
+    );
+
+    let mut started = Handshake::default();
+    started.record("启动", Duration::from_millis(9));
+    let stuck = started.failure(
+        "DSH",
+        "t2",
+        Some(7),
+        "initialize",
+        Duration::from_secs(30),
+        Some(Duration::from_millis(30_012)),
+        &[
+            "+20ms loading config".into(),
+            "+29990ms still waiting".into(),
+        ],
+        "DSH 握手超时（30 秒没有回答）",
+    );
+    let lines: Vec<&str> = stuck.lines().collect();
+    assert_eq!(
+        lines[0],
+        "[acp] DSH task=t2 pid=7 握手停在 initialize：等了 30000ms，进程已运行 30012ms；之前：启动 9ms；报错：DSH 握手超时（30 秒没有回答）"
+    );
+    assert_eq!(lines[1], "[acp]   stderr 最后 2 行：");
+    assert_eq!(lines[3], "[acp]   +29990ms still waiting");
+
+    let silent = Handshake::default().failure(
+        "DSH",
+        "t3",
+        None,
+        "启动",
+        Duration::from_millis(1),
+        None,
+        &[],
+        "没装",
+    );
+    assert_eq!(
+        silent,
+        "[acp] DSH task=t3 pid=- 握手停在 启动：等了 1ms；报错：没装\n[acp]   stderr 没有输出"
+    );
+}
+
+/// A3: only `end_turn` completes a turn; the spec's limits fail it without
+/// a raw state; a stop reason outside the spec, or none, fails it and keeps
+/// what was sent; a stop the person asked for stays an interruption.
+#[test]
+fn only_end_turn_completes_a_turn() {
+    use TurnEndReason::{Completed, Failed, Interrupted};
+    let ok = |stop: Value| -> Result<Value, RpcError> {
+        Ok(if stop.is_null() {
+            json!({})
+        } else {
+            json!({ "stopReason": stop })
+        })
+    };
+    let cases: Vec<(
+        Result<Value, RpcError>,
+        bool,
+        TurnEndReason,
+        Option<&str>,
+        Option<&str>,
+    )> = vec![
+        (ok(json!("end_turn")), false, Completed, None, None),
+        (ok(json!("cancelled")), false, Interrupted, None, None),
+        (ok(json!("end_turn")), true, Interrupted, None, None),
+        (ok(json!("paused")), true, Interrupted, None, None),
+        (
+            ok(json!("refusal")),
+            false,
+            Failed,
+            Some("DSH 拒绝了这次请求"),
+            None,
+        ),
+        (
+            ok(json!("max_tokens")),
+            false,
+            Failed,
+            Some("DSH 到了单轮上限（max_tokens），这一轮没做完"),
+            None,
+        ),
+        (
+            ok(json!("max_turn_requests")),
+            false,
+            Failed,
+            Some("DSH 到了单轮上限（max_turn_requests），这一轮没做完"),
+            None,
+        ),
+        (
+            ok(Value::Null),
+            false,
+            Failed,
+            Some("DSH 没有说这一轮是怎么结束的"),
+            Some(""),
+        ),
+        (
+            ok(json!("")),
+            false,
+            Failed,
+            Some("DSH 没有说这一轮是怎么结束的"),
+            Some(""),
+        ),
+        (
+            ok(json!("paused")),
+            false,
+            Failed,
+            Some("DSH 返回了没见过的结束状态：paused"),
+            Some("paused"),
+        ),
+        (
+            ok(json!(3)),
+            false,
+            Failed,
+            Some("DSH 返回了没见过的结束状态：3"),
+            Some("3"),
+        ),
+        (
+            Err(RpcError::Remote {
+                code: -32603,
+                message: "boom".into(),
+            }),
+            false,
+            Failed,
+            Some("DSH 这一轮失败：boom (-32603)"),
+            None,
+        ),
+    ];
+    for (result, interrupted, reason, error, raw) in cases {
+        let what = format!("{result:?} interrupted={interrupted}");
+        assert_eq!(
+            turn_outcome("DSH", &result, interrupted),
+            (reason, error.map(str::to_string), raw.map(str::to_string)),
+            "{what}"
+        );
+    }
+}
+
+/// A3: a turn the agent ended on a stop reason outside the spec is a
+/// failure that carries it, never a completed turn.
+#[tokio::test]
+async fn an_unknown_stop_reason_fails_the_turn_and_keeps_it() {
+    let mut h = start_with("ask", None, None);
+    h.session.prompt("hi".into()).unwrap();
+    let mut peer = launched(&mut h).await;
+    peer.open().await;
+    let prompt = peer.prompt("hi").await;
+    peer.reply(&prompt, json!({"stopReason": "paused"}));
+    wait_status(&h.sink, TaskStatus::Failed).await;
+    let updates = h.sink.updates.lock().clone();
+    let ended: Vec<_> = updates
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::TurnEnded {
+                reason,
+                error,
+                raw_status,
+                ..
+            } => Some((*reason, error.clone(), raw_status.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].0, TurnEndReason::Failed);
+    assert_eq!(ended[0].2.as_deref(), Some("paused"));
+    assert!(
+        ended[0]
+            .1
+            .as_deref()
+            .is_some_and(|e| e.ends_with("返回了没见过的结束状态：paused")),
+        "{:?}",
+        ended[0].1
+    );
+}
+
+/// B1-3 (A2): an answer that cannot be written to DSH does not pass for
+/// delivered — the request stays open, says why, and can be answered again;
+/// a second answer while one is on its way is refused.
+#[tokio::test]
+async fn an_approval_that_is_not_written_stays_open() {
+    let mut h = start_with("ask", None, None);
+    h.session.prompt("写文件".into()).unwrap();
+    let mut peer = launched(&mut h).await;
+    peer.open().await;
+    peer.prompt("写文件").await;
+    peer.send(json!({"jsonrpc": "2.0", "id": 3, "method": "session/request_permission",
+        "params": {"sessionId": "s1", "toolCall": {"toolCallId": "w", "title": "write"},
+            "options": [{"optionId": "a", "kind": "allow_once"}, {"optionId": "r", "kind": "reject_once"}]}}));
+    wait_status(&h.sink, TaskStatus::InputRequired).await;
+    let id = h.session.snapshot().pending[0].id.clone();
+    // The agent's input closes: nothing written gets through.
+    let Peer {
+        to_client,
+        from_client,
+        ..
+    } = peer;
+    drop(from_client);
+    h.session.respond(&id, Decision::AllowOnce).unwrap();
+    wait_type(&h.sink, "permissionSendFailed").await;
+    let types = h.sink.update_types();
+    assert!(
+        !types.iter().any(|t| t == "permissionResolved"),
+        "{types:?}"
+    );
+    assert_eq!(h.session.snapshot().pending.len(), 1, "still open");
+    assert_eq!(h.sink.last_status(), Some(TaskStatus::InputRequired));
+    // Free again: another answer is taken (and fails the same way).
+    assert!(h.session.respond(&id, Decision::AllowOnce).is_ok());
+    drop(to_client);
+}
+
+/// B1-4: a DSH that answers `initialize` and then never `session/new` does
+/// not hold the session hostage: Stop (before the turn has begun) and Close
+/// cut the handshake short at once instead of waiting out [`HANDSHAKE`].
+#[tokio::test]
+async fn stop_cuts_a_hanging_handshake_short() {
+    let mut h = start_with("ask", None, None);
+    h.session.prompt("hi".into()).unwrap();
+    let mut peer = launched(&mut h).await;
+    peer.initialize(json!({"sessionCapabilities": {}})).await;
+    let _new = peer.expect("session/new").await;
+    let asked = std::time::Instant::now();
+    // No turn has begun yet, so Stop says so — and still cuts the handshake.
+    let _ = h.session.interrupt();
+    let sink = Arc::clone(&h.sink);
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        until("the turn ends", move || {
+            matches!(
+                sink.last_status(),
+                Some(TaskStatus::Failed | TaskStatus::Interrupted)
+            )
+        }),
+    )
+    .await
+    .expect("the handshake must stop within two seconds, not thirty");
+    assert!(asked.elapsed() < Duration::from_secs(2));
+    drop(peer);
+}

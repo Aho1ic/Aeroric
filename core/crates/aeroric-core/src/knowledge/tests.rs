@@ -550,3 +550,34 @@ fn a_renamed_title_is_kept_and_a_source_rename_is_an_issue() {
     assert!(page.title.starts_with('新'));
     assert!(!page.title_edited);
 }
+
+#[test]
+fn links_between_notes_point_at_their_pages_and_other_relative_links_become_text() {
+    let other = notes::parse(
+        ".agents/notes/implemented/architecture/2026-09-21-native-boundary.md",
+        "# Agent Note: 边界\n\nStatus: implemented\n\n## Decision\n\n一个写者。\n",
+    );
+    let note = notes::parse(
+        ".agents/notes/implemented/feature/2026-10-31-delegation.md",
+        "# Agent Note: 委派\n\nStatus: implemented\n\n## Decision\n\n\
+         见[边界](../architecture/2026-09-21-native-boundary.md#Decision)、\
+         [路线](../../../../docs/frontier-roadmap.md)、![图](img.png)、\
+         [官网](https://example.com)、[本节](#Decision)、`[代码](x.md)`。\n\n\
+         ```\n[围栏](y.md)\n```\n",
+    );
+    let pages = super::compile::target(&Sources {
+        notes: vec![other, note],
+        ..Sources::default()
+    });
+    let page = pages
+        .iter()
+        .find(|p| p.slug == "decision-delegation")
+        .unwrap();
+    assert_eq!(
+        page.blocks[0].text,
+        "见[边界](decision-native-boundary.md#Decision)、\
+         路线（`../../../../docs/frontier-roadmap.md`）、图（`img.png`）、\
+         [官网](https://example.com)、[本节](#Decision)、`[代码](x.md)`。\n\n\
+         ```\n[围栏](y.md)\n```"
+    );
+}

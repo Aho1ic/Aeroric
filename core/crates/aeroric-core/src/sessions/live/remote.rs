@@ -261,12 +261,18 @@ pub fn parse_agent_probe(stdout: &str) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
-/// Print a remote file, at most its last `max_bytes` (history, B4).
+/// [`read_command`]'s exit status when it printed only the file's tail.
+pub const READ_CUT_EXIT: i32 = 4;
+
+/// Print a remote file, at most its last `max_bytes` (history, B4). Exits 3
+/// when there is no such file, and [`READ_CUT_EXIT`] after printing a tail
+/// (B1-8): whether the file was cut is said, not guessed from the length.
 pub fn read_command(path: &str, max_bytes: u64) -> String {
     let file = remote_path(path);
     login_shell(&format!(
         "f={file}; [ -f \"$f\" ] || exit 3; s=$(wc -c < \"$f\"); \
-         if [ \"$s\" -gt {max_bytes} ]; then tail -c {max_bytes} \"$f\"; else cat \"$f\"; fi"
+         if [ \"$s\" -gt {max_bytes} ]; then tail -c {max_bytes} \"$f\" && exit {READ_CUT_EXIT}; \
+         else cat \"$f\"; fi"
     ))
 }
 
@@ -521,6 +527,27 @@ mod tests {
         let read = read_command("~/.claude/projects/x/s.jsonl", 1024);
         assert!(read.contains("tail -c 1024"));
         assert!(read.contains("\"$HOME\"/"));
+        // B1-8: run it, and it says whether it cut.
+        let file =
+            std::env::temp_dir().join(format!("aeroric-read-{}.jsonl", uuid::Uuid::new_v4()));
+        std::fs::write(&file, "0123456789").unwrap();
+        let run = |max: u64| {
+            let out = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(
+                    read_command(&file.to_string_lossy(), max)
+                        .replace("exec \"${SHELL:-/bin/sh}\" -lc", "exec /bin/sh -c"),
+                )
+                .output()
+                .unwrap();
+            (
+                out.status.code(),
+                String::from_utf8_lossy(&out.stdout).into_owned(),
+            )
+        };
+        assert_eq!(run(4), (Some(READ_CUT_EXIT), "6789".to_string()));
+        assert_eq!(run(10), (Some(0), "0123456789".to_string()));
+        std::fs::remove_file(&file).unwrap();
         assert!(version_command("omp").ends_with("exec '\\''omp'\\'' --version'"));
     }
 

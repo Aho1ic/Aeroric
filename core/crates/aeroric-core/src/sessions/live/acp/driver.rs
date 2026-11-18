@@ -11,7 +11,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::{json, Value};
@@ -19,13 +19,18 @@ use tokio::sync::mpsc;
 
 use super::dialect::Dialect;
 use super::map::{AcpMapper, Tool};
-use crate::sessions::live::codex::rpc::{ChildGuard, Inbound, RpcClient, RpcError, Transport};
+use crate::sessions::live::codex::rpc::{
+    ChildGuard, Inbound, ProcessWatch, RpcClient, RpcError, Transport,
+};
 use crate::sessions::live::context_server::{ContextServer, SERVER_NAME};
 use crate::sessions::live::omp::map::tool_title;
-use crate::sessions::live::update::{PlanEntry, SessionUpdateKind, ToolKind, TurnEndReason};
+use crate::sessions::live::update::{
+    PermissionSendState, PlanEntry, SessionUpdateKind, ToolKind, TurnEndReason,
+};
 use crate::sessions::live::{
-    now_ms, ConfigChange, Decision, DriverError, LiveStatusSink, PendingPermission, SessionDriver,
-    SessionState, SharedLog, SlashCommand,
+    answer_not_written, now_ms, ConfigChange, Decision, DriverError, LiveStatusSink,
+    PendingPermission, SessionDriver, SessionState, SharedLog, SlashCommand,
+    ANSWER_ENDED_WITH_CONNECTION, ANSWER_ENDED_WITH_TURN,
 };
 use crate::tasks::TaskStatus;
 use aeroric_protocol::delivery::ReceiptOutcome;
@@ -50,6 +55,128 @@ pub type TranscriptLocator = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 const PROTOCOL_VERSION: u64 = 1;
 const HANDSHAKE: Duration = Duration::from_secs(30);
+
+/// 2026-11-17: how long each step of an ACP handshake took, for the host
+/// log. A DSH handshake timed out twice in a discussion's next round while
+/// one started alone answered in 4 s; this says where it waited.
+#[derive(Debug, Default)]
+pub(crate) struct Handshake {
+    steps: Vec<(&'static str, Duration)>,
+}
+
+impl Handshake {
+    fn record(&mut self, step: &'static str, took: Duration) {
+        self.steps.push((step, took));
+    }
+
+    fn steps(&self) -> String {
+        self.steps
+            .iter()
+            .map(|(step, took)| format!("{step} {}ms", took.as_millis()))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+
+    fn who(label: &str, task: &str, pid: Option<u32>) -> String {
+        let pid = pid.map_or("-".to_string(), |p| p.to_string());
+        format!("[acp] {label} task={task} pid={pid}")
+    }
+
+    /// One line for a handshake that went through.
+    pub(crate) fn summary(&self, label: &str, task: &str, pid: Option<u32>) -> String {
+        let total: Duration = self.steps.iter().map(|(_, took)| *took).sum();
+        format!(
+            "{} 握手 {}ms：{}",
+            Self::who(label, task, pid),
+            total.as_millis(),
+            self.steps()
+        )
+    }
+
+    /// Where a handshake stopped: the step, how long it waited, how long the
+    /// process had run, the steps before, and the process's last stderr lines.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn failure(
+        &self,
+        label: &str,
+        task: &str,
+        pid: Option<u32>,
+        step: &str,
+        waited: Duration,
+        age: Option<Duration>,
+        stderr: &[String],
+        error: &str,
+    ) -> String {
+        let mut out = format!(
+            "{} 握手停在 {step}：等了 {}ms",
+            Self::who(label, task, pid),
+            waited.as_millis()
+        );
+        if let Some(age) = age {
+            out.push_str(&format!("，进程已运行 {}ms", age.as_millis()));
+        }
+        if !self.steps.is_empty() {
+            out.push_str(&format!("；之前：{}", self.steps()));
+        }
+        out.push_str(&format!("；报错：{error}"));
+        if stderr.is_empty() {
+            out.push_str("\n[acp]   stderr 没有输出");
+        } else {
+            out.push_str(&format!("\n[acp]   stderr 最后 {} 行：", stderr.len()));
+            for line in stderr {
+                out.push_str(&format!("\n[acp]   {line}"));
+            }
+        }
+        out
+    }
+}
+
+/// Log where a handshake stopped; `error` back for the caller to return.
+/// B1-4: how one handshake step ended.
+enum Step<T> {
+    Done(T),
+    TimedOut,
+    Stopped,
+}
+
+/// B1-4: one handshake step, at most [`HANDSHAKE`], cut short by `stop`.
+async fn step<T>(
+    stop: &tokio::sync::Notify,
+    future: impl std::future::Future<Output = T>,
+) -> Step<T> {
+    tokio::select! {
+        done = tokio::time::timeout(HANDSHAKE, future) => match done {
+            Ok(value) => Step::Done(value),
+            Err(_) => Step::TimedOut,
+        },
+        () = stop.notified() => Step::Stopped,
+    }
+}
+
+fn stopped(
+    handshake: &Handshake,
+    label: &str,
+    task: &str,
+    process: Option<&ProcessWatch>,
+    step: &str,
+    since: Instant,
+    error: String,
+) -> String {
+    eprintln!(
+        "{}",
+        handshake.failure(
+            label,
+            task,
+            process.and_then(ProcessWatch::pid),
+            step,
+            since.elapsed(),
+            process.map(ProcessWatch::age),
+            &process.map(ProcessWatch::stderr_tail).unwrap_or_default(),
+            &error,
+        )
+    );
+    error
+}
 const CRASH_WINDOW_MS: u64 = 60_000;
 const CRASH_LIMIT: usize = 3;
 /// How long a stop waits for the agent to end its turn before the process goes.
@@ -92,6 +219,15 @@ struct Approval {
     /// `(optionId, kind)` as the agent offered them.
     options: Vec<(String, String)>,
     view: PendingPermission,
+    /// B1-3 (A2): an answer to it is on its way; a second one is refused.
+    claimed: bool,
+}
+
+/// B1-3 (A2): an answer that did not get through frees the request again.
+fn release(state: &Mutex<State>, id: &str) {
+    if let Some(pending) = state.lock().pending.iter_mut().find(|p| p.view.id == id) {
+        pending.claimed = false;
+    }
 }
 
 struct State {
@@ -120,6 +256,9 @@ pub struct AcpSession {
     log: SharedLog,
     state: Arc<Mutex<State>>,
     commands: mpsc::UnboundedSender<Command>,
+    /// B1-4: cuts a handshake in progress short (stop or close), which the
+    /// command queue cannot while the actor waits on it.
+    stop: Arc<tokio::sync::Notify>,
 }
 
 impl AcpSession {
@@ -151,7 +290,9 @@ impl AcpSession {
         }));
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (inbox, inbox_rx) = mpsc::unbounded_channel();
+        let stop = Arc::new(tokio::sync::Notify::new());
         let actor = Actor {
+            stop: Arc::clone(&stop),
             task_id: spec.task_id.clone(),
             dialect: spec.dialect,
             launcher,
@@ -178,6 +319,7 @@ impl AcpSession {
             log,
             state,
             commands,
+            stop,
         })
     }
 
@@ -219,6 +361,10 @@ impl SessionDriver for AcpSession {
     }
 
     fn interrupt(&self) -> Result<(), DriverError> {
+        // B1-4: wakes only a handshake waiting right now (its turn has not
+        // begun yet); a turn already running hears the interrupt from the
+        // queue.
+        self.stop.notify_waiters();
         if self.state.lock().active_turn.is_none() {
             return Err(DriverError::Unsupported("当前没有进行中的一轮".into()));
         }
@@ -226,16 +372,19 @@ impl SessionDriver for AcpSession {
     }
 
     fn respond(&self, request_id: &str, decision: Decision) -> Result<(), DriverError> {
-        if !self
-            .state
-            .lock()
-            .pending
-            .iter()
-            .any(|p| p.view.id == request_id)
+        // B1-3 (A2): first come wins; the request stays until it is written.
         {
-            return Err(DriverError::UnknownRequest(request_id.to_string()));
+            let mut state = self.state.lock();
+            let Some(pending) = state.pending.iter_mut().find(|p| p.view.id == request_id) else {
+                return Err(DriverError::UnknownRequest(request_id.to_string()));
+            };
+            if pending.claimed {
+                return Err(DriverError::AlreadyAnswered(request_id.to_string()));
+            }
+            pending.claimed = true;
         }
         self.send(Command::Respond(request_id.to_string(), decision))
+            .inspect_err(|_| release(&self.state, request_id))
     }
 
     fn configure(&self, change: ConfigChange) -> Result<(), DriverError> {
@@ -275,6 +424,7 @@ impl SessionDriver for AcpSession {
     fn close(&self) -> Result<(), DriverError> {
         let _ = self.commands.send(Command::Close);
         self.state.lock().closed = true;
+        self.stop.notify_waiters();
         Ok(())
     }
 
@@ -425,6 +575,38 @@ pub fn pick_effort(option: &Value, wanted: &str) -> Option<String> {
 }
 
 /// What an approval card says: the call's subject, and the agent's reason when it gives one.
+/// How a prompt's turn ended: `(reason, error, rawStatus)`.
+///
+/// A3: only `end_turn` completed it. `max_tokens` and `max_turn_requests`
+/// are in the ACP spec but mean the agent stopped before it was done, as
+/// Claude's `error_max_turns` does: a failure, so no checks or acceptance
+/// run on half a turn. A stop reason outside the spec, or none (the spec
+/// requires one), is a failure that keeps what was sent. A stop the person
+/// asked for stays an interruption whatever the agent answered.
+fn turn_outcome(
+    label: &str,
+    result: &Result<Value, RpcError>,
+    interrupted: bool,
+) -> (TurnEndReason, Option<String>, Option<String>) {
+    let stop = result.as_ref().ok().and_then(|r| r.get("stopReason"));
+    if interrupted || stop.and_then(Value::as_str) == Some("cancelled") {
+        return (TurnEndReason::Interrupted, None, None);
+    }
+    let failed = |error: String| (TurnEndReason::Failed, Some(error), None);
+    match (result, stop.and_then(Value::as_str)) {
+        (Err(error), _) => failed(format!("{label} 这一轮失败：{error}")),
+        (Ok(_), Some("end_turn")) => (TurnEndReason::Completed, None, None),
+        (Ok(_), Some("refusal")) => failed(format!("{label} 拒绝了这次请求")),
+        (Ok(_), Some(limit @ ("max_tokens" | "max_turn_requests"))) => {
+            failed(format!("{label} 到了单轮上限（{limit}），这一轮没做完"))
+        }
+        (Ok(_), _) => {
+            let (raw, why) = super::super::unknown_end(label, stop);
+            (TurnEndReason::Failed, Some(why), Some(raw))
+        }
+    }
+}
+
 fn approval_summary(tool: Option<&Tool>) -> String {
     let Some(tool) = tool else {
         return "Agent 请求一项权限".into();
@@ -461,6 +643,8 @@ enum Inbox {
 }
 
 struct Actor {
+    /// B1-4: see [`AcpSession::stop`].
+    stop: Arc<tokio::sync::Notify>,
     task_id: String,
     dialect: &'static Dialect,
     launcher: AcpLauncher,
@@ -592,7 +776,13 @@ impl Actor {
             env: pin.env.clone(),
             ..start
         };
-        let (transport, guard) = (self.launcher)(&start)?;
+        let task = self.task_id.clone();
+        let mut handshake = Handshake::default();
+        let since = Instant::now();
+        let (transport, guard) = (self.launcher)(&start)
+            .map_err(|error| stopped(&handshake, label, &task, None, "启动", since, error))?;
+        handshake.record("启动", since.elapsed());
+        let watch = guard.as_ref().map(ChildGuard::watch);
         let (client, mut inbound) = RpcClient::start(transport);
         self.epoch += 1;
         let epoch = self.epoch;
@@ -630,33 +820,60 @@ impl Actor {
                 "clientInfo": {"name": "aeroric", "version": env!("CARGO_PKG_VERSION")},
             }),
         );
-        let init = match tokio::time::timeout(HANDSHAKE, init).await {
-            Ok(Ok(init)) => init,
-            Ok(Err(error)) => {
+        let since = Instant::now();
+        let at = |step: &'static str, since: Instant, error: String| {
+            stopped(&handshake, label, &task, watch.as_ref(), step, since, error)
+        };
+        let stop = Arc::clone(&self.stop);
+        let waited = |step_name: &str| {
+            format!(
+                "{label} 握手超时：{step_name} {} 秒没有回答",
+                HANDSHAKE.as_secs()
+            )
+        };
+        let cut = format!("{label} 握手被停止");
+        let init = match step(&stop, init).await {
+            Step::Stopped => return Err(at("initialize", since, cut.clone())),
+            Step::Done(Ok(init)) => init,
+            Step::Done(Err(error)) => {
                 self.crashes.push_back(now_ms());
-                return Err(format!("{label} 握手失败：{error}"));
+                return Err(at(
+                    "initialize",
+                    since,
+                    format!("{label} 握手失败：{error}"),
+                ));
             }
-            Err(_) => {
+            Step::TimedOut => {
                 self.crashes.push_back(now_ms());
-                return Err(format!(
-                    "{label} 握手超时（{} 秒没有回答）",
-                    HANDSHAKE.as_secs()
+                return Err(at(
+                    "initialize",
+                    since,
+                    format!("{label} 握手超时（{} 秒没有回答）", HANDSHAKE.as_secs()),
                 ));
             }
         };
         let version = init.get("protocolVersion").and_then(Value::as_u64);
         if version != Some(PROTOCOL_VERSION) {
-            return Err(format!(
-                "{label} 说的 ACP 协议版本是 {}，Aeroric 只支持 {PROTOCOL_VERSION}",
-                version.map_or("未知".to_string(), |v| v.to_string())
+            return Err(at(
+                "initialize",
+                since,
+                format!(
+                    "{label} 说的 ACP 协议版本是 {}，Aeroric 只支持 {PROTOCOL_VERSION}",
+                    version.map_or("未知".to_string(), |v| v.to_string())
+                ),
             ));
         }
+        handshake.record("initialize", since.elapsed());
         let capabilities = init
             .get("agentCapabilities")
             .cloned()
             .unwrap_or(Value::Null);
         let cwd = start.cwd.clone();
         let servers: Vec<Value> = context.iter().map(mcp_entry).collect();
+        let since = Instant::now();
+        let at = |step: &'static str, since: Instant, error: String| {
+            stopped(&handshake, label, &task, watch.as_ref(), step, since, error)
+        };
         let opened = match &resume {
             Some(id) => {
                 let resumable = capabilities
@@ -664,35 +881,72 @@ impl Actor {
                     .and_then(|c| c.get("resume"))
                     .is_some();
                 if !resumable {
-                    return Err(format!(
-                        "{label} 不支持恢复会话（没有声明 session/resume），没有另开新会话"
+                    return Err(at(
+                        "session/resume",
+                        since,
+                        format!(
+                            "{label} 不支持恢复会话（没有声明 session/resume），没有另开新会话"
+                        ),
                     ));
                 }
-                let result = client
-                    .request(
-                        "session/resume",
-                        json!({"sessionId": id, "cwd": cwd, "mcpServers": servers}),
-                    )
-                    .await
-                    .map_err(|error| format!("{label} 恢复会话失败：{error}"))?;
+                let asked = client.request(
+                    "session/resume",
+                    json!({"sessionId": id, "cwd": cwd, "mcpServers": servers}),
+                );
+                let result = match step(&stop, asked).await {
+                    Step::Done(result) => result.map_err(|error| {
+                        at(
+                            "session/resume",
+                            since,
+                            format!("{label} 恢复会话失败：{error}"),
+                        )
+                    })?,
+                    Step::TimedOut => {
+                        return Err(at("session/resume", since, waited("session/resume")))
+                    }
+                    Step::Stopped => return Err(at("session/resume", since, cut.clone())),
+                };
                 if let Some(other) = s(&result, "sessionId").filter(|other| other != id) {
-                    return Err(format!(
-                        "{label} 恢复出的会话 {other} 不是原来的 {id}，没有接着用"
+                    return Err(at(
+                        "session/resume",
+                        since,
+                        format!("{label} 恢复出的会话 {other} 不是原来的 {id}，没有接着用"),
                     ));
                 }
                 result
             }
             None => {
-                let result = client
-                    .request("session/new", json!({"cwd": cwd, "mcpServers": servers}))
-                    .await
-                    .map_err(|error| format!("{label} 新建会话失败：{error}"))?;
+                let asked =
+                    client.request("session/new", json!({"cwd": cwd, "mcpServers": servers}));
+                let result = match step(&stop, asked).await {
+                    Step::Done(result) => result.map_err(|error| {
+                        at(
+                            "session/new",
+                            since,
+                            format!("{label} 新建会话失败：{error}"),
+                        )
+                    })?,
+                    Step::TimedOut => return Err(at("session/new", since, waited("session/new"))),
+                    Step::Stopped => return Err(at("session/new", since, cut.clone())),
+                };
                 if s(&result, "sessionId").is_none_or(|id| id.trim().is_empty()) {
-                    return Err(format!("{label} 新建会话没有给出会话 id"));
+                    return Err(at(
+                        "session/new",
+                        since,
+                        format!("{label} 新建会话没有给出会话 id"),
+                    ));
                 }
                 result
             }
         };
+        handshake.record(
+            if resume.is_some() {
+                "session/resume"
+            } else {
+                "session/new"
+            },
+            since.elapsed(),
+        );
         let session_id = resume
             .clone()
             .or_else(|| s(&opened, "sessionId").map(str::to_string))
@@ -703,19 +957,48 @@ impl Actor {
                 .and_then(|m| m.get("availableModes"))
                 .and_then(Value::as_array)
                 .is_some_and(|modes| modes.iter().any(|m| s(m, "id") == Some(mode)));
+            let since = Instant::now();
             if !offered {
-                return Err(format!(
-                    "{label} 没有提供模式 {mode}，无法守住所选权限，已拒绝连接"
+                return Err(stopped(
+                    &handshake,
+                    label,
+                    &task,
+                    watch.as_ref(),
+                    "session/set_mode",
+                    since,
+                    format!("{label} 没有提供模式 {mode}，无法守住所选权限，已拒绝连接"),
                 ));
             }
-            client
-                .request(
+            let asked = client.request(
+                "session/set_mode",
+                json!({"sessionId": session_id, "modeId": mode}),
+            );
+            let failed = |error: String| {
+                stopped(
+                    &handshake,
+                    label,
+                    &task,
+                    watch.as_ref(),
                     "session/set_mode",
-                    json!({"sessionId": session_id, "modeId": mode}),
+                    since,
+                    error,
                 )
-                .await
-                .map_err(|error| format!("{label} 拒绝了权限模式 {mode}：{error}"))?;
+            };
+            match step(&stop, asked).await {
+                Step::Done(result) => {
+                    result.map_err(|error| {
+                        failed(format!("{label} 拒绝了权限模式 {mode}：{error}"))
+                    })?;
+                }
+                Step::TimedOut => return Err(failed(waited("session/set_mode"))),
+                Step::Stopped => return Err(failed(cut.clone())),
+            }
+            handshake.record("session/set_mode", since.elapsed());
         }
+        eprintln!(
+            "{}",
+            handshake.summary(label, &task, watch.as_ref().and_then(ProcessWatch::pid))
+        );
         self.options = opened.get("configOptions").cloned().unwrap_or(Value::Null);
         self.process = Some(Process {
             client: Arc::clone(&client),
@@ -907,19 +1190,35 @@ impl Actor {
         });
     }
 
+    /// B1-3 (A2): the request stays pending until the answer is written;
+    /// only a written answer settles it.
     fn respond(&mut self, id: String, decision: Decision) {
         let pending = {
-            let mut state = self.state.lock();
-            let index = state.pending.iter().position(|p| p.view.id == id);
-            index.map(|i| state.pending.remove(i))
+            let state = self.state.lock();
+            state.pending.iter().find(|p| p.view.id == id).map(|p| {
+                (
+                    p.request.clone(),
+                    p.options.clone(),
+                    p.view.tool_call_id.clone(),
+                )
+            })
         };
-        let (Some(pending), Some(client)) = (pending, self.client()) else {
+        let Some((request, options, tool_call_id)) = pending else {
+            return;
+        };
+        let Some(client) = self.client() else {
+            self.state.lock().pending.retain(|p| p.view.id != id);
+            self.push(SessionUpdateKind::PermissionSendFailed {
+                id,
+                state: PermissionSendState::Ended,
+                reason: ANSWER_ENDED_WITH_CONNECTION.into(),
+            });
+            self.resume_running();
             return;
         };
         let find = |kinds: &[&str]| {
             kinds.iter().find_map(|kind| {
-                pending
-                    .options
+                options
                     .iter()
                     .find(|(_, k)| k == kind)
                     .map(|(option, _)| option.clone())
@@ -934,8 +1233,19 @@ impl Actor {
             Some(option) => json!({"outcome": "selected", "optionId": option}),
             None => json!({"outcome": "cancelled"}),
         };
+        if let Err(error) = client.respond(&request, json!({"outcome": outcome})) {
+            release(&self.state, &id);
+            self.push(SessionUpdateKind::PermissionSendFailed {
+                id,
+                state: PermissionSendState::Failed,
+                reason: answer_not_written(self.label(), error),
+            });
+            self.status(TaskStatus::InputRequired, None);
+            return;
+        }
+        self.state.lock().pending.retain(|p| p.view.id != id);
         if let Decision::Deny { reason } = &decision {
-            if let Some(tool) = &pending.view.tool_call_id {
+            if let Some(tool) = &tool_call_id {
                 self.mapper.declined(tool);
             }
             // ACP carries no reason: it goes to the agent as the next message.
@@ -950,9 +1260,6 @@ impl Actor {
                     ),
                 });
             }
-        }
-        if let Err(error) = client.respond(&pending.request, json!({"outcome": outcome})) {
-            self.recoverable(format!("审批未送达：{error}"));
         }
         self.push(SessionUpdateKind::PermissionResolved {
             id,
@@ -1080,6 +1387,7 @@ impl Actor {
             request: id,
             options,
             view,
+            claimed: false,
         });
         self.status(TaskStatus::InputRequired, None);
     }
@@ -1103,35 +1411,12 @@ impl Actor {
         self.drop_waiting();
         let label = self.label();
         let delivering = self.delivering.take();
-        let stop = result
-            .as_ref()
-            .ok()
-            .and_then(|r| s(r, "stopReason"))
-            .unwrap_or("end_turn")
-            .to_string();
-        let (reason, error) = match &result {
-            _ if self.interrupted || stop == "cancelled" => (TurnEndReason::Interrupted, None),
-            Ok(_) if stop == "refusal" => (
-                TurnEndReason::Failed,
-                Some(format!("{label} 拒绝了这次请求")),
-            ),
-            Ok(_) => (TurnEndReason::Completed, None),
-            Err(error) => (
-                TurnEndReason::Failed,
-                Some(format!("{label} 这一轮失败：{error}")),
-            ),
-        };
+        let (reason, error, raw_status) = turn_outcome(label, &result, self.interrupted);
         match (&result, &error) {
             (Err(_), Some(error)) => {
                 self.receipt(&delivering, ReceiptOutcome::Rejected, Some(error.clone()))
             }
             _ => self.receipt(&delivering, ReceiptOutcome::Delivered, None),
-        }
-        if matches!(stop.as_str(), "max_tokens" | "max_turn_requests") {
-            self.push(SessionUpdateKind::Notice {
-                level: "warning".into(),
-                message: format!("{label} 到了单轮上限（{stop}），这一轮先停在这里"),
-            });
         }
         let turn = {
             let mut state = self.state.lock();
@@ -1143,6 +1428,7 @@ impl Actor {
                 turn_id,
                 reason,
                 error: error.clone(),
+                raw_status,
             });
         }
         self.record_transcript();
@@ -1187,6 +1473,7 @@ impl Actor {
             turn_id: turn,
             reason: TurnEndReason::Interrupted,
             error: None,
+            raw_status: None,
         });
         self.status(TaskStatus::Interrupted, None);
         // Held messages wait for the user's next one rather than restarting now.
@@ -1254,10 +1541,20 @@ impl Actor {
                     json!({"outcome": {"outcome": "cancelled"}}),
                 );
             }
-            self.push(SessionUpdateKind::PermissionResolved {
-                id: approval.view.id,
-                decision: "cancelled".into(),
-            });
+            // B1-3 (A2): one the person had answered says its answer did
+            // not get through; the rest were simply cancelled.
+            if approval.claimed {
+                self.push(SessionUpdateKind::PermissionSendFailed {
+                    id: approval.view.id,
+                    state: PermissionSendState::Ended,
+                    reason: ANSWER_ENDED_WITH_TURN.into(),
+                });
+            } else {
+                self.push(SessionUpdateKind::PermissionResolved {
+                    id: approval.view.id,
+                    decision: "cancelled".into(),
+                });
+            }
         }
     }
 
@@ -1283,6 +1580,7 @@ impl Actor {
                 turn_id,
                 reason: TurnEndReason::Failed,
                 error: Some(message.clone()),
+                raw_status: None,
             });
             self.status(TaskStatus::Failed, Some(message));
         }
@@ -1335,6 +1633,7 @@ impl Actor {
                 turn_id,
                 reason: TurnEndReason::Interrupted,
                 error: None,
+                raw_status: None,
             });
         }
     }

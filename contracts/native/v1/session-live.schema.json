@@ -47,6 +47,13 @@
     },
     "state": {
       "properties": {
+        "cachedInputTokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "contextLimit": {
           "minimum": 0,
           "type": [
@@ -285,6 +292,9 @@
             {
               "properties": {
                 "error": {
+                  "type": "string"
+                },
+                "rawStatus": {
                   "type": "string"
                 },
                 "reason": {
@@ -678,6 +688,9 @@
             },
             {
               "properties": {
+                "cachedInputTokens": {
+                  "type": "integer"
+                },
                 "contextLimit": {
                   "type": "integer"
                 },
@@ -1577,6 +1590,7 @@
               "ask",
               "auto_edit",
               "full_access",
+              "plan",
               null
             ]
           },

@@ -4,7 +4,7 @@
 |---|---|
 | `remote-protocol/` | relay 撮合控制面协议。它与本地协议是两个独立版本空间，不是全量业务协议库 |
 | `remote-relay/` | 用户自托管的盲转发 relay（注册、限流、拼接两端连接），不解密业务内容 |
-| `remote-push/` | 产品方维护的 APNs 发送端：HMAC 认证宿主请求、白名单载荷、HTTP/2 到 APNs |
+| `remote-push/` | 产品方维护、也可由用户自托管的 APNs 发送端（暂无公网部署）：HMAC 认证宿主请求、白名单载荷、HTTP/2 到 APNs |
 
 三者各有独立的 `Cargo.toml`/`Cargo.lock`，不依赖 core。
 
