@@ -38,6 +38,7 @@ use crate::services::{find_project_of_task, ok};
 
 pub use wire::CAPABILITY;
 
+mod artifacts;
 mod board;
 mod capability;
 mod changes;
@@ -194,6 +195,8 @@ pub fn register_session_live_services(
     delivery::install(set, &live);
     capability::install(set, &live);
     turns::install(set, &live);
+    // B6: what each task delivered.
+    artifacts::install(set, &live);
     rerun::install(set, &live);
     changes::install(set, &live);
     // A12: 定时任务.

@@ -191,6 +191,8 @@ struct TaskWorkspaceView: View {
     @State private var auxiliaryTab: AuxiliaryTab = .details
     /// R2-2: the 改动 tab's state, for the selected task.
     @State private var changesStore: ChangesStore?
+    /// B6: the 交付物 section of the selected task.
+    @State private var artifactStore: ArtifactStore?
     /// R2-3b: a delegated child to show on 改动 · 相对原目录 once selected.
     @State private var originFor: String?
     @AppStorage(NewSessionLayout.defaultHarnessKey) private var defaultHarness = "codex"
@@ -762,7 +764,8 @@ struct TaskWorkspaceView: View {
                         await loadBoard(taskID)
                     }
                 },
-                stale: checkpoint?.taskId == taskID ? checkpointStale : []
+                stale: checkpoint?.taskId == taskID ? checkpointStale : [],
+                artifacts: artifactStore?.taskID == taskID ? artifactStore : nil
             )
             .task(id: progressRefreshKey) {
                 guard auxiliaryTab == .progress, showsAuxiliary || showsAuxiliaryOverlay else { return }
@@ -794,6 +797,7 @@ struct TaskWorkspaceView: View {
         }
         await loadDelegations(taskID)
         await loadBoard(taskID)
+        await loadArtifacts(taskID)
         // B4-1: the review loop beside it; who can review is read once per task.
         guard let review = try? await client.review(taskId: taskID) else { return }
         var next = ReviewPanelModel(settings: review.settings, card: review.card, reviewOf: review.reviewOf)
@@ -806,6 +810,19 @@ struct TaskWorkspaceView: View {
         }
         reviewPanel = next
         reviewPanelTask = taskID
+    }
+
+    /// B6: what the task delivered; the store is kept while the task stays selected.
+    private func loadArtifacts(_ taskID: String) async {
+        guard let client = services.sessionsClient else { return }
+        let store: ArtifactStore
+        if let known = artifactStore, known.taskID == taskID {
+            store = known
+        } else {
+            store = ArtifactStore(taskID: taskID, actions: client)
+        }
+        await store.load()
+        artifactStore = store
     }
 
     /// B4-3: the board the task works on.

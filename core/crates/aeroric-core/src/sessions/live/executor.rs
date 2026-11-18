@@ -440,6 +440,16 @@ impl StructuredExecutor {
         &self.turn_changes.ledger
     }
 
+    /// B6: the files each task delivered.
+    pub fn artifacts(&self) -> &Arc<super::artifacts::ArtifactRegistry> {
+        &self.turn_changes.artifacts
+    }
+
+    /// B6: where `task_id`'s agent works, once its session started.
+    pub fn task_cwd(&self, task_id: &str) -> Option<std::path::PathBuf> {
+        self.turn_changes.cwd_of(task_id)
+    }
+
     /// R2-2: hunk-by-hunk review of those changes.
     pub fn change_review(&self) -> &Arc<super::change_review::ChangeReview> {
         &self.change_review

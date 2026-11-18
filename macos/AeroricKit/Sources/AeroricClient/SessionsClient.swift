@@ -395,6 +395,49 @@ extension SessionsClient {
         return LiveTurnRecord.decodeList(frame.result["turns"])
     }
 
+    /// B6: one page of what the task delivered, the latest changed first.
+    public func artifacts(taskId: String, cursor: String? = nil) async throws -> LiveArtifactPage {
+        var params: [String: JSONValue] = ["taskId": .string(taskId)]
+        if let cursor { params["cursor"] = .string(cursor) }
+        let frame = try await connection.request("artifacts.list", params: .object(params))
+        return LiveArtifactPage.decode(frame.result)
+    }
+
+    /// B6: every version of one artifact, newest first.
+    public func artifactVersions(taskId: String, artifactId: String) async throws -> [LiveArtifactVersion] {
+        let frame = try await connection.request(
+            "artifacts.versions", params: .object(["taskId": .string(taskId), "artifactId": .string(artifactId)]))
+        return LiveArtifactVersion.decodeList(frame.result["versions"])
+    }
+
+    /// B6: a slice of one version (nil: the one that stands now).
+    public func readArtifact(taskId: String, artifactId: String, version: Int?, offset: UInt64 = 0,
+                             limit: UInt64? = nil) async throws -> LiveArtifactContent {
+        var params: [String: JSONValue] = [
+            "taskId": .string(taskId), "artifactId": .string(artifactId), "offset": .number(String(offset)),
+        ]
+        if let version { params["version"] = .number(String(version)) }
+        if let limit { params["limit"] = .number(String(limit)) }
+        let frame = try await connection.request("artifacts.read", params: .object(params))
+        guard let content = frame.result["content"].flatMap(LiveArtifactContent.decode) else {
+            throw SessionsClient.ArtifactReadError.unreadable
+        }
+        return content
+    }
+
+    /// B6: the host answered without content.
+    public enum ArtifactReadError: Error, CustomStringConvertible {
+        case unreadable
+        public var description: String { "读不出这个版本的内容" }
+    }
+
+    /// B6: the user says the file does (not) count as a deliverable.
+    public func excludeArtifact(taskId: String, artifactId: String, excluded: Bool) async throws {
+        _ = try await connection.request("artifacts.exclude", params: .object([
+            "taskId": .string(taskId), "artifactId": .string(artifactId), "excluded": .bool(excluded),
+        ]))
+    }
+
     /// R5-2: run `turnId` again with each of `choices` in its own isolated copy.
     public func startRerun(taskId: String, turnId: String, message: String, brief: Bool,
                            choices: [LiveRerunChoice]) async throws -> LiveRerunStarted {

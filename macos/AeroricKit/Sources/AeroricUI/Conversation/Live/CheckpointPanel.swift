@@ -25,6 +25,8 @@ public struct CheckpointPanel: View {
     let onBoard: (BoardPanelAction) -> Void
     /// R2-3a: conclusions whose files changed since they were drawn.
     let stale: [LiveStaleConclusion]
+    /// B6: what the task delivered; nil while it is read.
+    let artifacts: ArtifactStore?
     @State private var constraint = ""
 
     public init(checkpoint: LiveCheckpoint?, errorText: String?, isBranch: Bool,
@@ -36,8 +38,9 @@ public struct CheckpointPanel: View {
                 delegation: DelegationPanelModel? = nil,
                 onDelegation: @escaping (DelegationPanelAction) -> Void = { _ in },
                 board: BoardPanelModel? = nil, onBoard: @escaping (BoardPanelAction) -> Void = { _ in },
-                stale: [LiveStaleConclusion] = []) {
+                stale: [LiveStaleConclusion] = [], artifacts: ArtifactStore? = nil) {
         self.stale = stale
+        self.artifacts = artifacts
         self.board = board
         self.onBoard = onBoard
         self.review = review
@@ -111,6 +114,9 @@ public struct CheckpointPanel: View {
                 }
                 if let delegation {
                     DelegationPanelSection(model: delegation, onAction: onDelegation)
+                }
+                if let artifacts {
+                    ArtifactPanelSection(store: artifacts)
                 }
                 if let board, !board.board.entries.isEmpty || delegation?.delegations.isEmpty == false || board.shared {
                     BoardPanelSection(model: board, onAction: onBoard)

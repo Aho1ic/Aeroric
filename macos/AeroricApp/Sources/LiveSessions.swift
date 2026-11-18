@@ -4,6 +4,8 @@ import AeroricUI
 
 /// R2-2: the changes page talks to the host through the sessions client.
 extension SessionsClient: ChangesActions {}
+/// B6: so does the 交付物 section.
+extension SessionsClient: ArtifactActions {}
 import AppKit
 import Foundation
 import UserNotifications

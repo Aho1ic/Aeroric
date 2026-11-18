@@ -4,6 +4,7 @@
 //! `TaskExecutor` port so the task service and its reducer stay unchanged.
 
 pub mod acp;
+pub mod artifacts;
 pub mod auto_check;
 pub mod board;
 pub mod capabilities;

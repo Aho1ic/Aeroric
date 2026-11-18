@@ -76,6 +76,8 @@ pub struct TurnChangeTracker {
     started: Mutex<HashMap<String, (Snapshot, u64)>>,
     /// R2-1: every turn that changed files, for accepting and undoing.
     pub ledger: Arc<super::turn_ledger::TurnLedger>,
+    /// B6: the files each task delivered, a version per turn that changed one.
+    pub artifacts: Arc<super::artifacts::ArtifactRegistry>,
     /// Runs the project's checks after a completed turn that changed files.
     pub checks: Arc<AutoChecker>,
     /// B4-1: told when each watched turn's snapshot is done.
@@ -92,6 +94,7 @@ impl TurnChangeTracker {
         );
         let ledger: Arc<super::turn_ledger::TurnLedger> = Arc::default();
         checks.record_into(Arc::clone(&ledger));
+        let artifacts = Arc::new(super::artifacts::ArtifactRegistry::new(Arc::clone(&ledger)));
         Arc::new(Self {
             inner,
             registry,
@@ -99,6 +102,7 @@ impl TurnChangeTracker {
             started: Mutex::default(),
             checks,
             ledger,
+            artifacts,
             hook: Mutex::new(None),
         })
     }
@@ -113,6 +117,11 @@ impl TurnChangeTracker {
             .lock()
             .get(task_id)
             .map(|(project, _)| project.clone())
+    }
+
+    /// B6: where `task_id`'s agent works, once its session started.
+    pub fn cwd_of(&self, task_id: &str) -> Option<PathBuf> {
+        self.cwds.lock().get(task_id).map(|(_, cwd)| cwd.clone())
     }
 
     /// Where `task_id`'s agent works; set when its session starts.
@@ -182,27 +191,28 @@ impl TurnChangeTracker {
                         additions: *additions,
                         deletions: *deletions,
                     });
-                    this.ledger.record(
-                        &task_id,
-                        aeroric_protocol::turn_ledger::TurnRecord {
-                            turn_id: turn_id.clone(),
-                            started_ms,
-                            ended_ms: now_ms(),
-                            top: before.top.to_string_lossy().to_string(),
-                            before: before.id.clone(),
-                            after: after.id.clone(),
-                            head_before: before.head.clone(),
-                            head_after: after.head.clone(),
-                            files: files.clone(),
-                            additions: *additions,
-                            deletions: *deletions,
-                            state: Default::default(),
-                            undone_ms: None,
-                            undo_group: None,
-                            state_before_undo: None,
-                            check: None,
-                        },
-                    );
+                    let record = aeroric_protocol::turn_ledger::TurnRecord {
+                        turn_id: turn_id.clone(),
+                        started_ms,
+                        ended_ms: now_ms(),
+                        top: before.top.to_string_lossy().to_string(),
+                        before: before.id.clone(),
+                        after: after.id.clone(),
+                        head_before: before.head.clone(),
+                        head_after: after.head.clone(),
+                        files: files.clone(),
+                        additions: *additions,
+                        deletions: *deletions,
+                        state: Default::default(),
+                        undone_ms: None,
+                        undo_group: None,
+                        state_before_undo: None,
+                        check: None,
+                    };
+                    this.ledger.record(&task_id, record.clone());
+                    // B6: what it left on disk is a version, even when the
+                    // turn was cut short.
+                    this.artifacts.register(&task_id, &record);
                 }
                 if let Some(log) = this.registry.log(&task_id) {
                     let update = log.push(kind, now_ms());

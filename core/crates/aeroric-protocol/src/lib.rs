@@ -7,6 +7,7 @@
 //! here is generated into `contracts/native/v1/` by `bin/export-schema.rs`; the
 //! Swift and TypeScript decoders read the same fixtures.
 
+pub mod artifacts;
 pub mod board;
 pub mod capability;
 pub mod change_review;

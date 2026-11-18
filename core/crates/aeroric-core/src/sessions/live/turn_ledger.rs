@@ -686,7 +686,7 @@ fn ref_name(task_id: &str, turn_id: &str, side: &str) -> String {
 }
 
 /// Ref- and file-name safe.
-fn safe(id: &str) -> String {
+pub(super) fn safe(id: &str) -> String {
     id.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
