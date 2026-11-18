@@ -34,14 +34,30 @@ if [[ -n "${AERORIC_SIGN_IDENTITY:-}" ]]; then
 fi
 echo "sign-local: identity ${IDENTITY/#-/ad-hoc}"
 
+# Sign, then check the signature; one retry. On 2026-11-18 codesign twice left
+# a broken helper signature (once it died with SIGBUS, exit 138) and the cause
+# did not reproduce; a second attempt costs seconds, a broken bundle costs a
+# host that the system kills at launch.
+sign() {
+  local target="$1" attempt
+  for attempt in 1 2; do
+    if codesign --force --sign "$IDENTITY" "$target" && codesign --verify --strict "$target"; then
+      return 0
+    fi
+    echo "sign-local: signing $(basename "$target") failed (attempt $attempt)" >&2
+    sleep 1
+  done
+  return 1
+}
+
 for helper in "$CONTENTS/MacOS/"*; do
   # Skip the main executable; it is re-signed by the bundle signature below.
   if [[ "$(basename "$helper")" == "$(basename "${APP%.app}")" ]]; then
     continue
   fi
   echo "sign-local: helper $(basename "$helper")"
-  codesign --force --sign "$IDENTITY" "$helper"
+  sign "$helper"
 done
 
 echo "sign-local: bundle $(basename "$APP")"
-codesign --force --sign "$IDENTITY" "$APP"
+sign "$APP"

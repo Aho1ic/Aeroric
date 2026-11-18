@@ -12,7 +12,7 @@
 //   7. print the final .app path.
 // Every step propagates a non-zero exit; a failing step fails the whole chain.
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
@@ -80,7 +80,13 @@ if (!existsSync(CLI_BINARY)) {
 
 console.log("native:build: [4/6] copying aeroric-cli into bundle helpers");
 mkdirSync(path.join(APP, "Contents/MacOS"), { recursive: true });
-copyFileSync(CLI_BINARY, path.join(APP, "Contents/MacOS/aeroric-cli"));
+// A new file renamed into place, not an overwrite of the old one: a host
+// still running from the old helper keeps its own file, and nothing reads a
+// half-written binary (2026-11-18: two rebuilds ended with a broken helper
+// signature while the review app was running).
+const helper = path.join(APP, "Contents/MacOS/aeroric-cli");
+copyFileSync(CLI_BINARY, `${helper}.new`);
+renameSync(`${helper}.new`, helper);
 
 console.log("native:build: [5/6] inside-out ad-hoc signing");
 run("sign", "bash", [path.join(repoRoot, "scripts/native/sign-local.sh"), APP]);
