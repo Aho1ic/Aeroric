@@ -243,6 +243,14 @@ impl CheckpointSink {
                     found = true;
                     o.state = state;
                     o.passed_ms = (state == ObligationState::Passed).then(super::now_ms);
+                    // B3: a hand-settled criterion rests on the user's word.
+                    o.evidence = vec![aeroric_protocol::checkpoint::EvidenceRef {
+                        kind: aeroric_protocol::checkpoint::EvidenceKind::UserConfirmation,
+                        seq: None,
+                        turn: None,
+                        detail: String::new(),
+                    }];
+                    o.checked_revision = None;
                     Change::Save
                 }
                 None => Change::None,

@@ -72,13 +72,23 @@ struct DelegationCard: View {
             }
             ForEach(card.acceptance, id: \.id) { item in
                 HStack(spacing: AeroricSpace.m) {
-                    let (word, tint) = DelegationText.acceptance(item.state)
+                    let (word, tint) = DelegationText.acceptance(item)
                     CheckpointBadge(text: word, tint: tint)
                     Text(item.text)
                         .font(.system(size: AeroricType.secondary))
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    // B3: what the verdict rests on.
+                    if let basis = DelegationText.basis(item) {
+                        Text(basis)
+                            .font(.system(size: AeroricType.caption))
+                            .foregroundStyle(AeroricColor.textTertiary)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .help(DelegationText.basisDetail(item))
+                            .accessibilityIdentifier("delegation.acceptance.basis.\(item.id)")
+                    }
                 }
                 .padding(.horizontal, AeroricSpace.l)
                 .frame(height: 30)
@@ -259,6 +269,32 @@ public enum DelegationText {
         case "failed": return ("未通过", AeroricColor.danger)
         default: return ("未核对", AeroricColor.textSecondary)
         }
+    }
+
+    /// B3: a pass whose files changed since is not shown as passed.
+    public static func acceptance(_ item: LiveDelegationAcceptance) -> (String, Color) {
+        if item.stale { return ("需要重新确认", AeroricColor.warning) }
+        return acceptance(item.state)
+    }
+
+    /// B3: one short line on what the verdict rests on; nil while unchecked.
+    public static func basis(_ item: LiveDelegationAcceptance) -> String? {
+        guard item.state == "passed" || item.state == "failed" else { return nil }
+        guard let first = item.evidence.first else { return "依据未记录" }
+        switch first.kind {
+        case "autoCheck": return first.turn.map { "依据：自动检查 · 第 \($0) 轮" } ?? "依据：自动检查"
+        case "userConfirmation": return "依据：你确认的"
+        default: return "依据：\(first.kind)"
+        }
+    }
+
+    /// B3: the hover text: the basis, the files' version, and why it is stale.
+    public static func basisDetail(_ item: LiveDelegationAcceptance) -> String {
+        var lines: [String] = []
+        if let basis = basis(item) { lines.append(basis) }
+        if let revision = item.checkedRevision { lines.append("检查时的文件版本：\(revision.prefix(10))") }
+        if item.stale { lines.append("之后有文件变了，这条结论不再算通过，需要重新检查或确认。") }
+        return lines.joined(separator: "\n")
     }
 
     /// One line under the card: changes, evidence, rework, why it stopped.

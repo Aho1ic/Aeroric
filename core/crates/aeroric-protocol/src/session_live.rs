@@ -804,6 +804,9 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
                     id: "a1".into(),
                     text: "给出可运行的示例".into(),
                     state: crate::checkpoint::ObligationState::Open,
+                    evidence: Vec::new(),
+                    checked_revision: None,
+                    stale: false,
                 }],
                 evidence: false,
                 sent: true,
@@ -919,6 +922,8 @@ pub fn fixture_checkpoint() -> crate::checkpoint::Checkpoint {
             state: ObligationState::Open,
             source: ObligationSource::Acceptance,
             passed_ms: None,
+            evidence: Vec::new(),
+            checked_revision: None,
         }],
         ..Checkpoint::default()
     }

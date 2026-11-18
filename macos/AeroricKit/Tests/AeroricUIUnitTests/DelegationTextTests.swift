@@ -10,6 +10,34 @@ final class DelegationTextTests: XCTestCase {
         LiveDelegationRole(id: "implementer", name: "实现者", permission: "auto_edit", workspace: "shared"),
     ]
 
+    /// B3: a criterion says what its verdict rests on; a stale pass reads
+    /// "需要重新确认" and does not count as passed.
+    func testACriterionSaysWhatItRestsOnAndAStalePassIsNotPassed() throws {
+        let card = try XCTUnwrap(LiveDelegationCard.decode(.object([
+            "delegationId": .string("dg-1"), "state": .string("reported"),
+            "acceptance": .array([
+                .object(["id": .string("a1"), "text": .string("cargo test 通过"), "state": .string("passed"),
+                         "evidence": .array([.object(["kind": .string("autoCheck"), "seq": .number("7"),
+                                                      "turn": .number("2"), "detail": .string("u1")])]),
+                         "checkedRevision": .string("0123456789abcdef"), "stale": .bool(true)]),
+                .object(["id": .string("a2"), "text": .string("文档写好"), "state": .string("passed"),
+                         "evidence": .array([.object(["kind": .string("userConfirmation")])])]),
+                .object(["id": .string("a3"), "text": .string("旧数据"), "state": .string("passed")]),
+                .object(["id": .string("a4"), "text": .string("还没跑"), "state": .string("open")]),
+            ]),
+        ])))
+        let (a1, a2, a3, a4) = (card.acceptance[0], card.acceptance[1], card.acceptance[2], card.acceptance[3])
+        XCTAssertEqual(DelegationText.acceptance(a1).0, "需要重新确认")
+        XCTAssertEqual(DelegationText.basis(a1), "依据：自动检查 · 第 2 轮")
+        XCTAssertTrue(DelegationText.basisDetail(a1).contains("0123456789"))
+        XCTAssertTrue(DelegationText.basisDetail(a1).contains("不再算通过"))
+        XCTAssertEqual(DelegationText.acceptance(a2).0, "通过")
+        XCTAssertEqual(DelegationText.basis(a2), "依据：你确认的")
+        XCTAssertEqual(DelegationText.basis(a3), "依据未记录", "old data: not invented")
+        XCTAssertNil(DelegationText.basis(a4))
+        XCTAssertEqual(card.passedCount, 2, "the stale pass is not counted")
+    }
+
     func testTheHashPrefixNamesARoleOrAHarness() {
         XCTAssertEqual(DelegationText.hashCommand("#调研员 查 reqwest 超时")?.target, "调研员")
         XCTAssertEqual(DelegationText.hashCommand("#codex  改一下\n第二行")?.instruction, "改一下\n第二行")

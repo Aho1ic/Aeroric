@@ -734,6 +734,8 @@ fn clarify_accept(live: &Live, request: &Request) -> Frame {
                 state: cp_wire::ObligationState::Open,
                 source: cp_wire::ObligationSource::Acceptance,
                 passed_ms: None,
+                evidence: Vec::new(),
+                checked_revision: None,
             })
             .collect(),
     ) {

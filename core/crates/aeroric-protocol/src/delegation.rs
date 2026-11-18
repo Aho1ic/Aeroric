@@ -253,6 +253,15 @@ pub struct AcceptanceResult {
     pub id: String,
     pub text: String,
     pub state: ObligationState,
+    /// B3: what settled it; empty when not recorded (data from before B3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<crate::checkpoint::EvidenceRef>,
+    /// B3: the work tree the deciding check saw, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_revision: Option<String>,
+    /// B3: it passed, but files it rested on changed since: "需要重新确认".
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stale: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -365,12 +374,13 @@ impl DelegationCard {
     }
 
     /// Every criterion checked and none failed (vacuously false with none).
+    /// Every criterion passed, and none of those passes went stale (B3).
     pub fn acceptance_passed(&self) -> bool {
         !self.acceptance.is_empty()
             && self
                 .acceptance
                 .iter()
-                .all(|a| a.state == ObligationState::Passed)
+                .all(|a| a.state == ObligationState::Passed && !a.stale)
     }
 }
 

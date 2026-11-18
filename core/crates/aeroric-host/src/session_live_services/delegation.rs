@@ -518,6 +518,8 @@ fn delegation_list(live: &Live, request: &Request) -> Frame {
             "no task with that id in any known project",
         );
     };
+    // B3: a pass may have gone stale since the child reported.
+    live.executor.delegations().refresh_acceptance(&p.task_id);
     ok(
         request,
         json!({
@@ -786,6 +788,9 @@ fn context_delegations(live: &Live, request: &Request) -> Frame {
         Ok(scope) => scope,
         Err(frame) => return *frame,
     };
+    // B3: the parent agent sees each criterion's evidence and whether a
+    // pass has gone stale.
+    live.executor.delegations().refresh_acceptance(&task_id);
     ok(
         request,
         json!({ "delegations": live.executor.delegations().list(&task_id) }),

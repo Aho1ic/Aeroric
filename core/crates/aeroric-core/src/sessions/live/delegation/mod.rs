@@ -176,6 +176,8 @@ pub struct Delegations {
     registry: Mutex<Option<Arc<DriverRegistry>>>,
     host: Mutex<Option<Arc<dyn DelegationHost>>>,
     checkpoints: Mutex<Option<Weak<super::checkpoint::CheckpointSink>>>,
+    /// B3: the turns' snapshots, to tell when a passed criterion went stale.
+    ledger: Mutex<Option<Arc<super::turn_ledger::TurnLedger>>>,
     dir: Mutex<Option<PathBuf>>,
     watch_every: Mutex<Duration>,
     /// A1: the queue that carries results to the parent; unset, a result
@@ -203,6 +205,7 @@ impl Delegations {
             registry: Mutex::new(None),
             host: Mutex::new(None),
             checkpoints: Mutex::new(None),
+            ledger: Mutex::new(None),
             dir: Mutex::new(None),
             watch_every: Mutex::new(Duration::from_secs(5)),
             deliveries: Mutex::new(None),
@@ -225,6 +228,88 @@ impl Delegations {
 
     pub fn set_checkpoints(&self, checkpoints: Weak<super::checkpoint::CheckpointSink>) {
         *self.checkpoints.lock() = Some(checkpoints);
+    }
+
+    pub fn set_ledger(&self, ledger: Arc<super::turn_ledger::TurnLedger>) {
+        *self.ledger.lock() = Some(ledger);
+    }
+
+    /// B3: the child's criteria as they stand: state, evidence, and whether a
+    /// pass rests on files that changed since (`staleness`, R2-3a).
+    fn acceptance_of(&self, child: &str) -> Vec<AcceptanceResult> {
+        let checkpoints = self.checkpoints.lock().clone().and_then(|w| w.upgrade());
+        let Some(cp) = checkpoints.and_then(|c| c.get(child)) else {
+            return Vec::new();
+        };
+        let ledger = self.ledger.lock().clone();
+        let any_passed = cp.obligations.iter().any(|o| {
+            o.source == ObligationSource::Acceptance && o.state == ObligationState::Passed
+        });
+        let stale: HashSet<String> = match ledger {
+            Some(ledger) if any_passed => super::staleness::stale(child, &cp, &ledger)
+                .into_iter()
+                .filter(|s| s.kind == "obligation")
+                .map(|s| s.key)
+                .collect(),
+            _ => HashSet::new(),
+        };
+        cp.obligations
+            .iter()
+            .filter(|o| o.source == ObligationSource::Acceptance)
+            .map(|o| AcceptanceResult {
+                id: o.id.clone(),
+                text: o.text.clone(),
+                state: o.state,
+                evidence: o.evidence.clone(),
+                checked_revision: o.checked_revision.clone(),
+                stale: o.state == ObligationState::Passed && stale.contains(&o.id),
+            })
+            .collect()
+    }
+
+    /// B3: recompute `parent`'s criteria before someone reads them (the
+    /// parent agent, the app): a pass may have gone stale since the report.
+    pub fn refresh_acceptance(&self, parent: &str) {
+        let children: Vec<(String, String)> = {
+            let mut state = self.state.lock();
+            self.ensure_loaded(&mut state, parent);
+            state
+                .by_parent
+                .get(parent)
+                .map(|v| {
+                    v.iter()
+                        .filter(|e| {
+                            !e.card.contract.acceptance.is_empty() || !e.card.acceptance.is_empty()
+                        })
+                        .filter_map(|e| {
+                            Some((e.card.delegation_id.clone(), e.card.child_task_id.clone()?))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let fresh: Vec<(String, Vec<AcceptanceResult>)> = children
+            .into_iter()
+            .map(|(id, child)| (id, self.acceptance_of(&child)))
+            .collect();
+        let mut changed = Vec::new();
+        {
+            let mut state = self.state.lock();
+            for (id, acceptance) in fresh {
+                if acceptance.is_empty() {
+                    continue;
+                }
+                if let Some(entry) = find_mut(&mut state, parent, &id) {
+                    if entry.card.acceptance != acceptance {
+                        entry.card.acceptance = acceptance;
+                        changed.push(id);
+                    }
+                }
+            }
+        }
+        for id in changed {
+            self.publish(parent, &id);
+        }
     }
 
     /// A1: results go to the parent through `deliveries`, and each result
@@ -1202,16 +1287,19 @@ impl Delegations {
 
     /// The child answered (and its checks, if any, finished): fill the card.
     fn report(&self, parent: &str, id: &str) {
-        let checkpoints = self.checkpoints.lock().clone().and_then(|w| w.upgrade());
-        let mut state = self.state.lock();
-        // The tracker's settle can overtake the turn's end on the sink chain:
-        // then the turn's text is still being collected.
-        let child = state
+        let child = self
+            .state
+            .lock()
             .by_parent
             .get(parent)
             .and_then(|v| v.iter().find(|e| e.card.delegation_id == id))
             .and_then(|e| e.card.child_task_id.clone())
             .unwrap_or_default();
+        // B3: outside the lock (it may read git).
+        let acceptance = self.acceptance_of(&child);
+        let mut state = self.state.lock();
+        // The tracker's settle can overtake the turn's end on the sink chain:
+        // then the turn's text is still being collected.
         let collecting = state
             .text
             .get(&child)
@@ -1228,19 +1316,7 @@ impl Delegations {
         if entry.last_text.trim().is_empty() {
             entry.last_text = collecting;
         }
-        let obligations = checkpoints
-            .and_then(|cp| cp.get(&child))
-            .map(|cp| cp.obligations)
-            .unwrap_or_default();
-        entry.card.acceptance = obligations
-            .iter()
-            .filter(|o| o.source == ObligationSource::Acceptance)
-            .map(|o| AcceptanceResult {
-                id: o.id.clone(),
-                text: o.text.clone(),
-                state: o.state,
-            })
-            .collect();
+        entry.card.acceptance = acceptance;
         let checked = entry
             .card
             .acceptance
@@ -1696,6 +1772,8 @@ fn acceptance_obligations(acceptance: &[Acceptance]) -> Vec<Obligation> {
             state: ObligationState::Open,
             source: ObligationSource::Acceptance,
             passed_ms: None,
+            evidence: Vec::new(),
+            checked_revision: None,
         })
         .collect()
 }

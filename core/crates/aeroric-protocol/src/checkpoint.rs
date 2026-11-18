@@ -41,6 +41,8 @@ pub enum EvidenceKind {
     AutoCheck,
     Commit,
     Permission,
+    /// B3: the user settled it by hand.
+    UserConfirmation,
 }
 
 /// Where an entry's fact can be read again: a session update by `seq`.
@@ -133,6 +135,13 @@ pub struct Obligation {
     /// then are what the pass relied on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passed_ms: Option<u64>,
+    /// B3: what settled it (an auto check's update, the user). Empty on data
+    /// written before B3: "依据未记录", never invented.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<EvidenceRef>,
+    /// B3: the work tree the deciding check saw (`git write-tree`), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_revision: Option<String>,
 }
 
 /// What a side branch brought back to its parent.
@@ -362,6 +371,8 @@ mod tests {
             state: ObligationState::Passed,
             source: ObligationSource::Acceptance,
             passed_ms: None,
+            evidence: Vec::new(),
+            checked_revision: None,
         });
         assert!(!cp.needs_attention());
         cp.obligations[0].state = ObligationState::Open;

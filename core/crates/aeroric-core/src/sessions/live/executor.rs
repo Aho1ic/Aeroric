@@ -230,6 +230,7 @@ impl StructuredExecutor {
         delegations.set_checkpoints(Arc::downgrade(&checkpoints));
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&checkpoints) as Arc<dyn LiveStatusSink>;
         let turn_changes = super::turn_changes::TurnChangeTracker::new(sink, Arc::clone(&registry));
+        delegations.set_ledger(Arc::clone(&turn_changes.ledger));
         checkpoints.set_registry(Arc::clone(&registry));
         let weak = Arc::downgrade(&checkpoints);
         turn_changes.checks.set_extra(Arc::new(move |task: &str| {

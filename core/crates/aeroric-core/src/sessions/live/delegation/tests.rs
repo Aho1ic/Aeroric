@@ -1390,3 +1390,122 @@ fn a_child_that_fails_to_start_leaves_no_obligations() {
         .get(&child)
         .is_none_or(|c| c.obligations.is_empty()));
 }
+
+/// B3: a criterion carries the check that passed it and the tree it saw;
+/// when a file it rested on changes, the pass is stale and the acceptance
+/// no longer counts as passed. A hand-settled one rests on the user.
+#[test]
+fn a_passed_criterion_has_its_evidence_and_goes_stale_when_files_change() {
+    use crate::sessions::live::turn_changes::snapshot_tree;
+    use aeroric_protocol::checkpoint::EvidenceKind;
+    use aeroric_protocol::session_live::{AutoCheckItem, TurnFileChange};
+    use aeroric_protocol::turn_ledger::{TurnRecord, TurnState};
+
+    let rig = rig("ask");
+    let checkpoints = super::super::checkpoint::CheckpointSink::new(Arc::new(Quiet));
+    rig.d.set_checkpoints(Arc::downgrade(&checkpoints));
+    let ledger: Arc<super::super::turn_ledger::TurnLedger> = Arc::default();
+    let (id, child) = rig.running(criteria(1), Origin::User);
+
+    let dir = std::env::temp_dir().join(format!("aeroric-b3-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init", "-q"]);
+    std::fs::write(dir.join("a.txt"), "0\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "base"]);
+    let dir = dir.canonicalize().unwrap();
+    ledger.set_dir(dir.with_extension("turns"));
+    rig.d.set_ledger(Arc::clone(&ledger));
+    // The child's turn wrote a.txt.
+    let (top, before) = snapshot_tree(&dir).unwrap();
+    std::fs::write(dir.join("a.txt"), "1\n").unwrap();
+    let (_, after) = snapshot_tree(&dir).unwrap();
+    let at = crate::sessions::live::now_ms();
+    ledger.record(
+        &child,
+        TurnRecord {
+            turn_id: "u1".into(),
+            started_ms: at,
+            ended_ms: at + 1,
+            top: top.to_string_lossy().into(),
+            before,
+            after: after.clone(),
+            head_before: None,
+            head_after: None,
+            files: vec![TurnFileChange {
+                path: "a.txt".into(),
+                additions: Some(1),
+                deletions: Some(1),
+            }],
+            additions: 1,
+            deletions: 1,
+            state: TurnState::Pending,
+            undone_ms: None,
+            undo_group: None,
+            state_before_undo: None,
+            check: None,
+        },
+    );
+    // The auto check passed a1 after that turn.
+    std::thread::sleep(Duration::from_millis(5));
+    checkpoints.update(&SessionUpdate {
+        task_id: child.clone(),
+        seq: 7,
+        at_ms: crate::sessions::live::now_ms(),
+        kind: SessionUpdateKind::AutoCheck {
+            turn_id: "u1".into(),
+            state: "passed".into(),
+            items: vec![AutoCheckItem {
+                kind: "tests".into(),
+                profile: "acceptance:a1".into(),
+                label: "test 1".into(),
+                state: "passed".into(),
+                summary: String::new(),
+                failures: Vec::new(),
+                output_tail: String::new(),
+            }],
+            trigger: Some("fileChanges".into()),
+            note: None,
+            input_revision: Some(after.clone()),
+        },
+    });
+    // Read again on request (the parent agent, the app).
+    rig.d.refresh_acceptance("p");
+    let card = rig.card(&id);
+    let a = &card.acceptance[0];
+    assert_eq!(a.state, ObligationState::Passed);
+    assert_eq!(a.evidence.len(), 1);
+    assert_eq!(a.evidence[0].kind, EvidenceKind::AutoCheck);
+    assert_eq!(a.evidence[0].detail, "u1");
+    assert_eq!(a.checked_revision.as_deref(), Some(after.as_str()));
+    assert!(!a.stale);
+    assert!(card.acceptance_passed());
+
+    // Someone edits a.txt afterwards: the pass no longer describes the file.
+    std::fs::write(dir.join("a.txt"), "by hand\n").unwrap();
+    rig.d.refresh_acceptance("p");
+    let card = rig.card(&id);
+    assert!(card.acceptance[0].stale, "{:?}", card.acceptance);
+    assert!(!card.acceptance_passed());
+
+    // Settled by hand: the evidence is the user's confirmation.
+    assert!(checkpoints.set_obligation(&child, "a1", ObligationState::Passed));
+    let a = &checkpoints.get(&child).unwrap().obligations[0];
+    assert_eq!(a.evidence[0].kind, EvidenceKind::UserConfirmation);
+    assert_eq!(a.checked_revision, None);
+    std::fs::remove_dir_all(&dir).ok();
+}

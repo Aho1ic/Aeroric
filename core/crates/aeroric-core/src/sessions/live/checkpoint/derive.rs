@@ -244,6 +244,8 @@ impl Building {
                         },
                         source: ObligationSource::Plan,
                         passed_ms: None,
+                        evidence: Vec::new(),
+                        checked_revision: None,
                     })
                     .collect();
                 let obligations = &mut self.checkpoint.obligations;
@@ -314,8 +316,20 @@ impl Building {
                 });
                 Change::Save
             }
-            K::AutoCheck { state, items, .. } if state != "running" => {
+            K::AutoCheck {
+                turn_id,
+                state,
+                items,
+                input_revision,
+                ..
+            } if state != "running" => {
                 let mut change = Change::None;
+                // B3: the check run is the criterion's evidence, with the
+                // tree it saw.
+                let basis = EvidenceRef {
+                    detail: turn_id.clone(),
+                    ..evidence(EvidenceKind::AutoCheck, seq, self.checkpoint.turn)
+                };
                 for item in items {
                     let Some(id) = item.profile.strip_prefix(ACCEPTANCE_PROFILE) else {
                         continue;
@@ -328,6 +342,8 @@ impl Building {
                     if let Some(o) = self.checkpoint.obligations.iter_mut().find(|o| o.id == id) {
                         o.state = next;
                         o.passed_ms = (next == ObligationState::Passed).then_some(update.at_ms);
+                        o.evidence = vec![basis.clone()];
+                        o.checked_revision = input_revision.clone();
                         change = Change::Save;
                     }
                 }

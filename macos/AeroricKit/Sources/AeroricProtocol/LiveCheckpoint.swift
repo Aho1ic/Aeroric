@@ -17,7 +17,8 @@ public struct LiveCheckpointEntry: Equatable, Sendable {
 }
 
 public struct LiveEvidenceRef: Equatable, Sendable {
-    /// `userMessage` | `toolResult` | `turnChanges` | `autoCheck` | `commit` | `permission`.
+    /// `userMessage` | `toolResult` | `turnChanges` | `autoCheck` | `commit` | `permission`
+    /// | `userConfirmation` (B3: settled by hand).
     public var kind: String
     public var seq: UInt64?
     public var turn: UInt64?

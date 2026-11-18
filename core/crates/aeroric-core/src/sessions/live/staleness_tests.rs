@@ -162,6 +162,8 @@ fn a_hand_edit_makes_a_passed_criterion_stale() {
         state: ObligationState::Passed,
         source: ObligationSource::Acceptance,
         passed_ms: Some(base() + 500),
+        evidence: Vec::new(),
+        checked_revision: None,
     });
     assert!(stale("t", &cp, &ledger).is_empty());
     std::fs::write(dir.join("b.txt"), "by hand\n").unwrap();

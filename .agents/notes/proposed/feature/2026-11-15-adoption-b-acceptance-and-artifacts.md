@@ -65,6 +65,8 @@ id 既然是预先定好的，义务可以在启动之前就写入。
 
 ### B3 验收结果带依据，文件再变就不算通过
 
+2026-11-18 已实现，见 [B3 实现笔记](../../implemented/feature/2026-11-18-b3-acceptance-evidence-and-staleness.md)。判旧复用 `staleness::stale`，在子任务汇报时和有人读委派列表时算，不存。
+
 **用户会看到：** 每条验收旁边能点开"依据"：哪次检查、什么时候、对哪一版文件。文件之后又变了，这条验收变成"需要重新确认"，不再显示通过。
 
 **现状：** `core/crates/aeroric-protocol/src/delegation.rs:228` 的 `AcceptanceResult` 只有 `id`、`text`、`state`；`:307` 的 `acceptance_passed()` 只看状态。结果投影在 `delegation/mod.rs:951` 附近。

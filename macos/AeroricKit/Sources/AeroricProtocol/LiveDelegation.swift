@@ -86,7 +86,8 @@ public struct LiveDelegationCard: Equatable, Sendable {
     }
     /// Still something to do on its card: running, unsent, or needing the user.
     public var wantsUser: Bool { isOpen || canSend || needsUser }
-    public var passedCount: Int { acceptance.filter { $0.state == "passed" }.count }
+    /// B3: a stale pass is not counted.
+    public var passedCount: Int { acceptance.filter { $0.state == "passed" && !$0.stale }.count }
 }
 
 /// A1: the delivery a result card follows.
@@ -123,11 +124,21 @@ public struct LiveDelegationAcceptance: Equatable, Sendable {
     public var text: String
     /// `open` `passed` `failed` `unknown`.
     public var state: String
+    /// B3: what settled it (an auto check, the user); empty when not recorded.
+    public var evidence: [LiveEvidenceRef]
+    /// B3: the work tree the deciding check saw.
+    public var checkedRevision: String?
+    /// B3: passed, but files it rested on changed since.
+    public var stale: Bool
 
-    public init(id: String, text: String, state: String) {
+    public init(id: String, text: String, state: String, evidence: [LiveEvidenceRef] = [],
+                checkedRevision: String? = nil, stale: Bool = false) {
         self.id = id
         self.text = text
         self.state = state
+        self.evidence = evidence
+        self.checkedRevision = checkedRevision
+        self.stale = stale
     }
 }
 
@@ -255,7 +266,10 @@ extension LiveDelegationCard {
         let acceptance = (f["acceptance"]?.arrayValue ?? []).compactMap { item -> LiveDelegationAcceptance? in
             let g = item.fields
             guard let id = g["id"]?.stringValue, let text = g["text"]?.stringValue else { return nil }
-            return LiveDelegationAcceptance(id: id, text: text, state: g["state"]?.stringValue ?? "open")
+            return LiveDelegationAcceptance(
+                id: id, text: text, state: g["state"]?.stringValue ?? "open",
+                evidence: (g["evidence"]?.arrayValue ?? []).compactMap(LiveEvidenceRef.decode),
+                checkedRevision: g["checkedRevision"]?.stringValue, stale: g["stale"]?.boolValue ?? false)
         }
         return LiveDelegationCard(
             delegationId: id, parentTaskId: f["parentTaskId"]?.stringValue ?? "",
