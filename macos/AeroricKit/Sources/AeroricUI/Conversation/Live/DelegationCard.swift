@@ -15,7 +15,10 @@ struct DelegationCard: View {
     @State private var redoing = false
     @State private var note = ""
 
-    var body: some View {
+    // B3-4: counts, sizes and times that change keep their width.
+    var body: some View { bodyContent.monospacedDigit() }
+
+    @ViewBuilder private var bodyContent: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
             HStack(spacing: AeroricSpace.m) {
                 Image(systemName: "person.2").foregroundStyle(AeroricColor.textSecondary)

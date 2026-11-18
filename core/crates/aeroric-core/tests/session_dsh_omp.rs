@@ -332,3 +332,31 @@ fn omp_dir_discovery_uses_mtime_window_and_claimed_skip() {
     assert!(id.starts_with("0198older"));
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// 2026-11-18: a tool that failed stays failed in history (DSH `isError`,
+/// omp `isError`); the row shows "失败", not "完成".
+#[test]
+fn dsh_and_omp_failed_tools_carry_the_failed_flag() {
+    let dsh = vec![
+        dsh_header_line(0, "d1", 1),
+        r#"{"type":"tool/result","seq":4,"time":5,"data":{"message":{"content":[{"type":"tool-result","toolCallId":"ok","content":[{"type":"text","text":"file.txt"}]}]}}}"#.to_string(),
+        r#"{"type":"tool/result","seq":5,"time":6,"data":{"message":{"content":[{"type":"tool-result","toolCallId":"bad","isError":true,"content":[{"type":"text","text":"boom"}]}]}}}"#.to_string(),
+    ];
+    let omp = vec![
+        r#"{"type":"message","id":"e1","message":{"role":"toolResult","toolCallId":"ok","content":[{"type":"text","text":"fine"}]}}"#.to_string(),
+        r#"{"type":"message","id":"e2","message":{"role":"toolResult","toolCallId":"bad","isError":true,"content":[{"type":"text","text":"denied"}]}}"#.to_string(),
+    ];
+    let flags = |messages: Vec<aeroric_core::sessions::SessionMessage>| -> Vec<(String, bool)> {
+        messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|c| match c {
+                SessionContent::ToolResult { id, failed, .. } => Some((id.clone(), *failed)),
+                _ => None,
+            })
+            .collect()
+    };
+    let expected = vec![("ok".to_string(), false), ("bad".to_string(), true)];
+    assert_eq!(flags(parse_dsh_session_lines(&dsh).unwrap()), expected);
+    assert_eq!(flags(parse_omp_session_lines(&omp).unwrap()), expected);
+}

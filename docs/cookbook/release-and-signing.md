@@ -9,6 +9,7 @@
 | 开发/审阅构建 | 本机 | `scripts/native/sign-local.sh` 本地签名，`scripts/native/verify-bundle.sh` 校验 bundle |
 
 - 开发/测试签名、Developer ID、商店签名彼此分离；发布永不回退到 ad-hoc。
+- 本机构建默认 ad-hoc：签名每次重建都变，`aeroric-cli` 读钥匙串时系统会再问一次。想免掉，用"钥匙串访问 → 证书助理"建一张自签名的代码签名证书，构建前设 `AERORIC_SIGN_IDENTITY=<证书名>`，"始终允许"就能跨重建保留；钥匙串里找不到这个名字时照旧 ad-hoc。
 - macOS App 包内含宿主：`Contents/MacOS/aeroric-cli`（`cargo build --locked -p aeroric-cli` 产物）。
 - DMG：`scripts/create-macos-dmg.sh`。
 - 首发前仍缺：Hardened Runtime 与主 App entitlements、Developer ID 签名与公证脚本、去掉 UDS 回退到 `/tmp` 的路径；iOS 生产 `aps-environment` 与真实 APNs AuthKey。

@@ -813,7 +813,10 @@ public struct DiscussionView: View {
         self.actions = actions
     }
 
-    public var body: some View {
+    // B3-4: counts, sizes and times that change keep their width.
+    public var body: some View { bodyContent.monospacedDigit() }
+
+    @ViewBuilder private var bodyContent: some View {
         VStack(spacing: 0) {
             page
             if let discussion, DiscussionText.canSay(discussion) {

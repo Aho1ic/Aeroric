@@ -7,7 +7,10 @@ import SwiftUI
 struct AgentUpgradePane: View {
     let book: AgentUpgradeBook?
 
-    var body: some View {
+    // B3-4: counts, sizes and times that change keep their width.
+    var body: some View { bodyContent.monospacedDigit() }
+
+    @ViewBuilder private var bodyContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AeroricSpace.l) {
                 if let book, book.isAvailable {
@@ -49,10 +52,12 @@ struct AgentUpgradePane: View {
                 }
             }
             .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
+            .fixedSize()
             .disabled(book.checking)
             .accessibilityIdentifier("agent-upgrade.check")
             Button("全部升级") { Task { await book.upgradeAll() } }
                 .buttonStyle(AeroricCapsuleButtonStyle(.primary))
+                .fixedSize()
                 .disabled(book.upgradable.isEmpty)
                 .accessibilityIdentifier("agent-upgrade.all")
         }
@@ -171,10 +176,12 @@ private struct AgentUpgradeCard: View {
             case .notInstalled:
                 Button("安装") { Task { await book.upgrade(harness.agent) } }
                     .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
+                    .fixedSize()
                     .accessibilityIdentifier("agent-upgrade.\(harness.agent).install")
             case .updateAvailable, .required:
                 Button(harness.job?.state == .failed ? "重试" : "升级") { Task { await book.upgrade(harness.agent) } }
                     .buttonStyle(AeroricCapsuleButtonStyle(.primary))
+                    .fixedSize()
                     .accessibilityIdentifier("agent-upgrade.\(harness.agent).upgrade")
             default:
                 Text("已是最新").font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textTertiary)

@@ -27,7 +27,9 @@ Status: implemented
 - core：
   - `SessionContent::ToolResult` 加 `failed: bool`，序列化时为 false 就省略，旧数据和旧读者不受影响；
   - Claude 会话记录按 `is_error` 填它；
-  - Codex、DSH、omp、导入来源暂时都填 false。
+  - Codex 用回合账单已有的判定（`transcript_stats::codex_failed`：脚本失败、用户拒绝、进程退出码非 0），历史和账单说法一致；
+  - DSH、omp 按各自记录里的 `isError`（DSH 原来只在输出前加 `[error]`，前缀保留）；
+  - 导入来源（Cursor、OpenCode 等）填 false。
 - 宿主：`tool_result` 块的 payload 在失败时多一个 `"failed": true`。
 - App：
   - `SessionContent.toolResult` 多一个 `failed`（默认 false，原有构造不用改）；
@@ -43,8 +45,9 @@ Status: implemented
 ## Consequences
 
 - **收益**：被拒的计划、报错的命令在历史里显示"失败"，与运行中一致。
-- **代价与未做**：Codex、DSH、omp 的会话记录也有各自的失败标记，没接，仍按"完成"显示；以后按需要逐家补。
+- **代价与未做**：导入来源的数据库记录没有统一的失败标记，仍按"完成"显示。Codex 的判定靠输出文字（"Process exited with code"等），Codex 改了措辞就会漏判，和回合账单同进退。
 - **验证**：
   - core 新增 `a_refused_claude_tool_stays_failed_in_history`：`is_error` 的结果解析为失败，正常结果的 JSON 里没有 `failed`、读回来是 false；
+  - core 新增 `a_failed_codex_call_stays_failed_in_history`（退出码 101 为失败、0 为完成）和 `dsh_and_omp_failed_tools_carry_the_failed_flag`；
   - Swift 新增 `testAFailedResultMakesAFailedToolRow`：带 `failed` 的块解析出失败，单独成行、不折叠；
   - 第六轮目检已过（`2026-11-18-1514-aeroric-review-round6`）：上一轮成员会话里的 `ExitPlanMode` 显示红点和"失败"、单独成行，切走再切回不变；同一回合的 Bash、Write 仍是"完成"。

@@ -226,6 +226,7 @@ pub fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) 
                             .or_else(|| item.get("result"))
                             .or_else(|| item.get("content"))
                     });
+                    let failed = raw.is_some_and(super::transcript_stats::codex_failed);
                     let output = spawn_started(messages, &id, raw)
                         .unwrap_or_else(|| json_value_to_display(raw));
                     // An output record means the call finished, even an empty
@@ -234,11 +235,7 @@ pub fn parse_codex_session_line(line: &str, messages: &mut Vec<SessionMessage>) 
                     if !id.is_empty() || !output.trim().is_empty() {
                         messages.push(SessionMessage {
                             role: "user".to_string(),
-                            content: vec![SessionContent::ToolResult {
-                                id,
-                                output,
-                                failed: false,
-                            }],
+                            content: vec![SessionContent::ToolResult { id, output, failed }],
                             message_id: None,
                         });
                     }

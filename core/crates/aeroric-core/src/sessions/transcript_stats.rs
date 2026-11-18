@@ -442,7 +442,8 @@ fn codex_base_kind(text: &str, base: Option<&str>) -> &'static str {
 
 /// A Codex tool result that reports failure: a script that failed, a
 /// command that exited non-zero, or a call the person stopped or rejected.
-fn codex_failed(output: &Value) -> bool {
+/// Also read by the Codex history parser, so a tool row and the bill agree.
+pub(crate) fn codex_failed(output: &Value) -> bool {
     let text = text_of(output);
     if text.starts_with("Script failed")
         || text.contains("aborted by user")

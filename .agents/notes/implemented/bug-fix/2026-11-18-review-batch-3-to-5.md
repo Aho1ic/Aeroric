@@ -54,6 +54,7 @@ Status: implemented
 - **B3-4（部分）**：
   - 三处动画看 `accessibilityReduceMotion`：开着时不动，或只淡入；
   - 交接单列的数字定宽，只有两处直接写在 `Text` 里，已补 `.monospacedDigit()`；其余是格式化好的字符串，没有逐处改。
+  - 2026-11-18 补完：交接单的行号已过时，改成在整块视图上加 `.monospacedDigit()`（讨论页、委派卡、回合撤销条与撤销表、待办页、Agent 升级页、升级提醒胶囊），只影响数字宽度；升级页和升级胶囊里的胶囊按钮一律 `.fixedSize()`，胶囊里的长句 `.lineLimit(1)`。
 - **B4-2**：
   - `splice` 改成任一方向结束后，另一方向最多再排空 `SPLICE_DRAIN`（5 秒）；两边都静默超过 `SPLICE_IDLE`（120 秒）就断开；
   - 桌面数据连接的连接槽随连接一起交给桥（`DataConnection`），桥结束才归还；
@@ -86,6 +87,7 @@ Status: implemented
   - `Todos` 的锁改成进程级静态锁；
   - 共享原子写的临时名加进程内递增序号。
   - "只读实例拒写"一项没做：这五个模块拿不到写者租约，要从宿主传进来，改动面较大。
+  - 2026-11-18 复核后定为不做：五个模块只活在 `aeroric-cli serve` 里，而 `serve` 拿不到租约就不启动，租约是整个进程期间持有的系统文件锁；只有锁文件在运行中被删掉或换掉才会出现"别人也在写"。为这种情况把上下文穿过五个模块，代价大于收益。
 - **B5-4**：
   - CI 加跑 iOS 的 `swift test`、`contracts.mjs --check`、`digest.mjs --check`；
   - 修正 `export-schema` 的参数顺序；
@@ -115,7 +117,6 @@ Status: implemented
   - 伴随端能收到 APNs token，撤销后不留缓存；
   - 并发落盘不再互相覆盖。
 - **代价与未做**：
-  - B3-4 的大部分数字定宽和按钮 `fixedSize`；
   - B4-3、B5-1 只有方案；
   - B4-5 的 Pass-the-Hash；
   - 两个数据根的全量统一（另立项）；

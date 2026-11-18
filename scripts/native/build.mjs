@@ -6,7 +6,8 @@
 //   3. xcodebuild the app bundle (Debug, CODE_SIGNING_ALLOWED=NO — the
 //      in-linker signature is not an app signature);
 //   4. copy the helper binary into the bundle;
-//   5. sign inside-out with sign-local.sh (no account, ad-hoc);
+//   5. sign inside-out with sign-local.sh (no account; ad-hoc unless
+//      AERORIC_SIGN_IDENTITY names a code-signing certificate in the keychain);
 //   6. verify with verify-bundle.sh;
 //   7. print the final .app path.
 // Every step propagates a non-zero exit; a failing step fails the whole chain.

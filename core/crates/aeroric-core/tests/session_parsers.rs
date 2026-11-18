@@ -466,3 +466,24 @@ fn a_refused_claude_tool_stays_failed_in_history() {
         SessionContent::ToolResult { failed: false, .. }
     ));
 }
+
+/// 2026-11-18: a Codex call whose process exited non-zero (or the user
+/// rejected) is failed in history, by the same rule as the turn bill.
+#[test]
+fn a_failed_codex_call_stays_failed_in_history() {
+    let messages = parse_codex_session(&[
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c1","arguments":"{\"cmd\":\"cargo test\"}"}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"Chunk ID: 1\nProcess exited with code 101\nOutput:\nerror"}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c2","arguments":"{\"cmd\":\"ls\"}"}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"c2","output":"Chunk ID: 2\nProcess exited with code 0\nOutput:\na.rs"}}"#,
+    ]);
+    let flags: Vec<(&str, bool)> = messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|c| match c {
+            SessionContent::ToolResult { id, failed, .. } => Some((id.as_str(), *failed)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(flags, [("c1", true), ("c2", false)]);
+}

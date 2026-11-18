@@ -429,9 +429,9 @@ fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
                 .and_then(Value::as_str)
             {
                 let mut output = tool_result_output(blocks);
-                if data.pointer("/message/isError").and_then(Value::as_bool) == Some(true)
-                    && !output.is_empty()
-                {
+                let failed =
+                    data.pointer("/message/isError").and_then(Value::as_bool) == Some(true);
+                if failed && !output.is_empty() {
                     output = format!("[error] {output}");
                 }
                 messages.push(SessionMessage {
@@ -439,7 +439,7 @@ fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
                     content: vec![SessionContent::ToolResult {
                         id: id.to_string(),
                         output,
-                        failed: false,
+                        failed,
                     }],
                     message_id: None,
                 });
@@ -460,17 +460,13 @@ fn push_dsh_event(value: &Value, messages: &mut Vec<SessionMessage>) {
                     .cloned()
                     .unwrap_or_default();
                 let mut output = tool_result_output(&inner);
-                if block.get("isError").and_then(Value::as_bool) == Some(true) && !output.is_empty()
-                {
+                let failed = block.get("isError").and_then(Value::as_bool) == Some(true);
+                if failed && !output.is_empty() {
                     output = format!("[error] {output}");
                 }
                 messages.push(SessionMessage {
                     role: "user".to_string(),
-                    content: vec![SessionContent::ToolResult {
-                        id,
-                        output,
-                        failed: false,
-                    }],
+                    content: vec![SessionContent::ToolResult { id, output, failed }],
                     message_id: None,
                 });
             }

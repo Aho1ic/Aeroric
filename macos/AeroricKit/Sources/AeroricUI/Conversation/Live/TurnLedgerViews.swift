@@ -95,7 +95,10 @@ struct TurnLedgerControls {
 struct TurnLedgerAccessory: View {
     let controls: TurnLedgerControls
 
-    var body: some View {
+    // B3-4: counts, sizes and times that change keep their width.
+    var body: some View { bodyContent.monospacedDigit() }
+
+    @ViewBuilder private var bodyContent: some View {
         HStack(spacing: AeroricSpace.s) {
             CheckpointBadge(text: TurnLedgerText.badge(controls.record.state), tint: tint)
             Text(TurnLedgerText.summary(controls.record))
@@ -229,7 +232,10 @@ struct TurnUndoSheet: View {
     let onConfirm: () -> Void
     @Environment(\.dismiss) private var dismiss
 
-    var body: some View {
+    // B3-4: counts, sizes and times that change keep their width.
+    var body: some View { bodyContent.monospacedDigit() }
+
+    @ViewBuilder private var bodyContent: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.m) {
             Text(title)
                 .font(.system(size: AeroricType.body, weight: .semibold))

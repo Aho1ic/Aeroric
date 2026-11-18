@@ -37,7 +37,10 @@ public struct TodoPage: View {
         self.onOpenTask = onOpenTask
     }
 
-    public var body: some View {
+    // B3-4: counts, sizes and times that change keep their width.
+    public var body: some View { bodyContent.monospacedDigit() }
+
+    @ViewBuilder private var bodyContent: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.m) {
             HStack(spacing: AeroricSpace.m) {
                 Text(TodoText.intro)
