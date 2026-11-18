@@ -366,6 +366,7 @@ fn remember(
         turn_id,
         state,
         items,
+        ..
     } = kind
     else {
         return;
@@ -407,6 +408,20 @@ pub struct AutoChecker {
 /// project runs none).
 pub type ExtraChecks = Arc<dyn Fn(&str) -> Vec<CheckSpec> + Send + Sync>;
 
+/// B2: why a turn's checks run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckTrigger {
+    /// The turn changed files; `revision` is the work tree the checks see.
+    FileChanges { revision: String },
+    /// Nothing to compare (no changes, or not a Git work tree): only the
+    /// task's command checks run, and `note` says why.
+    CommandsOnly { note: String },
+}
+
+/// B2: the notes a commands-only check carries.
+pub const NO_FILE_CHANGES: &str = "这一轮没有文件变化，只跑了验收里的命令检查";
+pub const NOT_COMPARABLE: &str = "无法比较文件（不是 Git 仓库或读不到快照），只跑了命令检查";
+
 impl AutoChecker {
     pub fn new(
         inner: Arc<dyn LiveStatusSink>,
@@ -447,6 +462,7 @@ impl AutoChecker {
             turn_id,
             state,
             items,
+            ..
         } = &kind
         {
             if let (Some(ledger), "passed" | "failed") =
@@ -489,21 +505,29 @@ impl AutoChecker {
         list
     }
 
-    /// `turn_id` changed files and ended normally; returns whether a run
-    /// started (the project may not have opted in).
+    /// `turn_id` ended normally; returns whether a run started (the project
+    /// may not have opted in, and a commands-only turn needs a command).
     pub fn start(
         self: &Arc<Self>,
         task_id: &str,
         project_id: &str,
         turn_id: &str,
         cwd: &Path,
+        trigger: CheckTrigger,
     ) -> bool {
         let selection = self.policy.lock().selection(project_id);
         let extra_checks = self.extra.lock().clone();
         let extra = extra_checks.map(|f| f(task_id)).unwrap_or_default();
-        if !selection.any() && extra.is_empty() {
+        // B2: without file changes the project's own checks (tests,
+        // diagnostics) have nothing new to look at; the task's commands run.
+        let discover_too = selection.any() && matches!(trigger, CheckTrigger::FileChanges { .. });
+        if !discover_too && extra.is_empty() {
             return false;
         }
+        let (trigger_word, note, input_revision) = match trigger {
+            CheckTrigger::FileChanges { revision } => ("fileChanges", None, Some(revision)),
+            CheckTrigger::CommandsOnly { note } => ("commandsOnly", Some(note), None),
+        };
         self.cancel(task_id);
         let cancel = Arc::new(AtomicBool::new(false));
         let generation = self.next.fetch_add(1, Ordering::SeqCst);
@@ -526,10 +550,13 @@ impl AutoChecker {
                         turn_id: turn_id.clone(),
                         state: state.into(),
                         items,
+                        trigger: Some(trigger_word.into()),
+                        note: note.clone(),
+                        input_revision: input_revision.clone(),
                     },
                 );
             };
-            let mut specs = if selection.any() {
+            let mut specs = if discover_too {
                 discover(&cwd, selection)
             } else {
                 Vec::new()

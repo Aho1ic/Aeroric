@@ -363,9 +363,17 @@ struct LiveAutoCheckRow: View {
             }
             .padding(.top, AeroricSpace.xs)
         } label: {
-            Label(stale ? "\(check.title)（之后又有改动，结果已过时）" : check.title, systemImage: icon)
-                .font(.system(size: AeroricType.secondary))
-                .foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Label(stale ? "\(check.title)（之后又有改动，结果已过时）" : check.title, systemImage: icon)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(tint)
+                if let note = check.note {
+                    Text(note)
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .accessibilityIdentifier("session.live.auto-check.note")
+                }
+            }
         }
         .disabled(check.items.isEmpty)
         .padding(.horizontal, AeroricSpace.l)

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-use super::auto_check::AutoChecker;
+use super::auto_check::{AutoChecker, CheckTrigger, NOT_COMPARABLE, NO_FILE_CHANGES};
 use super::update::{SessionUpdate, SessionUpdateKind, TurnEndReason, TurnFileChange};
 use super::{now_ms, DriverRegistry, LiveStatusSink};
 use crate::tasks::{ProtocolFamily, TaskStatus};
@@ -154,13 +154,19 @@ impl TurnChangeTracker {
         std::thread::spawn(move || {
             let mut diff = None;
             let mut checking = false;
+            // B2: whether there was a work tree to compare at all.
+            let mut compared = false;
             let found = (|| {
                 let before = before.recv_timeout(GIT_TIMEOUT).ok()??;
                 let after = snapshot(&before.top)?;
+                compared = true;
                 let kind = changes(&before, &after, &turn_id)?;
                 Some((before, after, kind))
             })();
+            let changed = found.is_some();
+            let mut revision = None;
             if let Some((before, after, kind)) = found {
+                revision = Some(after.id.clone());
                 if let SessionUpdateKind::TurnChanges {
                     files,
                     additions,
@@ -202,9 +208,22 @@ impl TurnChangeTracker {
                     let update = log.push(kind, now_ms());
                     this.inner.update(&update);
                 }
-                if let (TurnEndReason::Completed, Some((project_id, cwd))) = (reason, watched) {
-                    checking = this.checks.start(&task_id, &project_id, &turn_id, &cwd);
-                }
+            }
+            // B2: a completed turn is checked whether or not it changed files;
+            // without changes only the task's command checks run.
+            if let (TurnEndReason::Completed, Some((project_id, cwd))) = (reason, watched) {
+                let trigger = match (changed, revision) {
+                    (true, Some(revision)) => CheckTrigger::FileChanges { revision },
+                    _ if compared => CheckTrigger::CommandsOnly {
+                        note: NO_FILE_CHANGES.into(),
+                    },
+                    _ => CheckTrigger::CommandsOnly {
+                        note: NOT_COMPARABLE.into(),
+                    },
+                };
+                checking = this
+                    .checks
+                    .start(&task_id, &project_id, &turn_id, &cwd, trigger);
             }
             let hook = this.hook.lock().clone();
             if let Some(hook) = hook {
@@ -521,6 +540,148 @@ mod tests {
         assert!(settled.checking, "an explicit completion starts them");
         tracker.checks.cancel("t");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A driver that does nothing: the registry needs one to hold the log.
+    struct Idle;
+    impl super::super::SessionDriver for Idle {
+        fn family(&self) -> ProtocolFamily {
+            ProtocolFamily::Codex
+        }
+        fn attach(&self) -> Result<(), super::super::DriverError> {
+            Ok(())
+        }
+        fn prompt(&self, _: String) -> Result<(), super::super::DriverError> {
+            Ok(())
+        }
+        fn interrupt(&self) -> Result<(), super::super::DriverError> {
+            Ok(())
+        }
+        fn respond(
+            &self,
+            _: &str,
+            _: super::super::Decision,
+        ) -> Result<(), super::super::DriverError> {
+            Ok(())
+        }
+        fn configure(
+            &self,
+            _: super::super::ConfigChange,
+        ) -> Result<(), super::super::DriverError> {
+            Ok(())
+        }
+        fn command(&self, _: super::super::SlashCommand) -> Result<(), super::super::DriverError> {
+            Ok(())
+        }
+        fn close(&self) -> Result<(), super::super::DriverError> {
+            Ok(())
+        }
+        fn snapshot(&self) -> super::super::SessionState {
+            super::super::SessionState::default()
+        }
+        fn idle_since_ms(&self) -> Option<u64> {
+            None
+        }
+        fn suspend(&self) {}
+        fn rebind(&self, _: u64) {}
+    }
+
+    /// B2: a completed turn that changed no file (or ran outside a Git work
+    /// tree) still runs the task's command checks, and says why only those;
+    /// a task without commands starts nothing.
+    #[test]
+    fn a_turn_without_file_changes_still_runs_the_tasks_commands() {
+        let plain = std::env::temp_dir().join(format!(
+            "aeroric-turn-plain-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&plain).unwrap();
+        for (dir, note, commands) in [
+            (repo(), NO_FILE_CHANGES, true),
+            (plain.clone(), NOT_COMPARABLE, true),
+            (repo(), NO_FILE_CHANGES, false),
+        ] {
+            let registry: Arc<DriverRegistry> = Arc::default();
+            let log = super::super::SharedLog::new("t");
+            registry.insert("t", Arc::new(Idle), log.clone());
+            let tracker = TurnChangeTracker::new(Arc::new(Quiet), Arc::clone(&registry));
+            tracker.checks.set_extra(Arc::new(move |_| {
+                if !commands {
+                    return Vec::new();
+                }
+                vec![super::super::auto_check::CheckSpec {
+                    kind: "tests",
+                    profile: "acceptance:a1".into(),
+                    label: "true".into(),
+                    program: "sh".into(),
+                    args: vec!["-c".into(), "true".into()],
+                }]
+            }));
+            let (tx, rx) = mpsc::channel();
+            let tx = Mutex::new(tx);
+            tracker.set_hook(Arc::new(move |settled| {
+                let _ = tx.lock().send(settled);
+            }));
+            tracker.watch("t", "p", dir.to_str().unwrap());
+            let sink = TrackingSink(Arc::clone(&tracker));
+            let update = |seq: u64, kind| SessionUpdate {
+                task_id: "t".into(),
+                seq,
+                at_ms: seq,
+                kind,
+            };
+            sink.update(&update(
+                1,
+                SessionUpdateKind::TurnStarted {
+                    turn_id: "u1".into(),
+                },
+            ));
+            sink.update(&update(
+                2,
+                SessionUpdateKind::TurnEnded {
+                    turn_id: "u1".into(),
+                    reason: TurnEndReason::Completed,
+                    error: None,
+                    raw_status: None,
+                },
+            ));
+            let settled = rx.recv_timeout(Duration::from_secs(30)).unwrap();
+            assert!(settled.diff.is_none(), "nothing changed");
+            assert_eq!(settled.checking, commands, "{note}");
+            if commands {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                let verdict = loop {
+                    let super::super::update::Replay::Updates(updates) = log.since(0) else {
+                        panic!("gap");
+                    };
+                    let found = updates.into_iter().find_map(|u| match u.kind {
+                        SessionUpdateKind::AutoCheck {
+                            state,
+                            trigger,
+                            note,
+                            input_revision,
+                            ..
+                        } if state != "running" => Some((state, trigger, note, input_revision)),
+                        _ => None,
+                    });
+                    if let Some(found) = found {
+                        break found;
+                    }
+                    assert!(Instant::now() < deadline, "no verdict");
+                    std::thread::sleep(Duration::from_millis(50));
+                };
+                assert_eq!(
+                    verdict,
+                    (
+                        "passed".to_string(),
+                        Some("commandsOnly".to_string()),
+                        Some(note.to_string()),
+                        None
+                    )
+                );
+            }
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 
     #[test]

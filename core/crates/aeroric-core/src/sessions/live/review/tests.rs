@@ -401,6 +401,9 @@ fn a_turn_with_checks_waits_for_them_in_either_order() {
         SessionUpdateKind::AutoCheck {
             turn_id: "u1".into(),
             state: "failed".into(),
+            trigger: None,
+            note: None,
+            input_revision: None,
             items: vec![item.clone()],
         },
     );
@@ -413,6 +416,9 @@ fn a_turn_with_checks_waits_for_them_in_either_order() {
         SessionUpdateKind::AutoCheck {
             turn_id: "u1".into(),
             state: "passed".into(),
+            trigger: None,
+            note: None,
+            input_revision: None,
             items: vec![],
         },
     );

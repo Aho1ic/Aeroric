@@ -148,6 +148,8 @@ public struct LiveTurnChanges: Equatable, Sendable {
     public var additions: UInt64
     public var deletions: UInt64
     public var truncated: Bool
+    /// The update's place in the session (B2: orders it against checks).
+    public var seq: UInt64 = 0
 
     /// `+12 −3 · 2 个文件` (`+` 前缀的文件数在截断时为“至少”)。
     public var summary: String {
@@ -162,13 +164,20 @@ public struct LiveAutoCheck: Equatable, Sendable {
     /// `running` | `passed` | `failed` | `cancelled` | `skipped`.
     public var state: String
     public var items: [LiveAutoCheckItem]
+    /// B2: why only the task's command checks ran.
+    public var note: String? = nil
+    /// The update's place in the session.
+    public var seq: UInt64 = 0
 
     public var failing: [LiveAutoCheckItem] { items.filter { $0.state != "passed" && $0.state != "cancelled" } }
 
     /// A later turn changed files again, so this verdict no longer describes the tree.
+    /// B2: a check of a turn without changes comes after the last changes,
+    /// so the order of the updates decides, not the turn ids.
     public func isStale(given changes: LiveTurnChanges?) -> Bool {
-        guard let changes else { return false }
-        return changes.turnId != turnId
+        guard let changes, changes.turnId != turnId else { return false }
+        if seq > 0 || changes.seq > 0 { return changes.seq > seq }
+        return true
     }
 
     public var title: String {
@@ -185,7 +194,8 @@ public struct LiveAutoCheck: Equatable, Sendable {
     /// What “把失败发给 Agent” sends; nil when nothing failed.
     public var failureReport: String? {
         guard state == "failed", !failing.isEmpty else { return nil }
-        var lines = ["上一轮改动后自动运行的项目检查没有通过，请修复："]
+        var lines = [note == nil ? "上一轮改动后自动运行的项目检查没有通过，请修复："
+                                 : "上一轮之后运行的验收命令检查没有通过，请修复："]
         for item in failing {
             lines.append("")
             lines.append("【\(item.label)】\(item.summary)")
@@ -520,9 +530,9 @@ public struct LiveSessionModel: Equatable, Sendable {
             }
         case let .turnChanges(turnId, files, additions, deletions, truncated):
             lastTurnChanges = LiveTurnChanges(turnId: turnId, files: files, additions: additions,
-                                              deletions: deletions, truncated: truncated)
-        case let .autoCheck(turnId, state, items):
-            lastAutoCheck = LiveAutoCheck(turnId: turnId, state: state, items: items)
+                                              deletions: deletions, truncated: truncated, seq: update.seq)
+        case let .autoCheck(turnId, state, items, note):
+            lastAutoCheck = LiveAutoCheck(turnId: turnId, state: state, items: items, note: note, seq: update.seq)
         case let .handoff(reason, checkpoint):
             items.append(.handoff(id: "seq\(update.seq)", reason: reason, checkpoint: checkpoint))
         case let .clarification(clarification):

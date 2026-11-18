@@ -257,6 +257,9 @@ fn only_the_latest_failed_run_is_remembered() {
     let update = |state: &str, items: Vec<AutoCheckItem>| SessionUpdateKind::AutoCheck {
         turn_id: "t1".into(),
         state: state.into(),
+        trigger: None,
+        note: None,
+        input_revision: None,
         items,
     };
     remember(&mut failures, "task", &update("running", vec![]), 1);

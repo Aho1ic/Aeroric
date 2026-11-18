@@ -181,6 +181,27 @@ final class LiveSessionModelTests: XCTestCase {
         XCTAssertEqual(LiveAutoCheck(turnId: "u2", state: "passed", items: [passing]).failureReport, nil)
     }
 
+    /// B2: a turn without file changes still gets the task's command checks;
+    /// that verdict is not stale just because the last changes were an
+    /// earlier turn's, and a later change makes it stale.
+    func testACommandsOnlyCheckIsNotStaleUntilFilesChangeAgain() {
+        var model = LiveSessionModel(state: state())
+        let files = [LiveFileChange(path: "a.py", additions: 1, deletions: 0)]
+        let failing = LiveAutoCheckItem(kind: "tests", profile: "acceptance:a1", label: "pytest", state: "failed",
+                                        summary: "退出码 1")
+        _ = model.apply(batch([
+            .turnChanges(turnId: "u1", files: files, additions: 1, deletions: 0, truncated: false),
+            .autoCheck(turnId: "u2", state: "failed", items: [failing], note: "这一轮没有文件变化，只跑了验收里的命令检查"),
+        ]))
+        let check = model.lastAutoCheck
+        XCTAssertEqual(check?.note, "这一轮没有文件变化，只跑了验收里的命令检查")
+        XCTAssertEqual(check?.isStale(given: model.lastTurnChanges), false)
+        XCTAssertTrue(check?.failureReport?.hasPrefix("上一轮之后运行的验收命令检查没有通过") == true)
+        _ = model.apply(batch([.turnChanges(turnId: "u3", files: files, additions: 1, deletions: 0, truncated: false)],
+                              from: 3))
+        XCTAssertEqual(model.lastAutoCheck?.isStale(given: model.lastTurnChanges), true)
+    }
+
     /// A14: quiet turns are flagged at 5 and 15 minutes; waiting on the user is not a stall.
     func testStallLevels() {
         let minute: UInt64 = 60_000

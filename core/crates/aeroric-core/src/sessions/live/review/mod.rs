@@ -630,6 +630,7 @@ impl ReviewLoop {
                 turn_id,
                 state: run,
                 items,
+                ..
             } => {
                 if run == "running" {
                     return Vec::new();

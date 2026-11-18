@@ -46,6 +46,8 @@ id 既然是预先定好的，义务可以在启动之前就写入。
 
 ### B2 没改文件的回合也跑契约里的命令检查
 
+2026-11-18 已实现，见 [B2 实现笔记](../../implemented/bug-fix/2026-11-18-b2-command-checks-without-file-changes.md)。仅命令方式只跑任务自己的命令，项目自动发现的测试和诊断不跑；`inputRevision` 已写入检查更新，供 B3 使用。
+
 **用户会看到：** 回合只跑了命令或只改了仓库外的东西时，契约要求的测试和命令检查照常运行，结果旁边写着"这一轮没有文件变化"。工作目录不是 Git 仓库时，写明"无法比较文件，只跑了命令检查"。
 
 **现状：** `core/crates/aeroric-core/src/sessions/live/turn_changes.rs:130–205` 的 `turn_ended`：`checks.start(…)` 只在拿到前后快照差异（`found` 为 `Some`）且回合 `Completed` 时调用。`core/crates/aeroric-core/src/sessions/live/auto_check.rs` 的 `start` 在没有选中项且没有额外命令时返回 `false`。

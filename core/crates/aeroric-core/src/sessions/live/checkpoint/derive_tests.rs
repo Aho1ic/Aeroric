@@ -281,6 +281,9 @@ fn an_acceptance_check_result_settles_its_obligation() {
         kind: SessionUpdateKind::AutoCheck {
             turn_id: "u".into(),
             state: "passed".into(),
+            trigger: None,
+            note: None,
+            input_revision: None,
             items: vec![AutoCheckItem {
                 kind: "tests".into(),
                 profile: "acceptance:a1".into(),

@@ -487,6 +487,9 @@ fn a_child_with_checks_reports_once_they_finish() {
         SessionUpdateKind::AutoCheck {
             turn_id: "t1".into(),
             state: "passed".into(),
+            trigger: None,
+            note: None,
+            input_revision: None,
             items: Vec::new(),
         },
     );

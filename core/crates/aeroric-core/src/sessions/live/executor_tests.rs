@@ -615,6 +615,7 @@ async fn a_turn_that_changed_files_runs_the_projects_tests() {
                     turn_id,
                     state,
                     items,
+                    ..
                 } => Some((turn_id.clone(), state.clone(), items.clone())),
                 _ => None,
             })

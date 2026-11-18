@@ -292,6 +292,17 @@ pub enum SessionUpdateKind {
         state: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         items: Vec<AutoCheckItem>,
+        /// B2: what started the check: `fileChanges` | `commandsOnly` (a turn
+        /// without file changes, or outside a Git work tree, still runs the
+        /// task's command checks).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger: Option<String>,
+        /// B2: why fewer checks ran, in the user's words.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+        /// B2: the work tree the check saw (`git write-tree`), when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_revision: Option<String>,
     },
     /// B4′: a handoff brief given to this session, with the checkpoint it was
     /// built from (the handoff card shows that snapshot, not a later one).
@@ -694,6 +705,9 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
         K::AutoCheck {
             turn_id: "u1".into(),
             state: "failed".into(),
+            trigger: None,
+            note: None,
+            input_revision: None,
             items: vec![AutoCheckItem {
                 kind: "tests".into(),
                 profile: "python".into(),

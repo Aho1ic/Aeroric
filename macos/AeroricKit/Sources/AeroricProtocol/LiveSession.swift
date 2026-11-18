@@ -83,7 +83,9 @@ public enum LiveUpdateKind: Equatable, Sendable {
     case turnChanges(turnId: String, files: [LiveFileChange], additions: UInt64, deletions: UInt64, truncated: Bool)
     /// A05: the project's tests / diagnostics after that turn; a later one for
     /// the same turn replaces the earlier (`running` first).
-    case autoCheck(turnId: String, state: String, items: [LiveAutoCheckItem])
+    /// B2: `note` says why fewer checks ran (a turn without file changes, or
+    /// outside a Git work tree, runs only the task's command checks).
+    case autoCheck(turnId: String, state: String, items: [LiveAutoCheckItem], note: String? = nil)
     /// B4′: a handoff brief given to this session, with the checkpoint it came from.
     /// `reason`: `modelSwitch` | `sourceMove` | `afterCompact` | `delegate` | `resume`.
     case handoff(reason: String, checkpoint: LiveCheckpoint)
@@ -413,7 +415,7 @@ extension LiveUpdateKind {
                                          outputTail: string(g, "outputTail") ?? "")
             }
             guard decoded.count == items.count else { return nil }
-            return .autoCheck(turnId: id, state: state, items: decoded)
+            return .autoCheck(turnId: id, state: state, items: decoded, note: string(f, "note"))
         case "handoff":
             guard let reason = string(f, "reason"), let checkpoint = f["checkpoint"].flatMap(LiveCheckpoint.decode)
             else { return nil }
