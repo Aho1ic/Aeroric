@@ -22,7 +22,9 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use aeroric_protocol::checkpoint::{HandoffReason, Obligation, ObligationSource, ObligationState};
+use aeroric_protocol::checkpoint::{
+    Acceptance, HandoffReason, Obligation, ObligationSource, ObligationState,
+};
 use aeroric_protocol::delegation::{
     permission_rank, AcceptanceResult, AgentChoice, AuditAction, AuditEntry, Contract,
     DelegationCard, DelegationState, ExpertChoice, Origin, ReputationRow, Resolved, ReturnDelivery,
@@ -689,7 +691,40 @@ impl Delegations {
             let Some(this) = me.upgrade() else {
                 return;
             };
+            // B1: the criteria become the child's obligations before its
+            // first input, so a child that ends at once is still held to them.
+            let planned = for_host.child_task_id.clone();
+            let obligations = acceptance_obligations(&for_host.contract.acceptance);
+            let cp = this.checkpoints.lock().clone().and_then(|w| w.upgrade());
+            let installed = match (&cp, &planned) {
+                (Some(cp), Some(planned)) if !obligations.is_empty() => {
+                    if let Err(error) = cp.install_obligations(planned, obligations.clone()) {
+                        this.fail_start(
+                            &parent_id,
+                            &id,
+                            format!("没能启动：验收条件没存下来（{error}）"),
+                        );
+                        return;
+                    }
+                    true
+                }
+                _ => false,
+            };
+            let ids: Vec<String> = obligations.iter().map(|o| o.id.clone()).collect();
             let outcome = host.start_child(&for_host, text);
+            if let (true, Some(cp), Some(planned)) = (installed, &cp, &planned) {
+                match &outcome {
+                    // The id may be retried later: leave nothing behind.
+                    Err(_) => cp.remove_obligations(planned, &ids),
+                    Ok(child) if child.task_id != *planned => {
+                        if let Err(error) = cp.install_obligations(&child.task_id, obligations) {
+                            eprintln!("delegation {id}: obligations not moved: {error}");
+                        }
+                        cp.remove_obligations(planned, &ids);
+                    }
+                    Ok(_) => {}
+                }
+            }
             let mut state = this.state.lock();
             let Some(entry) = find_mut(&mut state, &parent_id, &id) else {
                 return;
@@ -710,47 +745,40 @@ impl Delegations {
                     if !reported {
                         entry.card.state = DelegationState::Running;
                     }
-                    let acceptance = entry.card.contract.acceptance.clone();
                     state
                         .children
                         .insert(child.task_id.clone(), (parent_id.clone(), id.clone()));
                     drop(state);
-                    // The criteria become the child's obligations, so the auto
-                    // checker runs their commands after its turns.
-                    if let Some(cp) = this.checkpoints.lock().clone().and_then(|w| w.upgrade()) {
-                        cp.add_obligations(
-                            &child.task_id,
-                            acceptance
-                                .iter()
-                                .enumerate()
-                                .map(|(i, a)| Obligation {
-                                    id: format!("a{}", i + 1),
-                                    text: a.text.clone(),
-                                    check: a.check.clone(),
-                                    state: ObligationState::Open,
-                                    source: ObligationSource::Acceptance,
-                                    passed_ms: None,
-                                })
-                                .collect(),
-                        );
-                    }
                     if !reported {
                         this.watch(&parent_id, &id);
                     }
                 }
                 Err(error) => {
-                    entry.card.state = DelegationState::Failed;
-                    entry.card.error = Some(error.clone());
-                    entry.card.finished_ms = Some(now_ms());
-                    let audit = audit_of(&entry.card, AuditAction::Fail, "aeroric", &error);
-                    this.record(&mut state, audit);
                     drop(state);
-                    this.try_return(&parent_id);
+                    this.fail_start(&parent_id, &id, error);
+                    return;
                 }
             }
             this.publish(&parent_id, &id);
         });
         Ok(card)
+    }
+
+    /// The child did not start: the card fails with `error` and the parent
+    /// hears about it.
+    fn fail_start(&self, parent_id: &str, id: &str, error: String) {
+        let mut state = self.state.lock();
+        let Some(entry) = find_mut(&mut state, parent_id, id) else {
+            return;
+        };
+        entry.card.state = DelegationState::Failed;
+        entry.card.error = Some(error.clone());
+        entry.card.finished_ms = Some(now_ms());
+        let audit = audit_of(&entry.card, AuditAction::Fail, "aeroric", &error);
+        self.record(&mut state, audit);
+        drop(state);
+        self.try_return(parent_id);
+        self.publish(parent_id, id);
     }
 
     fn brief_of(&self, parent: &str) -> Option<String> {
@@ -1653,6 +1681,23 @@ impl LiveStatusSink for Delegations {
         self.inner.update(update);
         self.on_update(update);
     }
+}
+
+/// B1: a contract's criteria as the child's obligations (`a1`, `a2`, …), so
+/// the auto checker runs their commands after its turns.
+fn acceptance_obligations(acceptance: &[Acceptance]) -> Vec<Obligation> {
+    acceptance
+        .iter()
+        .enumerate()
+        .map(|(i, a)| Obligation {
+            id: format!("a{}", i + 1),
+            text: a.text.clone(),
+            check: a.check.clone(),
+            state: ObligationState::Open,
+            source: ObligationSource::Acceptance,
+            passed_ms: None,
+        })
+        .collect()
 }
 
 #[cfg(test)]

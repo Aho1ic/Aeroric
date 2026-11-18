@@ -187,15 +187,50 @@ impl CheckpointSink {
         });
     }
 
-    /// Add obligations (accepted criteria); ids that exist are replaced.
-    pub fn add_obligations(&self, task_id: &str, obligations: Vec<Obligation>) {
-        self.edit(task_id, |b| {
-            let list = &mut b.checkpoint.obligations;
+    /// Add obligations (accepted criteria; ids that exist are replaced).
+    /// B1: installed before the task's first input, saying whether
+    /// they reached the disk. On a failed write the list is left as it was,
+    /// so a task never runs with obligations that only lived in memory.
+    pub fn install_obligations(
+        &self,
+        task_id: &str,
+        obligations: Vec<Obligation>,
+    ) -> Result<(), String> {
+        let saved = {
+            let mut map = self.building.lock();
+            let building = map
+                .entry(task_id.to_string())
+                .or_insert_with(|| Building::new(self.load_or_new(task_id)));
+            let before = building.checkpoint.obligations.clone();
+            let list = &mut building.checkpoint.obligations;
             for o in obligations {
                 list.retain(|x| x.id != o.id);
                 list.push(o);
             }
-            Change::Save
+            match self.write(&mut building.checkpoint) {
+                Ok(revision) => revision,
+                Err(error) => {
+                    building.checkpoint.obligations = before;
+                    return Err(error);
+                }
+            }
+        };
+        if let Some(revision) = saved {
+            self.notify(task_id, revision);
+        }
+        Ok(())
+    }
+
+    /// B1: take back obligations installed for a task that did not start.
+    pub fn remove_obligations(&self, task_id: &str, ids: &[String]) {
+        self.edit(task_id, |b| {
+            let before = b.checkpoint.obligations.len();
+            b.checkpoint.obligations.retain(|o| !ids.contains(&o.id));
+            if b.checkpoint.obligations.len() == before {
+                Change::None
+            } else {
+                Change::Save
+            }
         });
     }
 
@@ -261,16 +296,22 @@ impl CheckpointSink {
 
     /// Bump the revision and write; `None` when there is nowhere to write.
     fn save(&self, checkpoint: &mut Checkpoint) -> Option<u64> {
+        self.write(checkpoint).unwrap_or_else(|error| {
+            eprintln!("checkpoint {} not saved: {error}", checkpoint.task_id);
+            None
+        })
+    }
+
+    /// `save`, with the failure kept: `Ok(None)` when there is nowhere to write.
+    fn write(&self, checkpoint: &mut Checkpoint) -> Result<Option<u64>, String> {
         checkpoint.revision += 1;
         checkpoint.updated_ms = now_ms();
-        let dir = self.dir.lock().clone()?;
-        match store::save(&dir, checkpoint) {
-            Ok(()) => Some(checkpoint.revision),
-            Err(error) => {
-                eprintln!("checkpoint {} not saved: {error}", checkpoint.task_id);
-                None
-            }
-        }
+        let Some(dir) = self.dir.lock().clone() else {
+            return Ok(None);
+        };
+        store::save(&dir, checkpoint)
+            .map(|()| Some(checkpoint.revision))
+            .map_err(|error| error.to_string())
     }
 
     fn notify(&self, task_id: &str, revision: u64) {

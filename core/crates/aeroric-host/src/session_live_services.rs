@@ -721,7 +721,8 @@ fn clarify_accept(live: &Live, request: &Request) -> Frame {
         .unwrap_or("ask")
         .to_string();
     let checkpoints = live.executor.checkpoints();
-    checkpoints.add_obligations(
+    // B1: the session continues only on obligations that reached the disk.
+    if let Err(error) = checkpoints.install_obligations(
         &p.task_id,
         p.acceptance
             .iter()
@@ -735,7 +736,13 @@ fn clarify_accept(live: &Live, request: &Request) -> Frame {
                 passed_ms: None,
             })
             .collect(),
-    );
+    ) {
+        return failure(
+            request.id.clone(),
+            ErrorCode::IoError,
+            &format!("验收条件没存下来，没有继续：{error}"),
+        );
+    }
     for constraint in &p.constraints {
         checkpoints.add_constraint(&p.task_id, constraint);
     }

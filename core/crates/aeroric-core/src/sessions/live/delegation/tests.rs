@@ -32,6 +32,10 @@ struct FakeHost {
     receipts: Mutex<bool>,
     /// A1: what the parent's own record says after a lost answer.
     recorded: Mutex<Option<bool>>,
+    /// B1: the checkpoints a test watches, and how many obligations the
+    /// child already had when `start_child` was called.
+    checkpoints: Mutex<Option<Arc<super::super::checkpoint::CheckpointSink>>>,
+    obligations_at_start: Mutex<Vec<usize>>,
 }
 
 /// A1: the delivery queue's side of the host — the parent's driver.
@@ -59,6 +63,10 @@ impl DelegationHost for FakeHost {
         self.parents.lock().get(task_id).cloned()
     }
     fn start_child(&self, card: &DelegationCard, prompt: String) -> Result<Child, String> {
+        if let (Some(cp), Some(child)) = (self.checkpoints.lock().clone(), &card.child_task_id) {
+            let count = cp.get(child).map_or(0, |c| c.obligations.len());
+            self.obligations_at_start.lock().push(count);
+        }
         if *self.fail_start.lock() {
             return Err("本机没有 Codex".into());
         }
@@ -1297,4 +1305,85 @@ fn the_expert_is_kept_until_cleared_and_its_role_only_reads() {
     );
     assert_eq!(role.context_mode, ContextMode::Brief);
     let _ = std::fs::remove_dir_all(tmp);
+}
+
+fn criteria(n: usize) -> Contract {
+    Contract {
+        acceptance: (1..=n)
+            .map(|i| Acceptance {
+                text: format!("条件 {i}"),
+                check: Some(format!("test {i}")),
+            })
+            .collect(),
+        ..contract("改")
+    }
+}
+
+/// B1: the criteria are the child's obligations before its first input.
+#[test]
+fn obligations_are_installed_before_the_child_starts() {
+    let rig = rig("ask");
+    let checkpoints = super::super::checkpoint::CheckpointSink::new(Arc::new(Quiet));
+    rig.d.set_checkpoints(Arc::downgrade(&checkpoints));
+    *rig.host.checkpoints.lock() = Some(checkpoints.clone());
+    let (_, child) = rig.running(criteria(2), Origin::User);
+    assert_eq!(*rig.host.obligations_at_start.lock(), [2]);
+    let ids: Vec<String> = checkpoints
+        .get(&child)
+        .unwrap()
+        .obligations
+        .iter()
+        .map(|o| o.id.clone())
+        .collect();
+    assert_eq!(ids, ["a1", "a2"]);
+}
+
+/// B1: obligations that could not be written stop the child from starting.
+#[test]
+fn a_child_whose_obligations_cannot_be_saved_does_not_start() {
+    let rig = rig("ask");
+    let checkpoints = super::super::checkpoint::CheckpointSink::new(Arc::new(Quiet));
+    // A file where the checkpoint directory should be: every write fails.
+    let blocked =
+        std::env::temp_dir().join(format!("aeroric-b1-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::write(&blocked, b"not a directory").unwrap();
+    checkpoints.set_dir(blocked.join("checkpoints"));
+    rig.d.set_checkpoints(Arc::downgrade(&checkpoints));
+    let card = rig.d.start("p", criteria(1), Origin::Session, "p").unwrap();
+    wait("failed", || {
+        rig.card(&card.delegation_id).state == DelegationState::Failed
+    });
+    let error = rig.card(&card.delegation_id).error.unwrap_or_default();
+    assert!(error.starts_with("没能启动：验收条件没存下来"), "{error}");
+    assert!(rig.host.started.lock().is_empty(), "no child was started");
+    let child = card.child_task_id.unwrap();
+    assert!(checkpoints
+        .get(&child)
+        .is_none_or(|c| c.obligations.is_empty()));
+    wait("returned", || rig.sent_to("p").len() == 1);
+    let _ = std::fs::remove_file(&blocked);
+}
+
+/// B1: a child that fails to start leaves no obligations under its id,
+/// which a retry may use again.
+#[test]
+fn a_child_that_fails_to_start_leaves_no_obligations() {
+    let rig = rig("ask");
+    let checkpoints = super::super::checkpoint::CheckpointSink::new(Arc::new(Quiet));
+    rig.d.set_checkpoints(Arc::downgrade(&checkpoints));
+    *rig.host.checkpoints.lock() = Some(checkpoints.clone());
+    *rig.host.fail_start.lock() = true;
+    let card = rig.d.start("p", criteria(2), Origin::Session, "p").unwrap();
+    wait("failed", || {
+        rig.card(&card.delegation_id).state == DelegationState::Failed
+    });
+    assert_eq!(
+        *rig.host.obligations_at_start.lock(),
+        [2],
+        "installed first"
+    );
+    let child = card.child_task_id.unwrap();
+    assert!(checkpoints
+        .get(&child)
+        .is_none_or(|c| c.obligations.is_empty()));
 }
