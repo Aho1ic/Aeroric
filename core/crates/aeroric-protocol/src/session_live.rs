@@ -820,6 +820,7 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
                 files: 0,
                 additions: 0,
                 deletions: 0,
+                artifacts: Vec::new(),
                 acceptance: vec![crate::delegation::AcceptanceResult {
                     id: "a1".into(),
                     text: "给出可运行的示例".into(),

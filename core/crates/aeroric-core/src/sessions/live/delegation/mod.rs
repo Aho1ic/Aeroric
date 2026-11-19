@@ -178,6 +178,8 @@ pub struct Delegations {
     checkpoints: Mutex<Option<Weak<super::checkpoint::CheckpointSink>>>,
     /// B3: the turns' snapshots, to tell when a passed criterion went stale.
     ledger: Mutex<Option<Arc<super::turn_ledger::TurnLedger>>>,
+    /// B6: what each child delivered, named in its result.
+    artifacts: Mutex<Option<Arc<super::artifacts::ArtifactRegistry>>>,
     dir: Mutex<Option<PathBuf>>,
     watch_every: Mutex<Duration>,
     /// A1: the queue that carries results to the parent; unset, a result
@@ -188,6 +190,9 @@ pub struct Delegations {
     /// B5-3: one save of a parent's cards at a time, of the newest state.
     writes: Mutex<()>,
 }
+
+/// B6: a result names at most this many deliverables.
+const MAX_RESULT_ARTIFACTS: usize = 20;
 
 /// A1: the source of the delivery carrying `ids`' results to `parent`.
 pub fn source_ref(parent: &str, ids: &[String]) -> String {
@@ -206,6 +211,7 @@ impl Delegations {
             host: Mutex::new(None),
             checkpoints: Mutex::new(None),
             ledger: Mutex::new(None),
+            artifacts: Mutex::new(None),
             dir: Mutex::new(None),
             watch_every: Mutex::new(Duration::from_secs(5)),
             deliveries: Mutex::new(None),
@@ -232,6 +238,33 @@ impl Delegations {
 
     pub fn set_ledger(&self, ledger: Arc<super::turn_ledger::TurnLedger>) {
         *self.ledger.lock() = Some(ledger);
+    }
+
+    pub fn set_artifacts(&self, artifacts: Arc<super::artifacts::ArtifactRegistry>) {
+        *self.artifacts.lock() = Some(artifacts);
+    }
+
+    /// B6: the child's deliverables at the versions that stand now, the
+    /// latest changed first; files the user said do not count are left out.
+    fn artifacts_of(&self, child: &str) -> Vec<aeroric_protocol::artifacts::ArtifactRef> {
+        let Some(registry) = self.artifacts.lock().clone() else {
+            return Vec::new();
+        };
+        registry
+            .list(child, None)
+            .artifacts
+            .into_iter()
+            .filter(|a| !a.excluded && !a.removed)
+            .filter_map(|a| {
+                let current = a.current?;
+                Some(aeroric_protocol::artifacts::ArtifactRef {
+                    artifact_id: a.id,
+                    version: current.version,
+                    path: a.path,
+                })
+            })
+            .take(MAX_RESULT_ARTIFACTS)
+            .collect()
     }
 
     /// B3: the child's criteria as they stand: state, evidence, and whether a
@@ -1297,6 +1330,7 @@ impl Delegations {
             .unwrap_or_default();
         // B3: outside the lock (it may read git).
         let acceptance = self.acceptance_of(&child);
+        let artifacts = self.artifacts_of(&child);
         let mut state = self.state.lock();
         // The tracker's settle can overtake the turn's end on the sink chain:
         // then the turn's text is still being collected.
@@ -1317,6 +1351,7 @@ impl Delegations {
             entry.last_text = collecting;
         }
         entry.card.acceptance = acceptance;
+        entry.card.artifacts = artifacts;
         let checked = entry
             .card
             .acceptance

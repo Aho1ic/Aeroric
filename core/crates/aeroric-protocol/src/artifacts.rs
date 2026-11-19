@@ -14,6 +14,9 @@ pub const LIST_METHOD: &str = "artifacts.list";
 pub const VERSIONS_METHOD: &str = "artifacts.versions";
 pub const READ_METHOD: &str = "artifacts.read";
 pub const EXCLUDE_METHOD: &str = "artifacts.exclude";
+/// B6 step 2: the context MCP's `artifact_list` / `artifact_read`.
+pub const CONTEXT_LIST_METHOD: &str = "context.artifactList";
+pub const CONTEXT_READ_METHOD: &str = "context.artifactRead";
 
 /// When a version's content is gone from the repository.
 pub const GONE: &str = "这个版本的内容已不可用";
@@ -73,6 +76,35 @@ pub struct ArtifactVersion {
     /// when read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<ValidationRecord>,
+}
+
+/// B6: one version of one artifact, as a delegation result names it:
+/// `artifact_id@version`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactRef {
+    pub artifact_id: String,
+    pub version: u32,
+    pub path: String,
+}
+
+impl ArtifactRef {
+    /// `art-…@3`.
+    pub fn label(&self) -> String {
+        format!("{}@{}", self.artifact_id, self.version)
+    }
+}
+
+/// `art-…@3` → (`art-…`, 3); without `@n`, the version is unset.
+pub fn parse_ref(text: &str) -> (String, Option<u32>) {
+    let text = text.trim();
+    match text.rsplit_once('@') {
+        Some((id, n)) => match n.parse() {
+            Ok(n) => (id.to_string(), Some(n)),
+            Err(_) => (text.to_string(), None),
+        },
+        None => (text.to_string(), None),
+    }
 }
 
 /// One check that saw this version.

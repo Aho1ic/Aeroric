@@ -303,6 +303,7 @@ public enum DelegationText {
         if let note = deliveryNote(card) { parts.append(note) }
         if let error = card.error { parts.append(error) }
         if card.files > 0 { parts.append("改动 \(card.files) 个文件 +\(card.additions) −\(card.deletions)") }
+        if let delivered = deliverables(card) { parts.append(delivered) }
         if card.state == "reported" && !card.evidence { parts.append("没有可核对的证据") }
         if card.contract.acceptance.isEmpty && card.state == "reported" {
             parts.append("没有验收条款，建议继续拆分")
@@ -310,6 +311,17 @@ public enum DelegationText {
         if card.reworks > 0 { parts.append("退回 \(card.reworks) 次") }
         if let tokens = card.tokens { parts.append("\(tokens) token") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// B6: what the child delivered, by name and version.
+    public static func deliverables(_ card: LiveDelegationCard) -> String? {
+        switch card.artifacts.count {
+        case 0: return nil
+        case 1: return "交付 \(card.artifacts[0].name)（第 \(card.artifacts[0].version) 版）"
+        case 2: return "交付 \(card.artifacts.map(\.name).joined(separator: "、"))"
+        default:
+            return "交付 \(card.artifacts.count) 个文件：\(card.artifacts.prefix(2).map(\.name).joined(separator: "、")) 等"
+        }
     }
 
     static func firstLine(_ text: String) -> String {

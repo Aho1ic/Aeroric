@@ -3381,3 +3381,131 @@ async fn a_transcript_line_that_does_not_read_is_reported() {
         .unwrap();
     assert!(older.get("unreadable").is_none(), "{older}");
 }
+
+/// B6 step 2: an agent reads deliverables through its context token — its
+/// own task's, byte for byte as the app shows them; a task it has no tie
+/// to is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_artifacts_read_the_tokens_task_and_refuse_strangers() {
+    use aeroric_protocol::session_live::TurnFileChange;
+    use aeroric_protocol::turn_ledger::{TurnRecord, TurnState};
+
+    let host = Host::start(true).await;
+    host.start_task("写报告");
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+
+    let bad = host
+        .call("context.artifactList", json!({"token": "made-up"}))
+        .await
+        .unwrap_err();
+    assert_eq!(bad["code"], "UNAUTHENTICATED");
+
+    // A turn of task-1 wrote out/report.md in a repository.
+    let repo = std::env::temp_dir().join(format!("aeroric-b6-host-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(repo.join("out")).unwrap();
+    let git = |args: &[&str]| -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    let before = git(&["write-tree"]);
+    let body = "# 报告\n第二行\n".repeat(50);
+    std::fs::write(repo.join("out/report.md"), &body).unwrap();
+    git(&["add", "-A"]);
+    let after = git(&["write-tree"]);
+    let record = TurnRecord {
+        turn_id: "u1".into(),
+        started_ms: 1,
+        ended_ms: 2,
+        top: repo.canonicalize().unwrap().to_string_lossy().into(),
+        before,
+        after,
+        head_before: None,
+        head_after: None,
+        files: vec![TurnFileChange {
+            path: "out/report.md".into(),
+            additions: Some(100),
+            deletions: Some(0),
+        }],
+        additions: 100,
+        deletions: 0,
+        state: TurnState::Pending,
+        undone_ms: None,
+        undo_group: None,
+        state_before_undo: None,
+        check: None,
+    };
+    host.structured.artifacts().register("task-1", &record);
+
+    let list = host
+        .call("context.artifactList", json!({"token": token}))
+        .await
+        .unwrap();
+    assert_eq!(list["taskId"], "task-1");
+    assert_eq!(list["readable"][0]["relation"], "当前任务");
+    let artifact = &list["artifacts"][0];
+    assert_eq!(artifact["path"], "out/report.md");
+    let id = artifact["id"].as_str().unwrap().to_string();
+
+    // Read in slices by `id@version`; together they are the file, and the
+    // app's own method returns the same bytes.
+    let mut text = String::new();
+    let mut offset = 0;
+    loop {
+        let read = host
+            .call(
+                "context.artifactRead",
+                json!({"token": token, "artifact": format!("{id}@1"), "offset": offset, "limit": 100}),
+            )
+            .await
+            .unwrap();
+        let content = &read["content"];
+        assert_eq!(content["encoding"], "utf8");
+        text.push_str(content["content"].as_str().unwrap());
+        match content["nextOffset"].as_u64() {
+            Some(next) => offset = next,
+            None => break,
+        }
+    }
+    assert_eq!(text, body);
+    let app = host
+        .call(
+            "artifacts.read",
+            json!({"taskId": "task-1", "artifactId": id, "limit": 262144}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(app["content"]["content"].as_str().unwrap(), body);
+
+    let stranger = host
+        .call(
+            "context.artifactList",
+            json!({"token": token, "taskId": "task-elsewhere"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(stranger["code"], "NOT_FOUND");
+    assert!(stranger["message"].as_str().unwrap().contains("委派或侧支"));
+    let unknown = host
+        .call(
+            "context.artifactRead",
+            json!({"token": token, "artifact": "art-nope@1"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(unknown["code"], "NOT_FOUND");
+    std::fs::remove_dir_all(&repo).ok();
+}

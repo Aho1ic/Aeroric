@@ -111,6 +111,13 @@ pub fn results(cards: &[DelegationCard]) -> String {
                 card.files, card.additions, card.deletions
             ));
         }
+        // B6: each delivered file by the version it stands at.
+        if !card.artifacts.is_empty() {
+            out.push_str("交付物（artifact_read 按 id@版本 读取）：\n");
+            for a in &card.artifacts {
+                out.push_str(&format!("- {}：{}\n", a.path, a.label()));
+            }
+        }
         if !card.acceptance.is_empty() {
             let passed = card
                 .acceptance

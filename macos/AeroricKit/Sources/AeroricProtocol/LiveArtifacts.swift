@@ -181,3 +181,25 @@ public struct LiveArtifactContent: Equatable, Sendable {
             nextOffset: f["nextOffset"]?.numberText.flatMap { UInt64($0) })
     }
 }
+
+/// B6 step 2: one version of one deliverable, as a delegation result names it.
+public struct LiveArtifactRef: Equatable, Sendable {
+    public var artifactId: String
+    public var version: Int
+    public var path: String
+
+    public init(artifactId: String, version: Int, path: String) {
+        self.artifactId = artifactId
+        self.version = version
+        self.path = path
+    }
+
+    public var name: String { path.split(separator: "/").last.map(String.init) ?? path }
+
+    public static func decode(_ value: JSONValue) -> LiveArtifactRef? {
+        let f = value.fields
+        guard let id = f["artifactId"]?.stringValue, let path = f["path"]?.stringValue,
+              let version = f["version"]?.numberText.flatMap({ Int($0) }) else { return nil }
+        return LiveArtifactRef(artifactId: id, version: version, path: path)
+    }
+}

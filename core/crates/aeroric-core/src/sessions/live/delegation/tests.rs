@@ -1514,3 +1514,95 @@ fn a_passed_criterion_has_its_evidence_and_goes_stale_when_files_change() {
     assert_eq!(a.checked_revision, None);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// B6 step 2: a child's result names each file it delivered by
+/// `artifact_id@version`, so the parent reads exactly that version.
+#[test]
+fn a_childs_result_names_its_deliverables_by_version() {
+    use crate::sessions::live::artifacts::ArtifactRegistry;
+    use crate::sessions::live::turn_changes::snapshot_tree;
+    use aeroric_protocol::session_live::TurnFileChange;
+    use aeroric_protocol::turn_ledger::{TurnRecord, TurnState};
+
+    let rig = rig("ask");
+    let ledger: Arc<super::super::turn_ledger::TurnLedger> = Arc::default();
+    let registry = Arc::new(ArtifactRegistry::new(Arc::clone(&ledger)));
+    rig.d.set_artifacts(Arc::clone(&registry));
+    let (id, child) = rig.running(contract("写一份报告"), Origin::User);
+
+    let dir = std::env::temp_dir().join(format!("aeroric-b6-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init", "-q"]);
+    std::fs::write(dir.join("keep.txt"), "0\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "base"]);
+    let dir = dir.canonicalize().unwrap();
+    // The child's turn wrote report.md and a scratch file.
+    let (top, before) = snapshot_tree(&dir).unwrap();
+    std::fs::write(dir.join("report.md"), "# 结论\n").unwrap();
+    std::fs::create_dir_all(dir.join("tmp")).unwrap();
+    std::fs::write(dir.join("tmp/x.txt"), "x").unwrap();
+    let (_, after) = snapshot_tree(&dir).unwrap();
+    let at = crate::sessions::live::now_ms();
+    let record = TurnRecord {
+        turn_id: "u1".into(),
+        started_ms: at,
+        ended_ms: at + 1,
+        top: top.to_string_lossy().into(),
+        before,
+        after,
+        head_before: None,
+        head_after: None,
+        files: ["report.md", "tmp/x.txt"]
+            .iter()
+            .map(|p| TurnFileChange {
+                path: (*p).into(),
+                additions: Some(1),
+                deletions: Some(0),
+            })
+            .collect(),
+        additions: 2,
+        deletions: 0,
+        state: TurnState::Pending,
+        undone_ms: None,
+        undo_group: None,
+        state_before_undo: None,
+        check: None,
+    };
+    ledger.record(&child, record.clone());
+    registry.register(&child, &record);
+
+    rig.answer(&child, "u1", "报告写好了", None, false);
+    wait("reported", || {
+        rig.card(&id).state == DelegationState::Reported
+    });
+    let card = rig.card(&id);
+    assert_eq!(card.artifacts.len(), 1, "{:?}", card.artifacts);
+    let named = &card.artifacts[0];
+    assert_eq!((named.path.as_str(), named.version), ("report.md", 1));
+    let text = prompt::results(std::slice::from_ref(&card));
+    assert!(
+        text.contains(&format!("- report.md：{}@1", named.artifact_id)),
+        "{text}"
+    );
+    // The parent reads that very version.
+    let read = registry
+        .read(&child, &named.artifact_id, Some(named.version), 0, None)
+        .unwrap();
+    assert_eq!(read.content, "# 结论\n");
+    std::fs::remove_dir_all(&dir).ok();
+}

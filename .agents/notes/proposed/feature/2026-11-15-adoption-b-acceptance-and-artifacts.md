@@ -125,7 +125,7 @@ id 既然是预先定好的，义务可以在启动之前就写入。
 
 ### B6 产物登记：交付物有身份和版本
 
-2026-11-19 第一步（登记与只读）已实现，见 [B6 实现笔记](../../implemented/feature/2026-11-19-b6-artifact-registry.md)。和下文的出入：被打断的回合也登记；按任务存 JSON，不建表；`artifacts.*` 和其他实时方法一样不进 `methods.schema.json`；不复用 DEBUG 样张 `TaskDeliverablesReviewStore`。第二步（Context MCP 工具、委派结果引用版本）未做。
+2026-11-19 第一步（登记与只读）已实现，见 [B6 实现笔记](../../implemented/feature/2026-11-19-b6-artifact-registry.md)。和下文的出入：被打断的回合也登记；按任务存 JSON，不建表；`artifacts.*` 和其他实时方法一样不进 `methods.schema.json`；不复用 DEBUG 样张 `TaskDeliverablesReviewStore`。第二步于 2026-11-19 实现，见 [B6 第二步笔记](../../implemented/feature/2026-11-19-b6-artifact-tools-for-agents.md)：`artifact_list` / `artifact_read` 可读当前任务、子任务、侧支、上级和同级任务；委派结果按 `artifact_id@版本` 列出交付物；交接说明未改。
 
 **用户会看到：** 任务页有"交付物"一栏，列出这个任务产出的文件，每个有版本列表、来自哪一轮、检查和验收的结论。可以打开任一版本、比较两个版本。其他任务里的 Agent 能通过工具读取指定版本。
 

@@ -71,6 +71,23 @@ final class ArtifactPanelTests: XCTestCase {
         XCTAssertEqual(artifact.current?.checks, [LiveArtifactCheck(turnId: "u1", passed: true, incomplete: true)])
     }
 
+    /// B6 step 2: a delegation card names what the child delivered.
+    func testADelegationCardSaysWhatTheChildDelivered() throws {
+        let card = try XCTUnwrap(LiveDelegationCard.decode(.object([
+            "delegationId": .string("dg-1"), "state": .string("reported"),
+            "artifacts": .array([
+                .object(["artifactId": .string("art-1"), "version": .number("2"), "path": .string("docs/report.md")]),
+            ]),
+        ])))
+        XCTAssertEqual(card.artifacts, [LiveArtifactRef(artifactId: "art-1", version: 2, path: "docs/report.md")])
+        XCTAssertEqual(DelegationText.deliverables(card), "交付 report.md（第 2 版）")
+        XCTAssertTrue(DelegationText.footnote(card)?.contains("交付 report.md（第 2 版）") == true)
+        var many = card
+        many.artifacts += [LiveArtifactRef(artifactId: "art-2", version: 1, path: "a.rs"),
+                           LiveArtifactRef(artifactId: "art-3", version: 1, path: "b.rs")]
+        XCTAssertEqual(DelegationText.deliverables(many), "交付 3 个文件：report.md、a.rs 等")
+    }
+
     @MainActor
     func testTheStoreListsExcludesOpensAndCompares() async {
         let host = FakeArtifactHost()

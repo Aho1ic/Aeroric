@@ -104,6 +104,24 @@ fn tools() -> Value {
                 "title": {"type": "string", "description": "要做什么，一句话，200 字以内"},
                 "notes": {"type": "string", "description": "背景、涉及的文件、怎么算做完"}
             }}
+        },
+        {
+            "name": "artifact_list",
+            "description": "列出一个任务交付的文件（交付物）：每个有 id、路径、当前第几版、最后一次检查是否通过。默认是当前任务；readable 列出你还能读的任务（你委派或分出的、上级、同一上级下的），用 taskId 指定。委派结果里的“交付物”就是这里的 id@版本。",
+            "inputSchema": {"type": "object", "properties": {
+                "taskId": {"type": "string", "description": "要看的任务，默认当前任务"},
+                "cursor": {"type": "string", "description": "上一页返回的 nextCursor"}
+            }}
+        },
+        {
+            "name": "artifact_read",
+            "description": "读交付物的某一版，内容和用户在 Aeroric 里打开的同一版逐字节一致。文本按 utf8 返回，二进制按 base64；没读完时带 nextOffset，用 offset 续读。版本被撤回或内容已不在仓库里时会明说。",
+            "inputSchema": {"type": "object", "required": ["artifact"], "properties": {
+                "artifact": {"type": "string", "description": "交付物 id，可带版本，如 art-1a2b3c4d5e6f@3；不带版本读当前版"},
+                "taskId": {"type": "string", "description": "交付物所在任务；不填就在你能读的任务里找"},
+                "offset": {"type": "integer", "minimum": 0, "description": "从第几个字节读起"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 262144, "description": "最多读几个字节，默认 65536"}
+            }}
         }
     ])
 }
@@ -160,6 +178,8 @@ fn method_of(tool: &str) -> Option<&'static str> {
         "flag_wiki_issue" => Some("context.wikiFlag"),
         "search_references" => Some("context.referenceSearch"),
         "read_reference" => Some("context.referenceRead"),
+        "artifact_list" => Some(aeroric_protocol::artifacts::CONTEXT_LIST_METHOD),
+        "artifact_read" => Some(aeroric_protocol::artifacts::CONTEXT_READ_METHOD),
         _ => None,
     }
 }
@@ -270,6 +290,7 @@ fn instructions(memory: bool, wiki: bool, references: bool, expert: bool) -> Str
         "读取当前任务的交接清单",
         "把工作委派给子会话",
         "把本轮范围以外、值得以后做的事提议成用户的待办（todo_propose）",
+        "读取任务交付的文件及其各版本（artifact_list、artifact_read）",
     ];
     if memory {
         parts.push("查用户的长期记忆与本项目约定");
@@ -609,9 +630,13 @@ mod tests {
                 "board_read",
                 "board_write",
                 "board_decide",
-                "todo_propose"
+                "todo_propose",
+                "artifact_list",
+                "artifact_read"
             ]
         );
+        assert_eq!(method_of("artifact_list"), Some("context.artifactList"));
+        assert_eq!(method_of("artifact_read"), Some("context.artifactRead"));
         assert!(answer(
             &mut client,
             dir,
@@ -627,6 +652,7 @@ mod tests {
         let base = instructions(false, false, false, false);
         assert!(base.contains("历史会话") && !base.contains("记忆") && !base.contains("Wiki"));
         assert!(base.contains("todo_propose"));
+        assert!(base.contains("artifact_read"));
         assert!(!base.contains("参考代码库") && !base.contains("专家"));
         let all = instructions(true, true, true, true);
         assert!(all.contains("长期记忆") && all.contains("Wiki") && all.contains("参考代码库"));

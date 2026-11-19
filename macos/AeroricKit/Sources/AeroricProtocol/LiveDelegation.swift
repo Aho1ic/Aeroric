@@ -22,6 +22,8 @@ public struct LiveDelegationCard: Equatable, Sendable {
     public var additions: Int
     public var deletions: Int
     public var acceptance: [LiveDelegationAcceptance]
+    /// B6: the files the child delivered, at the versions that stand.
+    public var artifacts: [LiveArtifactRef] = []
     public var evidence: Bool
     /// Handed to the delivery queue for the parent. A1: whether it arrived
     /// is `returnDelivery`, never this flag.
@@ -271,7 +273,7 @@ extension LiveDelegationCard {
                 evidence: (g["evidence"]?.arrayValue ?? []).compactMap(LiveEvidenceRef.decode),
                 checkedRevision: g["checkedRevision"]?.stringValue, stale: g["stale"]?.boolValue ?? false)
         }
-        return LiveDelegationCard(
+        var card = LiveDelegationCard(
             delegationId: id, parentTaskId: f["parentTaskId"]?.stringValue ?? "",
             childTaskId: f["childTaskId"]?.stringValue, origin: f["origin"]?.stringValue ?? "user",
             roleName: f["roleName"]?.stringValue, harnessLabel: f["harnessLabel"]?.stringValue ?? "",
@@ -285,6 +287,8 @@ extension LiveDelegationCard {
             tokens: f["tokens"]?.numberText.flatMap { UInt64($0) },
             probes: (f["probes"]?.arrayValue ?? []).compactMap(LiveDelegationProbe.decode),
             returnDelivery: LiveDelegationReturn.decode(f["returnDelivery"]))
+        card.artifacts = (f["artifacts"]?.arrayValue ?? []).compactMap(LiveArtifactRef.decode)
+        return card
     }
 }
 

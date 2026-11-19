@@ -297,6 +297,9 @@ pub struct DelegationCard {
     pub additions: u64,
     #[serde(default)]
     pub deletions: u64,
+    /// B6: the files the child delivered, each at the version that stands.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<crate::artifacts::ArtifactRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acceptance: Vec<AcceptanceResult>,
     /// The result rests on something checkable: a checked criterion or a diff.
