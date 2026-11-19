@@ -59,7 +59,7 @@ pub(super) fn apply_detect_proxy(
 /// 本机 base URL(Ollama、应用自带的 local_router)被推去代理后会从「能用」变成
 /// 「连不上」—— 代理通常不会把请求转回发起方的 loopback。用户没有理由为了让
 /// 模型探测工作而手写这些例外,所以在这里兜住。
-pub(super) fn detect_no_proxy_rules(user_rules: &str) -> String {
+pub(crate) fn detect_no_proxy_rules(user_rules: &str) -> String {
     const LOCAL_RULES: &[&str] = &[
         "127.0.0.1",
         "::1",
@@ -82,6 +82,69 @@ pub(super) fn detect_no_proxy_rules(user_rules: &str) -> String {
         }
     }
     rules.join(",")
+}
+
+/// C5 (2026-11-19): why nothing was sent for a connection that asks for the
+/// global proxy when none is set.
+pub const NO_GLOBAL_PROXY: &str = "Global proxy is not configured; no request was sent";
+
+/// C5: the proxy a connection's requests take — the same answer for the
+/// connection test, the model catalog, Aeroric's own calls and the gateway:
+/// the global proxy only when the connection opts in. Opted in with none
+/// set, nothing is sent; it is never quietly sent direct (Q139).
+pub fn connection_proxy(
+    use_global_proxy: bool,
+    global: &ProxySettings,
+) -> Result<ProxySettings, String> {
+    if !use_global_proxy {
+        return Ok(ProxySettings::default());
+    }
+    if normalize_proxy_url(&global.url).is_empty() {
+        return Err(NO_GLOBAL_PROXY.to_string());
+    }
+    Ok(global.clone())
+}
+
+/// C5: the global proxy settings as saved (a blocking read).
+pub fn global_proxy_settings() -> ProxySettings {
+    load_settings_internal().proxy_settings
+}
+
+/// C5: the global proxy settings, read only when a connection opts in.
+async fn global_proxy(wanted: bool) -> Result<ProxySettings, String> {
+    if !wanted {
+        return Ok(ProxySettings::default());
+    }
+    tokio::task::spawn_blocking(|| load_settings_internal().proxy_settings)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// C5: the gateway's form of [`connection_proxy`]'s answer, built by the
+/// same rules as [`apply_detect_proxy`]: the URL normalized, basic auth when
+/// a user is set, and the user's `no_proxy` plus loopback and private ranges.
+/// `None`: direct.
+pub fn gateway_proxy(
+    settings: &ProxySettings,
+) -> Result<Option<crate::local_router::RouterOutboundProxy>, String> {
+    let url = normalize_proxy_url(&settings.url);
+    if url.is_empty() {
+        return Ok(None);
+    }
+    let username = settings.username.trim();
+    let password = if username.is_empty() {
+        ""
+    } else {
+        settings.password.trim()
+    };
+    crate::local_router::RouterOutboundProxy::new(
+        url,
+        detect_no_proxy_rules(&settings.no_proxy),
+        username,
+        password,
+    )
+    .map(Some)
+    .map_err(|error| format!("Invalid proxy configuration: {}", error.message))
 }
 
 /// 构造一个探测客户端。`pinned` 非空时把 host 钉在这些地址上(地址故障转移用)。
@@ -278,23 +341,26 @@ pub async fn fetch_connection_catalog(
     api_key: &str,
     use_global_proxy: bool,
 ) -> Result<Vec<String>, String> {
+    // C5: the same decision as the gateway's (`connection_proxy`).
+    let proxy_settings =
+        connection_proxy(use_global_proxy, &global_proxy(use_global_proxy).await?)?;
+    fetch_connection_catalog_via(kind, base_url, api_key, &proxy_settings).await
+}
+
+/// C5: [`fetch_connection_catalog`] over an already decided proxy.
+pub async fn fetch_connection_catalog_via(
+    kind: AgentSetupKind,
+    base_url: &str,
+    api_key: &str,
+    proxy_settings: &ProxySettings,
+) -> Result<Vec<String>, String> {
     let api_key = api_key.trim();
     if api_key.is_empty() {
         return Err("API key is required".to_string());
     }
     let policy = ModelDetectionPolicy::LocalUser;
     let base_url = validate_model_base_url(base_url, policy)?;
-    let proxy_settings = if use_global_proxy {
-        let proxy = tokio::task::spawn_blocking(|| load_settings_internal().proxy_settings)
-            .await
-            .map_err(|error| error.to_string())?;
-        if normalize_proxy_url(&proxy.url).is_empty() {
-            return Err("Global proxy is not configured; no request was sent".to_string());
-        }
-        proxy
-    } else {
-        ProxySettings::default()
-    };
+    let proxy_settings = proxy_settings.clone();
     let failover_addresses = if detect_proxy_applies(&proxy_settings, policy) {
         Vec::new()
     } else {
@@ -338,19 +404,23 @@ pub async fn probe_connection(
     protocol: &str,
     model: &str,
 ) -> Result<ConnectionProbe, String> {
+    // C5: the same decision as the gateway's (`connection_proxy`).
+    let proxy_settings =
+        connection_proxy(use_global_proxy, &global_proxy(use_global_proxy).await?)?;
+    probe_connection_via(base_url, api_key, &proxy_settings, protocol, model).await
+}
+
+/// C5: [`probe_connection`] over an already decided proxy.
+pub async fn probe_connection_via(
+    base_url: &str,
+    api_key: &str,
+    proxy_settings: &ProxySettings,
+    protocol: &str,
+    model: &str,
+) -> Result<ConnectionProbe, String> {
     let policy = ModelDetectionPolicy::LocalUser;
     let base_url = validate_model_base_url(base_url, policy)?;
-    let proxy_settings = if use_global_proxy {
-        let proxy = tokio::task::spawn_blocking(|| load_settings_internal().proxy_settings)
-            .await
-            .map_err(|error| error.to_string())?;
-        if normalize_proxy_url(&proxy.url).is_empty() {
-            return Err("Global proxy is not configured; no request was sent".to_string());
-        }
-        proxy
-    } else {
-        ProxySettings::default()
-    };
+    let proxy_settings = proxy_settings.clone();
     let client = build_detect_client(&base_url, &proxy_settings, policy, &[])?;
     let root = base_url.as_str().trim_end_matches('/');
     let api_key = api_key.trim();
@@ -428,17 +498,9 @@ pub async fn chat_once(
 ) -> Result<ChatOnce, String> {
     let policy = ModelDetectionPolicy::LocalUser;
     let base_url = validate_model_base_url(base_url, policy)?;
-    let proxy_settings = if use_global_proxy {
-        let proxy = tokio::task::spawn_blocking(|| load_settings_internal().proxy_settings)
-            .await
-            .map_err(|error| error.to_string())?;
-        if normalize_proxy_url(&proxy.url).is_empty() {
-            return Err("Global proxy is not configured; no request was sent".to_string());
-        }
-        proxy
-    } else {
-        ProxySettings::default()
-    };
+    // C5: the same decision as the gateway's (`connection_proxy`).
+    let proxy_settings =
+        connection_proxy(use_global_proxy, &global_proxy(use_global_proxy).await?)?;
     let client = build_detect_client(&base_url, &proxy_settings, policy, &[])?;
     let root = base_url.as_str().trim_end_matches('/');
     let response = client

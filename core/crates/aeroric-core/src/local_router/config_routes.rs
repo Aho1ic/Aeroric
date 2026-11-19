@@ -28,6 +28,8 @@ use crate::agent_connections::routing::{
 };
 use crate::agent_connections::store;
 use crate::context::SecretStore;
+use crate::settings::model_detect::{connection_proxy, gateway_proxy};
+use crate::settings::schema::ProxySettings;
 
 use super::task_tokens::TaskGrant;
 use super::UpstreamTarget;
@@ -189,6 +191,20 @@ pub fn resolve(
     model: &str,
     secrets: &dyn SecretStore,
 ) -> Resolution {
+    resolve_with_proxy(doc, grant, model, secrets, &ProxySettings::default())
+}
+
+/// C5 (2026-11-19): like [`resolve`], each target reached the way its
+/// connection's test and catalog fetch reach it: through `global_proxy` when
+/// the connection opts in. Opted in with no proxy set, the connection is
+/// left out with that reason, never sent direct.
+pub fn resolve_with_proxy(
+    doc: &ConnectionsDocument,
+    grant: &TaskGrant,
+    model: &str,
+    secrets: &dyn SecretStore,
+    global_proxy: &ProxySettings,
+) -> Resolution {
     let Some(config_id) = grant.agent_config_id.as_deref() else {
         return Resolution::Unavailable("task token carries no agent configuration".into());
     };
@@ -337,6 +353,15 @@ pub fn resolve(
                 }
             },
         };
+        let proxy = match connection_proxy(connection.use_global_proxy, global_proxy)
+            .and_then(|settings| gateway_proxy(&settings))
+        {
+            Ok(proxy) => proxy,
+            Err(e) => {
+                reasons.push(format!("{}: {e}", connection.id));
+                continue;
+            }
+        };
         let bridge = matches!(candidate.reach, Reach::ViaGateway { .. });
         let speaks = match candidate.reach {
             Reach::Direct => crate::agent_connections::routing::config_protocol(doc, config),
@@ -352,7 +377,7 @@ pub fn resolve(
             bridge,
         ) {
             Ok(target) => {
-                let target = target.with_upstream_protocol(speaks);
+                let target = target.with_upstream_protocol(speaks).with_proxy(proxy);
                 let target = match login {
                     Some(harness) => target.with_login(harness),
                     None => target,
@@ -417,7 +442,13 @@ pub fn resolve_from_disk(
     secrets: &Arc<dyn SecretStore>,
 ) -> Resolution {
     match store::load_effective(&store::document_path(data_dir)) {
-        Ok(doc) => resolve(&doc, grant, model, secrets.as_ref()),
+        Ok(doc) => resolve_with_proxy(
+            &doc,
+            grant,
+            model,
+            secrets.as_ref(),
+            &crate::settings::model_detect::global_proxy_settings(),
+        ),
         Err(e) => Resolution::Unavailable(format!("cannot read agent connections: {e}")),
     }
 }
@@ -909,6 +940,65 @@ mod tests {
         };
         let got = ids(resolve(&doc, &grant, "", &MemorySecrets::default()));
         assert_eq!(got, ["conn:via-b"]);
+    }
+
+    /// C5: a connection that opts into the global proxy is reached through
+    /// it; with no proxy set it is left out with that reason, never sent
+    /// direct; the others go direct as before.
+    #[test]
+    fn a_connection_that_opts_into_the_proxy_is_reached_through_it_or_left_out() {
+        use crate::settings::model_detect::NO_GLOBAL_PROXY;
+        let mut doc = doc_with(Harness::Codex, "px");
+        doc.connections[0].use_global_proxy = true;
+        let secrets = MemorySecrets::default();
+        let global = ProxySettings {
+            url: "http://127.0.0.1:7890".into(),
+            ..ProxySettings::default()
+        };
+        let list = targets(resolve_with_proxy(
+            &doc,
+            &grant("px-t1"),
+            "",
+            &secrets,
+            &global,
+        ));
+        let proxied: Vec<(&str, bool)> =
+            list.iter().map(|t| (t.id(), t.proxy().is_some())).collect();
+        assert_eq!(
+            proxied,
+            [
+                ("conn:px-a", true),
+                ("conn:px-b", false),
+                ("conn:px-m", false)
+            ]
+        );
+
+        let unset = resolve_with_proxy(
+            &doc,
+            &grant("px-t2"),
+            "",
+            &secrets,
+            &ProxySettings::default(),
+        );
+        let ids_left: Vec<String> = targets(unset).iter().map(|t| t.id().to_string()).collect();
+        assert_eq!(
+            ids_left,
+            ["conn:px-b", "conn:px-m"],
+            "px-a is not sent direct"
+        );
+        doc.connections.truncate(1);
+        match resolve_with_proxy(
+            &doc,
+            &grant("px-t3"),
+            "",
+            &secrets,
+            &ProxySettings::default(),
+        ) {
+            Resolution::Unavailable(reason) => {
+                assert!(reason.contains(NO_GLOBAL_PROXY), "{reason}")
+            }
+            Resolution::Targets(t) => panic!("sent anyway: {t:?}"),
+        }
     }
 
     #[test]

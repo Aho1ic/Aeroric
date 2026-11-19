@@ -81,6 +81,10 @@ pub struct UpstreamTarget {
     /// 2026-10-30: authenticate with this harness's own local login instead
     /// of `api_key` (task `10-29-local-login-gateway`).
     login: Option<crate::agent_connections::model::Harness>,
+    /// C5 (2026-11-19): the proxy this upstream is reached through, as its
+    /// connection chose (`settings::model_detect::connection_proxy`); `None`
+    /// takes the runtime's own client.
+    proxy: Option<RouterOutboundProxy>,
 }
 
 impl UpstreamTarget {
@@ -146,6 +150,7 @@ impl UpstreamTarget {
             upstream_protocol: None,
             fallback: None,
             login: None,
+            proxy: None,
         })
     }
 
@@ -214,6 +219,16 @@ impl UpstreamTarget {
 
     pub fn fallback(&self) -> Option<&config_routes::Fallback> {
         self.fallback.as_ref()
+    }
+
+    /// C5: reach this upstream through `proxy`.
+    pub fn with_proxy(mut self, proxy: Option<RouterOutboundProxy>) -> Self {
+        self.proxy = proxy;
+        self
+    }
+
+    pub fn proxy(&self) -> Option<&RouterOutboundProxy> {
+        self.proxy.as_ref()
     }
 }
 
@@ -425,6 +440,9 @@ pub struct RouterRuntimeConfig {
     /// The host passes its own; `None` falls back to `settings::aeroric_dir()`.
     pub config_data_dir: Option<PathBuf>,
     client: reqwest::Client,
+    /// C5: one client per proxy an upstream asked for, built once.
+    proxied:
+        Arc<parking_lot::Mutex<std::collections::HashMap<RouterOutboundProxy, reqwest::Client>>>,
 }
 
 impl RouterRuntimeConfig {
@@ -445,6 +463,7 @@ impl RouterRuntimeConfig {
             outbound_proxy: None,
             config_data_dir: None,
             client,
+            proxied: Arc::default(),
         }
     }
 
@@ -469,6 +488,24 @@ impl RouterRuntimeConfig {
 
     pub(crate) fn client(&self) -> reqwest::Client {
         self.client.clone()
+    }
+
+    /// C5: the client for an upstream: its own proxy when it has one (never
+    /// quietly the direct client instead), else the runtime's client.
+    pub(crate) fn client_for(
+        &self,
+        proxy: Option<&RouterOutboundProxy>,
+    ) -> Result<reqwest::Client, RouterError> {
+        let Some(proxy) = proxy else {
+            return Ok(self.client());
+        };
+        let mut cache = self.proxied.lock();
+        if let Some(client) = cache.get(proxy) {
+            return Ok(client.clone());
+        }
+        let client = build_http_client(Some(proxy))?;
+        cache.insert(proxy.clone(), client.clone());
+        Ok(client)
     }
 
     pub(crate) fn equivalent_without_client(&self, other: &Self) -> bool {

@@ -810,8 +810,21 @@ async fn attempt_target(
                 }
             }
         };
-        let request = runtime_config
-            .client()
+        // C5: the upstream's own proxy, as its connection chose; a proxy that
+        // cannot be built fails the try instead of going out direct.
+        let client = match runtime_config.client_for(target.proxy()) {
+            Ok(client) => client,
+            Err(error) => {
+                return AttemptResult::Retry(AttemptFailure::transport(
+                    target,
+                    StatusCode::BAD_GATEWAY,
+                    error.message,
+                    endpoint,
+                    outbound_model,
+                ));
+            }
+        };
+        let request = client
             .request(method.clone(), upstream_url.clone())
             .headers(headers)
             .body(current_body.clone());
@@ -2978,6 +2991,194 @@ mod tests {
         let _ = healthy_task.await;
         remove_database(&database_path);
         record.expect("the request was recorded")
+    }
+
+    /// C5: one recorded request at the fake proxy.
+    #[derive(Clone, Debug)]
+    struct Seen {
+        uri: String,
+        api_key: Option<String>,
+        bearer: Option<String>,
+    }
+
+    /// A stand-in proxy: every request through it is recorded (its absolute
+    /// URI names the upstream) and answered as that upstream would.
+    async fn recording_proxy() -> (
+        SocketAddr,
+        Arc<Mutex<Vec<Seen>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
+        let log = Arc::clone(&seen);
+        let app = Router::new().fallback(any(move |request: axum::extract::Request| {
+            let log = Arc::clone(&log);
+            let header = |name: &str| {
+                request
+                    .headers()
+                    .get(name)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string)
+            };
+            let uri = request.uri().to_string();
+            let entry = Seen {
+                uri: uri.clone(),
+                api_key: header("x-api-key"),
+                bearer: header("authorization"),
+            };
+            async move {
+                log.lock().await.push(entry);
+                if uri.contains("/models") {
+                    Json(json!({"data": [{"id": "claude-c5"}]}))
+                } else {
+                    Json(json!({
+                        "id": "msg_c5", "type": "message", "role": "assistant", "model": "claude-c5",
+                        "content": [{"type": "text", "text": "pong"}],
+                        "usage": {"input_tokens": 3, "output_tokens": 1}
+                    }))
+                }
+            }
+        }));
+        let (address, task) = start_mock_upstream(app).await;
+        (address, seen, task)
+    }
+
+    /// C5 完成条件: for one connection that asks for the global proxy, the
+    /// connection test, the model catalog and the gateway each go through
+    /// that proxy, to the same upstream host, with the same key.
+    #[tokio::test]
+    async fn the_test_the_catalog_and_the_gateway_leave_by_the_same_exit() {
+        use crate::settings::model_detect::{
+            connection_proxy, fetch_connection_catalog_via, gateway_proxy, probe_connection_via,
+        };
+        use crate::settings::schema::{AgentSetupKind, ProxySettings};
+
+        let (proxy_address, seen, proxy_task) = recording_proxy().await;
+        let global = ProxySettings {
+            url: format!("http://{proxy_address}"),
+            ..ProxySettings::default()
+        };
+        // The upstream's name does not resolve: only a proxied request arrives.
+        let base = "http://upstream.c5.invalid/v1";
+        let key = "sk-c5";
+        let proxy = connection_proxy(true, &global).unwrap();
+
+        let probe = probe_connection_via(base, key, &proxy, "messages", "claude-c5")
+            .await
+            .unwrap();
+        assert_eq!(probe.status, 200, "{probe:?}");
+        let models = fetch_connection_catalog_via(AgentSetupKind::ClaudeCode, base, key, &proxy)
+            .await
+            .unwrap();
+        assert_eq!(models, ["claude-c5"]);
+
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone());
+        let target =
+            UpstreamTarget::with_details("conn:c5", "C5", base, key, Vec::new(), false, false)
+                .unwrap()
+                .with_proxy(gateway_proxy(&proxy).unwrap());
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                runtime_with_target(
+                    RouterAgent::Claude,
+                    target,
+                    RouterAgentPolicy {
+                        active_target: "conn:c5".to_string(),
+                        ..RouterAgentPolicy::default()
+                    },
+                ),
+            ))
+            .await
+            .unwrap();
+        let response = test_client()
+            .post(format!("{}/claude/v1/messages", info.base_url))
+            .json(&json!({"model": "claude-c5", "max_tokens": 8,
+                "messages": [{"role": "user", "content": "ping"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let seen = seen.lock().await.clone();
+        let host = |s: &Seen| {
+            url::Url::parse(&s.uri)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string))
+        };
+        let probe_seen = seen
+            .iter()
+            .find(|s| s.uri.ends_with("/messages"))
+            .expect("the test went out");
+        let catalog_seen = seen
+            .iter()
+            .find(|s| s.uri.contains("/models"))
+            .expect("the catalog went out");
+        let gateway_seen = seen
+            .iter()
+            .filter(|s| s.uri.ends_with("/messages"))
+            .nth(1)
+            .expect("the gateway went out through the proxy");
+        for each in [probe_seen, catalog_seen, gateway_seen] {
+            assert_eq!(
+                host(each).as_deref(),
+                Some("upstream.c5.invalid"),
+                "{each:?}"
+            );
+            let key_sent = each.api_key.as_deref() == Some(key)
+                || each.bearer.as_deref() == Some(&format!("Bearer {key}"));
+            assert!(key_sent, "the same key: {each:?}");
+        }
+        assert_eq!(
+            probe_seen.api_key.as_deref(),
+            gateway_seen.api_key.as_deref()
+        );
+
+        router.stop().await.unwrap();
+        proxy_task.abort();
+        let _ = proxy_task.await;
+        remove_database(&database_path);
+    }
+
+    /// C5: opting in with no proxy set sends nothing anywhere, and a
+    /// connection that does not opt in goes direct everywhere.
+    #[test]
+    fn the_proxy_choice_is_one_decision() {
+        use crate::settings::model_detect::{connection_proxy, gateway_proxy, NO_GLOBAL_PROXY};
+        use crate::settings::schema::ProxySettings;
+
+        let none = ProxySettings::default();
+        assert_eq!(
+            connection_proxy(true, &none),
+            Err(NO_GLOBAL_PROXY.to_string())
+        );
+        let set = ProxySettings {
+            url: "127.0.0.1:7890".into(),
+            no_proxy: "corp.example".into(),
+            username: " me ".into(),
+            password: " pw ".into(),
+        };
+        assert_eq!(
+            connection_proxy(false, &set).unwrap(),
+            ProxySettings::default()
+        );
+        assert_eq!(
+            gateway_proxy(&connection_proxy(false, &set).unwrap()).unwrap(),
+            None
+        );
+        let proxy = gateway_proxy(&connection_proxy(true, &set).unwrap())
+            .unwrap()
+            .expect("a proxy");
+        let expected = crate::local_router::RouterOutboundProxy::new(
+            "http://127.0.0.1:7890",
+            crate::settings::model_detect::detect_no_proxy_rules("corp.example"),
+            "me",
+            "pw",
+        )
+        .unwrap();
+        assert_eq!(proxy, expected, "normalized, trimmed, local ranges added");
     }
 
     #[tokio::test]
