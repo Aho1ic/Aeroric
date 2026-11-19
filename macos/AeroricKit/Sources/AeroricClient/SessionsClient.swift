@@ -951,6 +951,34 @@ extension SessionsClient {
                                          params: .object(["taskId": .string(taskId)]))
     }
 
+    /// C6: whether 额度恢复后自动继续 can be turned on for the session's last
+    /// turn; `dueMs` is when it would go, `reason` why it cannot.
+    public struct AutoRetryOffer: Equatable, Sendable {
+        public var available: Bool
+        public var dueMs: UInt64?
+        public var reason: String?
+
+        public init(available: Bool, dueMs: UInt64? = nil, reason: String? = nil) {
+            self.available = available
+            self.dueMs = dueMs
+            self.reason = reason
+        }
+    }
+
+    public func autoRetryOffer(taskId: String) async throws -> AutoRetryOffer {
+        let frame = try await connection.request("session.autoRetry.offer",
+                                                 params: .object(["taskId": .string(taskId)]))
+        return AutoRetryOffer(available: frame.result["available"]?.boolValue ?? false,
+                              dueMs: frame.result["dueMs"]?.numberText.flatMap { UInt64($0) },
+                              reason: frame.result["reason"]?.stringValue)
+    }
+
+    /// C6: turn on 额度恢复后自动继续 for the session's last turn.
+    public func armAutoRetry(taskId: String) async throws {
+        _ = try await connection.request("session.autoRetry.arm",
+                                         params: .object(["taskId": .string(taskId)]))
+    }
+
     /// Whether unattended sessions are continued on their own after a restart.
     public func resumeAfterRestart() async throws -> Bool {
         let frame = try await connection.request("session.resumeAfterRestart.get", params: .object([:]))

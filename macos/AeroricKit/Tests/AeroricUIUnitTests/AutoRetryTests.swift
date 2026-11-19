@@ -74,4 +74,24 @@ final class AutoRetryTests: XCTestCase {
         XCTAssertEqual(WorkspaceClient.parseTask(record, projectID: "p")?.continueStalled, why)
         XCTAssertNil(WorkspaceClient.parseTask(.object(["id": .string("t")]), projectID: "p")?.continueStalled)
     }
+
+    /// C6: a try the user armed reads as theirs; the offer says when the
+    /// quota comes back.
+    func testAnArmedQuotaResumeReadsAsTheUsers() {
+        let record: JSONValue = .object([
+            "state": .string("waiting"), "reason": .string("quota"), "count": .number("0"),
+            "max": .number("1"), "dueMs": .number("0"), "armed": .bool(true),
+        ])
+        let armed = AutoRetryInfo.parse(record)
+        XCTAssertEqual(armed?.armed, true)
+        XCTAssertTrue(AutoRetryText.banner(armed!).hasPrefix("额度恢复后自动继续："), AutoRetryText.banner(armed!))
+        XCTAssertTrue(AutoRetryText.banner(armed!).hasSuffix("继续"))
+        let plain = AutoRetryInfo.parse(.object(["state": .string("waiting"), "reason": .string("network"),
+                                                 "count": .number("1"), "max": .number("3")]))
+        XCTAssertEqual(plain?.armed, false, "an unattended retry is not the user's")
+        XCTAssertEqual(AutoRetryText.banner(plain!), "上一轮因为网络不通没跑成，自动重试（第 2/3 次）")
+        XCTAssertEqual(AutoRetryText.offer(dueMs: nil), "额度用完了")
+        XCTAssertTrue(AutoRetryText.offer(dueMs: 0).hasPrefix("额度用完了，约 "))
+        XCTAssertTrue(AutoRetryText.offer(dueMs: 0).hasSuffix(" 恢复"))
+    }
 }

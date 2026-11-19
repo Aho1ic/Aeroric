@@ -1406,6 +1406,23 @@ extension AppServices: WorkspaceStateProviding {
         await refreshWorkspace()
     }
 
+    /// C6: whether 额度恢复后自动继续 can be turned on for the task now.
+    func autoRetryOffer(taskID: String) async -> SessionsClient.AutoRetryOffer? {
+        guard let client = sessionsClient else { return nil }
+        return try? await client.autoRetryOffer(taskId: taskID)
+    }
+
+    /// C6: turn on 额度恢复后自动继续; the waiting banner takes over.
+    func armAutoRetry(taskID: String) async {
+        guard let client = sessionsClient else { return }
+        do {
+            try await client.armAutoRetry(taskId: taskID)
+        } catch {
+            showActionError("没能开启：\(AgentConfigStore.describe(error))")
+        }
+        await refreshWorkspace()
+    }
+
     /// 2026-11-14 无人值守自动重试: 取消 a waiting retry.
     func cancelAutoRetry(taskID: String) async {
         guard let client = sessionsClient else { return }

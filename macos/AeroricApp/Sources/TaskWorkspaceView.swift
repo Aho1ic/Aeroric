@@ -1634,6 +1634,12 @@ struct TaskWorkspaceView: View {
                     if let retry = task.autoRetry, retry.state == "waiting" {
                         AutoRetryBanner(retry: retry) { await services.cancelAutoRetry(taskID: task.id) }
                     }
+                    // C6: a turn the quota stopped can wait for the reset.
+                    if task.autoRetry?.state != "waiting",
+                       let last = services.liveStore(for: task.id).transcriptStats?.turns.last,
+                       last.notRun?.reason == "quota" {
+                        QuotaResumeSlot(taskID: task.id, turnStartedAt: last.startedAt, services: services)
+                    }
                     LiveSessionView(store: services.liveStore(for: task.id), facts: services.liveFacts(for: task),
                                     focusApproval: services.approvalFocus[task.id])
                 }
@@ -1861,3 +1867,24 @@ private struct AuxiliaryCard: ViewModifier {
             .overlay { shape.strokeBorder(AeroricColor.separator1, lineWidth: 1) }
     }
 }
+
+/// C6: asks the host whether 额度恢复后自动继续 can be turned on for this
+/// turn (the reset must be known), and offers it when it can.
+private struct QuotaResumeSlot: View {
+    let taskID: String
+    let turnStartedAt: UInt64
+    let services: AppServices
+    @State private var offer: SessionsClient.AutoRetryOffer?
+
+    var body: some View {
+        Group {
+            if let offer, offer.available {
+                QuotaResumeOffer(dueMs: offer.dueMs) { await services.armAutoRetry(taskID: taskID) }
+            }
+        }
+        .task(id: "\(taskID)|\(turnStartedAt)") {
+            offer = await services.autoRetryOffer(taskID: taskID)
+        }
+    }
+}
+

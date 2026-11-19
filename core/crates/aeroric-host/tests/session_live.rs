@@ -1094,6 +1094,27 @@ async fn a_restarted_host_settles_native_tasks_left_running() {
         .await
         .unwrap_err();
     assert_eq!(unknown["code"], "NOT_FOUND");
+    // C6: 额度恢复后自动继续 is offered only for a turn the quota stopped.
+    let offer = host
+        .call("session.autoRetry.offer", json!({"taskId": "finished"}))
+        .await
+        .unwrap();
+    assert_eq!(offer["available"], false, "{offer}");
+    assert_eq!(offer["reason"], "上一轮不是因为额度用完没跑成");
+    let not_quota = host
+        .call("session.autoRetry.arm", json!({"taskId": "finished"}))
+        .await
+        .unwrap_err();
+    assert_eq!(not_quota["code"], "INVALID_ARGUMENT", "{not_quota}");
+    let unknown = host
+        .call("session.autoRetry.arm", json!({"taskId": "nope"}))
+        .await
+        .unwrap_err();
+    assert_eq!(unknown["code"], "NOT_FOUND");
+    assert!(
+        host.record_of("finished").get("autoRetry").is_none(),
+        "nothing was armed"
+    );
     let auto = host
         .call("session.resumeAfterRestart.get", json!({}))
         .await

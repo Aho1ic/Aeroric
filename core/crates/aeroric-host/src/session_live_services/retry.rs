@@ -10,6 +10,10 @@
 //!   when due: the live driver or the session reopened quietly.
 //! - Switched off, waiting tries are cancelled at their time.
 //! - `session.autoRetry.cancel {taskId}`: the 取消 on the session page.
+//! - C6 (2026-11-19): `session.autoRetry.offer {taskId}` says whether the
+//!   session's last turn can wait for the quota's reset, and when that is;
+//!   `session.autoRetry.arm {taskId}` turns it on. An armed try ignores the
+//!   global switch and is checked once more before it goes out.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -27,6 +31,11 @@ use super::{blocking, failure, ok, params, Live, TaskParams};
 use crate::dispatcher::ServiceSet;
 
 pub const CANCEL_METHOD: &str = "session.autoRetry.cancel";
+pub const OFFER_METHOD: &str = "session.autoRetry.offer";
+pub const ARM_METHOD: &str = "session.autoRetry.arm";
+
+/// C6: tries armed since the last tick, for the tick to watch.
+static ARMED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -107,13 +116,7 @@ fn look(live: &Live, watch: &mut Watch, task_id: &str, now: u64) {
         return;
     };
     let quota_reset = (last.not_run.as_ref().map(|n| n.reason) == Some(NotRunReason::Quota))
-        .then(|| {
-            let agent = super::delegation::field(&record, "agent").unwrap_or_default();
-            match super::schedule::codex_quota(live, &agent, now) {
-                QuotaState::Out { reset_at } => Some(reset_at.max(0) as u64 * 1000),
-                _ => None,
-            }
-        })
+        .then(|| quota_reset(live, &record, now))
         .flatten();
     let prev = chain(&record);
     match auto_retry::after_turn(prev.as_ref(), last, now, quota_reset) {
@@ -158,6 +161,16 @@ fn look(live: &Live, watch: &mut Watch, task_id: &str, now: u64) {
     }
 }
 
+/// When the session's quota resets, while the built-in Codex's readings say
+/// it is used up; `None` when it is not, or nobody knows.
+fn quota_reset(live: &Live, record: &aeroric_core::storage::Record, now: u64) -> Option<u64> {
+    let agent = super::delegation::field(record, "agent").unwrap_or_default();
+    match super::schedule::codex_quota(live, &agent, now) {
+        QuotaState::Out { reset_at } => Some(reset_at.max(0) as u64 * 1000),
+        _ => None,
+    }
+}
+
 /// Send a waiting try that is due.
 fn send_due(live: &Live, watch: &mut Watch, task_id: &str, now: u64, enabled: bool) {
     let Some((_, record)) = live.record(task_id) else {
@@ -178,7 +191,7 @@ fn send_due(live: &Live, watch: &mut Watch, task_id: &str, now: u64, enabled: bo
         return;
     }
     watch.waiting.remove(task_id);
-    if !enabled {
+    if !enabled && !retry.armed {
         let mut cancelled = retry;
         cancelled.state = RetryState::Cancelled;
         cancelled.due_ms = None;
@@ -196,7 +209,49 @@ fn send_due(live: &Live, watch: &mut Watch, task_id: &str, now: u64, enabled: bo
         note(live, task_id, &format!("自动继续停下：{why}；等你处理"));
         return;
     }
-    let text = auto_retry::message(retry.reason);
+    // C6: a try the user armed is checked once more: the user may have
+    // written or stopped since, and the quota may still be used up.
+    if retry.armed {
+        let latest = super::rerun::turns(live, &record)
+            .last()
+            .map(|t| t.started_at);
+        let stopped = super::delegation::field(&record, "status").as_deref() == Some("cancelled");
+        let still_out = quota_reset(live, &record, now);
+        match auto_retry::before_send(&retry, latest, stopped, still_out) {
+            auto_retry::BeforeSend::Send => {}
+            auto_retry::BeforeSend::Cancel(why) => {
+                let mut off = retry;
+                off.state = RetryState::Cancelled;
+                off.due_ms = None;
+                off.error = Some(why.to_string());
+                let _ = store(live, task_id, Some(&off));
+                note(live, task_id, why);
+                return;
+            }
+            auto_retry::BeforeSend::Postpone(later) => {
+                if store(live, task_id, Some(&later)).is_ok() {
+                    watch.waiting.insert(task_id.to_string());
+                    let at = later.due_ms.map(clock).unwrap_or_default();
+                    note(live, task_id, &format!("额度仍用完，顺延到 {at} 再继续"));
+                }
+                return;
+            }
+            auto_retry::BeforeSend::GiveUp(done) => {
+                let _ = store(live, task_id, Some(&done));
+                note(
+                    live,
+                    task_id,
+                    &format!("{}，等你处理", auto_retry::STILL_OUT),
+                );
+                return;
+            }
+        }
+    }
+    let text = if retry.armed {
+        auto_retry::armed_message()
+    } else {
+        auto_retry::message(retry.reason)
+    };
     let sent = match live.driver(task_id) {
         Some(driver) => Ok(driver),
         None => live.reopen_quiet(task_id),
@@ -257,6 +312,7 @@ fn tick(live: &Live, watch: &mut Watch) {
         seed(live, watch);
     }
     let now = now_ms();
+    watch.waiting.extend(ARMED.lock().drain(..));
     let enabled = super::restart::auto_enabled(live);
     if enabled {
         for (task_id, driver) in live.executor.registry().all() {
@@ -276,6 +332,8 @@ fn tick(live: &Live, watch: &mut Watch) {
 
 pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     set.register(CANCEL_METHOD, blocking(live, cancel));
+    set.register(OFFER_METHOD, blocking(live, offer));
+    set.register(ARM_METHOD, blocking(live, arm));
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         return;
     };
@@ -321,4 +379,79 @@ fn cancel(live: &Live, request: &Request) -> Frame {
         }
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
     }
+}
+
+/// C6: the session's last turn, its chain, and the quota's reset.
+fn arming(
+    live: &Live,
+    task_id: &str,
+) -> Result<
+    (
+        Option<AutoRetry>,
+        aeroric_core::sessions::transcript_stats::TurnStat,
+        Option<u64>,
+    ),
+    String,
+> {
+    let (_, record) = live.record(task_id).ok_or("会话不存在")?;
+    let last = super::rerun::turns(live, &record)
+        .pop()
+        .ok_or(auto_retry::NOT_QUOTA)?;
+    let reset = quota_reset(live, &record, now_ms());
+    Ok((chain(&record), last, reset))
+}
+
+/// `session.autoRetry.offer {taskId}` → `{available, resetAt?, reason?}`:
+/// whether 额度恢复后自动继续 can be turned on now, and when it would go.
+fn offer(live: &Live, request: &Request) -> Frame {
+    let p: TaskParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let now = now_ms();
+    match arming(live, &p.task_id) {
+        Ok((prev, last, reset)) => match auto_retry::arm(prev.as_ref(), &last, reset, now) {
+            Ok(retry) => ok(
+                request,
+                json!({ "available": true, "resetAt": reset, "dueMs": retry.due_ms }),
+            ),
+            Err(why) => ok(request, json!({ "available": false, "reason": why })),
+        },
+        Err(why) => ok(request, json!({ "available": false, "reason": why })),
+    }
+}
+
+/// `session.autoRetry.arm {taskId}` → `{retry}`: turn it on; the try waits
+/// for the reset like an unattended one, with 取消 on the session page.
+fn arm(live: &Live, request: &Request) -> Frame {
+    let p: TaskParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let (prev, last, reset) = match arming(live, &p.task_id) {
+        Ok(found) => found,
+        Err(why) => {
+            let code = if live.record(&p.task_id).is_none() {
+                ErrorCode::NotFound
+            } else {
+                ErrorCode::InvalidArgument
+            };
+            return failure(request.id.clone(), code, &why);
+        }
+    };
+    let retry = match auto_retry::arm(prev.as_ref(), &last, reset, now_ms()) {
+        Ok(retry) => retry,
+        Err(why) => return failure(request.id.clone(), ErrorCode::InvalidArgument, why),
+    };
+    if let Err(error) = store(live, &p.task_id, Some(&retry)) {
+        return failure(request.id.clone(), ErrorCode::IoError, &error);
+    }
+    ARMED.lock().push(p.task_id.clone());
+    let at = retry.due_ms.map(clock).unwrap_or_default();
+    note(
+        live,
+        &p.task_id,
+        &format!("你开了额度恢复后自动继续，{at} 继续"),
+    );
+    ok(request, json!({ "retry": retry }))
 }

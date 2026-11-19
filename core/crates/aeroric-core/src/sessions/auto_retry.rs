@@ -10,6 +10,12 @@
 //!   keeps waiting. Out of tries, it waits for the user (需要我处理).
 //!
 //! Pure policy; the host watches the turns and sends the retries.
+//!
+//! C6 (2026-11-19): a session someone is watching gets the quota retry only
+//! when the user turns on 额度恢复后自动继续 for that turn ([`arm`]), and
+//! only when the reset time is known. Before it goes out ([`before_send`]) it
+//! is called off if the user wrote since or stopped the session, and put off
+//! once if the quota is still used up when the time comes.
 
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +60,13 @@ pub struct AutoRetry {
     /// Why the last try could not be sent, when it could not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// C6: the user turned it on for this turn (an attended session); the
+    /// global 自动继续 switch does not stop it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub armed: bool,
+    /// C6: already put off once because the quota was still used up.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub postponed: bool,
 }
 
 impl AutoRetry {
@@ -115,6 +128,8 @@ pub fn after_turn(
         due_ms: None,
         turn_started_at: last.started_at,
         error: None,
+        armed: false,
+        postponed: false,
     };
     if count < max {
         next.state = RetryState::Waiting;
@@ -150,6 +165,93 @@ pub fn after_send(mut retry: AutoRetry, sent: Result<(), String>, now_ms: u64) -
         }
     }
     retry
+}
+
+pub const NOT_QUOTA: &str = "上一轮不是因为额度用完没跑成";
+pub const ALREADY_ARMED: &str = "这一轮已经在等额度恢复后自动继续";
+pub const RESET_UNKNOWN: &str = "读不到额度的恢复时间，没法定时继续";
+pub const USER_WROTE: &str = "期间你发过新消息，不再自动继续";
+pub const STOPPED: &str = "会话已经停止，不再自动继续";
+pub const STILL_OUT: &str = "恢复时间到了额度仍用完";
+
+/// C6: the user turns on 额度恢复后自动继续 for the session's last turn.
+/// Only a turn the quota stopped, with a known reset: the try goes out a
+/// minute after it, once.
+pub fn arm(
+    prev: Option<&AutoRetry>,
+    last: &TurnStat,
+    quota_reset_ms: Option<u64>,
+    now_ms: u64,
+) -> Result<AutoRetry, &'static str> {
+    if last.not_run.as_ref().map(|n| n.reason) != Some(NotRunReason::Quota) {
+        return Err(NOT_QUOTA);
+    }
+    if prev.is_some_and(|p| p.state == RetryState::Waiting && p.turn_started_at == last.started_at)
+    {
+        return Err(ALREADY_ARMED);
+    }
+    let reset = quota_reset_ms.ok_or(RESET_UNKNOWN)?;
+    Ok(AutoRetry {
+        state: RetryState::Waiting,
+        reason: NotRunReason::Quota,
+        count: 0,
+        max: 1,
+        due_ms: Some(reset.max(now_ms) + AFTER_RESET_MS),
+        turn_started_at: last.started_at,
+        error: None,
+        armed: true,
+        postponed: false,
+    })
+}
+
+/// C6: what a due try armed by the user does now.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BeforeSend {
+    Send,
+    /// Called off, and why.
+    Cancel(&'static str),
+    /// Put off to the quota's new reset (once).
+    Postpone(AutoRetry),
+    /// Still used up after being put off once.
+    GiveUp(AutoRetry),
+}
+
+/// C6: a due try the user armed, checked before it goes out. `latest_turn`:
+/// when the session's last turn started; `stopped`: the user stopped the
+/// session; `still_out_reset_ms`: the quota is used up still, resetting then.
+pub fn before_send(
+    retry: &AutoRetry,
+    latest_turn: Option<u64>,
+    stopped: bool,
+    still_out_reset_ms: Option<u64>,
+) -> BeforeSend {
+    if stopped {
+        return BeforeSend::Cancel(STOPPED);
+    }
+    if latest_turn.is_some_and(|started| started > retry.turn_started_at) {
+        return BeforeSend::Cancel(USER_WROTE);
+    }
+    let Some(reset) = still_out_reset_ms else {
+        return BeforeSend::Send;
+    };
+    let mut next = retry.clone();
+    if retry.postponed {
+        next.state = RetryState::GaveUp;
+        next.due_ms = None;
+        next.error = Some(STILL_OUT.to_string());
+        return BeforeSend::GiveUp(next);
+    }
+    next.postponed = true;
+    next.due_ms = Some(reset + AFTER_RESET_MS);
+    BeforeSend::Postpone(next)
+}
+
+/// C6: what the session is told when a try the user armed goes out.
+pub fn armed_message() -> String {
+    format!(
+        "额度已恢复，这是你开的自动续跑。{}",
+        message(NotRunReason::Quota)
+    )
 }
 
 /// The reason in words, as the retry message and the notes say it.
@@ -357,5 +459,94 @@ mod tests {
         assert_eq!(json["reason"], "network");
         let back: AutoRetry = serde_json::from_value(json).unwrap();
         assert_eq!(back, failed);
+    }
+
+    /// C6: only a turn the quota stopped, with a known reset, can wait for
+    /// it; once armed it is not armed twice.
+    #[test]
+    fn the_user_arms_a_quota_turn_with_a_known_reset_only() {
+        let now = 1_000 * MIN;
+        let quota = turn(900 * MIN, Some(NotRunReason::Quota));
+        let armed = arm(None, &quota, Some(now + 30 * MIN), now).unwrap();
+        assert_eq!(armed.state, RetryState::Waiting);
+        assert!(armed.armed && !armed.postponed);
+        assert_eq!((armed.count, armed.max), (0, 1));
+        assert_eq!(
+            armed.due_ms,
+            Some(now + 31 * MIN),
+            "a minute after the reset"
+        );
+        assert_eq!(
+            arm(Some(&armed), &quota, Some(now), now),
+            Err(ALREADY_ARMED)
+        );
+        assert_eq!(arm(None, &quota, None, now), Err(RESET_UNKNOWN));
+        let network = turn(900 * MIN, Some(NotRunReason::Network));
+        assert_eq!(arm(None, &network, Some(now), now), Err(NOT_QUOTA));
+        assert_eq!(
+            arm(None, &turn(900 * MIN, None), Some(now), now),
+            Err(NOT_QUOTA)
+        );
+        // A reset already past: a minute from now.
+        let late = arm(None, &quota, Some(now - 5 * MIN), now).unwrap();
+        assert_eq!(late.due_ms, Some(now + MIN));
+    }
+
+    /// C6: before an armed try goes out — the user wrote or stopped since:
+    /// called off; the quota still used up: put off once, then given up.
+    #[test]
+    fn an_armed_try_is_called_off_or_put_off_once_before_it_goes() {
+        let now = 1_000 * MIN;
+        let armed = arm(
+            None,
+            &turn(900 * MIN, Some(NotRunReason::Quota)),
+            Some(now),
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            before_send(&armed, Some(900 * MIN), false, None),
+            BeforeSend::Send
+        );
+        assert_eq!(
+            before_send(&armed, Some(950 * MIN), false, None),
+            BeforeSend::Cancel(USER_WROTE)
+        );
+        assert_eq!(
+            before_send(&armed, Some(900 * MIN), true, None),
+            BeforeSend::Cancel(STOPPED)
+        );
+        let later = match before_send(&armed, Some(900 * MIN), false, Some(now + 60 * MIN)) {
+            BeforeSend::Postpone(later) => later,
+            other => panic!("{other:?}"),
+        };
+        assert!(later.postponed);
+        assert_eq!(later.state, RetryState::Waiting);
+        assert_eq!(later.due_ms, Some(now + 61 * MIN));
+        match before_send(&later, Some(900 * MIN), false, Some(now + 120 * MIN)) {
+            BeforeSend::GiveUp(done) => {
+                assert_eq!(done.state, RetryState::GaveUp);
+                assert_eq!(done.error.as_deref(), Some(STILL_OUT));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            armed_message().starts_with("额度已恢复，这是你开的自动续跑。上一轮因为额度用完没跑成")
+        );
+    }
+
+    /// C6: an old record (before C6) reads as not armed; an armed one keeps
+    /// its marks through the record.
+    #[test]
+    fn the_armed_marks_ride_on_the_record() {
+        let old: AutoRetry = serde_json::from_value(serde_json::json!({
+            "state": "waiting", "reason": "quota", "count": 0, "max": 1, "turnStartedAt": 5
+        }))
+        .unwrap();
+        assert!(!old.armed && !old.postponed);
+        let armed = arm(None, &turn(5, Some(NotRunReason::Quota)), Some(10), 1).unwrap();
+        let back: AutoRetry =
+            serde_json::from_value(serde_json::to_value(&armed).unwrap()).unwrap();
+        assert_eq!(back, armed);
     }
 }

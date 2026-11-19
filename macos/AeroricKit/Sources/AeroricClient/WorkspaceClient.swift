@@ -400,6 +400,8 @@ public struct AutoRetryInfo: Equatable, Sendable {
     public var max: Int
     public var dueMs: UInt64?
     public var error: String?
+    /// C6: the user turned it on (额度恢复后自动继续).
+    public var armed: Bool = false
 
     public init(state: String, reason: String, count: Int = 0, max: Int = 3, dueMs: UInt64? = nil,
                 error: String? = nil) {
@@ -414,8 +416,10 @@ public struct AutoRetryInfo: Equatable, Sendable {
     public static func parse(_ value: JSONValue?) -> AutoRetryInfo? {
         guard let f = value?.objectValue, let state = f["state"]?.stringValue else { return nil }
         let int = { (key: String) in f[key]?.numberText.flatMap { Int($0) } ?? 0 }
-        return AutoRetryInfo(state: state, reason: f["reason"]?.stringValue ?? "", count: int("count"),
-                             max: int("max"), dueMs: f["dueMs"]?.numberText.flatMap { UInt64($0) },
-                             error: f["error"]?.stringValue)
+        var info = AutoRetryInfo(state: state, reason: f["reason"]?.stringValue ?? "", count: int("count"),
+                                 max: int("max"), dueMs: f["dueMs"]?.numberText.flatMap { UInt64($0) },
+                                 error: f["error"]?.stringValue)
+        info.armed = f["armed"]?.boolValue ?? false
+        return info
     }
 }
