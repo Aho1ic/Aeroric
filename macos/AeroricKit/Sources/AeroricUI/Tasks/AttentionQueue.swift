@@ -30,6 +30,8 @@ public enum AttentionQueue {
         case retryNeedsYou
         /// 2026-11-14: an unattended session's automatic retries ran out.
         case autoRetryGaveUp
+        /// E5: continuing it by itself came to nothing, so Aeroric stopped.
+        case continueStalled
 
         public var text: String {
             switch self {
@@ -45,6 +47,7 @@ public enum AttentionQueue {
             case .deliveryNeedsYou: "投递待确认"
             case .retryNeedsYou: "在重试"
             case .autoRetryGaveUp: "没跑成"
+            case .continueStalled: "自动继续停下"
             }
         }
     }
@@ -75,6 +78,7 @@ public enum AttentionQueue {
             case .deliveryNeedsYou: "\(task.id)#delivery"
             case .retryNeedsYou: "\(task.id)#retry"
             case .autoRetryGaveUp: "\(task.id)#autoRetry"
+            case .continueStalled: "\(task.id)#continueGuard"
             default: task.id
             }
         }
@@ -144,6 +148,14 @@ public enum AttentionQueue {
                 let at = task.updatedAtMs ?? task.createdAtMs ?? 0
                 if nowMs <= at + recentWindowMs {
                     rows.append(Item(task: task, reason: .autoRetryGaveUp, detail: AutoRetryText.gaveUp(auto), atMs: at))
+                }
+            }
+            // E5: the retry row already says it when the guard stopped a retry.
+            if let stalled = task.continueStalled,
+               !(task.autoRetry?.state == "gaveUp" && task.autoRetry?.error == stalled) {
+                let at = task.updatedAtMs ?? task.createdAtMs ?? 0
+                if nowMs <= at + recentWindowMs {
+                    rows.append(Item(task: task, reason: .continueStalled, detail: stalled, atMs: at))
                 }
             }
             return rows

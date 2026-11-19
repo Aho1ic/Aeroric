@@ -1297,6 +1297,8 @@ fn prompt(live: &Live, request: &Request) -> Frame {
         Ok(item) => item,
         Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error),
     };
+    // E5: a person wrote; automatic continuing starts afresh.
+    restart::guard_clear(live, &p.task_id, &record);
     // R1-1: not refused — the user's own sessions are theirs to run — but said.
     let own_turn_writes = driver.is_none_or(|d| d.snapshot().permission.as_deref() != Some("plan"));
     let shared: Vec<Value> = if own_turn_writes {

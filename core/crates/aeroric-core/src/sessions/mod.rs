@@ -19,6 +19,7 @@ pub mod auto_retry;
 pub mod change_cost;
 pub mod claude;
 pub mod codex;
+pub mod continue_guard;
 pub mod discovery;
 pub mod dsh;
 pub mod export;

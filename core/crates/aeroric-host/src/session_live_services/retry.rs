@@ -186,12 +186,29 @@ fn send_due(live: &Live, watch: &mut Watch, task_id: &str, now: u64, enabled: bo
         note(live, task_id, "自动继续已关闭，没有重试");
         return;
     }
+    // E5: earlier continues that came to nothing stop the chain here.
+    if let Err(why) = super::restart::guard_before(live, task_id, &record) {
+        let mut stopped = retry;
+        stopped.state = RetryState::GaveUp;
+        stopped.due_ms = None;
+        stopped.error = Some(why.clone());
+        let _ = store(live, task_id, Some(&stopped));
+        note(live, task_id, &format!("自动继续停下：{why}；等你处理"));
+        return;
+    }
     let text = auto_retry::message(retry.reason);
     let sent = match live.driver(task_id) {
         Some(driver) => Ok(driver),
         None => live.reopen_quiet(task_id),
     }
     .and_then(|driver| driver.prompt(text).map_err(|e| e.to_string()));
+    if sent.is_ok() {
+        super::restart::guard_sent(
+            live,
+            task_id,
+            aeroric_core::sessions::continue_guard::SendKind::Retry,
+        );
+    }
     let next = auto_retry::after_send(retry, sent, now);
     if store(live, task_id, Some(&next)).is_err() {
         return;

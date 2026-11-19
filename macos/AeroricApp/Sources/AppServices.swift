@@ -488,6 +488,7 @@ final class AppServices {
                 entry.isDiscussion = task.discussion
                 entry.restartCut = task.status == "interrupted" && task.interruptedBy == "hostRestart"
                 entry.outwardBeforeCut = task.outwardBeforeCut
+                entry.continueStalled = task.continueStalled
                 entry.autoRetry = task.autoRetry
                 taskStore.upsertTask(entry)
                 if let generation = task.generation {

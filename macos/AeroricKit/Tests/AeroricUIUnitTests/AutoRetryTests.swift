@@ -51,4 +51,27 @@ final class AutoRetryTests: XCTestCase {
         XCTAssertEqual(items.first?.reason, .autoRetryGaveUp)
         XCTAssertEqual(items.first?.detail, "自动重试 3 次后仍因为网络不通没跑成")
     }
+
+    /// E5: a stall shows once — its own row, or inside the retry row when
+    /// it was the guard that stopped the retries — and the record's reason
+    /// reaches the mirror.
+    func testAStalledContinuingShowsOnce() {
+        let why = "连续 2 次自动继续都没有成功的工具调用，再续下去也不会有进展"
+        var fixing = task("fixing", nil)
+        fixing.continueStalled = why
+        var retried = task("retried", AutoRetryInfo(state: "gaveUp", reason: "service", count: 1, error: why))
+        retried.continueStalled = why
+        let items = AttentionQueue.items([fixing, retried], nowMs: 10)
+        XCTAssertEqual(items.map(\.id).sorted(), ["fixing#continueGuard", "retried#autoRetry"])
+        let row = items.first { $0.reason == .continueStalled }
+        XCTAssertEqual(row?.detail, why)
+        XCTAssertEqual(AttentionQueue.Reason.continueStalled.text, "自动继续停下")
+
+        let record: JSONValue = .object([
+            "id": .string("t"),
+            "continueGuard": .object(["stalled": .object(["reason": .string(why), "atMs": .number("1")])]),
+        ])
+        XCTAssertEqual(WorkspaceClient.parseTask(record, projectID: "p")?.continueStalled, why)
+        XCTAssertNil(WorkspaceClient.parseTask(.object(["id": .string("t")]), projectID: "p")?.continueStalled)
+    }
 }

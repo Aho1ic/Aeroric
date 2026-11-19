@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use aeroric_core::schedule::Schedules;
+use aeroric_core::sessions::continue_guard::{self, Guard, SendKind};
 use aeroric_core::sessions::live::envelope::{self, Authority};
 use aeroric_core::sessions::{outward, turn_outcome};
 use aeroric_core::settings::preferences;
@@ -128,6 +129,46 @@ fn mark_auto(live: &Live, task_id: &str) -> Result<(), String> {
     set_field(live, task_id, AUTO_RESUMED_FIELD, Value::from(now_ms()))
 }
 
+/// E5 stuck guard, before an automatic send (retry, restart, todo fix):
+/// `Err(why)` when the turns earlier sends started show no progress; the
+/// stall is saved on the record and holds until the user writes.
+pub(super) fn guard_before(live: &Live, task_id: &str, record: &Record) -> Result<(), String> {
+    let mut guard = Guard::of(record);
+    let held = guard.stalled.is_some();
+    let turns = if held {
+        Vec::new()
+    } else {
+        super::rerun::turns(live, record)
+    };
+    match guard.check(&turns, now_ms()) {
+        Some(why) => {
+            if !held {
+                let _ = set_field(live, task_id, continue_guard::FIELD, guard.to_value());
+            }
+            Err(why)
+        }
+        None => Ok(()),
+    }
+}
+
+/// E5: an automatic send went out; log it for the next one's check.
+pub(super) fn guard_sent(live: &Live, task_id: &str, kind: SendKind) {
+    let Some((_, record)) = live.record(task_id) else {
+        return;
+    };
+    let mut guard = Guard::of(&record);
+    guard.sent(kind, now_ms());
+    let _ = set_field(live, task_id, continue_guard::FIELD, guard.to_value());
+}
+
+/// E5: the user wrote to the session (or continued it): a person is
+/// watching, so the log and any stall go.
+pub(super) fn guard_clear(live: &Live, task_id: &str, record: &Record) {
+    if record.get(continue_guard::FIELD).is_some() {
+        let _ = set_field(live, task_id, continue_guard::FIELD, Value::Null);
+    }
+}
+
 fn set_field(live: &Live, task_id: &str, key: &'static str, value: Value) -> Result<(), String> {
     let (project, _) = live.record(task_id).ok_or("会话不存在")?;
     let project_id = field(&project, "id").ok_or("项目没有 id")?;
@@ -139,7 +180,11 @@ fn set_field(live: &Live, task_id: &str, key: &'static str, value: Value) -> Res
                 .map(|r| {
                     let mut r = r.clone();
                     if r.get("id").and_then(Value::as_str) == Some(id.as_str()) {
-                        r.0.insert(key.into(), value.clone());
+                        if value.is_null() {
+                            r.0.remove(key);
+                        } else {
+                            r.0.insert(key.into(), value.clone());
+                        }
                     }
                     r
                 })
@@ -186,8 +231,21 @@ fn resume_settled(live: &Live, settled: &[String]) {
             }
             continue;
         }
+        // E5: continues before this one that came to nothing stop it.
+        if let Err(why) = guard_before(live, task_id, &record) {
+            if scheduled {
+                book.note_task(
+                    task_id,
+                    &format!("被 Aeroric 重启打断；自动继续停下：{why}，等你点继续"),
+                );
+            }
+            continue;
+        }
         let note = match mark_auto(live, task_id).and_then(|()| continue_session(live, task_id)) {
-            Ok(()) => "被 Aeroric 重启打断，已自动继续".to_string(),
+            Ok(()) => {
+                guard_sent(live, task_id, SendKind::Restart);
+                "被 Aeroric 重启打断，已自动继续".to_string()
+            }
             Err(error) => format!("被 Aeroric 重启打断，自动继续失败：{error}"),
         };
         if scheduled {
@@ -224,8 +282,12 @@ fn continue_rpc(live: &Live, request: &Request) -> Frame {
     if live.record(&p.task_id).is_none() {
         return failure(request.id.clone(), ErrorCode::NotFound, "会话不存在");
     }
+    let record = live.record(&p.task_id).map(|(_, r)| r);
     match continue_session(live, &p.task_id) {
         Ok(()) => {
+            if let Some(record) = &record {
+                guard_clear(live, &p.task_id, record);
+            }
             if schedules(live).knows_task(&p.task_id) {
                 schedules(live).note_task(&p.task_id, "被 Aeroric 重启打断，你点了继续");
             }

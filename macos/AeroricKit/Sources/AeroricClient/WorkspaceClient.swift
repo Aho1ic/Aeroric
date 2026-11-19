@@ -145,6 +145,8 @@ public struct WorkspaceClient: Sendable {
         public var interruptedBy: String? = nil
         /// E5 (2026-11-19): what the cut turn had already done outside the machine.
         public var outwardBeforeCut: [String] = []
+        /// E5: why automatic continuing stopped (`continueGuard.stalled.reason`).
+        public var continueStalled: String? = nil
         /// 2026-11-14 无人值守自动重试: the record's `autoRetry`.
         public var autoRetry: AutoRetryInfo? = nil
     }
@@ -210,6 +212,7 @@ public struct WorkspaceClient: Sendable {
             discussion: record["discussion"]?.boolValue ?? false,
             interruptedBy: record["interruptedBy"]?.stringValue,
             outwardBeforeCut: (record["outwardBeforeCut"]?.arrayValue ?? []).compactMap(\.stringValue),
+            continueStalled: record["continueGuard"]?.fields["stalled"]?.fields["reason"]?.stringValue,
             autoRetry: AutoRetryInfo.parse(record["autoRetry"])
         )
     }

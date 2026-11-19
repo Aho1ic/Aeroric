@@ -56,6 +56,8 @@ public final class TaskStore {
         /// E5: what the cut turn had already done outward (`git push`…); it
         /// was not continued on its own.
         public var outwardBeforeCut: [String] = []
+        /// E5: why Aeroric stopped carrying the unattended session on.
+        public var continueStalled: String?
         /// 2026-11-14 无人值守自动重试.
         public var autoRetry: AutoRetryInfo?
 

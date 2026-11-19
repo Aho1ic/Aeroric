@@ -1142,10 +1142,22 @@ async fn a_cut_turn_that_already_pushed_is_not_continued_on_its_own() {
             "delegateOf": "parent", "sessionFamily": "claude",
             "claudeSessionId": "cs-9", "claudeSessionPath": transcript.to_string_lossy(),
         });
+        // E5 third step: continuing it already stalled; nothing goes out.
+        let stalled = json!({
+            "id": "stalled-run", "projectId": "project-1", "prompt": "修", "agent": "claude",
+            "permissionMode": "ask", "status": "running", "createdAt": 1, "generation": "2",
+            "delegateOf": "parent",
+            "continueGuard": {"stalled": {"reason": "连续 2 次自动继续都没有成功的工具调用", "atMs": 1}},
+        });
         aeroric_core::storage::save_tasks(
             context,
             "project-1",
-            &[serde_json::from_value(record).unwrap()],
+            // Settled in this order: the stalled one is past when the
+            // push is recorded.
+            &[
+                serde_json::from_value(stalled).unwrap(),
+                serde_json::from_value(record).unwrap(),
+            ],
         )
         .expect("seed tasks");
     });
@@ -1171,6 +1183,13 @@ async fn a_cut_turn_that_already_pushed_is_not_continued_on_its_own() {
     assert!(
         record.get("autoResumedAt").is_none(),
         "not continued: {record}"
+    );
+    // E5 third step: the same pass skipped the one whose continuing stalled.
+    let stalled = host.record_of("stalled-run");
+    assert_eq!(stalled["status"], "interrupted", "{stalled}");
+    assert!(
+        stalled.get("autoResumedAt").is_none(),
+        "the guard held: {stalled}"
     );
 }
 

@@ -124,6 +124,12 @@ fn run_check(live: &Live, book: &Todos, due: &DueCheck) {
     let Some(round) = fix_due(&todo) else {
         return;
     };
+    // E5: fixes before this one that came to nothing stop it.
+    if let Some((_, record)) = live.record(&due.task_id) {
+        if super::restart::guard_before(live, &due.task_id, &record).is_err() {
+            return;
+        }
+    }
     let text = fix_prompt(&due.command, &result.output, round);
     let sent = match live.driver(&due.task_id) {
         Some(driver) if driver.snapshot().turn_active => Err("会话正在跑".to_string()),
@@ -133,6 +139,11 @@ fn run_check(live: &Live, book: &Todos, due: &DueCheck) {
     .and_then(|driver| driver.prompt(text).map_err(|e| e.to_string()));
     if sent.is_ok() {
         let _ = book.fix_sent(&todo.id, &due.task_id);
+        super::restart::guard_sent(
+            live,
+            &due.task_id,
+            aeroric_core::sessions::continue_guard::SendKind::TodoFix,
+        );
     }
 }
 
