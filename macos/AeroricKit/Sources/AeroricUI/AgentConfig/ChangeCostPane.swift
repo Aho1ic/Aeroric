@@ -1,4 +1,5 @@
 import AeroricClient
+import AeroricProtocol
 import Foundation
 import Observation
 import SwiftUI
@@ -121,6 +122,59 @@ public enum QuotaText {
     }
 }
 
+/// C4 (2026-11-19): the gateway's requests in words. Usage nobody reported
+/// reads 用量未知, never 0.
+public enum GatewayText {
+    public typealias Usage = LiveGatewayUsage
+
+    /// `共 120 次 · 失败 3 · 5 次用量未知 · 缓存写入 5 分钟 1.2K / 1 小时 800`.
+    public static func summary(_ s: Usage.Summary) -> String {
+        var parts = ["共 \(s.totalRequests) 次"]
+        if s.failedRequests > 0 { parts.append("失败 \(s.failedRequests)") }
+        if s.unknownUsageRequests > 0 { parts.append("\(s.unknownUsageRequests) 次用量未知") }
+        parts.append("输入 \(SessionStatsText.compact(s.inputTokens)) · 输出 \(SessionStatsText.compact(s.outputTokens))")
+        if s.cacheWrite5mTokens > 0 || s.cacheWrite1hTokens > 0 {
+            parts.append("缓存写入 5 分钟 \(SessionStatsText.compact(s.cacheWrite5mTokens))"
+                + " / 1 小时 \(SessionStatsText.compact(s.cacheWrite1hTokens))")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// `12.3K 入 · 2K 出`, or `用量未知`.
+    public static func usage(source: String, input: UInt64, output: UInt64) -> String {
+        switch source {
+        case "unknown": "用量未知"
+        case "estimated": "约 \(SessionStatsText.compact(input)) 入 · \(SessionStatsText.compact(output)) 出"
+        default: "\(SessionStatsText.compact(input)) 入 · \(SessionStatsText.compact(output)) 出"
+        }
+    }
+
+    /// One request's line: model, where it ended, status, usage, tries.
+    public static func request(_ r: Usage.Request) -> String {
+        var parts = [r.model.isEmpty ? "未知模型" : r.model]
+        if let target = r.targetName, !target.isEmpty { parts.append(target) }
+        parts.append(r.success ? "成功" : "失败 \(r.statusCode)")
+        parts.append(usage(source: r.usageSource, input: r.inputTokens, output: r.outputTokens))
+        let tried = r.attempts.filter { !$0.skipped }.count
+        if tried > 1 { parts.append("试了 \(tried) 次") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// `第 1 次 · 连接 A · 429 · 0.4 秒 · 用量未知 · slow down`.
+    public static func attempt(_ a: Usage.Attempt) -> String {
+        var parts = ["第 \(a.seq) 次", a.targetName ?? "未知连接"]
+        if a.skipped {
+            parts.append("熔断中，跳过")
+            return parts.joined(separator: " · ")
+        }
+        parts.append(a.statusCode.map(String.init) ?? "没有回应")
+        parts.append(String(format: "%.1f 秒", Double(a.latencyMs) / 1000))
+        parts.append(usage(source: a.usageSource, input: a.inputTokens, output: a.outputTokens))
+        if let error = a.errorSummary, !error.isEmpty { parts.append(error) }
+        return parts.joined(separator: " · ")
+    }
+}
+
 /// The 用量与成本 tab's data: the quota is read when the tab opens, the
 /// change cost also when the range changes.
 @MainActor @Observable
@@ -145,6 +199,9 @@ public final class ChangeCostBook {
     public var errorText: String?
     public private(set) var quota: MaintenanceClient.QuotaPace?
     public private(set) var quotaError: String?
+    /// C4: the gateway's latest requests.
+    public private(set) var gateway: LiveGatewayUsage?
+    public private(set) var gatewayError: String?
 
     @ObservationIgnored private var client: SessionsClient?
     @ObservationIgnored private var maintenance: MaintenanceClient?
@@ -163,6 +220,17 @@ public final class ChangeCostBook {
             quotaError = nil
         } catch {
             quotaError = "没读到订阅额度：\(error.localizedDescription)"
+        }
+    }
+
+    /// C4: read when the tab opens.
+    public func refreshGateway() async {
+        guard let client else { return }
+        do {
+            gateway = try await client.gatewayRequests(limit: 30)
+            gatewayError = nil
+        } catch {
+            gatewayError = "没读到网关请求：\(error.localizedDescription)"
         }
     }
 
@@ -209,6 +277,8 @@ struct ChangeCostPane: View {
                 if let error = book.errorText {
                     Text(error).font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.danger)
                 }
+                GatewayRequestsSection(usage: book.gateway, error: book.gatewayError)
+                    .padding(.top, AeroricSpace.m)
             }
             .frame(maxWidth: 760, alignment: .leading)
             .padding(.horizontal, AeroricSpace.huge)
@@ -219,7 +289,8 @@ struct ChangeCostPane: View {
         .task {
             async let quota: Void = book.refreshQuota()
             async let cost: Void = book.refresh()
-            _ = await (quota, cost)
+            async let gateway: Void = book.refreshGateway()
+            _ = await (quota, cost, gateway)
         }
         .accessibilityIdentifier("agent-config.change-cost")
     }
@@ -355,6 +426,78 @@ struct QuotaCard: View {
                 .foregroundStyle(pace.verdict == "fast" ? AeroricColor.warning : AeroricColor.textSecondary)
                 .padding(.leading, 56 + AeroricSpace.m)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// C4: the gateway's latest requests; one opens to show each try.
+struct GatewayRequestsSection: View {
+    let usage: LiveGatewayUsage?
+    let error: String?
+    @State private var open: Set<String> = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("网关请求").font(.system(size: AeroricType.headline, weight: .semibold))
+                Text("经 Aeroric 网关的请求，每次尝试去了哪里、各花了多少；没报用量的写“用量未知”，不算进合计")
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let error {
+                Text(error).font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.danger)
+            }
+            if let usage {
+                Text(GatewayText.summary(usage.summary))
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(usage.summary.unknownUsageRequests > 0 ? AeroricColor.warning : AeroricColor.textSecondary)
+                    .monospacedDigit()
+                    .accessibilityIdentifier("agent-config.gateway.summary")
+                if usage.requests.isEmpty {
+                    Text("还没有经过网关的请求。用 Agent 配置启动的会话会出现在这里。")
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                }
+                ForEach(usage.requests) { request in row(request) }
+            }
+        }
+        .accessibilityIdentifier("agent-config.gateway")
+    }
+
+    @ViewBuilder private func row(_ request: LiveGatewayUsage.Request) -> some View {
+        let canOpen = request.attempts.count > 1
+        Button {
+            if open.remove(request.id) == nil { open.insert(request.id) }
+        } label: {
+            HStack(spacing: AeroricSpace.s) {
+                Text(GatewayText.request(request))
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(request.success ? AeroricColor.textSecondary : AeroricColor.danger)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: AeroricSpace.s)
+                if canOpen {
+                    Image(systemName: open.contains(request.id) ? "chevron.down" : "chevron.right")
+                        .font(.system(size: AeroricType.caption - 2))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canOpen)
+        .monospacedDigit()
+        .help(request.errorSummary ?? "")
+        if canOpen, open.contains(request.id) {
+            ForEach(request.attempts) { attempt in
+                Text(GatewayText.attempt(attempt))
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                    .monospacedDigit()
+                    .lineLimit(2)
+                    .padding(.leading, AeroricSpace.l)
+            }
         }
     }
 }

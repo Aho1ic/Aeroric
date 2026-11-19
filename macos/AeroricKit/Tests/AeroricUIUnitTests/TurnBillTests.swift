@@ -49,6 +49,19 @@ final class TurnBillTests: XCTestCase {
         XCTAssertFalse(TurnBillText.hasBill(SessionTranscriptStats.TurnStat(startedAt: 0, endedAt: 1, tokens: 0)))
     }
 
+    /// C4: a turn whose transcript recorded no usage says so, not 0.
+    func testATurnWithoutRecordedUsageSaysItIsUnknown() {
+        var turn = SessionTranscriptStats.TurnStat(startedAt: 0, endedAt: 1, tokens: 0)
+        turn.tools = [.init(name: "Read", startedAt: 0, endedAt: 1), .init(name: "Bash", startedAt: 0, endedAt: 1)]
+        XCTAssertTrue(TurnBillText.hasBill(turn))
+        XCTAssertEqual(TurnBillText.chip(turn), "用量未知 · 2 次工具")
+        XCTAssertEqual(TurnBillText.tokensOrUnknown(nil), "未记录")
+        turn.inputTokens = 0
+        turn.outputTokens = 0
+        XCTAssertEqual(TurnBillText.chip(turn), "2 次工具", "a reported zero is not unknown")
+        XCTAssertEqual(TurnBillText.tokensOrUnknown(0), "0 tok")
+    }
+
     func testWaterfallColoursAndPlacesEachCall() throws {
         let turn = try decodedTurn()
         XCTAssertEqual(TurnBillText.speed(turn.tools[0]), .failed)

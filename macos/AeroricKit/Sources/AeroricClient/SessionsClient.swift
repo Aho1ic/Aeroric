@@ -401,6 +401,13 @@ extension SessionsClient {
         return LiveTurnRecord.decodeList(frame.result["turns"])
     }
 
+    /// C4: the gateway's totals and its latest requests, each with every try.
+    public func gatewayRequests(limit: Int = 50) async throws -> LiveGatewayUsage {
+        let frame = try await connection.request(
+            "gateway.requests", params: .object(["limit": .number(String(limit))]))
+        return LiveGatewayUsage.decode(frame.result)
+    }
+
     /// B6: one page of what the task delivered, the latest changed first.
     public func artifacts(taskId: String, cursor: String? = nil) async throws -> LiveArtifactPage {
         var params: [String: JSONValue] = ["taskId": .string(taskId)]

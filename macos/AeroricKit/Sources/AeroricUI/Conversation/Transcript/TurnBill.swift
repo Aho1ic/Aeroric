@@ -20,7 +20,11 @@ public enum TurnBillText {
         var parts: [String] = []
         if stat.tokens > 0 { parts.append("\(SessionStatsText.compact(stat.tokens)) tok") }
         if let cost = stat.costUsd { parts.append("≈\(money(cost))") }
-        if parts.isEmpty { parts.append("\(stat.tools.count + stat.moreTools) 次工具") }
+        // C4: the transcript recorded no usage: say so instead of hiding it.
+        if parts.isEmpty {
+            if stat.inputTokens == nil && stat.outputTokens == nil { parts.append(unknownUsage) }
+            parts.append("\(stat.tools.count + stat.moreTools) 次工具")
+        }
         return parts.joined(separator: " · ")
     }
 
@@ -39,6 +43,14 @@ public enum TurnBillText {
 
     public static func tokens(_ count: UInt64?) -> String? {
         count.map { "\(SessionStatsText.grouped($0)) tok" }
+    }
+
+    /// C4: no usage was recorded for the turn (it is not zero).
+    public static let unknownUsage = "用量未知"
+
+    /// A token row of the card; `未记录` when the transcript has none.
+    public static func tokensOrUnknown(_ count: UInt64?) -> String {
+        tokens(count) ?? "未记录"
     }
 
     /// `23 次 · 2 次失败 · 共 41 秒`.
@@ -265,11 +277,11 @@ struct TurnBillCard: View {
             .font(.system(size: AeroricType.secondary))
             Divider()
             row("模型", stat.model)
-            row("输入", TurnBillText.tokens(stat.inputTokens))
+            row("输入", TurnBillText.tokensOrUnknown(stat.inputTokens))
             row("其中缓存读取", stat.cachedInputTokens.map { cached in
                 [TurnBillText.tokens(cached), TurnBillText.hitRate(stat)].compactMap { $0 }.joined(separator: " · ")
             })
-            row("输出", TurnBillText.tokens(stat.outputTokens))
+            row("输出", TurnBillText.tokensOrUnknown(stat.outputTokens))
             if let ended = stat.endedAt, ended >= stat.startedAt {
                 row("用时", SessionStatsText.duration(ended - stat.startedAt))
             }
