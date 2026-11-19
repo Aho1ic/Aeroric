@@ -16,6 +16,7 @@ pub mod context_server;
 pub mod delegation;
 pub mod delivery;
 pub mod discussion;
+pub mod envelope;
 pub mod executor;
 pub mod isolated_copy;
 pub mod login;

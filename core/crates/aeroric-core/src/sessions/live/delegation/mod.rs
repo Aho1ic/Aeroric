@@ -765,8 +765,7 @@ impl Delegations {
             ..DelegationCard::default()
         };
         let text = prompt::child(
-            &resolved,
-            role.as_ref().map(|r| r.name.as_str()),
+            &card,
             role.as_ref().map(|r| r.instruction.as_str()).unwrap_or(""),
             brief.as_deref(),
         );
@@ -1122,7 +1121,11 @@ impl Delegations {
         self.publish(parent, id);
         self.watch(parent, id);
         let me = self.me.lock().clone();
-        let (parent_id, id_owned, text) = (parent.to_string(), id.to_string(), prompt::redo(note));
+        let (parent_id, id_owned, text) = (
+            parent.to_string(),
+            id.to_string(),
+            prompt::redo(id, note, actor),
+        );
         std::thread::spawn(move || {
             if let Err(error) = host.prompt(&child, text) {
                 if let Some(this) = me.upgrade() {

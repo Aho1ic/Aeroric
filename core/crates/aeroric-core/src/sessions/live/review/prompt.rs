@@ -5,6 +5,7 @@
 use aeroric_protocol::review::{Decision, Finding, ReviewCard, Severity};
 
 use super::TurnDiff;
+use crate::sessions::live::envelope::{self, Authority};
 
 /// The first line of a reviewer prompt.
 pub const REVIEW_MARKER: &str = "[Aeroric 审查]";
@@ -32,10 +33,14 @@ pub struct Context<'a> {
 }
 
 pub fn reviewer(diff: &TurnDiff, cx: &Context<'_>) -> String {
-    let mut out = format!(
-        "{REVIEW_MARKER} 第 {} 轮\n你是代码审查者。只读：不要修改任何文件，不要运行有副作用的命令。你看不到写代码的会话的对话，只根据下面的改动和要求审查。\n",
-        cx.round
+    // E5: the user turned the loop on or asked for this review.
+    let head = envelope::open(
+        REVIEW_MARKER,
+        "Aeroric 审查回环",
+        &format!("第 {} 轮审查", cx.round),
+        Authority::ForUser,
     );
+    let mut out = "你是代码审查者。只读：不要修改任何文件，不要运行有副作用的命令。你看不到写代码的会话的对话，只根据下面的改动和要求审查。\n".to_string();
     list(&mut out, "验收条款", cx.acceptance);
     list(&mut out, "约束", cx.constraints);
     if let Some(checks) = cx.checks {
@@ -100,13 +105,19 @@ snippet 照抄代码原文，不要改写；行号写错时，Aeroric 会按 sni
 files 逐个列出上面每个要审查的文件：看过并审查了写 reviewed，没有审查写 skipped 并写原因。不要只审一部分就给结论。
 blocker 只用于必须改的问题：错误、数据丢失、安全、违反验收条款或约束。没有问题时 verdict 为 pass、findings 为空。\n"
     ));
-    out
+    head + &envelope::escape(&out)
 }
 
 pub fn reply_request(card: &ReviewCard) -> String {
-    let mut out = format!(
-        "{REPLY_MARKER} 第 {} 轮 · 审查者 {}\n另一个 Agent 只读审查了你上一回合的改动，意见如下。逐条判断：\n- 采纳（adopt）：照着改；\n- 驳回（reject）：你有更完整的上下文、认为不该改时，写清理由；\n- 需要用户定（ask）：涉及取舍或超出用户要求时。\n不要做超出这些意见和用户原始要求的改动。\n\n",
-        card.round, card.reviewer_label
+    // E5: another agent's comments; the writer weighs each one.
+    let head = envelope::open(
+        REPLY_MARKER,
+        &format!("审查者 {}", card.reviewer_label),
+        &format!("第 {} 轮审查意见", card.round),
+        Authority::Info,
+    );
+    let mut out = String::from(
+        "另一个 Agent 只读审查了你上一回合的改动，意见如下。逐条判断：\n- 采纳（adopt）：照着改；\n- 驳回（reject）：你有更完整的上下文、认为不该改时，写清理由；\n- 需要用户定（ask）：涉及取舍或超出用户要求时。\n不要做超出这些意见和用户原始要求的改动。\n\n",
     );
     for (i, f) in card.findings.iter().enumerate() {
         out.push_str(&format!("{}. {}\n", i + 1, line(f)));
@@ -125,7 +136,7 @@ pub fn reply_request(card: &ReviewCard) -> String {
 {\"responses\": [{\"id\": \"r1\", \"decision\": \"adopt|reject|ask\", \"reason\": \"驳回或待定时写理由\"}]}
 ```\n",
     );
-    out
+    head + &envelope::escape(&out)
 }
 
 fn line(f: &Finding) -> String {

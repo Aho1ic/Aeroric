@@ -136,7 +136,9 @@ pub fn handoff_brief(cp: &Checkpoint, reason: HandoffReason) -> String {
         }
     }
     out.push_str("\n已有证据的改动不要重做；宣告完成前，逐条核销「未完成义务」，并说明每条是怎么核对的。完整对话可用 Aeroric 上下文工具 read_session 查看。\n");
-    out
+    // E5: the records hold model and user text; none of it opens a
+    // host line.
+    crate::sessions::live::envelope::escape(&out)
 }
 
 /// `11-04 00:32` in local time; empty when unknown.
@@ -155,7 +157,7 @@ pub fn status_reminder(cp: &Checkpoint) -> Option<String> {
     if !cp.needs_attention() {
         return None;
     }
-    let mut out = String::from("[Aeroric 状态提醒]\n");
+    let mut out = String::new();
     for e in &cp.unknown {
         out.push_str(&format!("- 结果未知，先核对：{}\n", e.summary));
     }
@@ -177,7 +179,11 @@ pub fn status_reminder(cp: &Checkpoint) -> Option<String> {
         out.push_str(&format!("- 约束：{}\n", c.text));
     }
     out.push('\n');
-    Some(out)
+    // E5: the host's line, then the records' text escaped.
+    Some(format!(
+        "[Aeroric 状态提醒]\n{}",
+        crate::sessions::live::envelope::escape(&out)
+    ))
 }
 
 #[cfg(test)]

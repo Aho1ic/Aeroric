@@ -140,6 +140,7 @@ impl CheckpointSink {
             None => "[Aeroric 状态提醒]\n".to_string(),
         };
         for note in notes {
+            let note = super::envelope::escape(&note);
             out.push_str(&format!("- {note}\n"));
         }
         out.push('\n');

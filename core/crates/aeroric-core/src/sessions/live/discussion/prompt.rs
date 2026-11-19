@@ -4,6 +4,8 @@
 //! [`Discussion::name`], so an anonymous discussion never says who is who.
 
 use super::{version_of, Discussion, Format, PostKind};
+// E5: members' and the user's words never open a host line.
+use crate::sessions::live::envelope::escape;
 
 const READ_ONLY: &str =
     "这是只读讨论：可以读项目里的代码佐证，但不要修改任何文件，也不要执行会改动东西的命令。";
@@ -68,13 +70,13 @@ fn posts(d: &Discussion, indexes: &[usize]) -> String {
             PostKind::User => format!(
                 "<user-post round=\"{}\">\n{}\n</user-post>",
                 p.round,
-                p.text.trim()
+                escape(p.text.trim())
             ),
             _ => format!(
                 "<discussion-post from=\"{}\" round=\"{}\">\n{}\n</discussion-post>",
                 d.name(p.member),
                 p.round,
-                p.text.trim()
+                escape(p.text.trim())
             ),
         })
         .collect::<Vec<_>>()
