@@ -21,6 +21,10 @@ pub struct CopyRecord {
     /// When nothing was left to bring back; cleared again on a new change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleared_ms: Option<u64>,
+    /// B7 (2026-11-19): the copy's own snapshot right after it was made —
+    /// the tree its agent really found. Unset on copies from before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

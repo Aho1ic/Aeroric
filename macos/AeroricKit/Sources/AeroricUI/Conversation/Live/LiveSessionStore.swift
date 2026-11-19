@@ -84,7 +84,7 @@ public protocol LiveSessionActions {
     func openTask(_ taskID: String)
     /// R5-2: run a turn again with other configurations; the reruns so far;
     /// bring one run's copy back whole; drop a run's copy.
-    func startRerun(taskID: String, turnID: String, message: String, brief: Bool,
+    func startRerun(taskID: String, turnID: String, message: String, original: String?, brief: Bool,
                     choices: [LiveRerunChoice]) async throws -> LiveRerunStarted
     func reruns(taskID: String) async throws -> [LiveRerunGroup]
     func bringAll(taskID: String) async throws -> (applied: Int, conflicts: Int)
@@ -95,7 +95,7 @@ public protocol LiveSessionActions {
 }
 
 extension LiveSessionActions {
-    public func startRerun(taskID: String, turnID: String, message: String, brief: Bool,
+    public func startRerun(taskID: String, turnID: String, message: String, original: String?, brief: Bool,
                            choices: [LiveRerunChoice]) async throws -> LiveRerunStarted {
         throw LiveSessionError.unsupported("这个宿主不支持换模型重跑")
     }
@@ -519,10 +519,11 @@ public final class LiveSessionStore {
 
     /// R5-2: nil when the runs started (some may have been refused, said in
     /// the notice); the reason when none did.
-    public func startRerun(turnID: String, message: String, brief: Bool,
+    public func startRerun(turnID: String, message: String, original: String? = nil, brief: Bool,
                            choices: [LiveRerunChoice]) async -> String? {
         do {
             let started = try await actions.startRerun(taskID: taskID, turnID: turnID, message: message,
+                                                       original: original,
                                                        brief: brief, choices: choices)
             rerunNotice = RerunText.started(started)
             Task { await refreshReruns() }

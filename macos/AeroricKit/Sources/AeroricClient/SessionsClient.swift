@@ -439,17 +439,20 @@ extension SessionsClient {
     }
 
     /// R5-2: run `turnId` again with each of `choices` in its own isolated copy.
-    public func startRerun(taskId: String, turnId: String, message: String, brief: Bool,
-                           choices: [LiveRerunChoice]) async throws -> LiveRerunStarted {
+    /// B7: `original` is the turn's message as the sheet first showed it.
+    public func startRerun(taskId: String, turnId: String, message: String, original: String? = nil,
+                           brief: Bool, choices: [LiveRerunChoice]) async throws -> LiveRerunStarted {
         let targets: [JSONValue] = choices.map { choice in
             var target: [String: JSONValue] = ["configurationId": .string(choice.configurationId)]
             if let model = choice.model { target["model"] = .string(model) }
             return .object(target)
         }
-        let frame = try await connection.request("rerun.start", params: .object([
+        var params: [String: JSONValue] = [
             "taskId": .string(taskId), "turnId": .string(turnId), "message": .string(message),
             "brief": .bool(brief), "targets": .array(targets),
-        ]))
+        ]
+        if let original { params["originalMessage"] = .string(original) }
+        let frame = try await connection.request("rerun.start", params: .object(params))
         return LiveRerunStarted.decode(frame.result)
     }
 

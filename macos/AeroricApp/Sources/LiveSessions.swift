@@ -175,9 +175,10 @@ struct HostLiveSessionActions: LiveSessionActions {
         try await client().turns(taskId: taskID)
     }
 
-    func startRerun(taskID: String, turnID: String, message: String, brief: Bool,
+    func startRerun(taskID: String, turnID: String, message: String, original: String?, brief: Bool,
                     choices: [LiveRerunChoice]) async throws -> LiveRerunStarted {
-        try await client().startRerun(taskId: taskID, turnId: turnID, message: message, brief: brief,
+        try await client().startRerun(taskId: taskID, turnId: turnID, message: message, original: original,
+                                      brief: brief,
                                       choices: choices)
     }
 

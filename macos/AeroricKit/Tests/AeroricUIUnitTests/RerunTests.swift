@@ -76,4 +76,37 @@ final class RerunTests: XCTestCase {
         XCTAssertEqual(ordered.map { RerunText.title($0, among: ordered) },
                        ["全部第三方模型 · Codex", "Codex", "Claude Code", "全部第三方模型 · Claude Code"])
     }
+
+    /// B7: the card says from the recorded inputs whether both sides began
+    /// alike, and names each input that differed or was not recorded.
+    func testTheCardSaysWhetherTheInputsMatched() throws {
+        let group = try XCTUnwrap(LiveRerunGroup.decode(.object([
+            "group": .object(["id": .string("g1"), "turnId": .string("turn-3")]),
+            "runs": .array([]),
+            "inputs": .object([
+                "summary": .string("重跑之间输入一致；和原回合比，提示词不同，结果的差异不一定来自模型。技能未记录"),
+                "warn": .bool(true),
+                "items": .array([
+                    .object(["name": .string("起点"), "verdict": .string("same"),
+                             "values": .array([.string("abc"), .string("abc")])]),
+                    .object(["name": .string("提示词"), "verdict": .string("differs"),
+                             "values": .array([.string("11aa"), .string("22bb")])]),
+                    .object(["name": .string("技能"), "verdict": .string("unrecorded"),
+                             "values": .array([.null, .null])]),
+                ]),
+            ]),
+        ])))
+        let inputs = try XCTUnwrap(group.inputs)
+        XCTAssertTrue(inputs.warn)
+        XCTAssertEqual(inputs.items.map(\.verdict), ["same", "differs", "unrecorded"])
+        XCTAssertEqual(RerunText.inputLines(inputs, labels: ["原来这一轮", "Codex"]), [
+            "相同：起点",
+            "提示词 — 原来这一轮：11aa · Codex：22bb",
+            "技能 — 原来这一轮：未记录 · Codex：未记录",
+        ])
+        let old = try XCTUnwrap(LiveRerunGroup.decode(.object([
+            "group": .object(["id": .string("g0"), "turnId": .string("turn-1")]),
+        ])))
+        XCTAssertNil(old.inputs, "a host from before B7 sends none")
+    }
 }

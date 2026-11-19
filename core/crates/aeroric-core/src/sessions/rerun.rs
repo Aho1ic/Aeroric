@@ -6,6 +6,12 @@
 //! alone, what the original session had settled before that turn. The
 //! groups are kept per original session under `<data>/reruns/<task>.json`;
 //! the comparison is read fresh from each run's transcript and ledger.
+//!
+//! B7 (2026-11-19): when a rerun starts, what each side started from is
+//! frozen with the group — the tree, the prompt, the context, the
+//! permission, the harness and model — the original turn's as well as each
+//! run's as it really began. The comparison says from that record whether
+//! the inputs were the same, never by inference.
 
 use std::path::Path;
 
@@ -33,6 +39,9 @@ pub struct RerunGroup {
     pub with_brief: bool,
     pub created_ms: u64,
     pub runs: Vec<RerunRun>,
+    /// B7: the original turn's inputs; unset on groups from before B7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_inputs: Option<RunInputs>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -45,6 +54,207 @@ pub struct RerunRun {
     pub model: Option<String>,
     /// e.g. `Codex · gpt-6.1-sol`.
     pub label: String,
+    /// B7: what this run really started with; unset on runs from before B7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<RunInputs>,
+}
+
+/// B7: what one side of a comparison started from. A field left unset was
+/// not recorded (it reads "未记录", never as the same or different).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInputs {
+    /// The work tree the agent found: for a run, its copy's own snapshot
+    /// taken right after the copy was made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// [`text_hash`] of the message (without the brief).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// `conversation` (the session so far), `brief:<hash>` (what had been
+    /// settled, then the message) or `message` (the message alone).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Skills and their versions; unset until they are recorded (C7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+}
+
+/// The first 16 hex digits of the SHA-256 of `text`, trimmed: the same
+/// message typed again hashes the same.
+pub fn text_hash(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(text.trim().as_bytes());
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// B7: one input across the columns (original first, then each run).
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InputItem {
+    pub name: &'static str,
+    /// Per column, as shown; `None`: not recorded.
+    pub values: Vec<Option<String>>,
+    /// `same` | `differs` | `unrecorded` | `compared` (what the rerun is
+    /// for: harness and model).
+    pub verdict: &'static str,
+    /// The runs differ among themselves (not only from the original).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub runs_differ: bool,
+}
+
+/// B7: whether the sides started from the same inputs.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InputComparison {
+    /// One line for the card's head.
+    pub summary: String,
+    /// At least one difference: results may differ for that reason, not
+    /// the model's.
+    pub warn: bool,
+    pub items: Vec<InputItem>,
+}
+
+pub const INPUTS_UNRECORDED: &str = "这组重跑早于输入记录，说不出两边的输入是否一致";
+
+/// B7: the group's inputs side by side, from what was recorded at start.
+pub fn compare_inputs(group: &RerunGroup) -> InputComparison {
+    let Some(original) = &group.original_inputs else {
+        return InputComparison {
+            summary: INPUTS_UNRECORDED.into(),
+            warn: true,
+            items: Vec::new(),
+        };
+    };
+    let empty = RunInputs::default();
+    let mut sides = vec![original];
+    sides.extend(
+        group
+            .runs
+            .iter()
+            .map(|r| r.inputs.as_ref().unwrap_or(&empty)),
+    );
+    let short = |v: &Option<String>, n: usize| v.as_ref().map(|t| t.chars().take(n).collect());
+    let item = |name: &'static str, values: Vec<Option<String>>, compared: bool| {
+        let known: Vec<&String> = values.iter().flatten().collect();
+        let runs: Vec<&String> = values[1..].iter().flatten().collect();
+        let runs_differ = runs.windows(2).any(|w| w[0] != w[1]);
+        let verdict = if compared {
+            "compared"
+        } else if known.len() < values.len() {
+            "unrecorded"
+        } else if known.windows(2).all(|w| w[0] == w[1]) {
+            "same"
+        } else {
+            "differs"
+        };
+        InputItem {
+            name,
+            values,
+            verdict,
+            runs_differ: runs_differ && !compared,
+        }
+    };
+    let items = vec![
+        item(
+            "起点",
+            sides.iter().map(|s| short(&s.base, 10)).collect(),
+            false,
+        ),
+        item(
+            "提示词",
+            sides.iter().map(|s| short(&s.prompt, 8)).collect(),
+            false,
+        ),
+        item(
+            "上下文",
+            sides
+                .iter()
+                .map(|s| s.context.as_deref().map(context_text))
+                .collect(),
+            false,
+        ),
+        item(
+            "权限",
+            sides.iter().map(|s| s.permission.clone()).collect(),
+            false,
+        ),
+        item(
+            "技能",
+            sides
+                .iter()
+                .map(|s| s.skills.as_ref().map(|k| k.join("、")))
+                .collect(),
+            false,
+        ),
+        item(
+            "Harness 与模型",
+            sides
+                .iter()
+                .map(|s| {
+                    s.harness.as_ref().map(|h| match &s.model {
+                        Some(m) => format!("{h} · {m}"),
+                        None => h.clone(),
+                    })
+                })
+                .collect(),
+            true,
+        ),
+    ];
+    let names = |pick: &dyn Fn(&InputItem) -> bool| -> Vec<&'static str> {
+        items.iter().filter(|i| pick(i)).map(|i| i.name).collect()
+    };
+    let between = names(&|i| i.runs_differ);
+    let differs = names(&|i| i.verdict == "differs");
+    // Skills are not recorded anywhere yet (C7): said, but they do not keep
+    // the rest from being judged.
+    let unknown = names(&|i| i.verdict == "unrecorded" && i.name != "技能");
+    let skills_unknown = verdict_of(&items, "技能") == Some("unrecorded");
+    let mut summary = if !between.is_empty() {
+        format!(
+            "重跑之间有 {} 处输入不同（{}），结果的差异不一定来自模型",
+            between.len(),
+            between.join("、")
+        )
+    } else if !differs.is_empty() {
+        format!(
+            "重跑之间输入一致；和原回合比，{}不同，结果的差异不一定来自模型",
+            differs.join("、")
+        )
+    } else if !unknown.is_empty() {
+        format!("说不出输入是否一致：{}未记录", unknown.join("、"))
+    } else {
+        "输入一致，只换了 Harness 和模型".to_string()
+    };
+    if skills_unknown {
+        summary.push_str("。技能未记录");
+    }
+    InputComparison {
+        summary,
+        warn: !differs.is_empty() || !between.is_empty() || !unknown.is_empty(),
+        items,
+    }
+}
+
+fn verdict_of(items: &[InputItem], name: &str) -> Option<&'static str> {
+    items.iter().find(|i| i.name == name).map(|i| i.verdict)
+}
+
+fn context_text(context: &str) -> String {
+    match context {
+        "conversation" => "完整对话".into(),
+        "message" => "只有消息".into(),
+        other => match other.strip_prefix("brief:") {
+            Some(hash) => format!("已确认的决定（{}）+ 消息", &hash[..hash.len().min(6)]),
+            None => other.into(),
+        },
+    }
 }
 
 fn path(dir: &Path, origin: &str) -> std::path::PathBuf {
@@ -299,7 +509,9 @@ mod tests {
                 agent: "codex".into(),
                 model: Some("gpt-6.1-sol".into()),
                 label: "Codex · gpt-6.1-sol".into(),
+                inputs: None,
             }],
+            original_inputs: None,
         };
         assert!(load(&dir, "task/1").is_empty());
         append(&dir, group("g1")).unwrap();
@@ -381,6 +593,7 @@ mod tests {
             with_brief: true,
             created_ms,
             runs: vec![],
+            original_inputs: None,
         };
         let records = [record(TurnState::Undone, Some(500))];
         let mut turns = vec![failed()];
@@ -403,5 +616,138 @@ mod tests {
         );
         assert_eq!(permission(&modes(&["ask"]), Some("ask")), "ask");
         assert_eq!(permission(&[], None), "ask");
+    }
+
+    fn inputs(
+        base: &str,
+        prompt: &str,
+        context: &str,
+        permission: &str,
+        harness: &str,
+    ) -> RunInputs {
+        RunInputs {
+            base: Some(base.into()),
+            prompt: Some(text_hash(prompt)),
+            context: Some(context.into()),
+            permission: Some(permission.into()),
+            harness: Some(harness.into()),
+            model: None,
+            skills: None,
+        }
+    }
+
+    fn compared(original: Option<RunInputs>, runs: Vec<Option<RunInputs>>) -> InputComparison {
+        compare_inputs(&RerunGroup {
+            id: "g".into(),
+            origin_task_id: "o".into(),
+            turn_id: "t".into(),
+            turn_started_ms: 0,
+            base: "tree-a".into(),
+            message: "m".into(),
+            with_brief: false,
+            created_ms: 0,
+            runs: runs
+                .into_iter()
+                .enumerate()
+                .map(|(i, inputs)| RerunRun {
+                    task_id: format!("r{i}"),
+                    configuration_id: "c".into(),
+                    agent: "codex".into(),
+                    model: None,
+                    label: "Codex".into(),
+                    inputs,
+                })
+                .collect(),
+            original_inputs: original,
+        })
+    }
+
+    fn verdict<'a>(c: &'a InputComparison, name: &str) -> &'a InputItem {
+        c.items.iter().find(|i| i.name == name).unwrap()
+    }
+
+    /// B7: same tree, same message, only the model changed: consistent,
+    /// and skills (not recorded yet) say so instead of passing as the same.
+    #[test]
+    fn inputs_that_match_say_only_the_model_changed() {
+        let original = inputs("tree-a", "修复超时", "message", "auto_edit", "claude");
+        let run = inputs("tree-a", "修复超时 ", "message", "auto_edit", "codex");
+        let c = compared(Some(original), vec![Some(run.clone()), Some(run)]);
+        assert_eq!(verdict(&c, "起点").verdict, "same");
+        assert_eq!(
+            verdict(&c, "提示词").verdict,
+            "same",
+            "trailing blank ignored"
+        );
+        assert_eq!(verdict(&c, "Harness 与模型").verdict, "compared");
+        assert_eq!(verdict(&c, "技能").verdict, "unrecorded");
+        assert!(!c.warn);
+        assert_eq!(c.summary, "输入一致，只换了 Harness 和模型。技能未记录");
+    }
+
+    /// B7: an edited message and the original's whole conversation differ
+    /// from the original; a run whose copy began elsewhere differs among
+    /// the runs, and that is what the head says first.
+    #[test]
+    fn differing_inputs_are_named_and_runs_apart_come_first() {
+        let original = inputs("tree-a", "修复超时", "conversation", "ask", "claude");
+        let run = inputs(
+            "tree-a",
+            "修复超时，并补测试",
+            "brief:0123456789",
+            "auto_edit",
+            "codex",
+        );
+        let c = compared(
+            Some(original.clone()),
+            vec![Some(run.clone()), Some(run.clone())],
+        );
+        assert!(c.warn);
+        assert_eq!(
+            c.summary,
+            "重跑之间输入一致；和原回合比，提示词、上下文、权限不同，结果的差异不一定来自模型。技能未记录"
+        );
+        assert_eq!(
+            verdict(&c, "上下文").values,
+            [
+                Some("完整对话".to_string()),
+                Some("已确认的决定（012345）+ 消息".to_string()),
+                Some("已确认的决定（012345）+ 消息".to_string())
+            ]
+        );
+
+        let elsewhere = RunInputs {
+            base: Some("tree-b".into()),
+            ..run.clone()
+        };
+        let c = compared(Some(original), vec![Some(run), Some(elsewhere)]);
+        assert!(verdict(&c, "起点").runs_differ);
+        assert!(
+            c.summary.starts_with("重跑之间有 1 处输入不同（起点）"),
+            "{}",
+            c.summary
+        );
+    }
+
+    /// B7: a group from before the record cannot claim anything; a run
+    /// without its own record reads 未记录, not the same.
+    #[test]
+    fn unrecorded_inputs_are_never_called_the_same() {
+        let c = compared(None, vec![None]);
+        assert_eq!(c.summary, INPUTS_UNRECORDED);
+        assert!(c.warn && c.items.is_empty());
+
+        let original = inputs("tree-a", "m", "message", "ask", "claude");
+        let c = compared(Some(original), vec![None]);
+        assert_eq!(verdict(&c, "起点").verdict, "unrecorded");
+        assert_eq!(
+            verdict(&c, "起点").values,
+            [Some("tree-a".to_string()), None]
+        );
+        assert_eq!(
+            c.summary,
+            "说不出输入是否一致：起点、提示词、上下文、权限未记录。技能未记录"
+        );
+        assert!(c.warn);
     }
 }

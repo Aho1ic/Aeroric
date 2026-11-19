@@ -254,6 +254,8 @@ fn a_copy_can_start_from_an_earlier_snapshot() {
     let (_, copies) = review(&dir);
     let (record, cwd) = create_from(&copies, &dir, "task-rerun", Some(&before)).unwrap();
     assert_eq!(record.base, before);
+    // B7: the copy read back is exactly the snapshot it was made from.
+    assert_eq!(record.started.as_deref(), Some(before.as_str()));
     assert_eq!(read(&cwd.join("a.txt")), "one\nBEFORE\nthree\n");
     assert!(!cwd.join("later.txt").exists());
     assert_eq!(

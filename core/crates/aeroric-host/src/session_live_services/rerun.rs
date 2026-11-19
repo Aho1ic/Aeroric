@@ -2,10 +2,12 @@
 //! other configurations, each a submission of its own in an isolated copy
 //! made from the turn's `before` snapshot; `rerun.list` reads the original
 //! turn and every run side by side. Judging is the user's: nothing is scored.
+//! B7 (2026-11-19): each side's inputs are frozen into the group when the
+//! rerun starts; `rerun.list` says from them whether the inputs matched.
 
 use std::sync::Arc;
 
-use aeroric_core::sessions::rerun::{self, RerunGroup, RerunRun, MAX_RUNS};
+use aeroric_core::sessions::rerun::{self, RerunGroup, RerunRun, RunInputs, MAX_RUNS};
 use aeroric_core::sessions::transcript_stats::TurnStat;
 use aeroric_core::sessions::{change_cost, turn_outcome};
 use aeroric_core::storage::Record;
@@ -47,6 +49,9 @@ struct StartParams {
     #[serde(default = "yes")]
     brief: bool,
     targets: Vec<Target>,
+    /// B7: the turn's message as the sheet first showed it (before edits).
+    #[serde(default)]
+    original_message: Option<String>,
 }
 
 fn yes() -> bool {
@@ -130,11 +135,11 @@ fn start(live: &Live, request: &Request) -> Frame {
             Ok((_, catalog)) => catalog,
             Err(reason) => return fail(ErrorCode::InvalidArgument, &reason),
         };
+    // The turn's place among the session's turns, matched like the bill.
+    let index = turns(live, &record)
+        .iter()
+        .position(|t| change_cost::nearest(t.started_at, std::slice::from_ref(&turn)).is_some());
     let brief = if p.brief {
-        // The turn's place among the session's turns, matched like the bill.
-        let index = turns(live, &record).iter().position(|t| {
-            change_cost::nearest(t.started_at, std::slice::from_ref(&turn)).is_some()
-        });
         let checkpoint = std::fs::read(
             live.context
                 .paths
@@ -152,6 +157,22 @@ fn start(live: &Live, request: &Request) -> Frame {
     };
     let prompt = rerun::prompt(&p.message, brief.as_deref());
     let original_permission = field(&record, "permissionMode");
+    // B7: what the original turn started from. Its context was the session
+    // so far, which is the message alone on a session's first turn.
+    let original_inputs = RunInputs {
+        base: Some(turn.before.clone()),
+        prompt: p.original_message.as_deref().map(rerun::text_hash),
+        context: index.map(|i| if i == 0 { "message" } else { "conversation" }.to_string()),
+        permission: original_permission.clone(),
+        harness: field(&record, "agent"),
+        model: field(&record, "selectedModel"),
+        skills: None,
+    };
+    let context = match &brief {
+        Some(brief) => format!("brief:{}", rerun::text_hash(brief)),
+        None => "message".to_string(),
+    };
+    let copies = live.context.paths.data_dir().join("copies");
     let title = title_of(&record);
     let mut runs = Vec::new();
     let mut refused = Vec::new();
@@ -213,12 +234,25 @@ fn start(live: &Live, request: &Request) -> Frame {
         let _ = live
             .service
             .rename(&project_id, &task_id, &format!("{title}（重跑 · {label}）"));
+        // B7: the tree its copy really holds, read back when it was made.
+        let started = aeroric_core::sessions::live::isolated_copy::load(&copies, &task_id)
+            .and_then(|copy| copy.started);
+        let inputs = RunInputs {
+            base: started,
+            prompt: Some(rerun::text_hash(&p.message)),
+            context: Some(context.clone()),
+            permission: Some(permission.clone()),
+            harness: Some(configuration.agent.clone()),
+            model: target.model.clone(),
+            skills: None,
+        };
         runs.push(RerunRun {
             task_id,
             configuration_id: configuration.id.clone(),
             agent: configuration.agent.clone(),
             model: target.model.clone(),
             label,
+            inputs: Some(inputs),
         });
     }
     if runs.is_empty() {
@@ -234,6 +268,7 @@ fn start(live: &Live, request: &Request) -> Frame {
         with_brief: brief.is_some(),
         created_ms: super::now_ms(),
         runs,
+        original_inputs: Some(original_inputs),
     };
     if let Err(error) = rerun::append(&reruns_dir(live), group.clone()) {
         return fail(ErrorCode::IoError, &format!("记录重跑失败：{error}"));
@@ -299,7 +334,9 @@ fn list(live: &Live, request: &Request) -> Frame {
                     json!({"run": run, "copy": copy, "result": rerun::column(first, &changes, running, None)})
                 })
                 .collect();
-            json!({"group": group, "original": original, "runs": runs})
+            // B7: from what was frozen at start, never inferred now.
+            let inputs = rerun::compare_inputs(&group);
+            json!({"group": group, "original": original, "runs": runs, "inputs": inputs})
         })
         .collect();
     ok(request, json!({ "groups": groups }))

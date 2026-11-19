@@ -11,6 +11,8 @@ public struct LiveRerunGroup: Equatable, Sendable, Identifiable {
     /// The original turn, the first column.
     public var original: LiveRerunColumn
     public var runs: [LiveRerunRun]
+    /// B7: whether the sides started from the same inputs, as recorded.
+    public var inputs: LiveRerunInputs?
 
     public init(id: String, turnId: String, message: String = "", withBrief: Bool = true, createdMs: UInt64 = 0,
                 original: LiveRerunColumn = LiveRerunColumn(), runs: [LiveRerunRun] = []) {
@@ -32,10 +34,55 @@ public struct LiveRerunGroup: Equatable, Sendable, Identifiable {
         let group = f["group"]?.fields ?? [:]
         guard let id = group["id"]?.stringValue, let turnId = group["turnId"]?.stringValue else { return nil }
         let runs = (f["runs"]?.arrayValue ?? []).compactMap(LiveRerunRun.decode)
-        return LiveRerunGroup(id: id, turnId: turnId, message: group["message"]?.stringValue ?? "",
-                              withBrief: group["withBrief"]?.boolValue ?? true,
-                              createdMs: group["createdMs"]?.numberText.flatMap { UInt64($0) } ?? 0,
-                              original: LiveRerunColumn.decode(f["original"]), runs: runs)
+        var decoded = LiveRerunGroup(id: id, turnId: turnId, message: group["message"]?.stringValue ?? "",
+                                     withBrief: group["withBrief"]?.boolValue ?? true,
+                                     createdMs: group["createdMs"]?.numberText.flatMap { UInt64($0) } ?? 0,
+                                     original: LiveRerunColumn.decode(f["original"]), runs: runs)
+        decoded.inputs = f["inputs"].flatMap(LiveRerunInputs.decode)
+        return decoded
+    }
+}
+
+/// B7: mirrors `aeroric_core::sessions::rerun::InputComparison`.
+public struct LiveRerunInputs: Equatable, Sendable {
+    public struct Item: Equatable, Sendable, Identifiable {
+        public var id: String { name }
+        public var name: String
+        /// The original first, then each run; nil: not recorded.
+        public var values: [String?]
+        /// `same` / `differs` / `unrecorded` / `compared`.
+        public var verdict: String
+        public var runsDiffer: Bool
+
+        public init(name: String, values: [String?], verdict: String, runsDiffer: Bool = false) {
+            self.name = name
+            self.values = values
+            self.verdict = verdict
+            self.runsDiffer = runsDiffer
+        }
+    }
+
+    public var summary: String
+    /// Some input differs, or could not be told.
+    public var warn: Bool
+    public var items: [Item]
+
+    public init(summary: String, warn: Bool, items: [Item] = []) {
+        self.summary = summary
+        self.warn = warn
+        self.items = items
+    }
+
+    public static func decode(_ value: JSONValue) -> LiveRerunInputs? {
+        let f = value.fields
+        guard let summary = f["summary"]?.stringValue else { return nil }
+        let items: [Item] = (f["items"]?.arrayValue ?? []).compactMap { item in
+            let g = item.fields
+            guard let name = g["name"]?.stringValue, let verdict = g["verdict"]?.stringValue else { return nil }
+            let values: [String?] = (g["values"]?.arrayValue ?? []).map { $0.stringValue }
+            return Item(name: name, values: values, verdict: verdict, runsDiffer: g["runsDiffer"]?.boolValue ?? false)
+        }
+        return LiveRerunInputs(summary: summary, warn: f["warn"]?.boolValue ?? false, items: items)
     }
 }
 

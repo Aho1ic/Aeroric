@@ -84,6 +84,8 @@ pub fn create_from(
         return Err("把未提交的改动复制进副本失败".into());
     }
     copy_included(&top, &path);
+    // B7: what the agent will really find, read back rather than assumed.
+    let started = snapshot_tree(&path).map(|(_, tree)| tree);
     let _ = git(&top, &["update-ref", &base_ref(task_id), &base], None);
     let record = CopyRecord {
         task_id: task_id.to_string(),
@@ -92,6 +94,7 @@ pub fn create_from(
         base,
         created_ms: now_ms(),
         cleared_ms: None,
+        started,
     };
     save(dir, &record);
     let inside = project

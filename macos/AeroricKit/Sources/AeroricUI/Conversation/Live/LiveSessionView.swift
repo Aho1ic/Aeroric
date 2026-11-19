@@ -197,7 +197,8 @@ public struct LiveSessionView: View {
         .sheet(item: $loginHelp) { LoginHelpSheet(login: $0) }
         .sheet(item: $rerunRequest) { request in
             RerunSheet(request: request, targets: facts.rerunTargets) { message, brief, choices in
-                await store.startRerun(turnID: request.turnID, message: message, brief: brief, choices: choices)
+                await store.startRerun(turnID: request.turnID, message: message, original: request.message,
+                                       brief: brief, choices: choices)
             }
             // 目检 2026-11-12: right after a restart the built-in Codex had not
             // answered yet, so the catalog read then left it out of the list.

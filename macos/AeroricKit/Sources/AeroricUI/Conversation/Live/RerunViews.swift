@@ -55,6 +55,23 @@ public enum RerunText {
         target.models.isEmpty ? "默认模型" : "\(target.models.count) 个模型"
     }
 
+    /// B7: the inputs in detail: what was the same in one line, then one
+    /// line per input that differed or was not recorded, each column named.
+    public static func inputLines(_ inputs: LiveRerunInputs, labels: [String]) -> [String] {
+        var same: [String] = []
+        var lines: [String] = []
+        for item in inputs.items {
+            if item.verdict == "same" {
+                same.append(item.name)
+                continue
+            }
+            let cells = zip(labels, item.values).map { "\($0)：\($1 ?? "未记录")" }
+            lines.append("\(item.name) — \(cells.joined(separator: " · "))")
+        }
+        if !same.isEmpty { lines.insert("相同：\(same.joined(separator: "、"))", at: 0) }
+        return lines
+    }
+
     public static func anyRunning(_ groups: [LiveRerunGroup]) -> Bool {
         groups.contains { $0.runs.contains { $0.result.outcome == "running" || $0.result.outcome == "pending" } }
     }
@@ -296,6 +313,7 @@ struct RerunCompareCard: View {
     let onBringBack: (LiveRerunRun, Bool) -> Void
     let onDrop: ([LiveRerunRun]) -> Void
     @State private var keep: LiveRerunRun?
+    @State private var showsInputs = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.m) {
@@ -313,6 +331,9 @@ struct RerunCompareCard: View {
                         .help("删掉这些重跑的独立副本；会话留在侧栏")
                         .accessibilityIdentifier("rerun.dropAll")
                 }
+            }
+            if let inputs = group.inputs {
+                inputsLine(inputs)
             }
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: AeroricSpace.m) {
@@ -338,6 +359,42 @@ struct RerunCompareCard: View {
             Button("取消", role: .cancel) {}
         } message: { _ in
             Text(originalKept ? "原来这一轮的改动还在目录里。" : "把这个重跑副本里的改动带回原目录。")
+        }
+    }
+
+    /// B7: whether both sides started alike, from what was recorded at start.
+    @ViewBuilder private func inputsLine(_ inputs: LiveRerunInputs) -> some View {
+        let lines = RerunText.inputLines(inputs, labels: ["原来这一轮"] + group.runs.map(\.label))
+        Button { showsInputs.toggle() } label: {
+            HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.xs) {
+                Image(systemName: inputs.warn ? "exclamationmark.triangle" : "checkmark.circle")
+                Text(inputs.summary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !lines.isEmpty {
+                    Image(systemName: showsInputs ? "chevron.down" : "chevron.right")
+                        .font(.system(size: AeroricType.caption - 2))
+                }
+            }
+            .font(.system(size: AeroricType.caption))
+            .foregroundStyle(inputs.warn ? AeroricColor.warning : AeroricColor.textSecondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(lines.isEmpty)
+        .help("两边起步时记下的输入：起点、提示词、上下文、权限、技能")
+        .accessibilityIdentifier("rerun.inputs")
+        if showsInputs {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(lines, id: \.self) { line in
+                    Text(line)
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(AeroricColor.textSecondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.leading, AeroricSpace.l)
         }
     }
 
