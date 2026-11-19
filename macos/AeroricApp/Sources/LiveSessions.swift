@@ -734,6 +734,11 @@ struct HostMemoryService: MemoryService {
         let reply = try await client().memoryCall("memory.chain", ["id": .string(id)])
         return (reply["changes"]?.arrayValue ?? []).compactMap(LiveCodeChange.decode)
     }
+
+    func evidenceLocate(itemID: String, index: Int) async throws -> LiveEvidenceLookup {
+        LiveEvidenceLookup.decode(try await client().memoryCall(
+            "memory.evidenceLocate", ["itemId": .string(itemID), "index": .number("\(index)")]))
+    }
 }
 
 /// A12 (2026-11-14): the 定时任务 page's host calls, over `SessionsClient`.

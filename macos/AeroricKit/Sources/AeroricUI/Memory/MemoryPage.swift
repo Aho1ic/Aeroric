@@ -24,6 +24,8 @@ public struct MemoryPage: View {
     @State private var showClosedSkills = false
     /// B6: the memory whose 相关改动 sheet is open.
     @State private var chainOf: LiveMemoryItem?
+    /// C1: the evidence whose 查看原话 sheet is open.
+    @State private var sourceOf: MemoryEvidenceRef?
     /// B5-2: a session clue opens its session.
     let onOpenTask: (String) -> Void
 
@@ -76,6 +78,12 @@ public struct MemoryPage: View {
                 chainOf = nil
                 onOpenTask(task)
             }, onClose: { chainOf = nil })
+        }
+        .sheet(item: $sourceOf) { ref in
+            MemoryEvidenceSheet(store: store, item: ref.item, index: ref.index, onOpenTask: { task in
+                sourceOf = nil
+                onOpenTask(task)
+            }, onClose: { sourceOf = nil })
         }
         .sheet(isPresented: $showSettings) {
             MemoryExtractSettingsSheet(store: store, onClose: { showSettings = false })
@@ -754,11 +762,22 @@ public struct MemoryPage: View {
                     .fixedSize(horizontal: false, vertical: open)
                     .textSelection(.enabled)
                 if open, let source = MemoryText.evidenceLine(item) {
-                    Text(source)
-                        .font(.system(size: AeroricType.caption))
-                        .foregroundStyle(AeroricColor.textTertiary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
+                    HStack(alignment: .firstTextBaseline, spacing: AeroricSpace.s) {
+                        Text(source)
+                            .font(.system(size: AeroricType.caption))
+                            .foregroundStyle(AeroricColor.textTertiary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                        if let index = MemoryText.sourceIndex(item) {
+                            Button("查看原话") { sourceOf = MemoryEvidenceRef(item: item, index: index) }
+                                .buttonStyle(.plain)
+                                .font(.system(size: AeroricType.caption))
+                                .foregroundStyle(AeroricColor.accent)
+                                .fixedSize()
+                                .help("在来源会话里找到这句原话")
+                                .accessibilityIdentifier("memory.evidence.open")
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -837,6 +856,11 @@ public struct MemoryPage: View {
                 Button("有用", systemImage: "hand.thumbsup") { Task { await store.feedback(item, helpful: true) } }
                 Button("不对", systemImage: "hand.thumbsdown") { Task { await store.feedback(item, helpful: false) } }
                 Divider()
+            }
+            if let index = MemoryText.sourceIndex(item) {
+                Button("查看原话…", systemImage: "text.quote") {
+                    sourceOf = MemoryEvidenceRef(item: item, index: index)
+                }
             }
             if MemoryText.hasChain(item) {
                 Button("相关改动…", systemImage: "chevron.left.forwardslash.chevron.right") { chainOf = item }
@@ -1358,5 +1382,82 @@ struct MemoryChainSheet: View {
             }
         }
         .accessibilityIdentifier("memory.chain.\(change.id)")
+    }
+}
+
+/// C1: which evidence of which memory the 查看原话 sheet shows.
+struct MemoryEvidenceRef: Identifiable {
+    let item: LiveMemoryItem
+    let index: Int
+    var id: String { "\(item.id)#\(index)" }
+}
+
+/// C1 (2026-11-19): 查看原话 — the source message read again, the words
+/// marked; or why it cannot be shown (changed, gone, not recorded), with
+/// the excerpt kept at the time.
+struct MemoryEvidenceSheet: View {
+    let store: MemoryStore
+    let item: LiveMemoryItem
+    let index: Int
+    let onOpenTask: (String) -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.l) {
+            Text("原话").font(.system(size: AeroricType.title, weight: .semibold))
+            Text(item.text)
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+                .lineLimit(2)
+            if let error = store.lookupError {
+                Text(error)
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let lookup = store.lookup {
+                Text(MemoryText.lookupStatus(lookup))
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(lookup.status == "located" ? AeroricColor.textSecondary : AeroricColor.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("memory.evidence.status")
+                ScrollView {
+                    Text(lookup.message.map(marked) ?? AttributedString(lookup.excerpt))
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(lookup.message == nil ? AeroricColor.textSecondary : AeroricColor.text)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(AeroricSpace.l)
+                }
+                .scrollIndicators(.automatic)
+                .frame(maxHeight: 320)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(AeroricRadius.shape(AeroricRadius.m).fill(AeroricColor.layer1))
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            HStack {
+                Spacer()
+                if let task = store.lookup?.taskId, store.lookup?.status != "gone" {
+                    Button("打开这个会话") { onOpenTask(task) }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.tinted))
+                        .accessibilityIdentifier("memory.evidence.openTask")
+                }
+                Button("关闭", action: onClose)
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost))
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(AeroricSpace.xl)
+        .frame(width: 620)
+        .task { await store.loadLookup(item, index: index) }
+    }
+
+    /// The message with the words marked.
+    private func marked(_ message: LiveEvidenceMessage) -> AttributedString {
+        let parts = MemoryText.split(message)
+        var words = AttributedString(parts.words)
+        words.backgroundColor = AeroricColor.accent.opacity(0.22)
+        words.font = .system(size: AeroricType.secondary, weight: .semibold)
+        return AttributedString(parts.before) + words + AttributedString(parts.after)
     }
 }

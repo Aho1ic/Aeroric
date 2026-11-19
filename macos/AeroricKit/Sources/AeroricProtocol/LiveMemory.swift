@@ -118,13 +118,17 @@ public struct LiveMemoryEvidence: Equatable, Sendable {
     public var model: String?
     public var excerpt: String
     public var atMs: UInt64
+    /// C1 (2026-11-19): the message the words were found in; nil before C1.
+    public var location: LiveEvidenceLocation?
 
-    public init(taskId: String? = nil, harness: String? = nil, model: String? = nil, excerpt: String, atMs: UInt64 = 0) {
+    public init(taskId: String? = nil, harness: String? = nil, model: String? = nil, excerpt: String, atMs: UInt64 = 0,
+                location: LiveEvidenceLocation? = nil) {
         self.taskId = taskId
         self.harness = harness
         self.model = model
         self.excerpt = excerpt
         self.atMs = atMs
+        self.location = location
     }
 
     public static func decode(_ value: JSONValue) -> LiveMemoryEvidence? {
@@ -132,7 +136,82 @@ public struct LiveMemoryEvidence: Equatable, Sendable {
         guard let excerpt = f["excerpt"]?.stringValue else { return nil }
         return LiveMemoryEvidence(taskId: f["taskId"]?.stringValue, harness: f["harness"]?.stringValue,
                                   model: f["model"]?.stringValue, excerpt: excerpt,
-                                  atMs: f["atMs"]?.numberText.flatMap { UInt64($0) } ?? 0)
+                                  atMs: f["atMs"]?.numberText.flatMap { UInt64($0) } ?? 0,
+                                  location: f["location"].flatMap(LiveEvidenceLocation.decode))
+    }
+}
+
+/// C1: where in its session an evidence's words were found.
+public struct LiveEvidenceLocation: Equatable, Sendable {
+    public var messageIndex: Int
+    public var role: String
+
+    public init(messageIndex: Int, role: String) {
+        self.messageIndex = messageIndex
+        self.role = role
+    }
+
+    public static func decode(_ value: JSONValue) -> LiveEvidenceLocation? {
+        let f = value.fields
+        guard let index = f["messageIndex"]?.numberText.flatMap({ Int($0) }) else { return nil }
+        return LiveEvidenceLocation(messageIndex: index, role: f["role"]?.stringValue ?? "")
+    }
+}
+
+/// C1: `memory.evidenceLocate` — what became of an evidence's source.
+public struct LiveEvidenceLookup: Equatable, Sendable {
+    /// `located` / `moved` / `changed` / `gone` / `unrecorded`.
+    public var status: String
+    public var taskId: String?
+    public var excerpt: String
+    public var message: LiveEvidenceMessage?
+
+    public init(status: String, taskId: String? = nil, excerpt: String, message: LiveEvidenceMessage? = nil) {
+        self.status = status
+        self.taskId = taskId
+        self.excerpt = excerpt
+        self.message = message
+    }
+
+    public static func decode(_ value: JSONValue) -> LiveEvidenceLookup {
+        let f = value.fields
+        return LiveEvidenceLookup(status: f["status"]?.stringValue ?? "unrecorded",
+                                  taskId: f["taskId"]?.stringValue,
+                                  excerpt: f["excerpt"]?.stringValue ?? "",
+                                  message: f["message"].flatMap(LiveEvidenceMessage.decode))
+    }
+}
+
+/// C1: the message around the words (a window of a long one). `start` and
+/// `end` count Unicode scalars, as the host counts chars.
+public struct LiveEvidenceMessage: Equatable, Sendable {
+    public var messageIndex: Int
+    public var role: String
+    public var text: String
+    public var start: Int
+    public var end: Int
+    public var cutBefore: Bool
+    public var cutAfter: Bool
+
+    public init(messageIndex: Int, role: String, text: String, start: Int, end: Int,
+                cutBefore: Bool = false, cutAfter: Bool = false) {
+        self.messageIndex = messageIndex
+        self.role = role
+        self.text = text
+        self.start = start
+        self.end = end
+        self.cutBefore = cutBefore
+        self.cutAfter = cutAfter
+    }
+
+    public static func decode(_ value: JSONValue) -> LiveEvidenceMessage? {
+        let f = value.fields
+        guard let text = f["text"]?.stringValue else { return nil }
+        let int = { (key: String) in f[key]?.numberText.flatMap { Int($0) } ?? 0 }
+        return LiveEvidenceMessage(messageIndex: int("messageIndex"), role: f["role"]?.stringValue ?? "",
+                                   text: text, start: int("start"), end: int("end"),
+                                   cutBefore: f["cutBefore"]?.boolValue ?? false,
+                                   cutAfter: f["cutAfter"]?.boolValue ?? false)
     }
 }
 

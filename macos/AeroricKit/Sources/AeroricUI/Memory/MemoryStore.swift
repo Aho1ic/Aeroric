@@ -50,6 +50,8 @@ public protocol MemoryService {
     func semanticStatus() async throws -> LiveSemanticStatus
     /// B6 代码版本链: the changes of the sessions a memory came from.
     func chain(id: String) async throws -> [LiveCodeChange]
+    /// C1 (2026-11-19): what became of one evidence's source message.
+    func evidenceLocate(itemID: String, index: Int) async throws -> LiveEvidenceLookup
 }
 
 extension MemoryService {
@@ -78,6 +80,9 @@ extension MemoryService {
     public func revertDream(id: String) async throws {}
     public func semanticStatus() async throws -> LiveSemanticStatus { LiveSemanticStatus() }
     public func chain(id: String) async throws -> [LiveCodeChange] { [] }
+    public func evidenceLocate(itemID: String, index: Int) async throws -> LiveEvidenceLookup {
+        LiveEvidenceLookup(status: "unrecorded", excerpt: "")
+    }
 }
 
 /// The memory page's five tabs (§6.7).
@@ -384,6 +389,22 @@ public final class MemoryStore {
         } catch {
             chain = []
             errorText = "读取相关改动失败：\(AgentConfigStore.describe(error))"
+        }
+    }
+
+    /// C1: the 查看原话 sheet's answer; nil while it is read.
+    public private(set) var lookup: LiveEvidenceLookup?
+    /// C1: why it could not be read.
+    public private(set) var lookupError: String?
+
+    public func loadLookup(_ item: LiveMemoryItem, index: Int) async {
+        guard let service else { return }
+        lookup = nil
+        lookupError = nil
+        do {
+            lookup = try await service.evidenceLocate(itemID: item.id, index: index)
+        } catch {
+            lookupError = "读取原文失败：\(AgentConfigStore.describe(error))"
         }
     }
 
@@ -822,6 +843,51 @@ public enum MemoryText {
         let excerpt = first.excerpt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !excerpt.isEmpty, excerpt != item.text else { return nil }
         return "依据：\(excerpt)"
+    }
+
+    /// C1: the evidence 查看原话 opens — the first one placed in a message,
+    /// else the first from a session; nil when none came from a session.
+    public static func sourceIndex(_ item: LiveMemoryItem) -> Int? {
+        item.evidence.firstIndex { $0.location != nil }
+            ?? item.evidence.firstIndex { $0.taskId != nil }
+    }
+
+    /// C1: "你说的" / "Agent 说的".
+    public static func speaker(_ role: String) -> String {
+        role == "user" ? "你说的" : "Agent 说的"
+    }
+
+    /// C1: what became of the source, in one sentence.
+    public static func lookupStatus(_ lookup: LiveEvidenceLookup) -> String {
+        let place = lookup.message.map { "第 \($0.messageIndex + 1) 条消息里（\(speaker($0.role))）" } ?? ""
+        switch lookup.status {
+        case "located": return "原话在来源会话的\(place)"
+        case "moved": return "来源会话之后改过，原话现在在\(place)"
+        case "changed": return "原文之后改过，原话已经不在了；下面是当时记下的摘录"
+        case "gone": return "原文已不在：来源会话或它的记录已被删除；下面是当时记下的摘录"
+        default: return "这条记忆的来源位置没有记录；下面是当时记下的摘录"
+        }
+    }
+
+    /// C1: the message cut around the words — (before, words, after), at
+    /// most `lead` chars before and `trail` after so the words stay in
+    /// view, with "…" wherever the message goes on. Offsets count Unicode
+    /// scalars, as the host counts chars.
+    public static func split(_ message: LiveEvidenceMessage, lead: Int = 400,
+                             trail: Int = 1_200) -> (before: String, words: String, after: String) {
+        let scalars = Array(message.text.unicodeScalars)
+        let start = min(max(message.start, 0), scalars.count)
+        let end = min(max(message.end, start), scalars.count)
+        let from = max(0, start - lead)
+        let to = min(scalars.count, end + trail)
+        let piece = { (range: Range<Int>) in
+            var text = String.UnicodeScalarView()
+            text.append(contentsOf: scalars[range])
+            return String(text)
+        }
+        return ((message.cutBefore || from > 0 ? "…" : "") + piece(from..<start),
+                piece(start..<end),
+                piece(end..<to) + (message.cutAfter || to < scalars.count ? "…" : ""))
     }
 
     /// `/记住 …` (half- or full-width space after it); nil for anything else.
