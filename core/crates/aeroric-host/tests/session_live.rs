@@ -3604,3 +3604,34 @@ async fn context_artifacts_read_the_tokens_task_and_refuse_strangers() {
     assert_eq!(unknown["code"], "NOT_FOUND");
     std::fs::remove_dir_all(&repo).ok();
 }
+
+/// C4: the gateway's requests can be read at all — the totals say how many
+/// had no reported usage, each request lists its tries.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gateway_requests_answer_with_totals_and_tries() {
+    let host = Host::start(true).await;
+    let read = host
+        .call("gateway.requests", json!({"limit": 5}))
+        .await
+        .unwrap();
+    let summary = &read["summary"];
+    for field in [
+        "totalRequests",
+        "unknownUsageRequests",
+        "cacheWrite5mTokens",
+        "cacheWrite1hTokens",
+    ] {
+        assert!(summary[field].is_u64(), "{field}: {summary}");
+    }
+    let requests = read["requests"].as_array().expect("a list");
+    assert!(requests.len() <= 5);
+    for request in requests {
+        assert!(request["attempts"].is_array(), "{request}");
+        assert!(request["usageSource"].is_string(), "{request}");
+    }
+    let bad = host
+        .call("gateway.requests", json!({"limit": 5, "extra": 1}))
+        .await
+        .unwrap_err();
+    assert_eq!(bad["code"], "INVALID_ARGUMENT");
+}

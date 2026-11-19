@@ -11,7 +11,9 @@
 
 use std::sync::OnceLock;
 
-use aeroric_core::local_router::{LocalRouterState, RouterRuntimeConfig, RouterUpstreams};
+use aeroric_core::local_router::{
+    LocalRouterState, RouterRequestRecord, RouterRuntimeConfig, RouterUpstreams, RouterUsageSummary,
+};
 use parking_lot::Mutex;
 
 fn runtime() -> &'static tokio::runtime::Runtime {
@@ -75,4 +77,26 @@ pub fn ensure_running(data_dir: &std::path::Path) -> Result<String, String> {
     .map_err(|e| format!("cannot start the gateway: {}", e.message))?;
     *base_url = Some(info.base_url.clone());
     Ok(info.base_url)
+}
+
+/// C4 (2026-11-19): the totals and the last `limit` requests, each with its
+/// tries. Read from the file, so it answers before the gateway first starts.
+pub fn requests(
+    data_dir: &std::path::Path,
+    limit: usize,
+) -> Result<(RouterUsageSummary, Vec<RouterRequestRecord>), String> {
+    let gateway = gateway(data_dir);
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                runtime().block_on(async {
+                    let summary = gateway.state.usage_summary().await?;
+                    let requests = gateway.state.recent_requests(limit).await?;
+                    Ok::<_, aeroric_core::local_router::RouterError>((summary, requests))
+                })
+            })
+            .join()
+            .map_err(|_| "reading gateway usage panicked".to_string())
+    })?
+    .map_err(|e| format!("读不出网关用量：{}", e.message))
 }

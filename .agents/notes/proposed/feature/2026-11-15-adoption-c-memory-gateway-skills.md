@@ -74,6 +74,8 @@ Status: proposed
 
 ### C4 网关按每次尝试记账，缺失的用量不算零
 
+2026-11-19 第一步已实现，见 [C4 第一步笔记](../../implemented/feature/2026-11-19-c4-gateway-attempts.md)：每次尝试一行（`router_attempts`，被熔断跳过的也记），用量来源分"上游报告/未知"，缓存写入分两档，汇总单列"用量未知的请求数"，宿主新增 `gateway.requests` 读出记录。和下文的出入：未知时用量列仍存 0（列是 NOT NULL，改可空要重建表），由来源列排除；动手前发现这份记录此前没有任何地方读。账单、配额节奏和 App 用量页（第 4、5 条）留到第二步。
+
 **用户会看到：** 用量页里一次请求可以展开，看到每次尝试：去了哪个连接、用了哪个模型、状态、耗时、用量。用量来自上游报告、Aeroric 估算、还是未知，各有标记。缓存写入分 5 分钟和 1 小时两档。
 
 **现状：** `core/crates/aeroric-core/src/local_router/usage.rs:32` 的 `RouterRequestRecord` 每个请求一行，有 `attempt_count`，但没有各次尝试的明细。`cache_creation_tokens` 是单个数（`:45`），表结构里默认值为 0（`:321`），解析在 `:663` 附近。上游不返回用量时与真实的 0 无法区分。

@@ -46,6 +46,7 @@ mod delegation;
 mod delivery;
 mod discussion;
 mod expert;
+mod gateway_usage;
 mod memory;
 mod references;
 mod rerun;
@@ -197,6 +198,8 @@ pub fn register_session_live_services(
     turns::install(set, &live);
     // B6: what each task delivered.
     artifacts::install(set, &live);
+    // C4: the gateway's requests, try by try.
+    gateway_usage::install(set, &live);
     rerun::install(set, &live);
     changes::install(set, &live);
     // A12: 定时任务.

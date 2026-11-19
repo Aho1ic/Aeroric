@@ -31,7 +31,7 @@ use url::{Host, Url};
 pub use circuit_breaker::{
     CircuitBreakerConfig, CircuitBreakerRegistry, CircuitBreakerStats, CircuitState,
 };
-pub use usage::{RouterRequestRecord, RouterUsageSummary};
+pub use usage::{RouterAttempt, RouterRequestRecord, RouterUsageSummary, UsageSource};
 
 pub const DEFAULT_CLAUDE_UPSTREAM: &str = "https://api.anthropic.com";
 pub const DEFAULT_CODEX_UPSTREAM: &str = "https://api.openai.com/v1";

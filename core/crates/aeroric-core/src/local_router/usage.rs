@@ -15,12 +15,71 @@ use zstd::stream::Decoder as ZstdDecoder;
 const MAX_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ERROR_CHARS: usize = 512;
 
+/// C4 (2026-11-19): where a request's usage came from. `Unknown`: the
+/// upstream reported none (a stream cut short, a provider that leaves it
+/// out); its token columns hold 0 but say nothing, and totals leave it out.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UsageSource {
+    #[default]
+    Reported,
+    /// Reserved: Aeroric's own estimate (nothing estimates yet).
+    Estimated,
+    Unknown,
+}
+
+impl UsageSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reported => "reported",
+            Self::Estimated => "estimated",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    fn parse(text: &str) -> Self {
+        match text {
+            "estimated" => Self::Estimated,
+            "unknown" => Self::Unknown,
+            _ => Self::Reported,
+        }
+    }
+}
+
+/// C4: one try of a request at one upstream target (or a target the
+/// circuit breaker skipped). The request row stays the sum of the story.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouterAttempt {
+    /// 1, 2, 3 … in the order the targets were met.
+    pub seq: u32,
+    pub target_id: Option<String>,
+    pub target_name: Option<String>,
+    pub outbound_model: Option<String>,
+    /// The upstream's status; unset when none answered (or skipped).
+    pub status_code: Option<u16>,
+    pub latency_ms: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub usage_source: UsageSource,
+    pub error_summary: Option<String>,
+    /// The circuit breaker kept the request away from this target.
+    pub skipped: bool,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TokenUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
+    /// C4: the upstream sent a usage object at all.
+    pub reported: bool,
+    /// C4: Anthropic's split of cache writes by lifetime, when given.
+    pub cache_write_5m: Option<u64>,
+    pub cache_write_1h: Option<u64>,
     pub model: Option<String>,
     pub response_id: Option<String>,
     /// 首字延迟(毫秒)。只有流式响应且真的收到过 SSE 数据事件时才有值。
@@ -53,6 +112,13 @@ pub struct RouterRequestRecord {
     pub error_summary: Option<String>,
     /// 首字延迟(毫秒)。非流式请求、以及没收到任何 SSE 数据事件的流式请求为 None。
     pub ttft_ms: Option<u64>,
+    /// C4: whether the token columns were reported; old rows read `reported`.
+    pub usage_source: UsageSource,
+    /// C4: cache writes by lifetime; unset when the upstream gave only the total.
+    pub cache_write_5m_tokens: Option<u64>,
+    pub cache_write_1h_tokens: Option<u64>,
+    /// C4: each try, oldest first; empty on rows from before C4.
+    pub attempts: Vec<RouterAttempt>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -66,6 +132,10 @@ pub struct RouterUsageSummary {
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
     pub last_request_at: Option<i64>,
+    /// C4: requests whose usage nobody reported (left out of the sums).
+    pub unknown_usage_requests: u64,
+    pub cache_write_5m_tokens: u64,
+    pub cache_write_1h_tokens: u64,
 }
 
 #[derive(Clone)]
@@ -95,7 +165,10 @@ impl UsageStore {
     pub(crate) async fn insert(&self, request: RouterRequestRecord) -> Result<(), RouterError> {
         let path = self.database_path.clone();
         tokio::task::spawn_blocking(move || {
-            let connection = open_database(path.as_ref())?;
+            let mut connection = open_database(path.as_ref())?;
+            let connection = connection
+                .transaction()
+                .map_err(|error| RouterError::storage(error.to_string()))?;
             connection
                 .execute(
                     "
@@ -121,11 +194,15 @@ impl UsageStore {
                         is_streaming,
                         success,
                         error_summary,
-                        ttft_ms
+                        ttft_ms,
+                        usage_source,
+                        cache_write_5m_tokens,
+                        cache_write_1h_tokens
                     ) VALUES (
                         ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
                         ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                        ?16, ?17, ?18, ?19, ?20, ?21, ?22
+                        ?16, ?17, ?18, ?19, ?20, ?21, ?22,
+                        ?23, ?24, ?25
                     )
                     ON CONFLICT(request_id) DO NOTHING
                     ",
@@ -152,16 +229,59 @@ impl UsageStore {
                         i64::from(request.success),
                         request.error_summary,
                         request.ttft_ms.map(as_sql_integer),
+                        request.usage_source.as_str(),
+                        request.cache_write_5m_tokens.map(as_sql_integer),
+                        request.cache_write_1h_tokens.map(as_sql_integer),
                     ],
                 )
                 .map_err(|error| RouterError::storage(error.to_string()))?;
+            for attempt in &request.attempts {
+                connection
+                    .execute(
+                        "
+                        INSERT OR REPLACE INTO router_attempts (
+                            request_id, seq, target_id, target_name, outbound_model,
+                            status_code, latency_ms, input_tokens, output_tokens,
+                            cache_creation_tokens, cache_read_tokens, usage_source,
+                            error_summary, skipped
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                        ",
+                        params![
+                            request.request_id,
+                            i64::from(attempt.seq),
+                            attempt.target_id,
+                            attempt.target_name,
+                            attempt.outbound_model,
+                            attempt.status_code.map(i64::from),
+                            as_sql_integer(attempt.latency_ms),
+                            as_sql_integer(attempt.input_tokens),
+                            as_sql_integer(attempt.output_tokens),
+                            as_sql_integer(attempt.cache_creation_tokens),
+                            as_sql_integer(attempt.cache_read_tokens),
+                            attempt.usage_source.as_str(),
+                            attempt.error_summary,
+                            i64::from(attempt.skipped),
+                        ],
+                    )
+                    .map_err(|error| RouterError::storage(error.to_string()))?;
+            }
             // Keep 90 days (2026-10-29: recording is on now, so the table grows).
             let cutoff = request.completed_at.saturating_sub(RETENTION_MS);
+            connection
+                .execute(
+                    "DELETE FROM router_attempts WHERE request_id IN
+                        (SELECT request_id FROM router_requests WHERE completed_at < ?1)",
+                    params![cutoff],
+                )
+                .map_err(|error| RouterError::storage(error.to_string()))?;
             connection
                 .execute(
                     "DELETE FROM router_requests WHERE completed_at < ?1",
                     params![cutoff],
                 )
+                .map_err(|error| RouterError::storage(error.to_string()))?;
+            connection
+                .commit()
                 .map_err(|error| RouterError::storage(error.to_string()))?;
             Ok(())
         })
@@ -180,11 +300,14 @@ impl UsageStore {
                         COUNT(*),
                         COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0),
                         COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0),
-                        COALESCE(SUM(input_tokens), 0),
-                        COALESCE(SUM(output_tokens), 0),
-                        COALESCE(SUM(cache_creation_tokens), 0),
-                        COALESCE(SUM(cache_read_tokens), 0),
-                        MAX(completed_at)
+                        COALESCE(SUM(CASE WHEN usage_source = 'unknown' THEN 0 ELSE input_tokens END), 0),
+                        COALESCE(SUM(CASE WHEN usage_source = 'unknown' THEN 0 ELSE output_tokens END), 0),
+                        COALESCE(SUM(CASE WHEN usage_source = 'unknown' THEN 0 ELSE cache_creation_tokens END), 0),
+                        COALESCE(SUM(CASE WHEN usage_source = 'unknown' THEN 0 ELSE cache_read_tokens END), 0),
+                        MAX(completed_at),
+                        COALESCE(SUM(CASE WHEN usage_source = 'unknown' THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(cache_write_5m_tokens), 0),
+                        COALESCE(SUM(cache_write_1h_tokens), 0)
                     FROM router_requests
                     ",
                     [],
@@ -198,6 +321,9 @@ impl UsageStore {
                             cache_creation_tokens: nonnegative(row.get(5)?),
                             cache_read_tokens: nonnegative(row.get(6)?),
                             last_request_at: row.get(7)?,
+                            unknown_usage_requests: nonnegative(row.get(8)?),
+                            cache_write_5m_tokens: nonnegative(row.get(9)?),
+                            cache_write_1h_tokens: nonnegative(row.get(10)?),
                         })
                     },
                 )
@@ -240,7 +366,10 @@ impl UsageStore {
                         is_streaming,
                         success,
                         error_summary,
-                        ttft_ms
+                        ttft_ms,
+                        usage_source,
+                        cache_write_5m_tokens,
+                        cache_write_1h_tokens
                     FROM router_requests
                     ORDER BY completed_at DESC, rowid DESC
                     LIMIT ?1
@@ -276,11 +405,20 @@ impl UsageStore {
                         success: row.get::<_, i64>(19)? != 0,
                         error_summary: row.get(20)?,
                         ttft_ms: row.get::<_, Option<i64>>(21)?.map(nonnegative),
+                        usage_source: UsageSource::parse(&row.get::<_, String>(22)?),
+                        cache_write_5m_tokens: row.get::<_, Option<i64>>(23)?.map(nonnegative),
+                        cache_write_1h_tokens: row.get::<_, Option<i64>>(24)?.map(nonnegative),
+                        attempts: Vec::new(),
                     })
                 })
                 .map_err(|error| RouterError::storage(error.to_string()))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|error| RouterError::storage(error.to_string()))
+            let mut records = rows
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| RouterError::storage(error.to_string()))?;
+            for record in &mut records {
+                record.attempts = attempts_of(&connection, &record.request_id)?;
+            }
+            Ok(records)
         })
         .await
         .map_err(|error| RouterError::storage(format!("router database task failed: {error}")))?
@@ -346,15 +484,80 @@ fn open_database(path: &PathBuf) -> Result<Connection, RouterError> {
     ensure_column(&connection, "attempt_count", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(&connection, "outbound_model", "TEXT")?;
     ensure_column(&connection, "ttft_ms", "INTEGER")?;
+    // C4: rows from before read as reported (they cannot be told apart).
+    ensure_column(
+        &connection,
+        "usage_source",
+        "TEXT NOT NULL DEFAULT 'reported'",
+    )?;
+    ensure_column(&connection, "cache_write_5m_tokens", "INTEGER")?;
+    ensure_column(&connection, "cache_write_1h_tokens", "INTEGER")?;
     connection
         .execute_batch(
             "
             CREATE INDEX IF NOT EXISTS router_requests_target_completed_at
                 ON router_requests (agent, target_id, completed_at DESC);
+            CREATE TABLE IF NOT EXISTS router_attempts (
+                request_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                target_id TEXT,
+                target_name TEXT,
+                outbound_model TEXT,
+                status_code INTEGER,
+                latency_ms INTEGER NOT NULL DEFAULT 0,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                usage_source TEXT NOT NULL DEFAULT 'unknown',
+                error_summary TEXT,
+                skipped INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (request_id, seq)
+            );
             ",
         )
         .map_err(|error| RouterError::storage(error.to_string()))?;
     Ok(connection)
+}
+
+/// C4: one request's tries, oldest first.
+fn attempts_of(
+    connection: &Connection,
+    request_id: &str,
+) -> Result<Vec<RouterAttempt>, RouterError> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT seq, target_id, target_name, outbound_model, status_code, latency_ms,
+                   input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+                   usage_source, error_summary, skipped
+            FROM router_attempts WHERE request_id = ?1 ORDER BY seq
+            ",
+        )
+        .map_err(|error| RouterError::storage(error.to_string()))?;
+    let rows = statement
+        .query_map(params![request_id], |row| {
+            Ok(RouterAttempt {
+                seq: row.get::<_, i64>(0)?.clamp(0, u32::MAX as i64) as u32,
+                target_id: row.get(1)?,
+                target_name: row.get(2)?,
+                outbound_model: row.get(3)?,
+                status_code: row
+                    .get::<_, Option<i64>>(4)?
+                    .map(|code| code.clamp(0, u16::MAX as i64) as u16),
+                latency_ms: nonnegative(row.get(5)?),
+                input_tokens: nonnegative(row.get(6)?),
+                output_tokens: nonnegative(row.get(7)?),
+                cache_creation_tokens: nonnegative(row.get(8)?),
+                cache_read_tokens: nonnegative(row.get(9)?),
+                usage_source: UsageSource::parse(&row.get::<_, String>(10)?),
+                error_summary: row.get(11)?,
+                skipped: row.get::<_, i64>(12)? != 0,
+            })
+        })
+        .map_err(|error| RouterError::storage(error.to_string()))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| RouterError::storage(error.to_string()))
 }
 
 fn ensure_column(
@@ -631,9 +834,25 @@ fn absorb_envelope(_agent: RouterAgent, envelope: &Value, destination: &mut Toke
         destination.response_id = Some(response_id.to_string());
     }
 
-    let Some(usage) = envelope.get("usage") else {
+    // `"usage": null` (OpenAI's stream chunks before the last) is not a report.
+    let Some(usage) = envelope.get("usage").filter(|usage| usage.is_object()) else {
         return;
     };
+    destination.reported = true;
+    if let Some(split) = usage.get("cache_creation") {
+        if let Some(value) = split
+            .get("ephemeral_5m_input_tokens")
+            .and_then(Value::as_u64)
+        {
+            destination.cache_write_5m = Some(value);
+        }
+        if let Some(value) = split
+            .get("ephemeral_1h_input_tokens")
+            .and_then(Value::as_u64)
+        {
+            destination.cache_write_1h = Some(value);
+        }
+    }
     if let Some(value) = first_u64(usage, &["input_tokens", "prompt_tokens"]) {
         destination.input_tokens = value;
     }
@@ -788,6 +1007,144 @@ mod tests {
         assert_eq!(usage.cache_read_tokens, 512);
     }
 
+    /// C4: a usage object is a report; `"usage": null` (OpenAI's stream
+    /// chunks before the last) and no usage at all are not; Anthropic's
+    /// cache-write split is kept apart.
+    #[test]
+    fn only_a_usage_object_counts_as_reported_and_cache_writes_split() {
+        let mut usage = TokenUsage::default();
+        absorb_value(
+            RouterAgent::Codex,
+            &json!({"id": "c", "usage": null}),
+            &mut usage,
+        );
+        assert!(!usage.reported);
+        absorb_value(
+            RouterAgent::Claude,
+            &json!({"message": {"usage": {
+                "input_tokens": 3,
+                "cache_creation_input_tokens": 9,
+                "cache_creation": {"ephemeral_5m_input_tokens": 4, "ephemeral_1h_input_tokens": 5}
+            }}}),
+            &mut usage,
+        );
+        assert!(usage.reported);
+        assert_eq!(usage.cache_creation_tokens, 9);
+        assert_eq!(
+            (usage.cache_write_5m, usage.cache_write_1h),
+            (Some(4), Some(5))
+        );
+
+        let mut total_only = TokenUsage::default();
+        absorb_value(
+            RouterAgent::Claude,
+            &json!({"usage": {"cache_creation_input_tokens": 9}}),
+            &mut total_only,
+        );
+        assert_eq!(
+            (total_only.cache_write_5m, total_only.cache_write_1h),
+            (None, None),
+            "only the total: not split by guess"
+        );
+    }
+
+    fn record(id: &str, completed_at: i64, source: UsageSource, input: u64) -> RouterRequestRecord {
+        RouterRequestRecord {
+            request_id: id.to_string(),
+            session_id: None,
+            response_id: None,
+            agent: RouterAgent::Claude,
+            target_id: Some("b".to_string()),
+            target_name: Some("B".to_string()),
+            endpoint: "/v1/messages".to_string(),
+            attempt_count: 2,
+            model: "m".to_string(),
+            outbound_model: Some("m".to_string()),
+            input_tokens: input,
+            output_tokens: 1,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            status_code: 200,
+            latency_ms: 5,
+            started_at: completed_at - 5,
+            completed_at,
+            is_streaming: false,
+            success: true,
+            error_summary: None,
+            ttft_ms: None,
+            usage_source: source,
+            cache_write_5m_tokens: Some(1),
+            cache_write_1h_tokens: None,
+            attempts: vec![
+                RouterAttempt {
+                    seq: 1,
+                    target_id: Some("a".to_string()),
+                    status_code: Some(429),
+                    usage_source: UsageSource::Unknown,
+                    error_summary: Some("slow down".to_string()),
+                    ..RouterAttempt::default()
+                },
+                RouterAttempt {
+                    seq: 2,
+                    target_id: Some("b".to_string()),
+                    status_code: Some(200),
+                    input_tokens: input,
+                    output_tokens: 1,
+                    usage_source: source,
+                    ..RouterAttempt::default()
+                },
+            ],
+        }
+    }
+
+    /// C4: each try is stored with its request and read back in order; the
+    /// sums leave out requests whose usage is unknown and count them.
+    #[tokio::test]
+    async fn tries_are_kept_and_unknown_usage_is_counted_not_summed() {
+        let path = temp_database_path();
+        let store = UsageStore::new(path.clone());
+        store.initialize().await.unwrap();
+        let now = unix_millis();
+        store
+            .insert(record("known", now, UsageSource::Reported, 10))
+            .await
+            .unwrap();
+        store
+            .insert(record("lost", now + 1, UsageSource::Unknown, 0))
+            .await
+            .unwrap();
+
+        let summary = store.summary().await.unwrap();
+        assert_eq!(summary.total_requests, 2);
+        assert_eq!(summary.input_tokens, 10);
+        assert_eq!(summary.unknown_usage_requests, 1);
+        assert_eq!(summary.cache_write_5m_tokens, 2);
+        assert_eq!(summary.cache_write_1h_tokens, 0);
+
+        let recent = store.recent_requests(10).await.unwrap();
+        let lost = recent.iter().find(|r| r.request_id == "lost").unwrap();
+        assert_eq!(lost.usage_source, UsageSource::Unknown);
+        let seqs: Vec<_> = lost
+            .attempts
+            .iter()
+            .map(|a| (a.seq, a.status_code, a.usage_source))
+            .collect();
+        assert_eq!(
+            seqs,
+            [
+                (1, Some(429), UsageSource::Unknown),
+                (2, Some(200), UsageSource::Unknown)
+            ]
+        );
+        let known = recent.iter().find(|r| r.request_id == "known").unwrap();
+        assert_eq!(known.attempts[1].input_tokens, 10);
+        assert_eq!(
+            known.attempts[0].error_summary.as_deref(),
+            Some("slow down")
+        );
+        remove_database(&path);
+    }
+
     #[tokio::test]
     async fn stores_only_request_metadata_and_summarizes_it() {
         let path = temp_database_path();
@@ -817,6 +1174,10 @@ mod tests {
                 success: true,
                 error_summary: None,
                 ttft_ms: Some(6),
+                usage_source: UsageSource::Reported,
+                cache_write_5m_tokens: None,
+                cache_write_1h_tokens: None,
+                attempts: Vec::new(),
             })
             .await
             .unwrap();
@@ -923,6 +1284,10 @@ mod tests {
             success: true,
             error_summary: None,
             ttft_ms,
+            usage_source: UsageSource::Reported,
+            cache_write_5m_tokens: None,
+            cache_write_1h_tokens: None,
+            attempts: Vec::new(),
         }
     }
 
@@ -1045,6 +1410,11 @@ mod tests {
             .expect("老记录必须仍然读得出来");
         assert_eq!(legacy.ttft_ms, None);
         assert_eq!(legacy.output_tokens, 3);
+        // C4: an old row cannot say where its usage came from: it reads as
+        // reported, with no tries and no cache split.
+        assert_eq!(legacy.usage_source, UsageSource::Reported);
+        assert!(legacy.attempts.is_empty());
+        assert_eq!(legacy.cache_write_5m_tokens, None);
         let upgraded = recent
             .iter()
             .find(|record| record.request_id == "upgraded-1")

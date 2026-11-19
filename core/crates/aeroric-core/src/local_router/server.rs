@@ -16,7 +16,7 @@ use super::pivot_bridge::{
 use super::session;
 use super::thinking_optimizer;
 use super::transforms::{self, PreparedRequest};
-use super::usage::{self, TokenUsage, UsageCapture, UsageStore};
+use super::usage::{self, RouterAttempt, TokenUsage, UsageCapture, UsageSource, UsageStore};
 use super::{
     RouterAgent, RouterAgentPolicy, RouterRequestRecord, RouterRuntimeConfig, RuntimeMetrics,
     UpstreamTarget, HEALTH_PATH, ROUTER_TOKEN_HEADER, ROUTE_AGENT_HEADER,
@@ -236,6 +236,8 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
     let mut last_failure: Option<AttemptFailure> = None;
     let mut saw_circuit_candidate = false;
     let mut skipped_open_target: Option<UpstreamTarget> = None;
+    // C4: every target met, tried or skipped, in order.
+    let mut seq = 0u32;
 
     for target in candidates {
         if attempted_targets >= max_attempts {
@@ -254,6 +256,9 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                 .await
         };
         if !permit.allowed {
+            // C4: a target the breaker kept the request away from is told too.
+            seq += 1;
+            completion.push_attempt(skipped_attempt(seq, &target));
             if skipped_open_target.is_none() {
                 skipped_open_target = Some(target);
             }
@@ -261,6 +266,8 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
         }
         saw_circuit_candidate = true;
         attempted_targets += 1;
+        seq += 1;
+        let attempt_started = Instant::now();
 
         let attempt = attempt_target(
             &runtime_config,
@@ -278,6 +285,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
         match attempt {
             AttemptResult::Retry(mut failure) => {
                 failure.attempt_count = attempted_targets;
+                completion.push_attempt(failed_attempt(seq, &target, &failure, attempt_started));
                 context
                     .circuit_breakers
                     .record_failure(
@@ -293,6 +301,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
             }
             AttemptResult::Return(mut upstream) => {
                 upstream.attempt_count = attempted_targets;
+                completion.answering_attempt(attempt_started, seq);
                 completion.set_target(
                     target.id(),
                     target.name(),
@@ -357,6 +366,8 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
     if !saw_circuit_candidate {
         if let Some(target) = skipped_open_target {
             attempted_targets += 1;
+            seq += 1;
+            let attempt_started = Instant::now();
             let attempt = attempt_target(
                 &runtime_config,
                 &route,
@@ -372,6 +383,12 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
             match attempt {
                 AttemptResult::Retry(mut failure) => {
                     failure.attempt_count = attempted_targets;
+                    completion.push_attempt(failed_attempt(
+                        seq,
+                        &target,
+                        &failure,
+                        attempt_started,
+                    ));
                     context
                         .circuit_breakers
                         .record_failure(
@@ -387,6 +404,7 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
                 }
                 AttemptResult::Return(mut upstream) => {
                     upstream.attempt_count = attempted_targets;
+                    completion.answering_attempt(attempt_started, seq);
                     completion.set_target(
                         target.id(),
                         target.name(),
@@ -517,6 +535,39 @@ fn note_success(route: &SelectedRoute, config_task: Option<&str>, target: &Upstr
 
 /// After a failed attempt on a config-pinned task: cool the channel down (Q31,
 /// shared across pools and configs). Legacy targets keep only the circuit breaker.
+/// C4: a try that ended in a failure the router moved past.
+fn failed_attempt(
+    seq: u32,
+    target: &UpstreamTarget,
+    failure: &AttemptFailure,
+    started: Instant,
+) -> RouterAttempt {
+    RouterAttempt {
+        seq,
+        target_id: Some(target.id().to_string()),
+        target_name: Some(target.name().to_string()),
+        outbound_model: Some(failure.outbound_model.clone()).filter(|m| !m.trim().is_empty()),
+        status_code: failure.upstream_status.map(|status| status.as_u16()),
+        latency_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        usage_source: UsageSource::Unknown,
+        error_summary: Some(usage::sanitize_summary(&failure.summary)),
+        ..RouterAttempt::default()
+    }
+}
+
+/// C4: a target the circuit breaker kept the request away from.
+fn skipped_attempt(seq: u32, target: &UpstreamTarget) -> RouterAttempt {
+    RouterAttempt {
+        seq,
+        target_id: Some(target.id().to_string()),
+        target_name: Some(target.name().to_string()),
+        usage_source: UsageSource::Unknown,
+        error_summary: Some("circuit open: skipped".to_string()),
+        skipped: true,
+        ..RouterAttempt::default()
+    }
+}
+
 fn note_failure(config_task: Option<&str>, target: &UpstreamTarget, failure: &AttemptFailure) {
     if let Some(task_id) = config_task {
         let now = std::time::SystemTime::now()
@@ -2095,6 +2146,10 @@ struct CompletionContext {
     is_streaming: bool,
     usage_store: UsageStore,
     metrics: Arc<RuntimeMetrics>,
+    /// C4: the tries that did not answer, oldest first.
+    attempts: Vec<RouterAttempt>,
+    /// C4: when the answering try began, and its place among the tries.
+    answering: Option<(Instant, u32)>,
 }
 
 struct RequestCompletion {
@@ -2128,7 +2183,23 @@ impl RequestCompletion {
                 is_streaming: false,
                 usage_store,
                 metrics,
+                attempts: Vec::new(),
+                answering: None,
             }),
+        }
+    }
+
+    /// C4: a try that did not answer, or a target the breaker skipped.
+    fn push_attempt(&mut self, attempt: RouterAttempt) {
+        if let Some(context) = self.context.as_mut() {
+            context.attempts.push(attempt);
+        }
+    }
+
+    /// C4: the try whose response goes back; its usage is known at the end.
+    fn answering_attempt(&mut self, started: Instant, seq: u32) {
+        if let Some(context) = self.context.as_mut() {
+            context.answering = Some((started, seq));
         }
     }
 
@@ -2271,6 +2342,30 @@ async fn finalize_request(
             (!context.request_model.trim().is_empty()).then_some(context.request_model.clone())
         })
         .unwrap_or_else(|| "unknown".to_string());
+    // C4: no usage object from the upstream is unknown usage, not zero.
+    let usage_source = if usage.reported {
+        UsageSource::Reported
+    } else {
+        UsageSource::Unknown
+    };
+    let mut attempts = context.attempts;
+    if let Some((started, seq)) = context.answering {
+        attempts.push(RouterAttempt {
+            seq,
+            target_id: context.target_id.clone(),
+            target_name: context.target_name.clone(),
+            outbound_model: context.outbound_model.clone(),
+            status_code: (status_code != 0).then_some(status_code),
+            latency_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_creation_tokens: usage.cache_creation_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            usage_source,
+            error_summary: error_summary.clone(),
+            skipped: false,
+        });
+    }
     let record = RouterRequestRecord {
         request_id: context.request_id,
         session_id: context.session_id,
@@ -2294,6 +2389,10 @@ async fn finalize_request(
         success,
         error_summary,
         ttft_ms: usage.ttft_ms,
+        usage_source,
+        cache_write_5m_tokens: usage.cache_write_5m,
+        cache_write_1h_tokens: usage.cache_write_1h,
+        attempts,
     };
     if let Err(error) = context.usage_store.insert(record).await {
         context.metrics.set_error(
@@ -2799,6 +2898,149 @@ mod tests {
         upstream_task.abort();
         let _ = upstream_task.await;
         remove_database(&database_path);
+    }
+
+    /// C4: a request that failed over keeps each try: where it went, its
+    /// status and its usage. The answering try's usage is the request's.
+    async fn failover_record(answer: Value) -> RouterRequestRecord {
+        let failing = Router::new().fallback(any(|| async {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({"error":{"message":"slow down"}})),
+            )
+        }));
+        let healthy = Router::new().fallback(any(move || {
+            let answer = answer.clone();
+            async move { Json(answer) }
+        }));
+        let (failing_address, failing_task) = start_mock_upstream(failing).await;
+        let (healthy_address, healthy_task) = start_mock_upstream(healthy).await;
+        let target = |id: &str, name: &str, address: SocketAddr| {
+            UpstreamTarget::with_details(
+                id,
+                name,
+                format!("http://{address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap()
+        };
+        let policy = RouterAgentPolicy {
+            auto_failover_enabled: true,
+            max_retries: 1,
+            failover_queue: vec!["first".to_string(), "second".to_string()],
+            active_target: "first".to_string(),
+            ..RouterAgentPolicy::default()
+        };
+        let upstreams = RouterUpstreams {
+            claude: RouterAgentRuntime::default(),
+            codex: RouterAgentRuntime {
+                targets: vec![
+                    target("first", "First", failing_address),
+                    target("second", "Second", healthy_address),
+                ],
+                policy,
+            },
+        };
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone());
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                upstreams,
+            ))
+            .await
+            .unwrap();
+        let response = test_client()
+            .post(format!("{}/codex/v1/responses", info.base_url))
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = response.bytes().await;
+        let mut record = None;
+        for _ in 0..50 {
+            if let Some(found) = router.recent_requests(5).await.unwrap().into_iter().next() {
+                record = Some(found);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        router.stop().await.unwrap();
+        failing_task.abort();
+        healthy_task.abort();
+        let _ = failing_task.await;
+        let _ = healthy_task.await;
+        remove_database(&database_path);
+        record.expect("the request was recorded")
+    }
+
+    #[tokio::test]
+    async fn a_failed_over_request_keeps_each_try_and_its_usage() {
+        let record = failover_record(json!({
+            "id": "resp_ok",
+            "model": "gpt-test",
+            "output": [],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 4,
+                "cache_creation_input_tokens": 6,
+                "cache_creation": {"ephemeral_5m_input_tokens": 2, "ephemeral_1h_input_tokens": 4}
+            }
+        }))
+        .await;
+        assert_eq!(record.attempt_count, 2);
+        assert_eq!(record.usage_source, UsageSource::Reported);
+        assert_eq!(record.cache_write_5m_tokens, Some(2));
+        assert_eq!(record.cache_write_1h_tokens, Some(4));
+        let tries: Vec<_> = record
+            .attempts
+            .iter()
+            .map(|a| (a.seq, a.target_id.as_deref(), a.status_code, a.usage_source))
+            .collect();
+        assert_eq!(
+            tries,
+            [
+                (1, Some("first"), Some(429), UsageSource::Unknown),
+                (2, Some("second"), Some(200), UsageSource::Reported),
+            ]
+        );
+        assert!(record.attempts[0].error_summary.is_some());
+        // 完成条件: the tries' reported usage adds up to the request's.
+        let reported = record
+            .attempts
+            .iter()
+            .filter(|a| a.usage_source == UsageSource::Reported);
+        let sum: (u64, u64, u64) = reported.fold((0, 0, 0), |acc, a| {
+            (
+                acc.0 + a.input_tokens,
+                acc.1 + a.output_tokens,
+                acc.2 + a.cache_creation_tokens,
+            )
+        });
+        assert_eq!(
+            sum,
+            (
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_creation_tokens
+            )
+        );
+    }
+
+    /// C4: an answer with no usage object is unknown usage, not zero.
+    #[tokio::test]
+    async fn an_answer_without_usage_is_unknown_not_zero() {
+        let record =
+            failover_record(json!({"id": "resp_ok", "model": "gpt-test", "output": []})).await;
+        assert_eq!(record.usage_source, UsageSource::Unknown);
+        assert_eq!(record.attempts[1].usage_source, UsageSource::Unknown);
+        assert_eq!(record.cache_write_5m_tokens, None, "no split was given");
     }
 
     #[tokio::test]
