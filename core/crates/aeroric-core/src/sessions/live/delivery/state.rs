@@ -55,7 +55,11 @@ pub fn step(d: &mut Delivery, event: Event<'_>, now_ms: u64) -> bool {
             d.reason = None;
             S::Sending
         }
-        (S::Sending | S::Paused, Event::Receipt(ReceiptOutcome::Accepted, _)) => S::Accepted,
+        // E5-4: an old reason ("Aeroric 重启了") does not outlive the hand-over.
+        (S::Sending | S::Paused, Event::Receipt(ReceiptOutcome::Accepted, _)) => {
+            d.reason = None;
+            S::Accepted
+        }
         (
             S::Sending | S::Accepted | S::Paused | S::Unknown,
             Event::Receipt(ReceiptOutcome::Delivered, _),
@@ -74,6 +78,7 @@ pub fn step(d: &mut Delivery, event: Event<'_>, now_ms: u64) -> bool {
         }
         (S::Accepted, Event::TurnStarted) => {
             d.evidence = Some(DeliveryEvidence::TurnStarted);
+            d.reason = None;
             S::Delivered
         }
         (S::Sending, Event::SendFailed { reason, blocked }) => {

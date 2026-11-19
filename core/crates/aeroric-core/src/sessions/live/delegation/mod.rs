@@ -1034,10 +1034,27 @@ impl Delegations {
         self.ensure_loaded(&mut state, parent);
         // The queue's state now, not the one this call was made with: two
         // changes may be told out of order.
-        let now = self
+        let mut now = self
             .queue()
             .and_then(|q| q.get(&item.id))
             .unwrap_or_else(|| item.clone());
+        // E5-4: withdrawn because the same content had arrived after all
+        // (a late answer to an earlier send): follow the one that arrived,
+        // so the card reads delivered and cannot be sent a third time.
+        if now.state == DeliveryState::Withdrawn
+            && now.reason.as_deref() == Some(super::delivery::ALREADY_DELIVERED)
+        {
+            let arrived = self.queue().and_then(|q| {
+                q.list(parent).into_iter().find(|d| {
+                    d.state == DeliveryState::Delivered
+                        && d.source_ref == now.source_ref
+                        && d.text == now.text
+                })
+            });
+            if let Some(arrived) = arrived {
+                now = arrived;
+            }
+        }
         let follow = ReturnDelivery::of(&now);
         let mut changed = Vec::new();
         if let Some(list) = state.by_parent.get_mut(parent) {

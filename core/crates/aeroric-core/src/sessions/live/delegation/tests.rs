@@ -1606,3 +1606,197 @@ fn a_childs_result_names_its_deliverables_by_version() {
     assert_eq!(read.content, "# 结论\n");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// MARK: E5-4 invariants
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+/// E5-4: what holds between the cards and the queue after any step. A card
+/// in progress names its child; a card's return delivery is the queue's
+/// record as it stands, never more; every delegation item in the queue
+/// belongs to a card; and a host started over copies of both files reads
+/// the same cards back (those still open as interrupted).
+fn card_invariants(rig: &Rig, cards_dir: &std::path::Path) -> Result<(), String> {
+    let cards = rig.d.list("p");
+    let items = rig.queue.list("p");
+    for card in &cards {
+        if card.state.is_open() && card.child_task_id.is_none() {
+            return Err(format!("{}: in progress with no child", card.delegation_id));
+        }
+        if let Some(follow) = &card.return_delivery {
+            let item = rig
+                .queue
+                .get(&follow.id)
+                .ok_or(format!("{}: its delivery is gone", card.delegation_id))?;
+            if (follow.state, follow.evidence) != (item.state, item.evidence) {
+                return Err(format!(
+                    "{}: card says {:?}/{:?}, queue {:?}/{:?}",
+                    card.delegation_id, follow.state, follow.evidence, item.state, item.evidence
+                ));
+            }
+        }
+    }
+    for item in items.iter().filter(|d| d.kind == DeliveryKind::Delegation) {
+        let source = item.source_ref.as_deref().unwrap_or_default();
+        if !cards.iter().any(|c| source.contains(&c.delegation_id)) {
+            return Err(format!("{}: a result no card owns", item.id));
+        }
+    }
+    // Rebuilt from what is on disk.
+    let copy = std::env::temp_dir().join(format!("aeroric-e5-{}", uuid::Uuid::new_v4().simple()));
+    copy_tree(cards_dir, &copy.join("cards"));
+    copy_tree(&rig.queue_dir, &copy.join("queue"));
+    let queue = Deliveries::new(Arc::new(Quiet));
+    queue
+        .set_dir(&copy.join("queue"))
+        .map_err(|e| e.to_string())?;
+    let again = Delegations::new(Arc::clone(&queue) as Arc<dyn LiveStatusSink>);
+    again.set_dir(copy.join("cards"));
+    again.follow(&queue);
+    let back = again.list("p");
+    std::fs::remove_dir_all(&copy).ok();
+    if back.len() != cards.len() {
+        return Err(format!("{} cards read back of {}", back.len(), cards.len()));
+    }
+    for card in &cards {
+        let b = back
+            .iter()
+            .find(|c| c.delegation_id == card.delegation_id)
+            .ok_or("a card was not read back")?;
+        let expected = if card.state.is_open() {
+            DelegationState::Interrupted
+        } else {
+            card.state
+        };
+        if b.state != expected || b.child_task_id != card.child_task_id {
+            return Err(format!(
+                "{}: read back as {:?}",
+                card.delegation_id, b.state
+            ));
+        }
+        let ids = |c: &DelegationCard| c.return_delivery.as_ref().map(|r| r.id.clone());
+        if ids(b) != ids(card) {
+            return Err(format!("{}: follows another delivery", card.delegation_id));
+        }
+        if let Some(follow) = &b.return_delivery {
+            let record = queue.get(&follow.id).map(|d| d.state);
+            if record != Some(follow.state) {
+                return Err(format!(
+                    "{}: read back {:?}, record {record:?}",
+                    card.delegation_id, follow.state
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Wait for the cards' file to catch up, then insist.
+fn hold(rig: &Rig, cards_dir: &std::path::Path, step: &str) {
+    let start = Instant::now();
+    loop {
+        match card_invariants(rig, cards_dir) {
+            Ok(()) => return,
+            Err(error) if start.elapsed() > Duration::from_secs(3) => {
+                panic!("after {step}: {error}")
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+}
+
+/// E5-4: one delegation from start to a result proven delivered late, the
+/// invariants checked after every step; the parent hears the result once.
+#[test]
+fn a_delegation_keeps_its_invariants_from_start_to_a_late_proven_delivery() {
+    let tmp = std::env::temp_dir().join(format!(
+        "aeroric-e5-cards-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let rig = rig("ask");
+    rig.d.set_dir(tmp.clone());
+    let turn_ended = |rig: &Rig| {
+        rig.push(
+            "p",
+            SessionUpdateKind::TurnEnded {
+                turn_id: "u".into(),
+                reason: TurnEndReason::Completed,
+                error: None,
+                raw_status: None,
+            },
+        )
+    };
+
+    let (id, child) = rig.running(contract("查"), Origin::User);
+    hold(&rig, &tmp, "the child started");
+    rig.answer(&child, "t1", "结论", None, false);
+    wait("reported", || {
+        rig.card(&id).state == DelegationState::Reported
+    });
+    rig.d.ack_probes("p", &id).unwrap();
+    hold(&rig, &tmp, "the child reported");
+
+    rig.host.busy.lock().insert("p".into());
+    rig.d.send("p", &id, "user").unwrap();
+    hold(&rig, &tmp, "queued behind a busy parent");
+    rig.host.busy.lock().clear();
+    turn_ended(&rig);
+    wait("accepted", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Accepted)
+    });
+    hold(&rig, &tmp, "handed over");
+    let first = rig.card(&id).return_delivery.unwrap().id;
+
+    // The parent's session dies: nobody knows whether it arrived.
+    rig.d.status(
+        "project-1",
+        "p",
+        1,
+        TaskStatus::Failed,
+        Some("进程退出".into()),
+    );
+    wait("unknown", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Unknown)
+    });
+    hold(&rig, &tmp, "the answer was lost");
+
+    // The user sends it again while the parent is busy; then the first
+    // one's receipt shows it had arrived.
+    rig.host.busy.lock().insert("p".into());
+    rig.d.send("p", &id, "user").unwrap();
+    hold(&rig, &tmp, "sent again");
+    rig.push(
+        "p",
+        SessionUpdateKind::DeliveryReceipt {
+            id: first.clone(),
+            outcome: ReceiptOutcome::Delivered,
+            reason: None,
+        },
+    );
+    wait("delivered", || {
+        follow_state(&rig, &id) == Some(DeliveryState::Delivered)
+    });
+    hold(&rig, &tmp, "proven delivered late");
+    assert_eq!(rig.card(&id).return_delivery.unwrap().id, first);
+    assert_eq!(
+        rig.d.send("p", &id, "user").unwrap_err(),
+        DelegationError::NothingToSend,
+        "not a third time"
+    );
+
+    rig.host.busy.lock().clear();
+    turn_ended(&rig);
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(rig.sent_to("p").len(), 1, "the parent heard it once");
+    std::fs::remove_dir_all(&tmp).ok();
+}

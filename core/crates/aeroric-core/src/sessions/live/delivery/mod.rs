@@ -8,6 +8,8 @@
 //! drivers' `deliveryReceipt`s and turn boundaries, and appends `delivery`
 //! updates for clients. The host does the sending ([`DeliveryHost`]).
 
+#[cfg(test)]
+mod invariants;
 pub mod state;
 mod store;
 #[cfg(test)]
@@ -39,6 +41,9 @@ pub trait DeliveryHost: Send + Sync {
     /// cannot be read.
     fn recorded(&self, task_id: &str, text: &str) -> Option<bool>;
 }
+
+/// E5-4: why a waiting copy was withdrawn: the same content had arrived.
+pub const ALREADY_DELIVERED: &str = "同一份内容已经送达";
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DeliveryError {
@@ -337,16 +342,40 @@ impl Deliveries {
 
     /// Apply `event` to `id` and publish; `None` when it does not apply.
     fn change(&self, id: &str, event: Event<'_>) -> Option<Delivery> {
-        let item = {
+        let (item, withdrawn) = {
             let mut store = self.store.lock();
             let mut item = store.items.get(id).cloned()?;
-            if !step(&mut item, event, now_ms()) {
+            let now = now_ms();
+            if !step(&mut item, event, now) {
                 return None;
             }
             store.save(&item);
-            item
+            // E5-4: the same content just proved delivered (an answer that
+            // came back late, after the user sent it again): a copy still
+            // waiting is not sent as well. One already handed over cannot
+            // be called back.
+            let mut withdrawn = Vec::new();
+            if item.state == DeliveryState::Delivered && item.source_ref.is_some() {
+                for mut copy in store.of_task(&item.task_id) {
+                    let same = copy.id != item.id
+                        && copy.source_ref == item.source_ref
+                        && copy.text == item.text;
+                    if same
+                        && matches!(copy.state, DeliveryState::Waiting | DeliveryState::Paused)
+                        && step(&mut copy, Event::Discard, now)
+                    {
+                        copy.reason = Some(ALREADY_DELIVERED.into());
+                        store.save(&copy);
+                        withdrawn.push(copy);
+                    }
+                }
+            }
+            (item, withdrawn)
         };
         self.publish(&item);
+        for copy in &withdrawn {
+            self.publish(copy);
+        }
         Some(item)
     }
 
