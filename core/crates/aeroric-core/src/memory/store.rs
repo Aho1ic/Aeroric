@@ -135,6 +135,14 @@ impl Store {
                 conn.execute_batch(&format!("ALTER TABLE items ADD COLUMN {name} {kind}"))?;
             }
         }
+        // C1 (2026-11-19): where the evidence's words were found, as JSON.
+        let evidence_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(evidence)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<_, _>>()?;
+        if !evidence_columns.iter().any(|c| c == "location") {
+            conn.execute_batch("ALTER TABLE evidence ADD COLUMN location TEXT")?;
+        }
         conn.execute(
             "UPDATE meta SET value = ?1 WHERE key = 'schema_version' AND value < ?1",
             [SCHEMA_VERSION],
@@ -615,7 +623,7 @@ impl Store {
 
     fn with_evidence(&self, mut item: MemoryItem) -> Result<MemoryItem, MemoryError> {
         let mut statement = self.conn.prepare_cached(
-            "SELECT task_id, harness, model, excerpt, hash, at_ms FROM evidence
+            "SELECT task_id, harness, model, excerpt, hash, at_ms, location FROM evidence
              WHERE item_id = ?1 ORDER BY at_ms",
         )?;
         item.evidence = statement
@@ -627,6 +635,9 @@ impl Store {
                     excerpt: row.get(3)?,
                     hash: row.get(4)?,
                     at_ms: row.get::<_, i64>(5)? as u64,
+                    location: row
+                        .get::<_, Option<String>>(6)?
+                        .and_then(|json| serde_json::from_str(&json).ok()),
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -690,8 +701,9 @@ impl Store {
         let tx = self.conn.transaction()?;
         let id = if let Some(id) = existing {
             tx.execute(
-                "INSERT INTO evidence(item_id, task_id, harness, model, excerpt, hash, at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO evidence(item_id, task_id, harness, model, excerpt, hash, at_ms,
+                                      location)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     id,
                     evidence.task_id,
@@ -699,7 +711,8 @@ impl Store {
                     evidence.model,
                     evidence.excerpt,
                     evidence.hash,
-                    evidence.at_ms as i64
+                    evidence.at_ms as i64,
+                    location_json(&evidence)
                 ],
             )?;
             if assertion == Assertion::UserExplicit {
@@ -734,8 +747,9 @@ impl Store {
                 params![id, cjk::segment(text)],
             )?;
             tx.execute(
-                "INSERT INTO evidence(item_id, task_id, harness, model, excerpt, hash, at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO evidence(item_id, task_id, harness, model, excerpt, hash, at_ms,
+                                      location)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     id,
                     evidence.task_id,
@@ -743,7 +757,8 @@ impl Store {
                     evidence.model,
                     evidence.excerpt,
                     evidence.hash,
-                    evidence.at_ms as i64
+                    evidence.at_ms as i64,
+                    location_json(&evidence)
                 ],
             )?;
             if let (Some(old), MemoryState::Active) = (&draft.supersedes, state) {
@@ -1085,4 +1100,12 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+/// C1: an evidence's place as stored (JSON), `None` when not known.
+fn location_json(evidence: &Evidence) -> Option<String> {
+    evidence
+        .location
+        .as_ref()
+        .and_then(|place| serde_json::to_string(place).ok())
 }

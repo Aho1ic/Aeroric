@@ -19,6 +19,8 @@ pub const FORGET_METHOD: &str = "memory.forget";
 pub const ATTENTION_METHOD: &str = "memory.attention";
 pub const PROJECT_METHOD: &str = "memory.project";
 pub const NATIVE_METHOD: &str = "memory.native";
+/// C1 (2026-11-19): `{itemId, index}` → [`EvidenceLookup`].
+pub const EVIDENCE_LOCATE_METHOD: &str = "memory.evidenceLocate";
 pub const PROFILE_METHOD: &str = "memory.profile";
 // B5-2 (2026-10-31): extraction when a session ends.
 pub const SETTINGS_METHOD: &str = "memory.settings";
@@ -192,6 +194,73 @@ pub struct Evidence {
     /// sha256 of the full source text, first 16 hex digits.
     pub hash: String,
     pub at_ms: u64,
+    /// C1: where in the source session the words were found; `None` for
+    /// evidence from before C1, or words not found in one message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<EvidenceLocation>,
+}
+
+/// C1 (2026-11-19): the message the evidence's words were found in, found
+/// by Aeroric matching the words, not by the model's say-so.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceLocation {
+    /// Its place among the session's text messages, from 0.
+    pub message_index: u32,
+    /// `user` or `assistant`.
+    pub role: String,
+    /// The words, as char offsets in the message's text (end exclusive).
+    pub start: u32,
+    pub end: u32,
+    /// sha256 of the message's text then, first 16 hex: the source version.
+    pub message_hash: String,
+}
+
+/// C1: what became of an evidence's source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EvidenceStatus {
+    /// The message is there, unchanged.
+    Located,
+    /// The message changed (the agent compacted or rewrote the history),
+    /// but the words are still found — maybe in another message.
+    Moved,
+    /// The message changed and the words are no longer there.
+    Changed,
+    /// The session, or its history, is gone.
+    Gone,
+    /// Evidence from before C1: no place was kept.
+    Unrecorded,
+}
+
+/// C1: the message around the words, cut to a window for a long message.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceMessage {
+    pub message_index: u32,
+    pub role: String,
+    /// The message's text, or a window of it.
+    pub text: String,
+    /// The words in `text`, as char offsets (end exclusive).
+    pub start: u32,
+    pub end: u32,
+    /// Text was cut before / after the window.
+    #[serde(default)]
+    pub cut_before: bool,
+    #[serde(default)]
+    pub cut_after: bool,
+}
+
+/// C1: `memory.evidenceLocate`'s reply.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceLookup {
+    pub status: EvidenceStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    pub excerpt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<EvidenceMessage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

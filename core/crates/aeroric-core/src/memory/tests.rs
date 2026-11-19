@@ -504,6 +504,9 @@ fn a_schema_one_database_gains_the_new_columns() {
                 superseded_by TEXT, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);
              INSERT INTO items VALUES ('mem-old', '', 'profile', NULL, '旧的', '旧的', 'userExplicit',
                 'active', 0, NULL, NULL, 1, 1);
+             CREATE TABLE evidence(item_id TEXT NOT NULL, task_id TEXT, harness TEXT, model TEXT,
+                excerpt TEXT NOT NULL, hash TEXT NOT NULL, at_ms INTEGER NOT NULL);
+             INSERT INTO evidence VALUES ('mem-old', 't1', 'analysis', NULL, '旧的依据', 'h', 1);
              CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
              INSERT INTO meta VALUES ('schema_version', 1);",
         )
@@ -514,6 +517,10 @@ fn a_schema_one_database_gains_the_new_columns() {
     let old = memory.item("mem-old").unwrap().unwrap();
     assert_eq!(old.stats, aeroric_protocol::memory::MemoryStats::default());
     assert_eq!(old.confidence, None);
+    // C1: evidence from before keeps reading, with no place.
+    assert_eq!(old.evidence.len(), 1);
+    assert_eq!(old.evidence[0].excerpt, "旧的依据");
+    assert_eq!(old.evidence[0].location, None);
     let conn = rusqlite::Connection::open(dir.join("memory.db")).unwrap();
     let version: i64 = conn
         .query_row(

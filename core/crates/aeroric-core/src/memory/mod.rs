@@ -11,6 +11,7 @@ mod barrier;
 pub mod chain;
 pub mod dream;
 pub mod extract;
+pub mod locate;
 pub mod native;
 mod profile;
 pub mod run;
@@ -101,21 +102,25 @@ pub fn evidence(
         excerpt: source.chars().take(MAX_EXCERPT_CHARS).collect(),
         hash,
         at_ms,
+        location: None,
     }
+}
+
+/// One char in its comparable form: none for whitespace, half-width, lower
+/// case (C1: shared with finding the words in a message).
+pub(crate) fn fold(c: char) -> impl Iterator<Item = char> {
+    let c = match c as u32 {
+        _ if c.is_whitespace() => None,
+        0xFF01..=0xFF5E => Some(char::from_u32(c as u32 - 0xFEE0).unwrap_or(c)),
+        _ => Some(c),
+    };
+    c.into_iter().flat_map(char::to_lowercase)
 }
 
 /// The comparable form of a text: no whitespace, half-width, lower case,
 /// without closing punctuation.
 pub(crate) fn normalize(text: &str) -> String {
-    let mut out: String = text
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .map(|c| match c as u32 {
-            0xFF01..=0xFF5E => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
-            _ => c,
-        })
-        .flat_map(char::to_lowercase)
-        .collect();
+    let mut out: String = text.chars().flat_map(fold).collect();
     while out.ends_with(['.', '。', '!', '！', ';', '；', ',', '，']) {
         out.pop();
     }

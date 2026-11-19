@@ -2239,6 +2239,27 @@ async fn remembered_words_reach_a_new_session_and_proposals_wait() {
         .await
         .unwrap();
     assert_eq!(kept["item"]["assertion"], "userExplicit");
+    // C1: what the user said with /记住 has no session place to look up.
+    let item_id = kept["item"]["id"].as_str().unwrap().to_string();
+    let place = host
+        .call(
+            "memory.evidenceLocate",
+            json!({"itemId": item_id, "index": 0}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(place["status"], "unrecorded", "{place}");
+    assert_eq!(place["excerpt"], "/记住 回复一律用简体中文");
+    for (params, what) in [
+        (json!({"itemId": item_id, "index": 9}), "no such evidence"),
+        (json!({"itemId": "mem-nope", "index": 0}), "no such item"),
+    ] {
+        let missing = host
+            .call("memory.evidenceLocate", params)
+            .await
+            .unwrap_err();
+        assert_eq!(missing["code"], "NOT_FOUND", "{what}: {missing}");
+    }
     let secret = host
         .call(
             "memory.remember",

@@ -19,6 +19,8 @@ Status: proposed
 
 ### C1 记忆的依据能定位到原文
 
+2026-11-19 第一步已实现，见 [C1 第一步笔记](../../implemented/feature/2026-11-19-c1-evidence-knows-its-message.md)：不让模型报消息序号，由 core 拿已经逐字校验过的原话去匹配消息，记下序号、角色、字符位置和这条消息的哈希（代替"历史文件长度加末尾哈希"，免得会话往后追加就误判为改过）；会话消息大多没有稳定 id，所以记序号不记 id。宿主新增 `memory.evidenceLocate`，返回未变、挪了位置、找不到、已不在、没记录五种状态。App 的"在会话里查看"留给第二步。
+
 **用户会看到：** 打开一条记忆的依据，能跳到来源会话里的那条消息，原话高亮。来源会话已被删除或内容已变时，写明"原文已不在"或"原文之后改过"，摘录仍然显示。
 
 **现状：** `core/crates/aeroric-protocol/src/memory.rs:141` 的 `Evidence` 有 `task_id`、`harness`、`model`、`excerpt`、`hash`、`at_ms`。没有消息 id、角色和原文中的位置。

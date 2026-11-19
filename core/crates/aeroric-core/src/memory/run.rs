@@ -304,13 +304,15 @@ impl Memory {
                 text: candidate.text,
                 supersedes: candidate.supersedes,
             };
-            let proof = evidence(
+            let mut proof = evidence(
                 Some(session.task_id),
                 Some("analysis"),
                 Some(&model),
                 &candidate.quote,
                 now_ms,
             );
+            // C1: the message the user said it in, when one message holds it.
+            proof.location = super::locate::locate(session.messages, &candidate.quote);
             if let Some(item) = writes.note(self.propose(draft, proof, now_ms)) {
                 if item.state == aeroric_protocol::memory::MemoryState::Pending {
                     run.candidates += 1;
@@ -590,6 +592,23 @@ mod tests {
             .unwrap();
         assert_eq!(profile.project_id, None, "about the user: global");
         assert_eq!(profile.evidence[0].excerpt, "以后回复都用简体中文");
+        // C1: the place it was said is kept, and read back from the store.
+        let place = profile.evidence[0].location.clone().unwrap();
+        assert_eq!(
+            (
+                place.message_index,
+                place.role.as_str(),
+                place.start,
+                place.end
+            ),
+            (0, "user", 0, 10)
+        );
+        assert_eq!(
+            place.message_hash,
+            super::super::locate::message_hash(&talk[0].1)
+        );
+        let fact = pending.iter().find(|i| i.kind == MemoryKind::Fact).unwrap();
+        assert_eq!(fact.evidence[0].location.as_ref().unwrap().message_index, 2);
         let clues: Vec<_> = memory
             .list(Some("p1"), None)
             .unwrap()
@@ -598,6 +617,10 @@ mod tests {
             .collect();
         assert_eq!(clues.len(), 1);
         assert_eq!(clues[0].state, MemoryState::Active);
+        assert_eq!(
+            clues[0].evidence[0].location, None,
+            "a summary has no place"
+        );
         // Once only, unless asked again.
         let again = memory.extract_session(
             session(&talk, "p1", false),

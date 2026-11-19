@@ -45,6 +45,10 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     set.register(wire::ATTENTION_METHOD, blocking(live, memory_attention));
     set.register(wire::PROJECT_METHOD, blocking(live, memory_project));
     set.register(wire::NATIVE_METHOD, blocking(live, memory_native));
+    set.register(
+        wire::EVIDENCE_LOCATE_METHOD,
+        blocking(live, memory_evidence_locate),
+    );
     set.register(wire::PROFILE_METHOD, blocking(live, memory_profile));
     set.register(CONTEXT_MEMORY_RECALL_METHOD, blocking(live, context_recall));
     set.register(
@@ -315,6 +319,56 @@ fn memory_forget(live: &Live, request: &Request) -> Frame {
         live.executor.memory().forget(&p.id, now_ms()),
         "removed",
     )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocateParams {
+    item_id: String,
+    index: usize,
+}
+
+/// `memory.evidenceLocate {itemId, index}` (C1): what became of one piece
+/// of an item's evidence — the message it was found in, read again from the
+/// session (or the imported session) it came from.
+fn memory_evidence_locate(live: &Live, request: &Request) -> Frame {
+    let p: LocateParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let item = match live.executor.memory().item(&p.item_id) {
+        Ok(Some(item)) => item,
+        Ok(None) => return failure(request.id.clone(), ErrorCode::NotFound, "没有这条记忆"),
+        Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
+    };
+    let Some(evidence) = item.evidence.get(p.index) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "这条记忆没有这份依据",
+        );
+    };
+    let messages = match evidence.task_id.as_deref() {
+        Some(task_id) if evidence.location.is_some() => match source_messages(live, task_id) {
+            Ok(messages) => messages,
+            Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error),
+        },
+        _ => None,
+    };
+    let found = memory::locate::lookup(evidence, messages.as_deref());
+    ok(request, json!(found))
+}
+
+/// A session's text messages as extraction read them: a task's current
+/// session, or an imported one; `None` when neither is there any more.
+fn source_messages(live: &Live, task_id: &str) -> Result<Option<Vec<(String, String)>>, String> {
+    if let Some((_, record)) = live.record(task_id) {
+        return super::context_messages(live, &record, false).map(Some);
+    }
+    match imports(live).messages(task_id) {
+        Ok((_, messages)) => Ok(Some(text_pairs(&messages))),
+        Err(_) => Ok(None),
+    }
 }
 
 /// `memory.attention {}`: proposals waiting for the user.
