@@ -189,6 +189,8 @@ owner 在 `~/Downloads/同步空间/LYX/New-addition-1118/` 整理了四个项�
 
 #### E0 Chat 桥接如实传递"没说完"（立即可做，约 1 天）
 
+2026-11-19 已实现，见 [E0 实现笔记](../../implemented/bug-fix/2026-11-19-e0-chat-bridge-incomplete-streams.md)。中途断开发 `response.failed`（不是什么都不发），理由写在笔记里。
+
 - **用户会看到**：上游因长度截断、被内容过滤或连接中途断开时，回合显示"没跑完"并给出原因，而不是一个突然结束、却显示成功的回答；这一轮的检查和分级也不会算它完成。
 - **做法**：
   - `ChatSseTransformer` 记下最后一个 `finish_reason`：

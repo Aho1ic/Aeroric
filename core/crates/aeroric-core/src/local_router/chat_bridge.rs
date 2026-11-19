@@ -764,6 +764,16 @@ pub fn chat_response_to_responses(payload: &Value, requested_model: &str) -> Val
         .cloned()
         .unwrap_or_else(|| json!({}));
     let message = choice.get("message").cloned().unwrap_or_else(|| json!({}));
+    // E0: a length or content-filter stop is incomplete, not completed.
+    let incomplete = choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .and_then(incomplete_reason);
+    let item_status = if incomplete.is_some() {
+        "incomplete"
+    } else {
+        "completed"
+    };
     let mut output = Vec::new();
 
     if let Some(reasoning) = extract_reasoning_text(&message) {
@@ -779,7 +789,7 @@ pub fn chat_response_to_responses(payload: &Value, requested_model: &str) -> Val
         output.push(json!({
             "id":message_id,
             "type":"message",
-            "status":"completed",
+            "status":item_status,
             "role":"assistant",
             "content":[{"type":"output_text","text":text,"annotations":[]}]
         }));
@@ -790,7 +800,7 @@ pub fn chat_response_to_responses(payload: &Value, requested_model: &str) -> Val
             output.push(json!({
                 "id":call.get("id").cloned().unwrap_or_else(|| Value::String(format!("fc_{}", uuid::Uuid::new_v4().simple()))),
                 "type":"function_call",
-                "status":"completed",
+                "status":item_status,
                 "call_id":call.get("id").cloned().unwrap_or_else(|| Value::String(format!("call_{}", uuid::Uuid::new_v4().simple()))),
                 "name":function.get("name").cloned().unwrap_or(Value::String("tool".to_string())),
                 "arguments":function.get("arguments").cloned().unwrap_or(Value::String(String::new()))
@@ -798,14 +808,18 @@ pub fn chat_response_to_responses(payload: &Value, requested_model: &str) -> Val
         }
     }
 
-    json!({
+    let mut response = json!({
         "id":response_id,
         "object":"response",
-        "status":"completed",
+        "status":if incomplete.is_some() { "incomplete" } else { "completed" },
         "output":output,
         "model":model,
         "usage":responses_usage(payload.get("usage").unwrap_or(&Value::Null))
-    })
+    });
+    if let Some(reason) = incomplete {
+        response["incomplete_details"] = json!({ "reason": reason });
+    }
+    response
 }
 
 fn responses_usage(usage: &Value) -> Value {
@@ -948,6 +962,8 @@ pub struct ChatSseTransformer {
     namespaces: ToolNamespaces,
     call_indexes: super::bridge_common::CallIndexer,
     usage: Option<Value>,
+    /// E0: the upstream's last `finish_reason`; decides how the stream ends.
+    finish_reason: Option<String>,
     started: bool,
     text_started: bool,
     reasoning_started: bool,
@@ -967,6 +983,7 @@ impl ChatSseTransformer {
             namespaces: ToolNamespaces::new(),
             call_indexes: Default::default(),
             usage: None,
+            finish_reason: None,
             started: false,
             text_started: false,
             reasoning_started: false,
@@ -993,14 +1010,30 @@ impl ChatSseTransformer {
         output
     }
 
+    /// The upstream closed. E0 (2026-11-19): without a finish reason or
+    /// `[DONE]` the answer was cut off, so it fails instead of completing;
+    /// Codex then handles it as the dropped stream it is.
     pub fn finish(&mut self) -> Vec<Bytes> {
         let mut output = Vec::new();
         if !self.input_buffer.is_empty() {
             let event = std::mem::take(&mut self.input_buffer);
             self.handle_event(&event, &mut output);
         }
-        self.emit_finish(&mut output);
+        if self.finish_reason.is_some() {
+            self.emit_end(&mut output);
+        } else {
+            self.emit_failed(CUT_OFF, &mut output);
+        }
         output
+    }
+
+    /// `[DONE]`, or a finish reason then the end of the stream: a length or
+    /// content-filter stop is incomplete, anything else completes.
+    fn emit_end(&mut self, output: &mut Vec<Bytes>) {
+        match self.finish_reason.as_deref().and_then(incomplete_reason) {
+            Some(reason) => self.emit_incomplete(reason, output),
+            None => self.emit_finish(output),
+        }
     }
 
     fn handle_event(&mut self, bytes: &[u8], output: &mut Vec<Bytes>) {
@@ -1015,7 +1048,7 @@ impl ChatSseTransformer {
             return;
         }
         if data.trim() == "[DONE]" {
-            self.emit_finish(output);
+            self.emit_end(output);
             return;
         }
         let Ok(chunk) = serde_json::from_str::<Value>(&data) else {
@@ -1036,6 +1069,12 @@ impl ChatSseTransformer {
         }
         if chunk.get("usage").is_some_and(Value::is_object) {
             self.usage = Some(responses_usage(&chunk["usage"]));
+        }
+        if let Some(reason) = chunk
+            .pointer("/choices/0/finish_reason")
+            .and_then(Value::as_str)
+        {
+            self.finish_reason = Some(reason.to_string());
         }
         self.emit_start(output);
         let Some(delta) = chunk
@@ -1308,6 +1347,29 @@ impl ChatSseTransformer {
         );
     }
 
+    /// E0: stopped by the length limit or a content filter. Nothing it
+    /// started is reported done: a half-written tool call must not run.
+    fn emit_incomplete(&mut self, reason: &str, output: &mut Vec<Bytes>) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        self.emit_start(output);
+        let mut response = response_base(
+            &self.response_id,
+            &self.model,
+            "incomplete",
+            Vec::new(),
+            self.usage.clone(),
+        );
+        response["incomplete_details"] = json!({ "reason": reason });
+        emit_event(
+            "response.incomplete",
+            json!({"type":"response.incomplete","response":response}),
+            output,
+        );
+    }
+
     fn emit_failed(&mut self, message: &str, output: &mut Vec<Bytes>) {
         if self.finished {
             return;
@@ -1323,6 +1385,19 @@ impl ChatSseTransformer {
             }),
             output,
         );
+    }
+}
+
+/// E0: the upstream closed before saying the answer was over.
+pub const CUT_OFF: &str = "上游在回复结束前断开了连接（没有收到结束标记）";
+
+/// E0: a Chat `finish_reason` that means the answer was stopped short, as
+/// the Responses API's `incomplete_details.reason`.
+fn incomplete_reason(finish_reason: &str) -> Option<&'static str> {
+    match finish_reason {
+        "length" | "max_tokens" | "max_output_tokens" => Some("max_output_tokens"),
+        "content_filter" | "sensitive" => Some("content_filter"),
+        _ => None,
     }
 }
 
@@ -1723,5 +1798,168 @@ mod tests {
         assert_eq!(done["item"]["type"], "custom_tool_call");
         assert_eq!(done["item"]["name"], "exec");
         assert_eq!(done["item"]["input"], "text(2)");
+    }
+
+    /// E0: every event a stream produced, the push and the close together.
+    fn stream_events(chunks: &[&[u8]], close: bool) -> Vec<Value> {
+        let mut transformer = ChatSseTransformer::new("m");
+        let mut bytes = Vec::new();
+        for chunk in chunks {
+            bytes.extend(transformer.push(chunk));
+        }
+        if close {
+            bytes.extend(transformer.finish());
+        }
+        bytes
+            .iter()
+            .flat_map(|b| {
+                String::from_utf8_lossy(b)
+                    .lines()
+                    .filter_map(|l| l.strip_prefix("data: ").map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .filter_map(|data| serde_json::from_str(&data).ok())
+            .collect()
+    }
+
+    fn types(events: &[Value]) -> Vec<String> {
+        events
+            .iter()
+            .map(|e| e["type"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// E0 (LinkSense #79): text then the connection drops, with no finish
+    /// reason and no `[DONE]`: the answer was cut off, so it fails.
+    #[test]
+    fn a_stream_that_drops_before_its_end_fails_instead_of_completing() {
+        let events = stream_events(
+            &[b"data: {\"choices\":[{\"delta\":{\"content\":\"\xe5\x86\x99\xe5\x88\xb0\xe4\xb8\x80\xe5\x8d\x8a\"}}]}\n\n"],
+            true,
+        );
+        let kinds = types(&events);
+        assert!(
+            !kinds.iter().any(|k| k == "response.completed"),
+            "{kinds:?}"
+        );
+        let failed = events
+            .iter()
+            .find(|e| e["type"] == "response.failed")
+            .expect("failed");
+        assert_eq!(failed["error"]["message"], CUT_OFF);
+    }
+
+    /// E0: stopped by the length limit, mid tool call: incomplete, and the
+    /// half-written call is never reported done, so it cannot run.
+    #[test]
+    fn a_length_stop_is_incomplete_and_its_half_tool_call_is_not_done() {
+        let events = stream_events(
+            &[
+                b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"shell\",\"arguments\":\"{\\\"cmd\\\":\\\"rm -\"}}]}}]}\n\n",
+                b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":9}}\n\n",
+                b"data: [DONE]\n\n",
+            ],
+            true,
+        );
+        let kinds = types(&events);
+        assert!(
+            !kinds.iter().any(|k| k == "response.completed"),
+            "{kinds:?}"
+        );
+        assert!(
+            !kinds
+                .iter()
+                .any(|k| k == "response.function_call_arguments.done"
+                    || k == "response.output_item.done"),
+            "{kinds:?}"
+        );
+        let end = events.last().unwrap();
+        assert_eq!(end["type"], "response.incomplete");
+        assert_eq!(end["response"]["status"], "incomplete");
+        assert_eq!(
+            end["response"]["incomplete_details"]["reason"],
+            "max_output_tokens"
+        );
+        assert_eq!(
+            end["response"]["usage"]["output_tokens"], 9,
+            "usage is kept"
+        );
+    }
+
+    /// E0: a content filter stop, then the stream ends without `[DONE]`.
+    #[test]
+    fn a_content_filter_stop_is_incomplete_even_without_done() {
+        let events = stream_events(
+            &[
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n",
+                b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n",
+            ],
+            true,
+        );
+        let end = events.last().unwrap();
+        assert_eq!(end["type"], "response.incomplete");
+        assert_eq!(
+            end["response"]["incomplete_details"]["reason"],
+            "content_filter"
+        );
+    }
+
+    /// E0: providers that send a finish reason and close without `[DONE]`,
+    /// or `[DONE]` without a finish reason, still complete.
+    #[test]
+    fn a_normal_end_completes_with_either_marker() {
+        let reason_only = stream_events(
+            &[b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"],
+            true,
+        );
+        assert_eq!(reason_only.last().unwrap()["type"], "response.completed");
+        let done_only = stream_events(
+            &[
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+                b"data: [DONE]\n\n",
+            ],
+            false,
+        );
+        assert_eq!(done_only.last().unwrap()["type"], "response.completed");
+        let tool = stream_events(
+            &[
+                b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"shell\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                b"data: [DONE]\n\n",
+            ],
+            true,
+        );
+        let kinds = types(&tool);
+        assert!(kinds
+            .iter()
+            .any(|k| k == "response.function_call_arguments.done"));
+        assert_eq!(kinds.last().unwrap(), "response.completed");
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|k| k.starts_with("response.completed"))
+                .count(),
+            1,
+            "closing after [DONE] adds nothing"
+        );
+    }
+
+    /// E0: the non-streaming answer keeps the same distinction.
+    #[test]
+    fn a_non_streaming_length_stop_is_incomplete() {
+        let payload = json!({"choices":[{"message":{"role":"assistant","content":"半句"},
+            "finish_reason":"length"}],"usage":{"prompt_tokens":1,"completion_tokens":2}});
+        let response = chat_response_to_responses(&payload, "m");
+        assert_eq!(response["status"], "incomplete");
+        assert_eq!(
+            response["incomplete_details"]["reason"],
+            "max_output_tokens"
+        );
+        assert_eq!(response["output"][0]["status"], "incomplete");
+        let stop = json!({"choices":[{"message":{"role":"assistant","content":"好"},
+            "finish_reason":"stop"}]});
+        assert_eq!(
+            chat_response_to_responses(&stop, "m")["status"],
+            "completed"
+        );
     }
 }
