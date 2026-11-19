@@ -473,6 +473,45 @@ async fn a_test_message_goes_through_the_connection_with_its_key() {
         request.contains("\"max_tokens\":64"),
         "room for a reasoning model to answer"
     );
+    // C5: the test is kept with the exit it took, without the key.
+    assert_eq!(reply["test"]["egress"]["protocol"], "chat_completions");
+    let snapshot = rig
+        .call("agentConnections.load", json!({}))
+        .await
+        .expect("load");
+    let tests = snapshot["tests"].as_array().expect("tests");
+    assert_eq!(tests.len(), 1, "{snapshot}");
+    assert_eq!(tests[0]["model"], "m-1");
+    assert_eq!(tests[0]["passed"], true);
+    assert!(tests[0].get("stale").is_none(), "{}", tests[0]);
+    assert_eq!(tests[0]["egress"]["proxy"], "", "direct");
+    assert!(
+        !snapshot.to_string().contains("sk-probe"),
+        "the key is never kept"
+    );
+
+    // A new key: the old test no longer describes the connection.
+    let snapshot = rig
+        .call(
+            "agentConnections.setCredential",
+            json!({ "connectionId": "p", "credential": "sk-rotated" }),
+        )
+        .await
+        .expect("rotate");
+    assert_eq!(
+        snapshot["tests"][0]["stale"],
+        "配置已变，需要重测（凭据换过）"
+    );
+
+    // A deleted connection's tests go with it.
+    rig.call("agentConnections.deleteConnection", json!({ "id": "p" }))
+        .await
+        .expect("delete");
+    let snapshot = rig
+        .call("agentConnections.load", json!({}))
+        .await
+        .expect("load");
+    assert_eq!(snapshot["tests"], json!([]));
 }
 
 #[tokio::test]

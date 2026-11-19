@@ -342,6 +342,13 @@ struct ConnectionsPane: View {
                             .accessibilityIdentifier("agent-config.test-result")
                     }
                 }
+                if testedModel != model.upstreamId || store.probe == nil,
+                   let last = store.lastTest(model: model.upstreamId) {
+                    let word = AgentConfigText.lastTest(last)
+                    StatusChip(text: word.text, tint: word.tone)
+                        .help(AgentConfigText.lastTestHelp(last))
+                        .accessibilityIdentifier("agent-config.last-test.\(index)")
+                }
                 Button { test(model.upstreamId) } label: { Image(systemName: "bolt.horizontal") }
                     .buttonStyle(.borderless)
                     .disabled(store.connectionDirty || store.selectedConnection == nil)

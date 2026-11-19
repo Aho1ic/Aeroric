@@ -11,7 +11,9 @@ use aeroric_core::agent_connections::login_credentials;
 use aeroric_core::agent_connections::model::{
     AgentConfig, Connection, ConnectionsDocument, Harness, ModelEntry, Pool,
 };
-use aeroric_core::agent_connections::{fetch, legacy_cleanup, routing, service, store};
+use aeroric_core::agent_connections::{
+    fetch, legacy_cleanup, routing, service, store, test_record,
+};
 use aeroric_core::context::CoreContext;
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
@@ -47,19 +49,33 @@ fn optional_str(request: &Request, name: &str) -> Option<String> {
 
 /// Document plus, per connection, whether a credential is stored (never the value).
 fn snapshot(context: &CoreContext, doc: &ConnectionsDocument) -> Value {
+    let mut keys: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let credentials: serde_json::Map<String, Value> = doc
         .connections
         .iter()
         .map(|c| {
             let state = match store::get_credential(context.secrets.as_ref(), &c.id) {
-                Ok(Some(_)) => "stored",
+                Ok(Some(key)) => {
+                    keys.insert(c.id.clone(), key);
+                    "stored"
+                }
                 Ok(None) => "missing",
                 Err(_) => "unreadable",
             };
             (c.id.clone(), Value::String(state.to_string()))
         })
         .collect();
-    json!({ "document": doc, "credentials": credentials })
+    // C5: each kept test, judged against the exit its connection takes now.
+    // The global settings are read only when a connection opts into them.
+    let global = if doc.connections.iter().any(|c| c.use_global_proxy) {
+        aeroric_core::settings::model_detect::global_proxy_settings()
+    } else {
+        Default::default()
+    };
+    let tests = test_record::views(context.paths.data_dir(), &doc.connections, &global, |id| {
+        keys.get(id).cloned()
+    });
+    json!({ "document": doc, "credentials": credentials, "tests": tests })
 }
 
 /// Load → mutate → validate+save, all under the lock. Returns the new snapshot.
@@ -184,6 +200,8 @@ fn delete_connection(request: Request, context: Arc<CoreContext>) -> Frame {
     // Only drop the key once the document no longer references the connection.
     if frame_is_ok(&frame) {
         let _ = store::delete_credential(context.secrets.as_ref(), &id);
+        // C5: its tests go with it.
+        let _ = test_record::forget(context.paths.data_dir(), &id);
     }
     frame
 }
@@ -611,28 +629,63 @@ fn test_connection_handler(context: &Arc<CoreContext>) -> Handler {
                 Err(e) => return failure(request.id.clone(), ErrorCode::IoError, &e.to_string()),
             };
             // Chat Completions when offered (cheapest to read back), else the first.
-            let protocol = if connection
-                .protocols
-                .contains(&aeroric_core::agent_connections::model::WireProtocol::ChatCompletions)
-            {
-                "chat_completions"
+            let protocol = test_record::test_protocol(&connection);
+            // C5: the exit is decided once, as the gateway decides it; the
+            // request goes out through it and the result is kept with it.
+            let global = if connection.use_global_proxy {
+                tokio::task::spawn_blocking(
+                    aeroric_core::settings::model_detect::global_proxy_settings,
+                )
+                .await
+                .unwrap_or_default()
             } else {
-                connection
-                    .protocols
-                    .first()
-                    .map(|p| p.as_str())
-                    .unwrap_or("chat_completions")
+                Default::default()
             };
-            match aeroric_core::settings::model_detect::probe_connection(
-                &connection.base_url,
-                &secret,
+            let egress = test_record::Egress::of(&connection, protocol, &secret, &global);
+            let proxy = aeroric_core::settings::model_detect::connection_proxy(
                 connection.use_global_proxy,
-                protocol,
-                &model,
-            )
-            .await
-            {
-                Ok(probe) => ok(&request, json!({ "protocol": protocol, "probe": probe })),
+                &global,
+            );
+            let result = match proxy {
+                Ok(proxy) => {
+                    aeroric_core::settings::model_detect::probe_connection_via(
+                        &connection.base_url,
+                        &secret,
+                        &proxy,
+                        protocol,
+                        &model,
+                    )
+                    .await
+                }
+                Err(e) => Err(e),
+            };
+            let record = test_record::TestRecord {
+                connection_id: connection.id.clone(),
+                model: model.clone(),
+                at_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or_default(),
+                status: result.as_ref().map(|p| p.status).unwrap_or(0),
+                elapsed_ms: result.as_ref().map(|p| p.elapsed_ms).unwrap_or(0),
+                excerpt: match &result {
+                    Ok(probe) => probe.excerpt.clone(),
+                    Err(e) => e.chars().take(200).collect(),
+                },
+                egress: egress.unwrap_or_else(|_| test_record::Egress {
+                    base_url: connection.base_url.trim().to_string(),
+                    protocol: protocol.to_string(),
+                    ..Default::default()
+                }),
+            };
+            let data_dir = context.paths.data_dir().to_path_buf();
+            let kept = record.clone();
+            let _ = tokio::task::spawn_blocking(move || test_record::save(&data_dir, kept)).await;
+            match result {
+                Ok(probe) => ok(
+                    &request,
+                    json!({ "protocol": protocol, "probe": probe, "test": record }),
+                ),
                 Err(e) => failure(request.id.clone(), ErrorCode::IoError, &e),
             }
         })

@@ -14,6 +14,7 @@ pub mod official;
 pub mod routing;
 pub mod service;
 pub mod store;
+pub mod test_record;
 
 #[cfg(test)]
 mod login_gateway_tests;

@@ -442,13 +442,15 @@ pub fn resolve_from_disk(
     secrets: &Arc<dyn SecretStore>,
 ) -> Resolution {
     match store::load_effective(&store::document_path(data_dir)) {
-        Ok(doc) => resolve_with_proxy(
-            &doc,
-            grant,
-            model,
-            secrets.as_ref(),
-            &crate::settings::model_detect::global_proxy_settings(),
-        ),
+        Ok(doc) => {
+            // The global settings are read only when a connection opts in.
+            let global = if doc.connections.iter().any(|c| c.use_global_proxy) {
+                crate::settings::model_detect::global_proxy_settings()
+            } else {
+                ProxySettings::default()
+            };
+            resolve_with_proxy(&doc, grant, model, secrets.as_ref(), &global)
+        }
         Err(e) => Resolution::Unavailable(format!("cannot read agent connections: {e}")),
     }
 }

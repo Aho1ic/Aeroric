@@ -62,6 +62,37 @@ public extension AgentConfigText {
 
     /// The store's probe text starts with 成功 on success.
     static func probeSucceeded(_ probe: String) -> Bool { probe.hasPrefix("成功") }
+
+    /// C5: a kept test in a word: 需要重测 once its exit changed.
+    static func lastTest(_ test: AgentConnectionsClient.TestRecord) -> (text: String, tone: Color) {
+        if test.stale != nil { return ("需要重测", AeroricColor.warning) }
+        return test.passed ? ("上次通过", AeroricColor.success) : ("上次失败", AeroricColor.danger)
+    }
+
+    /// C5: when, what came back, and which exit it took.
+    static func lastTestHelp(_ test: AgentConnectionsClient.TestRecord, calendar: Calendar = .current) -> String {
+        var lines: [String] = []
+        if let stale = test.stale { lines.append(stale) }
+        var first: [String] = []
+        if test.atMs > 0 {
+            let date = Date(timeIntervalSince1970: Double(test.atMs) / 1000)
+            let formatter = DateFormatter()
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            formatter.locale = Locale(identifier: "zh_CN")
+            formatter.dateFormat = "M月d日 HH:mm"
+            first.append("测于 \(formatter.string(from: date))")
+        }
+        first.append(test.status == 0 ? "没有回应" : "HTTP \(test.status)")
+        first.append(String(format: "%.1f 秒", Double(test.elapsedMs) / 1000))
+        lines.append(first.joined(separator: " · "))
+        var exit = [test.proxy.isEmpty ? "直连" : "经代理 \(test.proxy)"]
+        if !test.protocolName.isEmpty { exit.append(AgentConnectionsClient.protocolTitle(test.protocolName)) }
+        if !test.baseUrl.isEmpty { exit.append(test.baseUrl) }
+        lines.append(exit.joined(separator: " · "))
+        if !test.passed, !test.excerpt.isEmpty { lines.append(test.excerpt) }
+        return lines.joined(separator: "\n")
+    }
     /// 2026-10-28: while the probe runs its text is "测试中…"; that is not a failure.
     static let probeRunning = "测试中…"
     static func probeRunning(_ probe: String) -> Bool { probe == probeRunning }

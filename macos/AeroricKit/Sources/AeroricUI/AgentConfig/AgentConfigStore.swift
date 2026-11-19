@@ -493,6 +493,12 @@ public final class AgentConfigStore {
         notice = "已添加 \(new.count) 个模型；记得保存"
     }
 
+    /// C5: the kept test of `model` on the selected connection.
+    public func lastTest(model: String) -> ACC.TestRecord? {
+        guard let id = selectedConnection else { return nil }
+        return snapshot?.test(connectionId: id, model: model)
+    }
+
     public func testConnection(model: String) async {
         guard let id = selectedConnection else { return }
         probe = AgentConfigText.probeRunning
@@ -504,6 +510,8 @@ public final class AgentConfigStore {
         } catch {
             probe = "失败：\(error.localizedDescription)"
         }
+        // C5: the host kept this test with its exit; read it back.
+        if let snapshot = try? await backend.load() { apply(snapshot) }
     }
 
     public func cooldowns(forConnection id: String) -> [ACC.Cooldown] {

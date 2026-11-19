@@ -157,8 +157,58 @@ public struct AgentConnectionsClient: Sendable {
     public struct Snapshot: Equatable, Sendable {
         public var document: Document
         public var credentials: [String: String]
-        public init(document: Document, credentials: [String: String]) {
-            self.document = document; self.credentials = credentials
+        /// C5: the last test of each connection and model.
+        public var tests: [TestRecord]
+        public init(document: Document, credentials: [String: String], tests: [TestRecord] = []) {
+            self.document = document; self.credentials = credentials; self.tests = tests
+        }
+
+        public func test(connectionId: String, model: String) -> TestRecord? {
+            tests.first { $0.connectionId == connectionId && $0.model == model }
+        }
+    }
+
+    /// C5 (2026-11-19): a kept connection test and the exit it took; `stale`
+    /// says why it no longer describes how the connection is reached.
+    public struct TestRecord: Equatable, Sendable {
+        public var connectionId: String
+        public var model: String
+        public var atMs: UInt64
+        /// 0: no answer came.
+        public var status: Int
+        public var elapsedMs: UInt64
+        public var excerpt: String
+        public var passed: Bool
+        public var stale: String?
+        public var baseUrl: String
+        public var protocolName: String
+        /// Empty: direct.
+        public var proxy: String
+
+        public init(connectionId: String, model: String, atMs: UInt64 = 0, status: Int = 200, elapsedMs: UInt64 = 0,
+                    excerpt: String = "", passed: Bool = true, stale: String? = nil, baseUrl: String = "",
+                    protocolName: String = "", proxy: String = "") {
+            self.connectionId = connectionId; self.model = model; self.atMs = atMs; self.status = status
+            self.elapsedMs = elapsedMs; self.excerpt = excerpt; self.passed = passed; self.stale = stale
+            self.baseUrl = baseUrl; self.protocolName = protocolName; self.proxy = proxy
+        }
+
+        static func decode(_ value: JSONValue) -> TestRecord? {
+            guard let id = value["connectionId"]?.stringValue, let model = value["model"]?.stringValue else {
+                return nil
+            }
+            let egress = value["egress"]
+            return TestRecord(
+                connectionId: id, model: model,
+                atMs: value["atMs"]?.numberText.flatMap { UInt64($0) } ?? 0,
+                status: value["status"]?.numberText.flatMap { Int($0) } ?? 0,
+                elapsedMs: value["elapsedMs"]?.numberText.flatMap { UInt64($0) } ?? 0,
+                excerpt: value["excerpt"]?.stringValue ?? "",
+                passed: value["passed"]?.boolValue ?? false,
+                stale: value["stale"]?.stringValue,
+                baseUrl: egress?["baseUrl"]?.stringValue ?? "",
+                protocolName: egress?["protocol"]?.stringValue ?? "",
+                proxy: egress?["proxy"]?.stringValue ?? "")
         }
     }
 
@@ -426,7 +476,9 @@ public struct AgentConnectionsClient: Sendable {
         for (key, state) in value["credentials"]?.fields ?? [:] {
             credentials[key] = state.stringValue ?? "unreadable"
         }
-        return Snapshot(document: try decode(Document.self, document, snake: true), credentials: credentials)
+        let tests = (value["tests"]?.arrayValue ?? []).compactMap(TestRecord.decode)
+        return Snapshot(document: try decode(Document.self, document, snake: true), credentials: credentials,
+                        tests: tests)
     }
 
     public static func decodeCandidates(_ value: JSONValue) throws -> Candidates {
