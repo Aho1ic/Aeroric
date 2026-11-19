@@ -701,3 +701,54 @@ fn the_inlined_diff_never_carries_a_secret() {
     assert!(!text.contains("sk-very-secret"), "{text}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// E2: a finding with the wrong line and a `./` path lands on its code in
+/// the file the turn left; the same finding said twice is kept once, at the
+/// stronger level.
+#[test]
+fn findings_land_on_their_code_and_say_the_same_thing_once() {
+    let dir = std::env::temp_dir().join(format!("aeroric-e2-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let git = |args: &[&str]| -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    let before = git(&["write-tree"]);
+    std::fs::write(
+        dir.join("src/a.rs"),
+        "fn a() {\n    // 说明\n    loop {\n        retry();\n    }\n}\n",
+    )
+    .unwrap();
+    git(&["add", "-A"]);
+    let after = git(&["write-tree"]);
+    let mut changed = diff(&["src/a.rs"]);
+    changed.top = dir.clone();
+    changed.before = before;
+    changed.after = after;
+
+    let rig = rig(true, false);
+    rig.settled("t1", "u1", Some(changed), false);
+    rig.wait_sent(1);
+    const TWICE: &str = "```json\n{\"verdict\":\"changes\",\"files\":[{\"path\":\"src/a.rs\",\"status\":\"reviewed\"}],\"findings\":[{\"id\":\"r1\",\"severity\":\"minor\",\"category\":\"bug\",\"file\":\"./src/a.rs\",\"line\":1,\"snippet\":\"  retry();\",\"text\":\"重试没有上限\"},{\"id\":\"r2\",\"severity\":\"blocker\",\"category\":\"bug\",\"file\":\"src/a.rs\",\"line\":4,\"snippet\":\"retry();\",\"text\":\"换个说法：会一直重试\"}]}\n```";
+    rig.turn("rev-1", "v1", TWICE);
+    let card = rig.reviews.card("t1").unwrap();
+    assert_eq!(card.findings.len(), 1, "{:?}", card.findings);
+    let f = &card.findings[0];
+    assert_eq!(f.id, "r1");
+    assert_eq!(f.file.as_deref(), Some("src/a.rs"));
+    assert_eq!((f.line, f.moved_from), (Some(4), Some(1)));
+    assert_eq!(f.severity, Severity::Blocker);
+    assert_eq!(f.merged, 1);
+    assert_eq!(f.category.as_deref(), Some("bug"));
+    // The writer gets the quoted code with the finding.
+    let sent = rig.wait_sent(2);
+    assert!(sent[1].1.contains("retry();"), "{}", sent[1].1);
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -781,6 +781,7 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
                     line: Some(88),
                     decision: Some(crate::review::Decision::Adopt),
                     reason: None,
+                    ..Default::default()
                 }],
                 summary: Some("超时逻辑可行，重试上限缺测试".into()),
                 raw: None,

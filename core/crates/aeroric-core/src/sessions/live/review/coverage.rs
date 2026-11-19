@@ -119,7 +119,7 @@ pub fn judge(plan: &Plan, claims: Option<&[Claim]>, opened: &[String]) -> Review
 /// The reviewer may write `./src/a.rs`, `a/src/a.rs` or the path from the
 /// repository's parent: the same file when one ends with the other at a
 /// path boundary.
-fn same_path(said: &str, path: &str) -> bool {
+pub(super) fn same_path(said: &str, path: &str) -> bool {
     let said = said.trim().trim_start_matches("./");
     said == path
         || said

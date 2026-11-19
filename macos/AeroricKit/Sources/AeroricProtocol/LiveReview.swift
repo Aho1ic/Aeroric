@@ -54,6 +54,15 @@ public struct LiveReviewFinding: Equatable, Sendable {
     /// The writer's answer: `adopt` `reject` `ask`.
     public var decision: String?
     public var reason: String?
+    /// E2: the code the finding is about, as the reviewer quoted it.
+    public var snippet: String?
+    public var category: String?
+    /// E2: the line the reviewer wrote, when its code sits elsewhere.
+    public var movedFrom: UInt64?
+    /// E2: the quoted code is nowhere in the file.
+    public var unlocated: Bool = false
+    /// E2: findings saying the same that were folded into this one.
+    public var merged: Int = 0
 
     public init(id: String, severity: String, text: String, file: String? = nil, line: UInt64? = nil,
                 decision: String? = nil, reason: String? = nil) {
@@ -142,9 +151,16 @@ extension LiveReviewCard {
         let findings = (f["findings"]?.arrayValue ?? []).compactMap { item -> LiveReviewFinding? in
             let g = item.fields
             guard let id = g["id"]?.stringValue, let text = g["text"]?.stringValue else { return nil }
-            return LiveReviewFinding(id: id, severity: g["severity"]?.stringValue ?? "minor", text: text,
-                                     file: g["file"]?.stringValue, line: g["line"]?.numberText.flatMap { UInt64($0) },
-                                     decision: g["decision"]?.stringValue, reason: g["reason"]?.stringValue)
+            var finding = LiveReviewFinding(
+                id: id, severity: g["severity"]?.stringValue ?? "minor", text: text,
+                file: g["file"]?.stringValue, line: g["line"]?.numberText.flatMap { UInt64($0) },
+                decision: g["decision"]?.stringValue, reason: g["reason"]?.stringValue)
+            finding.snippet = g["snippet"]?.stringValue
+            finding.category = g["category"]?.stringValue
+            finding.movedFrom = g["movedFrom"]?.numberText.flatMap { UInt64($0) }
+            finding.unlocated = g["unlocated"]?.boolValue ?? false
+            finding.merged = g["merged"]?.numberText.flatMap { Int($0) } ?? 0
+            return finding
         }
         return LiveReviewCard(reviewId: reviewId, round: f["round"]?.numberText.flatMap { Int($0) } ?? 1,
                               state: state, turnId: f["turnId"]?.stringValue ?? "",

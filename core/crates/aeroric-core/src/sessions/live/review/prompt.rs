@@ -88,8 +88,9 @@ pub fn reviewer(diff: &TurnDiff, cx: &Context<'_>) -> String {
 ```json
 {{\"verdict\": \"pass 或 changes\", \"summary\": \"一句话总评\",
  \"files\": [{{\"path\": \"路径\", \"status\": \"reviewed|skipped\", \"reason\": \"跳过时写原因\"}}],
- \"findings\": [{{\"id\": \"r1\", \"severity\": \"blocker|major|minor\", \"file\": \"路径\", \"line\": 12, \"text\": \"问题与修改建议\"}}]}}
+ \"findings\": [{{\"id\": \"r1\", \"severity\": \"blocker|major|minor\", \"category\": \"bug|security|performance|maintainability|test|style|documentation|other\", \"file\": \"路径\", \"line\": 12, \"snippet\": \"问题所在的代码，从改动后的文件里照抄一到几行\", \"text\": \"问题与修改建议\"}}]}}
 ```
+snippet 照抄代码原文，不要改写；行号写错时，Aeroric 会按 snippet 找到正确的位置。
 files 逐个列出上面每个要审查的文件：看过并审查了写 reviewed，没有审查写 skipped 并写原因。不要只审一部分就给结论。
 blocker 只用于必须改的问题：错误、数据丢失、安全、违反验收条款或约束。没有问题时 verdict 为 pass、findings 为空。\n"
     ));
@@ -103,6 +104,10 @@ pub fn reply_request(card: &ReviewCard) -> String {
     );
     for (i, f) in card.findings.iter().enumerate() {
         out.push_str(&format!("{}. {}\n", i + 1, line(f)));
+        // E2: the quoted code, so the writer finds the place either way.
+        if let Some(snippet) = &f.snippet {
+            out.push_str(&format!("   ```\n{}\n   ```\n", indent(snippet)));
+        }
     }
     out.push_str(
         "\n处理完后，在回答末尾给一个 JSON 代码块：
@@ -141,6 +146,13 @@ fn answer(f: &Finding) -> String {
         Some(reason) => format!("{word}（{reason}）"),
         None => word.to_string(),
     }
+}
+
+fn indent(text: &str) -> String {
+    text.lines()
+        .map(|l| format!("   {l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn list(out: &mut String, title: &str, items: &[String]) {

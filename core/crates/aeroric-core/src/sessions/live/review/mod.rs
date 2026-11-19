@@ -13,6 +13,7 @@
 
 pub mod coverage;
 pub mod gates;
+pub mod locate;
 pub mod parse;
 pub mod prompt;
 
@@ -779,11 +780,24 @@ impl ReviewLoop {
             return None;
         };
         l.card.summary = verdict.summary;
-        l.card.findings = verdict.findings;
+        let plan = l.plan.clone().unwrap_or_default();
+        // E2: each finding on the file's own path and at its code's line;
+        // the same thing said twice is said once.
+        let mut findings = verdict.findings;
+        for f in &mut findings {
+            if let Some(file) = &f.file {
+                if let Some(path) = plan.selected.iter().find(|p| coverage::same_path(file, p)) {
+                    f.file = Some(path.clone());
+                }
+            }
+        }
+        if let Some(diff) = &l.diff {
+            locate::place(&mut findings, |path| file_after(diff, path));
+        }
+        l.card.findings = locate::fold(findings);
         l.card.findings.sort_by_key(|f| f.severity);
         // E1: what the round rests on, from the files alone.
         let opened = state.opened.remove(reviewer).unwrap_or_default();
-        let plan = l.plan.clone().unwrap_or_default();
         let coverage = coverage::judge(&plan, verdict.files.as_deref(), &opened);
         let unreviewed = coverage.state == CoverageState::Unreviewed;
         l.card.coverage = Some(coverage);
@@ -909,6 +923,23 @@ fn checks_summary(run: &str, items: &[super::update::AutoCheckItem]) -> String {
         }
     }
     out
+}
+
+/// E2: a file as the turn left it, from its snapshot tree.
+fn file_after(diff: &TurnDiff, path: &str) -> Option<String> {
+    if diff.after.is_empty() {
+        return None;
+    }
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&diff.top)
+        .args(["cat-file", "-p", &format!("{}:{path}", diff.after)])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// The turn's diff, without `left_out` (E1: secrets and binaries).

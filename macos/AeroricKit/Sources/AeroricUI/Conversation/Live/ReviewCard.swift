@@ -141,6 +141,16 @@ struct ReviewCard: View {
             if open {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(finding.text).textSelection(.enabled)
+                    if let snippet = finding.snippet {
+                        Text(snippet)
+                            .font(.system(size: AeroricType.code, design: .monospaced))
+                            .foregroundStyle(AeroricColor.textSecondary)
+                            .textSelection(.enabled)
+                            .padding(.vertical, 2)
+                    }
+                    ForEach(ReviewText.notes(finding), id: \.self) { note in
+                        Text(note).foregroundStyle(AeroricColor.textTertiary)
+                    }
                     if let reason = finding.reason {
                         Text("答复：\(reason)").foregroundStyle(AeroricColor.textSecondary).textSelection(.enabled)
                     }
@@ -198,9 +208,25 @@ public enum ReviewText {
         text.count > 12 ? String(text.prefix(12)) + "…" : text
     }
 
-    /// "client.rs:88 重试没有上限".
+    /// "client.rs:88 重试没有上限", with "（3 条相同）" when others were folded in.
     public static func line(_ finding: LiveReviewFinding) -> String {
-        [finding.location, finding.text].compactMap { $0 }.joined(separator: " ")
+        let text = [finding.location, finding.text].compactMap { $0 }.joined(separator: " ")
+        return finding.merged > 0 ? "\(text)（\(finding.merged + 1) 条相同）" : text
+    }
+
+    /// E2: how the finding's place and its duplicates were settled.
+    public static func notes(_ finding: LiveReviewFinding) -> [String] {
+        var notes: [String] = []
+        if let moved = finding.movedFrom {
+            notes.append("位置已按代码修正（审查者写的是第 \(moved) 行）")
+        }
+        if finding.unlocated {
+            notes.append("引用的代码在文件里找不到，位置以审查者写的为准")
+        }
+        if finding.merged > 0 {
+            notes.append("合并了 \(finding.merged) 条说同一处的意见")
+        }
+        return notes
     }
 
     /// E1: what the round rests on, e.g. "审查覆盖 7/9 个文件（结果可能不完整）".

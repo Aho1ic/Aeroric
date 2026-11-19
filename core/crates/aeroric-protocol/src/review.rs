@@ -85,6 +85,28 @@ pub struct Finding {
     pub decision: Option<Decision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// E2 (2026-11-19): the code the finding is about, as the reviewer
+    /// quoted it; it finds the right line again when the number drifts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
+    /// E2: `bug` `security` `performance` `maintainability` `test` `style`
+    /// `documentation` `other`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// E2: the line the reviewer wrote, when its snippet sits elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_from: Option<u64>,
+    /// E2: the snippet is nowhere in the file: the place is the reviewer's
+    /// word alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlocated: bool,
+    /// E2: how many findings saying the same were folded into this one.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub merged: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,6 +311,7 @@ mod tests {
                 line: Some(88),
                 decision: Some(Decision::Adopt),
                 reason: None,
+                ..Finding::default()
             }],
             ..ReviewCard::default()
         };

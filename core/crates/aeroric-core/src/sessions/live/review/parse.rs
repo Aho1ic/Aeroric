@@ -50,6 +50,11 @@ struct RawFinding {
     file: Option<String>,
     #[serde(default)]
     line: Option<Value>,
+    /// E2: the quoted code (`snippet`, or OCR's `existing_code`).
+    #[serde(default, alias = "existing_code", alias = "code")]
+    snippet: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
 }
 
 /// The reviewer's verdict; `None` when the text holds none.
@@ -84,6 +89,12 @@ pub fn verdict(text: &str) -> Option<Verdict> {
             },
             decision: None,
             reason: None,
+            snippet: f
+                .snippet
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| cut(s.trim_end())),
+            category: f.category.as_deref().and_then(category),
+            ..Finding::default()
         });
     }
     let said = raw
@@ -123,6 +134,22 @@ pub fn verdict(text: &str) -> Option<Verdict> {
         findings,
         files,
     })
+}
+
+/// E2: the reviewer's kind of finding, among the known ones.
+fn category(text: &str) -> Option<String> {
+    let word = text.trim().to_ascii_lowercase();
+    const KINDS: [&str; 8] = [
+        "bug",
+        "security",
+        "performance",
+        "maintainability",
+        "test",
+        "style",
+        "documentation",
+        "other",
+    ];
+    KINDS.contains(&word.as_str()).then_some(word)
 }
 
 #[derive(Deserialize)]

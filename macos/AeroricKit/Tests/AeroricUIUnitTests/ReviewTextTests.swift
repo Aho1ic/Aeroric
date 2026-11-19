@@ -91,4 +91,25 @@ final class ReviewTextTests: XCTestCase {
         XCTAssertEqual(ReviewText.coverage(none)?.0, "没有审查：1 个改动的文件一个都没看")
         XCTAssertNil(LiveReviewCard.decode(.object(["reviewId": .string("rv-2"), "state": .string("passed")]))?.coverage)
     }
+
+    /// E2: a finding shows its code, where it was moved from, and what it folded.
+    func testAFindingSaysHowItsPlaceWasSettled() throws {
+        let card = try XCTUnwrap(LiveReviewCard.decode(.object([
+            "reviewId": .string("rv-1"), "state": .string("waitingCoder"),
+            "findings": .array([.object([
+                "id": .string("r1"), "severity": .string("blocker"), "text": .string("重试没有上限"),
+                "file": .string("src/a.rs"), "line": .number("4"), "snippet": .string("retry();"),
+                "category": .string("bug"), "movedFrom": .number("1"), "merged": .number("2"),
+            ])]),
+        ])))
+        let finding = try XCTUnwrap(card.findings.first)
+        XCTAssertEqual(finding.snippet, "retry();")
+        XCTAssertEqual(ReviewText.line(finding), "src/a.rs:4 重试没有上限（3 条相同）")
+        XCTAssertEqual(ReviewText.notes(finding), ["位置已按代码修正（审查者写的是第 1 行）", "合并了 2 条说同一处的意见"])
+        var lost = finding
+        lost.movedFrom = nil
+        lost.merged = 0
+        lost.unlocated = true
+        XCTAssertEqual(ReviewText.notes(lost), ["引用的代码在文件里找不到，位置以审查者写的为准"])
+    }
 }
