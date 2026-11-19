@@ -95,7 +95,7 @@ pub fn fold(findings: Vec<Finding>) -> Vec<Finding> {
 }
 
 /// File, kind, and the code it means (its words when it quoted none).
-fn identity(f: &Finding) -> String {
+pub(super) fn identity(f: &Finding) -> String {
     let body = f
         .snippet
         .as_deref()

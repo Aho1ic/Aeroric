@@ -752,3 +752,45 @@ fn findings_land_on_their_code_and_say_the_same_thing_once() {
     assert!(sent[1].1.contains("retry();"), "{}", sent[1].1);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// E3: round 2 against round 1. The answer changed only a.rs: the finding
+/// on a.rs said again persists, the other one on a.rs is resolved, and the
+/// one on b.rs, which nobody looked at again, is not re-reviewed.
+#[test]
+fn the_second_round_says_what_persists_what_is_resolved_and_what_went_unchecked() {
+    const ROUND1: &str = "```json\n{\"verdict\":\"changes\",\"findings\":[{\"id\":\"r1\",\"severity\":\"blocker\",\"file\":\"src/a.rs\",\"line\":3,\"text\":\"重试没有上限\"},{\"id\":\"r2\",\"severity\":\"major\",\"file\":\"src/b.rs\",\"text\":\"会崩\"},{\"id\":\"r3\",\"severity\":\"minor\",\"file\":\"src/a.rs\",\"text\":\"忙等\"}]}\n```";
+    const ADOPT_ALL: &str = "```json\n{\"responses\":[{\"id\":\"r1\",\"decision\":\"adopt\"},{\"id\":\"r2\",\"decision\":\"adopt\"},{\"id\":\"r3\",\"decision\":\"adopt\"}]}\n```";
+    const ROUND2: &str = "```json\n{\"verdict\":\"changes\",\"files\":[{\"path\":\"src/a.rs\",\"status\":\"reviewed\"}],\"findings\":[{\"id\":\"r1\",\"severity\":\"blocker\",\"file\":\"src/a.rs\",\"line\":5,\"text\":\"重试没有上限\"},{\"id\":\"r2\",\"severity\":\"minor\",\"file\":\"src/a.rs\",\"text\":\"日志太多\"}]}\n```";
+    let rig = rig(true, false);
+    rig.settled("t1", "u1", Some(diff(&["src/a.rs", "src/b.rs"])), false);
+    rig.wait_reviewer();
+    rig.turn("rev-1", "v1", ROUND1);
+    rig.wait_sent(2);
+    assert!(
+        rig.reviews.card("t1").unwrap().compare.is_none(),
+        "round 1 has nothing before it"
+    );
+    rig.turn("t1", "u2", ADOPT_ALL);
+    rig.settled("t1", "u2", Some(diff(&["src/a.rs"])), false);
+    let sent = rig.wait_sent(3);
+    assert!(sent[2].1.contains("用原来的 file 和 snippet 再报一次"));
+    rig.turn("rev-1", "v2", ROUND2);
+    let sent = rig.wait_sent(4);
+
+    let card = rig.reviews.card("t1").unwrap();
+    assert_eq!((card.round, card.state), (2, ReviewState::WaitingCoder));
+    let repeats: Vec<_> = card
+        .findings
+        .iter()
+        .map(|f| (f.id.as_str(), f.repeats.as_deref()))
+        .collect();
+    assert_eq!(repeats, [("r1", Some("r1")), ("r2", None)]);
+    let cmp = card.compare.expect("round 2 compares");
+    assert_eq!(cmp.previous_round, 1);
+    let ids = |list: &[aeroric_protocol::review::Finding]| {
+        list.iter().map(|f| f.id.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&cmp.resolved), ["r3"]);
+    assert_eq!(ids(&cmp.unchecked), ["r2"], "b.rs was not looked at again");
+    assert!(sent[3].1.contains("上一轮也提过，还没改好"));
+}

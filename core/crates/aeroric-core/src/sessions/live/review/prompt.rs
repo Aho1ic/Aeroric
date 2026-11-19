@@ -50,8 +50,11 @@ pub fn reviewer(diff: &TurnDiff, cx: &Context<'_>) -> String {
         for f in &previous.findings {
             out.push_str(&format!("- {}：{}", line(f), answer(f)));
             out.push('\n');
+            if let Some(snippet) = &f.snippet {
+                out.push_str(&format!("   ```\n{}\n   ```\n", indent(snippet)));
+            }
         }
-        out.push_str("这一轮只看新的改动，以及上一轮被采纳但还没改好的问题；被驳回的意见不要重复提，除非新改动让它更严重。\n");
+        out.push_str("这一轮只看新的改动，以及上一轮被采纳但还没改好的问题；被驳回的意见不要重复提，除非新改动让它更严重。\n上一轮的问题还没改好的，用原来的 file 和 snippet 再报一次；已经改好的不要再报。\n");
     }
     let git = format!(
         "git -C {} diff {} {}",
@@ -104,6 +107,10 @@ pub fn reply_request(card: &ReviewCard) -> String {
     );
     for (i, f) in card.findings.iter().enumerate() {
         out.push_str(&format!("{}. {}\n", i + 1, line(f)));
+        // E3: said last round too, and still there.
+        if f.repeats.is_some() {
+            out.push_str("   （上一轮也提过，还没改好）\n");
+        }
         // E2: the quoted code, so the writer finds the place either way.
         if let Some(snippet) = &f.snippet {
             out.push_str(&format!("   ```\n{}\n   ```\n", indent(snippet)));

@@ -13,6 +13,7 @@ struct ReviewCard: View {
     let onOpen: (String) -> Void
     @State private var expanded: Set<String> = []
     @State private var showsFiles = false
+    @State private var showsEarlier = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
@@ -63,6 +64,37 @@ struct ReviewCard: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .help(file.path)
+                        }
+                    }
+                    .padding(.leading, AeroricSpace.l)
+                }
+            }
+            if let compare = card.compare, let line = ReviewText.compare(card) {
+                Button { showsEarlier.toggle() } label: {
+                    HStack(spacing: AeroricSpace.xs) {
+                        Image(systemName: "arrow.left.arrow.right")
+                        Text(line).lineLimit(1).truncationMode(.tail)
+                        if !compare.resolved.isEmpty || !compare.unchecked.isEmpty {
+                            Image(systemName: showsEarlier ? "chevron.down" : "chevron.right")
+                                .font(.system(size: AeroricType.caption - 2))
+                        }
+                    }
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(compare.unchecked.isEmpty ? AeroricColor.textSecondary : AeroricColor.warning)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("和第 \(compare.previousRound) 轮比：哪些是新的、哪些还在、哪些改好了、哪些这轮没人再看")
+                .accessibilityIdentifier("review.compare")
+                if showsEarlier {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(ReviewText.earlier(compare), id: \.self) { line in
+                            Text(line)
+                                .font(.system(size: AeroricType.caption))
+                                .foregroundStyle(line.hasPrefix("未复查") ? AeroricColor.warning : AeroricColor.textSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .help(line)
                         }
                     }
                     .padding(.leading, AeroricSpace.l)
@@ -226,7 +258,28 @@ public enum ReviewText {
         if finding.merged > 0 {
             notes.append("合并了 \(finding.merged) 条说同一处的意见")
         }
+        if let earlier = finding.repeats {
+            notes.append("上一轮也提过（当时是 \(earlier)），还没改好")
+        }
         return notes
+    }
+
+    /// E3: "新增 2 · 仍在 1 · 已解决 3 · 未复查 1"; nil when there is
+    /// nothing to compare.
+    public static func compare(_ card: LiveReviewCard) -> String? {
+        guard let compare = card.compare else { return nil }
+        let persisting = card.findings.filter { $0.repeats != nil }.count
+        let parts = [("新增", card.findings.count - persisting), ("仍在", persisting),
+                     ("已解决", compare.resolved.count), ("未复查", compare.unchecked.count)]
+            .filter { $0.1 > 0 }
+            .map { "\($0.0) \($0.1)" }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// E3: the last round's findings not said again, one line each.
+    public static func earlier(_ compare: LiveRoundCompare) -> [String] {
+        compare.resolved.map { "已解决 · \(line($0))" }
+            + compare.unchecked.map { "未复查（这一轮没人再看这个文件） · \(line($0))" }
     }
 
     /// E1: what the round rests on, e.g. "审查覆盖 7/9 个文件（结果可能不完整）".
@@ -264,6 +317,9 @@ public enum ReviewText {
             parts.append("覆盖 \(coverage.looked)/\(coverage.inScope.count)")
         }
         if !card.findings.isEmpty { parts.append("\(card.findings.count) 条") }
+        if let unchecked = card.compare?.unchecked.count, unchecked > 0 {
+            parts.append("\(unchecked) 条未复查")
+        }
         if asks > 0 { parts.append("\(asks) 条需要你定") }
         return parts.joined(separator: " · ")
     }

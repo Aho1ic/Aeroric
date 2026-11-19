@@ -11,6 +11,7 @@
 //! sending messages is the host's ([`ReviewHost`]), always off the caller's
 //! thread: a sink callback never waits on a session.
 
+pub mod compare;
 pub mod coverage;
 pub mod gates;
 pub mod locate;
@@ -421,6 +422,7 @@ impl ReviewLoop {
             },
         );
         l.card.coverage = None;
+        l.card.compare = None;
         l.plan = Some(plan);
         match &l.card.reviewer_task_id {
             Some(reviewer) => Act::PromptReviewer {
@@ -801,6 +803,14 @@ impl ReviewLoop {
         let coverage = coverage::judge(&plan, verdict.files.as_deref(), &opened);
         let unreviewed = coverage.state == CoverageState::Unreviewed;
         l.card.coverage = Some(coverage);
+        // E3: from round 2, what became of the last round's findings.
+        if let Some(previous) = &l.previous {
+            l.card.compare = Some(compare::compare(
+                previous,
+                &mut l.card.findings,
+                l.card.coverage.as_ref(),
+            ));
+        }
         if verdict.pass && unreviewed {
             l.card.state = ReviewState::Escalated;
             l.card.raw = Some(coverage::NOT_REVIEWED.into());

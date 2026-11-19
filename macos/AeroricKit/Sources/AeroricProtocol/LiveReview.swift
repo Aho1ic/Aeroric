@@ -16,6 +16,8 @@ public struct LiveReviewCard: Equatable, Sendable {
     public var raw: String?
     /// E1: which changed files the reviewer accounted for.
     public var coverage: LiveReviewCoverage?
+    /// E3: this round against the one before, from round 2 on.
+    public var compare: LiveRoundCompare?
 
     public init(reviewId: String, round: Int = 1, state: String, turnId: String = "", reviewerTaskId: String? = nil,
                 reviewerLabel: String = "", sameFamily: Bool = false, findings: [LiveReviewFinding] = [],
@@ -63,6 +65,8 @@ public struct LiveReviewFinding: Equatable, Sendable {
     public var unlocated: Bool = false
     /// E2: findings saying the same that were folded into this one.
     public var merged: Int = 0
+    /// E3: the previous round's finding this one says again.
+    public var repeats: String?
 
     public init(id: String, severity: String, text: String, file: String? = nil, line: UInt64? = nil,
                 decision: String? = nil, reason: String? = nil) {
@@ -148,33 +152,59 @@ extension LiveReviewCard {
     public static func decode(_ value: JSONValue) -> LiveReviewCard? {
         let f = value.fields
         guard let reviewId = f["reviewId"]?.stringValue, let state = f["state"]?.stringValue else { return nil }
-        let findings = (f["findings"]?.arrayValue ?? []).compactMap { item -> LiveReviewFinding? in
-            let g = item.fields
-            guard let id = g["id"]?.stringValue, let text = g["text"]?.stringValue else { return nil }
-            var finding = LiveReviewFinding(
-                id: id, severity: g["severity"]?.stringValue ?? "minor", text: text,
-                file: g["file"]?.stringValue, line: g["line"]?.numberText.flatMap { UInt64($0) },
-                decision: g["decision"]?.stringValue, reason: g["reason"]?.stringValue)
-            finding.snippet = g["snippet"]?.stringValue
-            finding.category = g["category"]?.stringValue
-            finding.movedFrom = g["movedFrom"]?.numberText.flatMap { UInt64($0) }
-            finding.unlocated = g["unlocated"]?.boolValue ?? false
-            finding.merged = g["merged"]?.numberText.flatMap { Int($0) } ?? 0
-            return finding
-        }
-        return LiveReviewCard(reviewId: reviewId, round: f["round"]?.numberText.flatMap { Int($0) } ?? 1,
+        let findings = (f["findings"]?.arrayValue ?? []).compactMap(LiveReviewFinding.decode)
+        var card = LiveReviewCard(reviewId: reviewId, round: f["round"]?.numberText.flatMap { Int($0) } ?? 1,
                               state: state, turnId: f["turnId"]?.stringValue ?? "",
                               reviewerTaskId: f["reviewerTaskId"]?.stringValue,
                               reviewerLabel: f["reviewerLabel"]?.stringValue ?? "",
                               sameFamily: f["sameFamily"]?.boolValue ?? false, findings: findings,
                               summary: f["summary"]?.stringValue, raw: f["raw"]?.stringValue)
-            .with(coverage: f["coverage"].flatMap(LiveReviewCoverage.decode))
+        card.coverage = f["coverage"].flatMap(LiveReviewCoverage.decode)
+        card.compare = f["compare"].flatMap(LiveRoundCompare.decode)
+        return card
+    }
+}
+
+extension LiveReviewFinding {
+    public static func decode(_ item: JSONValue) -> LiveReviewFinding? {
+        let g = item.fields
+        guard let id = g["id"]?.stringValue, let text = g["text"]?.stringValue else { return nil }
+        var finding = LiveReviewFinding(
+            id: id, severity: g["severity"]?.stringValue ?? "minor", text: text,
+            file: g["file"]?.stringValue, line: g["line"]?.numberText.flatMap { UInt64($0) },
+            decision: g["decision"]?.stringValue, reason: g["reason"]?.stringValue)
+        finding.snippet = g["snippet"]?.stringValue
+        finding.category = g["category"]?.stringValue
+        finding.movedFrom = g["movedFrom"]?.numberText.flatMap { UInt64($0) }
+        finding.unlocated = g["unlocated"]?.boolValue ?? false
+        finding.merged = g["merged"]?.numberText.flatMap { Int($0) } ?? 0
+        finding.repeats = g["repeats"]?.stringValue
+        return finding
+    }
+}
+
+/// E3 (2026-11-19): mirrors `aeroric_protocol::review::RoundCompare` — what
+/// became of the previous round's adopted findings not said again.
+public struct LiveRoundCompare: Equatable, Sendable {
+    public var previousRound: Int
+    /// Its file was reviewed again and it was not raised again.
+    public var resolved: [LiveReviewFinding]
+    /// Its file was not in front of the reviewer this round.
+    public var unchecked: [LiveReviewFinding]
+
+    public init(previousRound: Int, resolved: [LiveReviewFinding] = [], unchecked: [LiveReviewFinding] = []) {
+        self.previousRound = previousRound
+        self.resolved = resolved
+        self.unchecked = unchecked
     }
 
-    func with(coverage: LiveReviewCoverage?) -> LiveReviewCard {
-        var card = self
-        card.coverage = coverage
-        return card
+    public static func decode(_ value: JSONValue) -> LiveRoundCompare? {
+        let f = value.fields
+        guard let round = f["previousRound"]?.numberText.flatMap({ Int($0) }) else { return nil }
+        return LiveRoundCompare(
+            previousRound: round,
+            resolved: (f["resolved"]?.arrayValue ?? []).compactMap(LiveReviewFinding.decode),
+            unchecked: (f["unchecked"]?.arrayValue ?? []).compactMap(LiveReviewFinding.decode))
     }
 }
 

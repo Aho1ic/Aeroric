@@ -103,6 +103,10 @@ pub struct Finding {
     /// E2: how many findings saying the same were folded into this one.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub merged: u32,
+    /// E3 (2026-11-19): the id of the previous round's finding this one
+    /// says again. From round 2 on, a finding without it is new.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeats: Option<String>,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -136,6 +140,26 @@ pub struct ReviewCard {
     /// E1: which of the round's changed files the reviewer accounted for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<ReviewCoverage>,
+    /// E3: this round against the one before, from round 2 on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compare: Option<RoundCompare>,
+}
+
+/// E3 (2026-11-19): what became of the previous round's adopted findings
+/// that this round did not raise again. A finding raised again carries
+/// [`Finding::repeats`]; one the writer rejected and the reviewer let go is
+/// in neither list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoundCompare {
+    pub previous_round: u32,
+    /// Its file was reviewed this round, and the finding was not raised again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved: Vec<Finding>,
+    /// Its file was not in front of the reviewer this round (the writer did
+    /// not change it, or the reviewer skipped it): not counted as resolved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unchecked: Vec<Finding>,
 }
 
 /// E1 (2026-11-19): every changed file of a round ends one way. The round's

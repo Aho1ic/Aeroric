@@ -112,4 +112,36 @@ final class ReviewTextTests: XCTestCase {
         lost.unlocated = true
         XCTAssertEqual(ReviewText.notes(lost), ["引用的代码在文件里找不到，位置以审查者写的为准"])
     }
+
+    /// E3: round 2 says what is new, what persists, what was resolved and
+    /// what nobody looked at again.
+    func testTheSecondRoundComparesWithTheFirst() throws {
+        func finding(_ id: String, _ file: String, _ text: String, repeats: String? = nil) -> JSONValue {
+            var fields: [String: JSONValue] = ["id": .string(id), "severity": .string("blocker"),
+                                               "file": .string(file), "text": .string(text)]
+            if let repeats { fields["repeats"] = .string(repeats) }
+            return .object(fields)
+        }
+        let card = try XCTUnwrap(LiveReviewCard.decode(.object([
+            "reviewId": .string("rv-1"), "round": .number("2"), "state": .string("waitingCoder"),
+            "findings": .array([finding("r1", "src/a.rs", "重试没有上限", repeats: "r1"),
+                                finding("r2", "src/a.rs", "日志太多")]),
+            "compare": .object([
+                "previousRound": .number("1"),
+                "resolved": .array([finding("r3", "src/a.rs", "忙等")]),
+                "unchecked": .array([finding("r2", "src/b.rs", "会崩")]),
+            ]),
+        ])))
+        let compare = try XCTUnwrap(card.compare)
+        XCTAssertEqual(card.findings.first?.repeats, "r1")
+        XCTAssertEqual(ReviewText.compare(card), "新增 1 · 仍在 1 · 已解决 1 · 未复查 1")
+        XCTAssertEqual(ReviewText.earlier(compare), ["已解决 · src/a.rs 忙等",
+                                                     "未复查（这一轮没人再看这个文件） · src/b.rs 会崩"])
+        XCTAssertEqual(ReviewText.notes(card.findings[0]), ["上一轮也提过（当时是 r1），还没改好"])
+        XCTAssertEqual(ReviewText.summary(card), "第 2 轮 · 等写代码的会话答复 · 2 条 · 1 条未复查")
+
+        var first = card
+        first.compare = nil
+        XCTAssertNil(ReviewText.compare(first), "round 1 has nothing to compare")
+    }
 }
