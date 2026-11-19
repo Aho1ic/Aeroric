@@ -1,5 +1,6 @@
-//! One project's `wiki.db`: whole pages as JSON, revisions only appended,
-//! issues, an FTS5 index, and the Markdown projection beside it.
+//! One project's `wiki.db`: whole pages as JSON, revisions only appended
+//! (C2: except that forgotten memories are scrubbed out of them), issues, an
+//! FTS5 index, and the Markdown projection beside it.
 
 use std::path::{Path, PathBuf};
 
@@ -209,6 +210,52 @@ impl Store {
             .collect())
     }
 
+    /// C2: the page's Markdown file written again when it is not what the
+    /// page says (a save that failed after the database took it).
+    pub(super) fn reproject(&self, page: &WikiPage) -> Result<(), WikiError> {
+        let path = self.pages_dir.join(format!("{}.md", page.slug));
+        let markdown = render(page);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(markdown.as_str()) {
+            std::fs::write(&path, markdown).map_err(|e| WikiError::Storage(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// C2: every revision of every page (removed pages' too) loses the
+    /// sections whose heading `drop` says to; how many revisions changed.
+    pub(super) fn scrub_revisions(&self, drop: &dyn Fn(&str) -> bool) -> Result<u32, WikiError> {
+        let mut statement = self.conn.prepare("SELECT slug, n, body FROM revisions")?;
+        let rows = statement
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut changed = 0;
+        for (slug, n, body) in rows {
+            let Ok(mut revision) = serde_json::from_str::<WikiRevision>(&body) else {
+                continue;
+            };
+            let Some(markdown) = drop_sections(&revision.markdown, drop) else {
+                continue;
+            };
+            revision.markdown = markdown;
+            self.conn.execute(
+                "UPDATE revisions SET body = ?3 WHERE slug = ?1 AND n = ?2",
+                params![
+                    slug,
+                    n,
+                    serde_json::to_string(&revision).unwrap_or_default()
+                ],
+            )?;
+            changed += 1;
+        }
+        Ok(changed)
+    }
+
     pub(super) fn put_issue(&self, issue: &WikiIssue) -> Result<(), WikiError> {
         self.conn.execute(
             "INSERT INTO issues(id, slug, body, open, at_ms) VALUES (?1, ?2, ?3, ?4, ?5)
@@ -347,4 +394,28 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+/// C2: `markdown` without the `## ` sections whose heading `drop` says to
+/// (each up to the next `## `); `None` when none was.
+pub(super) fn drop_sections(markdown: &str, drop: &dyn Fn(&str) -> bool) -> Option<String> {
+    let mut out = Vec::new();
+    let mut skipping = false;
+    let mut dropped = false;
+    for line in markdown.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            skipping = drop(heading.trim());
+            dropped |= skipping;
+        } else if line.starts_with("# ") {
+            skipping = false;
+        }
+        if !skipping {
+            out.push(line);
+        }
+    }
+    dropped.then(|| {
+        let mut text = out.join("\n");
+        text.push('\n');
+        text
+    })
 }

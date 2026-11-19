@@ -272,9 +272,97 @@ fn memory_archive(live: &Live, request: &Request) -> Frame {
         .archive(&p.id, p.archived.unwrap_or(true), now_ms());
     // C2: what archiving touched beyond the item.
     match result {
-        Ok((item, withdrawal)) => ok(request, json!({ "item": item, "withdrawal": withdrawal })),
+        Ok((item, mut withdrawal)) => {
+            reach_wiki(live, &mut withdrawal, false);
+            ok(request, json!({ "item": item, "withdrawal": withdrawal }))
+        }
         Err(error) => memory_failure(request, error),
     }
+}
+
+/// C2 second step: the Wiki pages of the withdrawn experiences' projects
+/// (every project's, for a global one) lose their paragraphs now; a
+/// forgotten one's words leave the history too. A project whose Wiki could
+/// not be changed goes to the backlog (ids only), tried again on every
+/// withdrawal and every 需要我处理 read, and is named in `failed`.
+fn reach_wiki(live: &Live, withdrawal: &mut wire::Withdrawal, forgotten: bool) {
+    let memory = live.executor.memory();
+    let mut work: Vec<memory::WikiBacklog> = memory.wiki_backlog();
+    let now = now_ms();
+    if !withdrawal.experiences.is_empty() {
+        let mut all: Option<Vec<String>> = None;
+        let mut by_project: Vec<(String, Vec<String>)> = Vec::new();
+        for (id, project) in &withdrawal.experiences {
+            let projects = match project {
+                Some(project) => vec![project.clone()],
+                None => all.get_or_insert_with(|| project_ids(live)).clone(),
+            };
+            for project in projects {
+                match by_project.iter_mut().find(|(p, _)| *p == project) {
+                    Some((_, ids)) => ids.push(id.clone()),
+                    None => by_project.push((project, vec![id.clone()])),
+                }
+            }
+        }
+        work.extend(
+            by_project
+                .into_iter()
+                .map(|(project_id, ids)| memory::WikiBacklog {
+                    project_id,
+                    ids,
+                    forgotten,
+                    reason: String::new(),
+                    at_ms: now,
+                }),
+        );
+    }
+    if work.is_empty() {
+        return;
+    }
+    let (wiki_pages, wiki_flagged, failed, left) = run_backlog(live, work);
+    withdrawal.wiki_pages += wiki_pages;
+    withdrawal.wiki_flagged += wiki_flagged;
+    withdrawal.failed.extend(failed);
+    let _ = memory.set_wiki_backlog(&left);
+}
+
+/// Every project, by id.
+fn project_ids(live: &Live) -> Vec<String> {
+    aeroric_core::projects::ProjectService::new(Arc::clone(&live.context))
+        .list()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|p| p.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
+
+/// Try each entry: `(pages, flagged, failures in words, entries left)`.
+fn run_backlog(
+    live: &Live,
+    work: Vec<memory::WikiBacklog>,
+) -> (u32, u32, Vec<String>, Vec<memory::WikiBacklog>) {
+    let memory = live.executor.memory();
+    let wikis = live.executor.wikis();
+    let forgotten = |text: &str| memory.is_forgotten(text);
+    let (mut pages, mut flagged, mut failed, mut left) = (0, 0, Vec::new(), Vec::new());
+    for mut entry in work {
+        let scrub: Option<&dyn Fn(&str) -> bool> = entry.forgotten.then_some(&forgotten);
+        match wikis.withdraw_memory(&entry.project_id, &entry.ids, scrub, now_ms()) {
+            Ok(report) => {
+                pages += report.pages;
+                flagged += report.flagged;
+            }
+            Err(error) => {
+                let name = super::schedule::project(live, &entry.project_id)
+                    .and_then(|p| p.get("name").and_then(Value::as_str).map(str::to_string))
+                    .unwrap_or_else(|| entry.project_id.clone());
+                failed.push(format!("项目「{name}」的 Wiki 没能更新：{error}"));
+                entry.reason = error.to_string();
+                left.push(entry);
+            }
+        }
+    }
+    (pages, flagged, failed, left)
 }
 
 /// `memory.pin {id, pinned}`.
@@ -321,10 +409,13 @@ fn memory_forget(live: &Live, request: &Request) -> Frame {
     // `removed` stays the count older clients read; C2: `withdrawal` says
     // what else it touched.
     match live.executor.memory().forget(&p.id, now_ms()) {
-        Ok(withdrawal) => ok(
-            request,
-            json!({ "removed": withdrawal.items, "withdrawal": withdrawal }),
-        ),
+        Ok(mut withdrawal) => {
+            reach_wiki(live, &mut withdrawal, true);
+            ok(
+                request,
+                json!({ "removed": withdrawal.items, "withdrawal": withdrawal }),
+            )
+        }
         Err(error) => memory_failure(request, error),
     }
 }
@@ -382,6 +473,16 @@ fn source_messages(live: &Live, task_id: &str) -> Result<Option<Vec<(String, Str
 /// `memory.attention {}`: proposals waiting for the user.
 fn memory_attention(live: &Live, request: &Request) -> Frame {
     let memory = live.executor.memory();
+    // C2: Wiki withdrawals that failed are tried again; those still
+    // failing come along.
+    let backlog = memory.wiki_backlog();
+    let backlog = if backlog.is_empty() {
+        backlog
+    } else {
+        let (_, _, _, left) = run_backlog(live, backlog);
+        let _ = memory.set_wiki_backlog(&left);
+        left
+    };
     match memory.attention() {
         // B5-3b: skill proposals waiting for the user come along.
         Ok(items) => ok(
@@ -394,6 +495,7 @@ fn memory_attention(live: &Live, request: &Request) -> Frame {
                     .into_iter()
                     .filter(|p| p.state == wire::SkillProposalState::Pending)
                     .collect::<Vec<_>>(),
+                "wikiBacklog": backlog,
             }),
         ),
         Err(error) => memory_failure(request, error),

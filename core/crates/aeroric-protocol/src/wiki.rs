@@ -130,6 +130,9 @@ pub enum RevisionReason {
     Edit,
     Revert,
     Issue,
+    /// C2 (2026-11-20): a memory it was compiled from was forgotten or
+    /// archived, and its paragraph left the page.
+    Withdraw,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

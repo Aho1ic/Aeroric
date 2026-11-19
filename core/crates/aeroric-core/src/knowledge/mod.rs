@@ -20,6 +20,8 @@ mod code_index_tests;
 mod explain_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod withdraw_tests;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -200,6 +202,25 @@ pub fn apply_edit(page: &WikiPage, markdown: &str) -> WikiPage {
         }
     }
     next
+}
+
+/// C2: the issue on a paragraph the user changed whose memory is forgotten.
+pub const FORGOTTEN_ISSUE: &str = "这段依据的记忆已被永久遗忘，你改过的这段先保留，请核对。";
+/// C2: its heading, which was the forgotten words.
+pub const FORGOTTEN_HEADING: &str = "（来源记忆已遗忘）";
+
+/// C2: what withdrawing memories did to one project's Wiki.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikiWithdrawal {
+    /// Pages that lost a paragraph (one new revision each).
+    pub pages: u32,
+    /// Paragraphs removed.
+    pub removed: u32,
+    /// Paragraphs the user changed: kept, with an issue to check.
+    pub flagged: u32,
+    /// Past revisions the forgotten words were scrubbed from.
+    pub scrubbed: u32,
 }
 
 #[derive(Default)]
@@ -387,6 +408,100 @@ impl Wikis {
         }
         report.pages = store.pages()?.len() as u32;
         store.set_gaps(gaps)?;
+        Ok(report)
+    }
+
+    /// C2 (2026-11-20): memories `ids` were archived or forgotten. Their
+    /// compiled paragraphs (`memory:<id>`) leave every page now, not at the
+    /// next compile — one the user changed stays, with an issue to check
+    /// it. `forgotten` (on forget) also says which past wording was
+    /// forgotten: revisions lose those sections, and the issues about these
+    /// paragraphs lose their words.
+    pub fn withdraw_memory(
+        &self,
+        project: &str,
+        ids: &[String],
+        forgotten: Option<&dyn Fn(&str) -> bool>,
+        now: u64,
+    ) -> Result<WikiWithdrawal, WikiError> {
+        let store = self.store(project)?;
+        let mut store = store.lock();
+        let keys: std::collections::HashSet<String> =
+            ids.iter().map(|id| format!("memory:{id}")).collect();
+        let mut report = WikiWithdrawal::default();
+        for mut page in store.pages()? {
+            let before = page.blocks.len();
+            let mut flagged = Vec::new();
+            let mut renamed = false;
+            page.blocks.retain(|block| {
+                if !keys.contains(&block.key) {
+                    return true;
+                }
+                if block.user_edited && !block.text.is_empty() {
+                    flagged.push(block.key.clone());
+                    return true;
+                }
+                false
+            });
+            let removed = (before - page.blocks.len()) as u32;
+            for key in &flagged {
+                let text = match (
+                    forgotten.is_some(),
+                    page.blocks.iter().find(|b| &b.key == key),
+                ) {
+                    (false, Some(block)) => format!(
+                        "「{}」依据的经验已归档，你改过的这段先保留，请核对。",
+                        block.heading.as_deref().unwrap_or(&page.title)
+                    ),
+                    _ => FORGOTTEN_ISSUE.into(),
+                };
+                if let Some(block) = page.blocks.iter_mut().find(|b| &b.key == key) {
+                    block.source = None;
+                    // The heading was the memory's own words: forgotten,
+                    // they go; the user's paragraph under it stays.
+                    if let (Some(forgotten), Some(heading)) = (forgotten, &block.heading) {
+                        if forgotten(heading) {
+                            block.heading = Some(FORGOTTEN_HEADING.into());
+                            renamed = true;
+                        }
+                    }
+                }
+                store.put_issue(&WikiIssue {
+                    id: format!("wis-{}", &uuid::Uuid::new_v4().simple().to_string()[..10]),
+                    slug: page.slug.clone(),
+                    block_key: Some(key.clone()),
+                    kind: WikiIssueKind::SourceRemoved,
+                    text,
+                    suggestion: None,
+                    open: true,
+                    author: "compiler".into(),
+                    at_ms: now,
+                })?;
+                report.flagged += 1;
+            }
+            report.removed += removed;
+            if removed > 0 || renamed {
+                report.pages += 1;
+                store.save(page, RevisionReason::Withdraw, now)?;
+            } else {
+                if !flagged.is_empty() {
+                    store.refresh(&page)?;
+                }
+                // A try before may have saved the page but not its file.
+                store.reproject(&page)?;
+            }
+        }
+        if let Some(forgotten) = forgotten {
+            report.scrubbed = store.scrub_revisions(forgotten)?;
+            for mut issue in store.issues()? {
+                let about = issue.block_key.as_ref().is_some_and(|k| keys.contains(k));
+                if about && (issue.suggestion.is_some() || issue.text != FORGOTTEN_ISSUE) {
+                    issue.suggestion = None;
+                    issue.text = FORGOTTEN_ISSUE.into();
+                    store.put_issue(&issue)?;
+                }
+            }
+        }
         Ok(report)
     }
 

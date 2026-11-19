@@ -630,6 +630,19 @@ pub struct Withdrawal {
     /// Dream proposals that waited on it, withdrawn.
     #[serde(default)]
     pub dreams: u32,
+    /// C2 second step: Wiki pages that lost a paragraph compiled from it.
+    #[serde(default)]
+    pub wiki_pages: u32,
+    /// Wiki paragraphs the user had changed: kept, with an issue to check.
+    #[serde(default)]
+    pub wiki_flagged: u32,
+    /// What could not be updated, and why; tried again later.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<String>,
+    /// The experiences withdrawn, `(id, project)` — for the host to reach
+    /// the Wiki; not sent.
+    #[serde(skip)]
+    pub experiences: Vec<(String, Option<String>)>,
 }
 
 /// 编辑: any of these.

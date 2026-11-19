@@ -3025,6 +3025,199 @@ async fn a_trusted_experience_becomes_a_versioned_skill() {
     assert!(none["proposals"].as_array().unwrap().is_empty());
 }
 
+/// C2 (2026-11-20): once an experience is forgotten, a word only it had is
+/// found by no read the app or an agent has — memory list and search,
+/// recall, 需要我处理, skills, the Wiki's pages, search, history and issues,
+/// and the agent's Wiki tools — without compiling the Wiki again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forgotten_experience_is_read_back_from_nowhere() {
+    const WORD: &str = "zebra-42";
+    let host = Host::start(true).await;
+    host.start_task("修复超时");
+    host.call(
+        "memory.project",
+        json!({"projectId": "project-1", "enabled": true}),
+    )
+    .await
+    .unwrap();
+    let experience = host
+        .structured
+        .memory()
+        .add_experience(
+            "project-1",
+            "部署前清空 zebra-42 缓存目录",
+            &aeroric_protocol::memory::ExperienceDetail {
+                problem: "旧缓存让部署失败".into(),
+                solution: "rm -rf zebra-42".into(),
+                ..Default::default()
+            },
+            aeroric_protocol::memory::Confidence::High,
+            aeroric_core::memory::evidence(Some("task-1"), None, None, "x", 1),
+            1,
+        )
+        .unwrap();
+    host.call("wiki.compile", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    host.call(
+        "wiki.agentAccess",
+        json!({"projectId": "project-1", "enabled": true}),
+    )
+    .await
+    .unwrap();
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+    let reads = [
+        (
+            "memory.list",
+            json!({"projectId": "project-1", "query": "zebra"}),
+        ),
+        ("memory.list", json!({"projectId": "project-1"})),
+        (
+            "context.memoryRecall",
+            json!({"token": token, "query": "zebra 缓存"}),
+        ),
+        ("memory.attention", json!({})),
+        ("memory.proposals", json!({})),
+        (
+            "wiki.search",
+            json!({"projectId": "project-1", "query": "zebra"}),
+        ),
+        (
+            "wiki.page",
+            json!({"projectId": "project-1", "slug": "runbook"}),
+        ),
+        (
+            "wiki.revisions",
+            json!({"projectId": "project-1", "slug": "runbook"}),
+        ),
+        ("wiki.issues", json!({"projectId": "project-1"})),
+        (
+            "context.wikiSearch",
+            json!({"token": token, "query": "zebra"}),
+        ),
+        (
+            "context.wikiRead",
+            json!({"token": token, "slug": "runbook"}),
+        ),
+    ];
+    let mut before = Vec::new();
+    for (method, params) in &reads {
+        let reply = host.call(method, params.clone()).await.unwrap();
+        if reply.to_string().contains(WORD) {
+            before.push(*method);
+        }
+    }
+    for must in [
+        "memory.list",
+        "context.memoryRecall",
+        "wiki.search",
+        "wiki.page",
+        "context.wikiRead",
+    ] {
+        assert!(
+            before.contains(&must),
+            "{must} should find it first: {before:?}"
+        );
+    }
+
+    let forgot = host
+        .call("memory.forget", json!({"id": experience.id}))
+        .await
+        .unwrap();
+    assert_eq!(forgot["withdrawal"]["wikiPages"], 1, "{forgot}");
+    assert!(forgot["withdrawal"].get("failed").is_none(), "{forgot}");
+    for (method, params) in &reads {
+        let reply = host.call(method, params.clone()).await.unwrap();
+        assert!(
+            !reply.to_string().contains(WORD),
+            "{method} still reads it: {reply}"
+        );
+    }
+}
+
+/// C2 (2026-11-20): a Wiki that cannot be changed now is named in
+/// `failed`, waits in the backlog (ids only) and is tried again when
+/// 需要我处理 is read; once it goes through, its file and history are clean.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wiki_that_cannot_be_changed_is_tried_again() {
+    const WORD: &str = "zebra-43";
+    let host = Host::start(true).await;
+    host.start_task("修复超时");
+    let experience = host
+        .structured
+        .memory()
+        .add_experience(
+            "project-1",
+            "部署前清空 zebra-43 缓存目录",
+            &aeroric_protocol::memory::ExperienceDetail {
+                solution: "rm -rf zebra-43".into(),
+                ..Default::default()
+            },
+            aeroric_protocol::memory::Confidence::High,
+            aeroric_core::memory::evidence(Some("task-1"), None, None, "x", 1),
+            1,
+        )
+        .unwrap();
+    host.call("wiki.compile", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    // The page's Markdown file cannot be written: a folder stands there.
+    let file = host
+        .context
+        .paths
+        .data_dir()
+        .join("knowledge/project-1/pages/runbook.md");
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+
+    let forgot = host
+        .call("memory.forget", json!({"id": experience.id}))
+        .await
+        .unwrap();
+    let failed = forgot["withdrawal"]["failed"][0]
+        .as_str()
+        .unwrap_or_default();
+    assert!(failed.contains("的 Wiki 没能更新"), "{forgot}");
+    let waiting = host.call("memory.attention", json!({})).await.unwrap();
+    assert_eq!(
+        waiting["wikiBacklog"].as_array().unwrap().len(),
+        1,
+        "{waiting}"
+    );
+    assert!(
+        !waiting.to_string().contains(WORD),
+        "the backlog keeps ids, not words"
+    );
+
+    std::fs::remove_dir(&file).unwrap();
+    let cleared = host.call("memory.attention", json!({})).await.unwrap();
+    assert!(
+        cleared["wikiBacklog"].as_array().unwrap().is_empty(),
+        "{cleared}"
+    );
+    assert!(!std::fs::read_to_string(&file).unwrap().contains(WORD));
+    for (method, params) in [
+        (
+            "wiki.page",
+            json!({"projectId": "project-1", "slug": "runbook"}),
+        ),
+        (
+            "wiki.revisions",
+            json!({"projectId": "project-1", "slug": "runbook"}),
+        ),
+        (
+            "wiki.search",
+            json!({"projectId": "project-1", "query": "zebra"}),
+        ),
+    ] {
+        let reply = host.call(method, params).await.unwrap();
+        assert!(!reply.to_string().contains(WORD), "{method}: {reply}");
+    }
+}
+
 /// B5.5-1 (2026-10-31): a project's notes compile into a Wiki the app reads
 /// and edits and an agent reads, searches and flags.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

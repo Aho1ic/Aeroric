@@ -1127,12 +1127,12 @@ impl Store {
     }
 
     /// Delete the item and its older versions; keep only their signatures.
-    /// Returns the ids deleted.
+    /// Returns the items deleted.
     pub(super) fn forget(
         &mut self,
         item: &MemoryItem,
         now_ms: u64,
-    ) -> Result<Vec<String>, MemoryError> {
+    ) -> Result<Vec<MemoryItem>, MemoryError> {
         let chain = self.chain(item)?;
         let texts: Vec<&str> = chain.iter().map(|i| i.text.as_str()).collect();
         self.withdraw(&texts, now_ms)?;
@@ -1147,7 +1147,7 @@ impl Store {
         // Old pages in the write-ahead log go too.
         self.conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
-        Ok(chain.into_iter().map(|i| i.id).collect())
+        Ok(chain)
     }
 
     pub(super) fn barred(&self, norm: &str) -> Result<bool, MemoryError> {

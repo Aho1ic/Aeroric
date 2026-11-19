@@ -287,6 +287,7 @@ impl Memory {
             if archived {
                 store.withdraw(&[&item.text], now_ms)?;
                 withdrawal.items = 1;
+                withdrawal.experiences = experiences(std::slice::from_ref(&item));
                 withdrawal.skills = store.mark_skill_sources(&ids, Some(now_ms))?;
                 withdrawal.dreams = store.withdraw_dreams(&ids)?;
             } else {
@@ -330,13 +331,39 @@ impl Memory {
     pub fn forget(&self, id: &str, now_ms: u64) -> Result<Withdrawal, MemoryError> {
         self.with(|store| {
             let item = store.get(id)?.ok_or(MemoryError::UnknownItem)?;
-            let ids = store.forget(&item, now_ms)?;
+            let gone = store.forget(&item, now_ms)?;
+            let ids: Vec<String> = gone.iter().map(|i| i.id.clone()).collect();
             Ok(Withdrawal {
                 items: ids.len() as u32,
                 skills: store.mark_skill_sources(&ids, Some(now_ms))?,
                 dreams: store.withdraw_dreams(&ids)?,
+                experiences: experiences(&gone),
+                ..Withdrawal::default()
             })
         })
+    }
+
+    /// C2: Wiki withdrawals that failed, to try again (ids, never words).
+    pub fn wiki_backlog(&self) -> Vec<WikiBacklog> {
+        self.with(|store| {
+            Ok(store
+                .kv(WIKI_BACKLOG)?
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or_default())
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn set_wiki_backlog(&self, backlog: &[WikiBacklog]) -> Result<(), MemoryError> {
+        let text = serde_json::to_string(backlog).unwrap_or_else(|_| "[]".into());
+        self.with(|store| store.set_kv(WIKI_BACKLOG, &text))
+    }
+
+    /// C2: whether these words were forgotten (永久遗忘): the Wiki scrubs
+    /// them from its history.
+    pub fn is_forgotten(&self, text: &str) -> bool {
+        self.with(|store| store.barred(&normalize(text)))
+            .unwrap_or(false)
     }
 
     /// C2: the number of the last withdrawal; a run reads it before its
@@ -645,4 +672,29 @@ impl Memory {
             Ok(items)
         })
     }
+}
+
+/// C2: the experiences among `items`, `(id, project)` — the Wiki compiles
+/// paragraphs from them.
+fn experiences(items: &[MemoryItem]) -> Vec<(String, Option<String>)> {
+    items
+        .iter()
+        .filter(|i| i.kind == aeroric_protocol::memory::MemoryKind::Experience)
+        .map(|i| (i.id.clone(), i.project_id.clone()))
+        .collect()
+}
+
+const WIKI_BACKLOG: &str = "wiki_backlog";
+
+/// C2: one project's Wiki still holding paragraphs of withdrawn memories.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikiBacklog {
+    pub project_id: String,
+    pub ids: Vec<String>,
+    /// Forgotten (scrub the history too), not just archived.
+    pub forgotten: bool,
+    /// Why the last try failed.
+    pub reason: String,
+    pub at_ms: u64,
 }
