@@ -171,7 +171,8 @@ public enum AttentionQueue {
              "interrupted" where nowMs <= updated + recentWindowMs:
             let cut = task.status == "interrupted" && task.restartCut
             return Item(task: task, reason: task.status == "failed" ? .failed : .interrupted,
-                        detail: check?.summary ?? (cut ? RestartCutText.attention : nil), atMs: updated)
+                        detail: check?.summary ?? (cut ? RestartCutText.attention(outward: task.outwardBeforeCut) : nil),
+                        atMs: updated)
         default:
             if let check {
                 return Item(task: task, reason: .checksFailed, detail: check.summary, atMs: check.atMs)

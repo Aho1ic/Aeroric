@@ -143,6 +143,8 @@ public struct WorkspaceClient: Sendable {
         public var discussion: Bool = false
         /// 2026-11-14: `hostRestart` when an Aeroric restart cut the session.
         public var interruptedBy: String? = nil
+        /// E5 (2026-11-19): what the cut turn had already done outside the machine.
+        public var outwardBeforeCut: [String] = []
         /// 2026-11-14 无人值守自动重试: the record's `autoRetry`.
         public var autoRetry: AutoRetryInfo? = nil
     }
@@ -207,6 +209,7 @@ public struct WorkspaceClient: Sendable {
                     : (record["discussionOf"] != nil ? "discussion" : nil))),
             discussion: record["discussion"]?.boolValue ?? false,
             interruptedBy: record["interruptedBy"]?.stringValue,
+            outwardBeforeCut: (record["outwardBeforeCut"]?.arrayValue ?? []).compactMap(\.stringValue),
             autoRetry: AutoRetryInfo.parse(record["autoRetry"])
         )
     }

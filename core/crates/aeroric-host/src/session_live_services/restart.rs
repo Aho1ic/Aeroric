@@ -8,13 +8,19 @@
 //!   few seconds after the host starts; the user's own sessions only get
 //!   the button. `autoResumedAt` keeps it to once per session.
 //! - A 定时任务's run says what became of its session.
+//! - E5 (2026-11-19): a cut turn that already acted outside the machine
+//!   (pushed, published, sent; read from its transcript) is never continued
+//!   on its own; the record keeps what it did (`outwardBeforeCut`), and a
+//!   continue the user asks for is told not to do it again.
 
 use std::sync::Arc;
 
 use aeroric_core::schedule::Schedules;
+use aeroric_core::sessions::live::envelope::{self, Authority};
+use aeroric_core::sessions::{outward, turn_outcome};
 use aeroric_core::settings::preferences;
 use aeroric_core::storage::Record;
-use aeroric_core::tasks::reducer::{HOST_RESTART, INTERRUPTED_BY_FIELD};
+use aeroric_core::tasks::reducer::{HOST_RESTART, INTERRUPTED_BY_FIELD, OUTWARD_BEFORE_CUT_FIELD};
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
 use serde_json::{json, Value};
@@ -30,6 +36,8 @@ pub const AUTO_SET_METHOD: &str = "session.resumeAfterRestart.set";
 /// What a continued session is told.
 pub const CONTINUE_TEXT: &str =
     "上一轮被 Aeroric 重启打断了。先看看工作区现在的状态，再从中断处接着做，做完的不要重做。";
+/// E5: the first word of the continue message.
+pub const CONTINUE_MARKER: &str = "[Aeroric 重启续跑]";
 
 /// The record field that keeps an automatic continue to once.
 const AUTO_RESUMED_FIELD: &str = "autoResumedAt";
@@ -69,26 +77,61 @@ pub(super) fn auto_enabled(live: &Live) -> bool {
     preferences::resume_after_restart(fields.as_ref())
 }
 
+/// E5: what the turn the last restart cut did outside the machine, from the
+/// agent's transcript.
+pub(super) fn outward_before_cut(live: &Live, record: &Record) -> Vec<String> {
+    let Some(cut) = turn_outcome::host_restarts(record).last().copied() else {
+        return Vec::new();
+    };
+    outward::at_cut(&super::rerun::turns(live, record), cut)
+        .iter()
+        .map(outward::Outward::text)
+        .collect()
+}
+
+/// The continue message: the envelope, the fixed words, and (E5) what the
+/// cut turn already did outward, not to be done twice.
+pub fn continue_text(outward: &[String]) -> String {
+    let mut body = CONTINUE_TEXT.to_string();
+    if !outward.is_empty() {
+        body.push_str(&format!(
+            "\n被打断前，这一轮已经执行过：{}。不要再执行一遍；先核对它们的结果，再决定还要做什么。",
+            outward.join("、")
+        ));
+    }
+    envelope::wrap(
+        CONTINUE_MARKER,
+        "Aeroric",
+        "重启后继续上一轮",
+        Authority::ForUser,
+        &body,
+    )
+}
+
 /// Reopen the session and send the continue message.
 pub(super) fn continue_session(live: &Live, task_id: &str) -> Result<(), String> {
     let (_, record) = live.record(task_id).ok_or("会话不存在")?;
     if !cut_by_restart(&record) {
         return Err("这个会话不是被 Aeroric 重启打断的，或者已经继续过了".into());
     }
+    let outward = outward_before_cut(live, &record);
     let driver = match live.driver(task_id) {
         Some(driver) => driver,
         None => live.reopen_quiet(task_id)?,
     };
     driver
-        .prompt(CONTINUE_TEXT.to_string())
+        .prompt(continue_text(&outward))
         .map_err(|e| e.to_string())
 }
 
 fn mark_auto(live: &Live, task_id: &str) -> Result<(), String> {
+    set_field(live, task_id, AUTO_RESUMED_FIELD, Value::from(now_ms()))
+}
+
+fn set_field(live: &Live, task_id: &str, key: &'static str, value: Value) -> Result<(), String> {
     let (project, _) = live.record(task_id).ok_or("会话不存在")?;
     let project_id = field(&project, "id").ok_or("项目没有 id")?;
     let id = task_id.to_string();
-    let at = now_ms();
     live.service
         .mutate(&project_id, |records, _now| {
             let next = records
@@ -96,7 +139,7 @@ fn mark_auto(live: &Live, task_id: &str) -> Result<(), String> {
                 .map(|r| {
                     let mut r = r.clone();
                     if r.get("id").and_then(Value::as_str) == Some(id.as_str()) {
-                        r.0.insert(AUTO_RESUMED_FIELD.into(), Value::from(at));
+                        r.0.insert(key.into(), value.clone());
                     }
                     r
                 })
@@ -119,6 +162,21 @@ fn resume_settled(live: &Live, settled: &[String]) {
             continue;
         }
         let scheduled = book.knows_task(task_id);
+        // E5: a turn that already pushed or sent is not run again unasked.
+        let outward = outward_before_cut(live, &record);
+        if !outward.is_empty() {
+            let _ = set_field(live, task_id, OUTWARD_BEFORE_CUT_FIELD, json!(outward));
+            if scheduled {
+                book.note_task(
+                    task_id,
+                    &format!(
+                        "被 Aeroric 重启打断；这一轮已经执行过 {}，没有自动继续，等你决定",
+                        outward.join("、")
+                    ),
+                );
+            }
+            continue;
+        }
         let eligible = auto
             && unattended(live, task_id, &record)
             && field(&record, AUTO_RESUMED_FIELD).is_none();
@@ -198,5 +256,26 @@ fn auto_set(live: &Live, request: &Request) -> Frame {
     ) {
         Ok(_) => ok(request, json!({ "enabled": p.enabled })),
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// E5: the continue message opens with the host's envelope and, after a
+    /// turn that acted outward, says not to do it again.
+    #[test]
+    fn the_continue_message_names_what_not_to_repeat() {
+        let plain = continue_text(&[]);
+        assert!(plain.starts_with(&format!(
+            "{CONTINUE_MARKER} 来自：Aeroric · 重启后继续上一轮 · 代用户执行"
+        )));
+        assert!(plain.contains(CONTINUE_TEXT));
+        assert!(!plain.contains("已经执行过"));
+        let pushed = continue_text(&["git push".into(), "npm publish（被打断时还在执行）".into()]);
+        assert!(pushed.contains(
+            "被打断前，这一轮已经执行过：git push、npm publish（被打断时还在执行）。不要再执行一遍"
+        ));
     }
 }

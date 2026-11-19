@@ -53,6 +53,9 @@ public final class TaskStore {
         public var isDiscussion = false
         /// 2026-11-14: an Aeroric restart cut it and it was not continued yet.
         public var restartCut = false
+        /// E5: what the cut turn had already done outward (`git push`…); it
+        /// was not continued on its own.
+        public var outwardBeforeCut: [String] = []
         /// 2026-11-14 无人值守自动重试.
         public var autoRetry: AutoRetryInfo?
 

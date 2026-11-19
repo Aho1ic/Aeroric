@@ -1118,6 +1118,62 @@ async fn a_restarted_host_settles_native_tasks_left_running() {
     assert!(again.is_empty(), "{again:?}");
 }
 
+/// E5 (2026-11-19): an unattended session whose cut turn had already run
+/// `git push` (its transcript says so) is not continued on its own, even
+/// with auto-continue on; its record says what it did.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cut_turn_that_already_pushed_is_not_continued_on_its_own() {
+    let seed: Seed = Box::new(|context| {
+        let transcript = context.paths.data_dir().join("pushed.jsonl");
+        let t = |s: &str| format!("2026-11-09T01:00:{s}Z");
+        let lines = [
+            json!({"timestamp": t("00.000"), "type": "user", "message": {"role": "user", "content": "发版"}}),
+            json!({"timestamp": t("01.000"), "type": "assistant", "message": {"id": "m1", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "git push origin main"}}]}}),
+            json!({"timestamp": t("02.000"), "type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}),
+        ];
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::create_dir_all(context.paths.data_dir()).unwrap();
+        std::fs::write(&transcript, text).unwrap();
+        let record = json!({
+            "id": "pushed-run", "projectId": "project-1", "prompt": "发版", "agent": "claude",
+            "permissionMode": "ask", "status": "running", "createdAt": 1, "generation": "2",
+            "delegateOf": "parent", "sessionFamily": "claude",
+            "claudeSessionId": "cs-9", "claudeSessionPath": transcript.to_string_lossy(),
+        });
+        aeroric_core::storage::save_tasks(
+            context,
+            "project-1",
+            &[serde_json::from_value(record).unwrap()],
+        )
+        .expect("seed tasks");
+    });
+    let host = Host::start_seeded(true, seed).await;
+    host.call("session.resumeAfterRestart.set", json!({"enabled": true}))
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let record = host.record_of("pushed-run");
+        if record.get("outwardBeforeCut").is_some() {
+            assert_eq!(record["outwardBeforeCut"], json!(["git push"]), "{record}");
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "never recorded: {record}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let record = host.record_of("pushed-run");
+    assert_eq!(record["status"], "interrupted", "{record}");
+    assert!(
+        record.get("autoResumedAt").is_none(),
+        "not continued: {record}"
+    );
+}
+
 /// A task whose driver is alive in this process is not an orphan.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn settling_leaves_a_task_with_a_live_driver_alone() {

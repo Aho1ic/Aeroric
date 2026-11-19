@@ -48,4 +48,22 @@ final class RestartCutTests: XCTestCase {
         XCTAssertTrue(store.enabled, "put back")
         XCTAssertNotNil(store.lastError)
     }
+
+    /// E5: a cut turn that already pushed says so, in the row and the banner,
+    /// and the record's list reaches the mirror.
+    func testACutTurnThatActedOutwardSaysWhat() {
+        var pushed = task("pushed", "interrupted", cut: true)
+        pushed.outwardBeforeCut = ["git push"]
+        let items = AttentionQueue.items([pushed], nowMs: 10)
+        XCTAssertEqual(items.first?.detail, "Aeroric 重启打断 · 已执行过 git push")
+        XCTAssertEqual(RestartCutText.banner(outward: ["git push", "npm publish"]),
+                       "Aeroric 重启时这个会话还在跑，上一轮被打断了。被打断前它已经执行过 git push、npm publish，所以没有自动继续；继续前先核对，避免做两遍。")
+        XCTAssertEqual(RestartCutText.banner(outward: []), RestartCutText.banner)
+
+        let record: JSONValue = .object(["id": .string("t"), "status": .string("interrupted"),
+                                         "interruptedBy": .string("hostRestart"),
+                                         "outwardBeforeCut": .array([.string("git push")])])
+        XCTAssertEqual(WorkspaceClient.parseTask(record, projectID: "p")?.outwardBeforeCut, ["git push"])
+        XCTAssertEqual(WorkspaceClient.parseTask(.object(["id": .string("t")]), projectID: "p")?.outwardBeforeCut, [])
+    }
 }

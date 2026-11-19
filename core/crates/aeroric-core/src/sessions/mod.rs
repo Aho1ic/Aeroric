@@ -28,6 +28,7 @@ pub mod import;
 pub mod import_sources;
 pub mod live;
 pub mod omp;
+pub mod outward;
 pub mod parser;
 pub mod rerun;
 pub mod resume;

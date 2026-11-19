@@ -1627,7 +1627,9 @@ struct TaskWorkspaceView: View {
             case true?:
                 VStack(spacing: 0) {
                     if task.restartCut, task.status == "interrupted" {
-                        RestartCutBanner { await services.continueAfterRestart(taskID: task.id) }
+                        RestartCutBanner(outward: task.outwardBeforeCut) {
+                            await services.continueAfterRestart(taskID: task.id)
+                        }
                     }
                     if let retry = task.autoRetry, retry.state == "waiting" {
                         AutoRetryBanner(retry: retry) { await services.cancelAutoRetry(taskID: task.id) }

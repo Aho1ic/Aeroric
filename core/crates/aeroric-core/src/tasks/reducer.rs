@@ -131,6 +131,7 @@ pub fn apply_status_transition(
             write_field(&mut updated, "completedAt", completed);
             if status != TaskStatus::Interrupted {
                 updated.0.remove(INTERRUPTED_BY_FIELD);
+                updated.0.remove(OUTWARD_BEFORE_CUT_FIELD);
             }
             if status == TaskStatus::Failed {
                 if let Some(reason) = failure_reason {
@@ -563,6 +564,10 @@ pub fn record_diff_stats(
 pub const INTERRUPTED_BY_FIELD: &str = "interruptedBy";
 pub const HOST_RESTART: &str = "hostRestart";
 pub const HOST_RESTARTS_FIELD: &str = "hostRestarts";
+/// E5 (2026-11-19): what the turn a restart cut had already done outside the
+/// machine (`git push`, a message sent); the host writes it, and any status
+/// but `interrupted` clears it with `interruptedBy`.
+pub const OUTWARD_BEFORE_CUT_FIELD: &str = "outwardBeforeCut";
 const HOST_RESTARTS_KEPT: usize = 20;
 
 pub fn settle_orphaned_sessions(
@@ -1378,12 +1383,18 @@ mod tests {
         assert_eq!(row[INTERRUPTED_BY_FIELD], json!(HOST_RESTART));
         assert_eq!(row[HOST_RESTARTS_FIELD], json!([1, 2, 500]));
 
+        // E5: what the cut turn did outward goes with the mark.
+        let mut next = next;
+        next[0]
+            .0
+            .insert(OUTWARD_BEFORE_CUT_FIELD.into(), json!(["git push"]));
         let running = apply_status_transition(&next, "t1", TaskStatus::Running, None, None, 600);
         let row = &running.records[0].0;
         assert!(
             !row.contains_key(INTERRUPTED_BY_FIELD),
             "continued: no longer cut"
         );
+        assert!(!row.contains_key(OUTWARD_BEFORE_CUT_FIELD));
         assert_eq!(row[HOST_RESTARTS_FIELD], json!([1, 2, 500]));
 
         let many: Vec<u64> = (0..25).collect();
