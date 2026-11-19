@@ -11,6 +11,9 @@ pub struct Verdict {
     pub pass: bool,
     pub summary: Option<String>,
     pub findings: Vec<Finding>,
+    /// E1: what the reviewer said about each file; `None` when it said
+    /// nothing (then only what it saw counts).
+    pub files: Option<Vec<super::coverage::Claim>>,
 }
 
 #[derive(Deserialize)]
@@ -21,6 +24,18 @@ struct RawVerdict {
     summary: Option<String>,
     #[serde(default)]
     findings: Vec<RawFinding>,
+    #[serde(default)]
+    files: Option<Vec<RawFile>>,
+}
+
+#[derive(Deserialize)]
+struct RawFile {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -79,11 +94,34 @@ pub fn verdict(text: &str) -> Option<Verdict> {
         return None;
     }
     let blocking = findings.iter().any(|f| f.severity == Severity::Blocker);
+    let files = raw.files.map(|files| {
+        files
+            .into_iter()
+            .filter_map(|f| {
+                let path = f.path?.trim().to_string();
+                if path.is_empty() {
+                    return None;
+                }
+                // Anything but a clear skip is a review (审过 / reviewed / done).
+                let status = f.status.unwrap_or_default().trim().to_ascii_lowercase();
+                let skipped = matches!(
+                    status.as_str(),
+                    "skipped" | "skip" | "跳过" | "未审" | "没有审查" | "not reviewed"
+                );
+                Some(super::coverage::Claim {
+                    path,
+                    reviewed: !skipped,
+                    reason: f.reason.map(|r| cut(r.trim())).filter(|r| !r.is_empty()),
+                })
+            })
+            .collect()
+    });
     Some(Verdict {
         // Q-B7: no blocker is a pass, whatever the reviewer called it.
         pass: !blocking,
         summary: raw.summary.map(|s| cut(s.trim())).filter(|s| !s.is_empty()),
         findings,
+        files,
     })
 }
 

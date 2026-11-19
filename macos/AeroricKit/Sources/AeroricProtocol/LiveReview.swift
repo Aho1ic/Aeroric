@@ -14,6 +14,8 @@ public struct LiveReviewCard: Equatable, Sendable {
     public var findings: [LiveReviewFinding]
     public var summary: String?
     public var raw: String?
+    /// E1: which changed files the reviewer accounted for.
+    public var coverage: LiveReviewCoverage?
 
     public init(reviewId: String, round: Int = 1, state: String, turnId: String = "", reviewerTaskId: String? = nil,
                 reviewerLabel: String = "", sameFamily: Bool = false, findings: [LiveReviewFinding] = [],
@@ -150,5 +152,54 @@ extension LiveReviewCard {
                               reviewerLabel: f["reviewerLabel"]?.stringValue ?? "",
                               sameFamily: f["sameFamily"]?.boolValue ?? false, findings: findings,
                               summary: f["summary"]?.stringValue, raw: f["raw"]?.stringValue)
+            .with(coverage: f["coverage"].flatMap(LiveReviewCoverage.decode))
+    }
+
+    func with(coverage: LiveReviewCoverage?) -> LiveReviewCard {
+        var card = self
+        card.coverage = coverage
+        return card
+    }
+}
+
+/// E1 (2026-11-19): mirrors `aeroric_protocol::review::ReviewCoverage`.
+public struct LiveReviewCoverage: Equatable, Sendable {
+    public struct File: Equatable, Sendable, Identifiable {
+        public var id: String { path }
+        public var path: String
+        /// `reviewed` / `skipped` / `seen` / `missed` / `excluded`.
+        public var state: String
+        public var reason: String?
+
+        public init(path: String, state: String, reason: String? = nil) {
+            self.path = path
+            self.state = state
+            self.reason = reason
+        }
+    }
+
+    /// `complete` / `partial` / `unreviewed` / `empty`.
+    public var state: String
+    public var files: [File]
+
+    public init(state: String, files: [File]) {
+        self.state = state
+        self.files = files
+    }
+
+    /// The files in scope (all but the excluded).
+    public var inScope: [File] { files.filter { $0.state != "excluded" } }
+    /// Reviewed or at least in front of the reviewer.
+    public var looked: Int { inScope.filter { $0.state == "reviewed" || $0.state == "seen" }.count }
+
+    public static func decode(_ value: JSONValue) -> LiveReviewCoverage? {
+        let f = value.fields
+        guard let state = f["state"]?.stringValue else { return nil }
+        let files: [File] = (f["files"]?.arrayValue ?? []).compactMap { item in
+            let g = item.fields
+            guard let path = g["path"]?.stringValue, let state = g["state"]?.stringValue else { return nil }
+            return File(path: path, state: state, reason: g["reason"]?.stringValue)
+        }
+        return LiveReviewCoverage(state: state, files: files)
     }
 }

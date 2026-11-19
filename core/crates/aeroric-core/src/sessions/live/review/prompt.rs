@@ -24,6 +24,9 @@ pub struct Context<'a> {
     pub diff_text: Option<&'a str>,
     /// The previous round, with the writer's answers.
     pub previous: Option<&'a ReviewCard>,
+    /// E1: the files in scope, and those left out with why.
+    pub selected: &'a [String],
+    pub excluded: &'a [(String, String)],
 }
 
 pub fn reviewer(diff: &TurnDiff, cx: &Context<'_>) -> String {
@@ -62,24 +65,32 @@ pub fn reviewer(diff: &TurnDiff, cx: &Context<'_>) -> String {
         diff.additions,
         diff.deletions
     ));
-    match cx.diff_text {
-        Some(text) => out.push_str(&format!("```diff\n{text}\n```\n")),
-        None => {
-            for f in &diff.files {
-                out.push_str(&format!("- {}\n", f.path));
-            }
-            out.push_str(&format!(
-                "改动太长没有内联。用 `{git} -- <文件>` 查看每个文件。\n"
-            ));
+    // E1: what to review, one by one; what is left out is never opened.
+    out.push_str("要审查的文件：\n");
+    for path in cx.selected {
+        out.push_str(&format!("- {path}\n"));
+    }
+    if !cx.excluded.is_empty() {
+        out.push_str("不在审查范围、不要打开的文件：\n");
+        for (path, why) in cx.excluded {
+            out.push_str(&format!("- {path}（{why}）\n"));
         }
     }
+    match cx.diff_text {
+        Some(text) => out.push_str(&format!("```diff\n{text}\n```\n")),
+        None => out.push_str(&format!(
+            "改动太长没有内联。用 `{git} -- <文件>` 逐个查看上面要审查的文件。\n"
+        )),
+    }
     out.push_str(&format!(
-        "（完整改动也可以用 `{git}` 查看。）\n
+        "（单个文件的改动可以用 `{git} -- <文件>` 查看。）\n
 最后只输出一个 JSON 代码块：
 ```json
 {{\"verdict\": \"pass 或 changes\", \"summary\": \"一句话总评\",
+ \"files\": [{{\"path\": \"路径\", \"status\": \"reviewed|skipped\", \"reason\": \"跳过时写原因\"}}],
  \"findings\": [{{\"id\": \"r1\", \"severity\": \"blocker|major|minor\", \"file\": \"路径\", \"line\": 12, \"text\": \"问题与修改建议\"}}]}}
 ```
+files 逐个列出上面每个要审查的文件：看过并审查了写 reviewed，没有审查写 skipped 并写原因。不要只审一部分就给结论。
 blocker 只用于必须改的问题：错误、数据丢失、安全、违反验收条款或约束。没有问题时 verdict 为 pass、findings 为空。\n"
     ));
     out

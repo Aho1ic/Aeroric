@@ -12,6 +12,7 @@ struct ReviewCard: View {
     let onPause: (Bool) -> Void
     let onOpen: (String) -> Void
     @State private var expanded: Set<String> = []
+    @State private var showsFiles = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
@@ -37,6 +38,35 @@ struct ReviewCard: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .help(summary)
+            }
+            if let coverage = card.coverage, let (line, tint) = ReviewText.coverage(coverage) {
+                Button { showsFiles.toggle() } label: {
+                    HStack(spacing: AeroricSpace.xs) {
+                        Image(systemName: coverage.state == "complete" ? "checklist" : "exclamationmark.triangle")
+                        Text(line).lineLimit(1).truncationMode(.tail)
+                        Image(systemName: showsFiles ? "chevron.down" : "chevron.right")
+                            .font(.system(size: AeroricType.caption - 2))
+                    }
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(tint)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("这一轮改动的每个文件，审查者审了、看过、跳过还是没看")
+                .accessibilityIdentifier("review.coverage")
+                if showsFiles {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(coverage.files) { file in
+                            Text(ReviewText.fileLine(file))
+                                .font(.system(size: AeroricType.caption))
+                                .foregroundStyle(file.state == "missed" ? AeroricColor.warning : AeroricColor.textSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(file.path)
+                        }
+                    }
+                    .padding(.leading, AeroricSpace.l)
+                }
             }
             ForEach(card.findings, id: \.id) { finding in
                 findingRow(finding)
@@ -173,10 +203,40 @@ public enum ReviewText {
         [finding.location, finding.text].compactMap { $0 }.joined(separator: " ")
     }
 
+    /// E1: what the round rests on, e.g. "审查覆盖 7/9 个文件（结果可能不完整）".
+    public static func coverage(_ coverage: LiveReviewCoverage) -> (String, Color)? {
+        let total = coverage.inScope.count
+        switch coverage.state {
+        case "complete": return ("审查覆盖 \(total)/\(total) 个文件", AeroricColor.textSecondary)
+        case "partial":
+            return ("审查覆盖 \(coverage.looked)/\(total) 个文件（结果可能不完整）", AeroricColor.warning)
+        case "unreviewed": return ("没有审查：\(total) 个改动的文件一个都没看", AeroricColor.danger)
+        case "empty": return ("改动的文件都不在审查范围", AeroricColor.textSecondary)
+        default: return nil
+        }
+    }
+
+    /// One file's end: "src/a.rs · 已审", "x.rs · 跳过：生成的代码".
+    public static func fileLine(_ file: LiveReviewCoverage.File) -> String {
+        let end: String
+        switch file.state {
+        case "reviewed": end = "已审"
+        case "seen": end = "看过（审查者没有逐个交代）"
+        case "skipped": end = "跳过：\(file.reason ?? "没写原因")"
+        case "missed": end = "没看"
+        case "excluded": end = "不在范围：\(file.reason ?? "")"
+        default: end = file.state
+        }
+        return "\(file.path) · \(end)"
+    }
+
     /// The progress page's one-line summary of the latest loop.
     public static func summary(_ card: LiveReviewCard) -> String {
         let asks = card.findings.filter { $0.decision == "ask" }.count
         var parts = ["第 \(card.round) 轮", state(card).0]
+        if let coverage = card.coverage, coverage.state == "partial" || coverage.state == "unreviewed" {
+            parts.append("覆盖 \(coverage.looked)/\(coverage.inScope.count)")
+        }
         if !card.findings.isEmpty { parts.append("\(card.findings.count) 条") }
         if asks > 0 { parts.append("\(asks) 条需要你定") }
         return parts.joined(separator: " · ")

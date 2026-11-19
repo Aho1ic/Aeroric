@@ -162,7 +162,10 @@ impl Rig {
 }
 
 const BLOCKER: &str = "```json\n{\"verdict\":\"changes\",\"summary\":\"缺上限\",\"findings\":[{\"id\":\"r1\",\"severity\":\"blocker\",\"file\":\"src/a.rs\",\"line\":3,\"text\":\"重试没有上限\"},{\"id\":\"r2\",\"severity\":\"minor\",\"text\":\"命名\"}]}\n```";
-const PASS: &str = "```json\n{\"verdict\":\"pass\",\"findings\":[]}\n```";
+/// E1: a pass that says which files it reviewed.
+const PASS: &str = "```json\n{\"verdict\":\"pass\",\"files\":[{\"path\":\"src/a.rs\",\"status\":\"reviewed\"},{\"path\":\"x\",\"status\":\"reviewed\"}],\"findings\":[]}\n```";
+/// A pass that says nothing about the files.
+const BARE_PASS: &str = "```json\n{\"verdict\":\"pass\",\"findings\":[]}\n```";
 
 fn answer(r1: &str, r2: &str) -> String {
     format!("```json\n{{\"responses\":[{{\"id\":\"r1\",\"decision\":\"{r1}\",\"reason\":\"理由\"}},{{\"id\":\"r2\",\"decision\":\"{r2}\"}}]}}\n```")
@@ -512,6 +515,8 @@ fn gate_flags_reach_the_reviewer_to_judge() {
         gates,
         diff_text: Some("diff"),
         previous: None,
+        selected: &[],
+        excluded: &[],
     };
     let text = prompt::reviewer(&diff(&["a.rs"]), &context(&flags));
     assert!(text.contains("## 门禁完整性"), "{text}");
@@ -565,4 +570,134 @@ fn the_same_issues_with_new_changes_go_on() {
     assert!(sent.last().unwrap().1.contains("第 3 轮"));
     let card = rig.reviews.card("t1").unwrap();
     assert_eq!((card.round, card.state), (3, ReviewState::Reviewing));
+}
+
+/// E1: a reviewer that says "pass" but neither had the diff in its prompt,
+/// listed a file nor opened one: the round rests on nothing.
+#[test]
+fn a_pass_that_rests_on_no_file_is_not_a_pass() {
+    let rig = rig(true, false);
+    rig.settled("t1", "u1", Some(diff(&["src/a.rs", "src/b.rs"])), false);
+    rig.wait_sent(1);
+    rig.turn("rev-1", "v1", BARE_PASS);
+    assert_eq!(rig.state(), ReviewState::Escalated);
+    let card = rig.reviews.card("t1").unwrap();
+    assert_eq!(card.raw.as_deref(), Some(coverage::NOT_REVIEWED));
+    let cov = card.coverage.expect("coverage");
+    assert_eq!(cov.state, CoverageState::Unreviewed);
+    assert!(cov
+        .files
+        .iter()
+        .all(|f| f.state == aeroric_protocol::review::FileCoverage::Missed));
+}
+
+/// E1: a file the reviewer opened is seen even when it did not list it;
+/// one it never opened stays missed, and the pass says so.
+#[test]
+fn a_file_the_reviewer_opened_counts_as_seen() {
+    use aeroric_protocol::review::FileCoverage;
+    let rig = rig(true, false);
+    rig.settled("t1", "u1", Some(diff(&["src/a.rs", "src/b.rs"])), false);
+    let prompt = rig.wait_sent(1)[0].1.clone();
+    assert!(
+        prompt.contains("要审查的文件：\n- src/a.rs\n- src/b.rs"),
+        "{prompt}"
+    );
+    rig.push(
+        "rev-1",
+        SessionUpdateKind::TurnStarted {
+            turn_id: "v1".into(),
+        },
+    );
+    rig.push(
+        "rev-1",
+        SessionUpdateKind::ToolCall {
+            id: "c1".into(),
+            kind: aeroric_protocol::session_live::ToolKind::Command,
+            title: "git diff".into(),
+            input: serde_json::json!({"command": "git -C /w diff a b -- src/a.rs"}),
+        },
+    );
+    rig.push(
+        "rev-1",
+        SessionUpdateKind::MessageCompleted {
+            message_id: "m-v1".into(),
+            text: Some(BARE_PASS.into()),
+        },
+    );
+    rig.push(
+        "rev-1",
+        SessionUpdateKind::TurnEnded {
+            turn_id: "v1".into(),
+            reason: TurnEndReason::Completed,
+            error: None,
+            raw_status: None,
+        },
+    );
+    assert_eq!(rig.state(), ReviewState::Passed);
+    let cov = rig.reviews.card("t1").unwrap().coverage.unwrap();
+    assert_eq!(cov.state, CoverageState::Partial);
+    let states: Vec<_> = cov.files.iter().map(|f| f.state).collect();
+    assert_eq!(states, [FileCoverage::Seen, FileCoverage::Missed]);
+}
+
+/// E1: a secret is named as left out and never put in the prompt; the
+/// reviewer's own per-file account is kept.
+#[test]
+fn a_secret_is_left_out_of_the_review_and_the_files_are_accounted_for() {
+    use aeroric_protocol::review::FileCoverage;
+    let rig = rig(true, false);
+    rig.settled("t1", "u1", Some(diff(&["src/a.rs", "config/.env"])), false);
+    let prompt = rig.wait_sent(1)[0].1.clone();
+    assert!(
+        prompt.contains("不在审查范围、不要打开的文件：\n- config/.env（可能含有凭据"),
+        "{prompt}"
+    );
+    rig.turn("rev-1", "v1", PASS);
+    assert_eq!(rig.state(), ReviewState::Passed);
+    let cov = rig.reviews.card("t1").unwrap().coverage.unwrap();
+    assert_eq!(cov.state, CoverageState::Complete);
+    let ends: Vec<_> = cov
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.state))
+        .collect();
+    assert_eq!(
+        ends,
+        [
+            ("src/a.rs", FileCoverage::Reviewed),
+            ("config/.env", FileCoverage::Excluded)
+        ]
+    );
+}
+
+/// E1: the inlined diff leaves the secret's lines out, in a real repository.
+#[test]
+fn the_inlined_diff_never_carries_a_secret() {
+    let dir = std::env::temp_dir().join(format!("aeroric-e1-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(dir.join("config")).unwrap();
+    let git = |args: &[&str]| -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    let before = git(&["write-tree"]);
+    std::fs::write(dir.join("a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(dir.join("config/.env"), "TOKEN=sk-very-secret\n").unwrap();
+    git(&["add", "-A"]);
+    let after = git(&["write-tree"]);
+    let mut changed = diff(&["a.rs", "config/.env"]);
+    changed.top = dir.clone();
+    changed.before = before;
+    changed.after = after;
+    let text = diff_text(&changed, &["config/.env"]).unwrap();
+    assert!(text.contains("fn a() {}"), "{text}");
+    assert!(!text.contains("sk-very-secret"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
 }

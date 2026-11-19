@@ -78,3 +78,4 @@ Status: implemented
   - B4-CU-01（B4′ 遗留）：core 的 accepted 回执多报一项 `clarify`，Swift `NativeSubmissionReceipt.matches` 仍按 10 项核对，新建会话一律落入"接收结果未知"，核对也失败。Swift 补上 `clarify`，测试覆盖 clarify 为假/真两种回执和查询。
   - B4-CU-02：改选审查者后，新回环仍复用旧审查会话。见上文 `chosen`；测试 `a_changed_reviewer_choice_starts_a_new_reviewer`。
 - 未覆盖：自动检查完成后再审、验收条款传递、全驳回结束、3 轮上限、ExitPlanMode、远程/omp/DSH 的运行期限制。
+- 2026-11-19 E1：每一轮由宿主列出要审的文件（凭据和二进制排除并写明原因，不再贴给审查者），审查者逐个交代审了还是跳过；整轮的覆盖由文件推出，一个文件都没看的"通过"转为需要你处理。见 [E1 审查覆盖清单](2026-11-19-e1-review-coverage.md)。

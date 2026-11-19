@@ -11,6 +11,7 @@
 //! sending messages is the host's ([`ReviewHost`]), always off the caller's
 //! thread: a sink callback never waits on a session.
 
+pub mod coverage;
 pub mod gates;
 pub mod parse;
 pub mod prompt;
@@ -24,8 +25,8 @@ use serde::{Deserialize, Serialize};
 
 use aeroric_protocol::checkpoint::ObligationSource;
 use aeroric_protocol::review::{
-    Decision, ReviewCard, ReviewSettings, ReviewState, ReviewerChoice, Severity, MAX_RAW_CHARS,
-    MAX_ROUNDS,
+    CoverageState, Decision, ReviewCard, ReviewSettings, ReviewState, ReviewerChoice, Severity,
+    MAX_RAW_CHARS, MAX_ROUNDS,
 };
 
 pub use super::turn_changes::{TurnDiff, TurnSettled};
@@ -102,6 +103,9 @@ struct Loop {
     /// to stop a loop that goes in circles.
     #[serde(default)]
     progress: Option<(Vec<String>, String)>,
+    /// E1: what this round put in front of the reviewer.
+    #[serde(default)]
+    plan: Option<coverage::Plan>,
 }
 
 #[derive(Default)]
@@ -115,6 +119,8 @@ struct State {
     text: HashMap<String, Vec<(String, String)>>,
     /// The last finished check run per task: (turn, summary).
     checks_done: HashMap<String, (String, String)>,
+    /// E1: what each reviewer's current turn named in its tool calls.
+    opened: HashMap<String, Vec<String>>,
 }
 
 enum Act {
@@ -227,7 +233,7 @@ impl ReviewLoop {
             .filter(|(t, _)| *t == turn)
             .map(|(_, s)| s.clone());
         self.open(&mut state, task_id, &turn, diff, checks, settings.reviewer);
-        let act = self.review_act(task_id, &state.loops[task_id]);
+        let act = self.review_act(task_id, state.loops.get_mut(task_id).expect("just opened"));
         let card = state.loops[task_id].card.clone();
         drop(state);
         self.publish(task_id);
@@ -388,13 +394,17 @@ impl ReviewLoop {
     }
 
     /// Start or prompt the reviewer for the loop's current round.
-    fn review_act(&self, task: &str, l: &Loop) -> Act {
+    fn review_act(&self, task: &str, l: &mut Loop) -> Act {
         let diff = l.diff.clone().unwrap_or_default();
         let (acceptance, constraints) = self.context(task);
-        // Gate flags come from the whole diff, inlined or not.
-        let full = diff_text(&diff);
+        // E1: secrets and binaries never reach the reviewer.
+        let mut plan = coverage::plan(&diff);
+        let left_out: Vec<&str> = plan.excluded.iter().map(|(p, _)| p.as_str()).collect();
+        // Gate flags come from the whole diff in scope, inlined or not.
+        let full = diff_text(&diff, &left_out);
         let gates = full.as_deref().map(gates::flags).unwrap_or_default();
         let text = full.filter(|t| t.len() <= prompt::MAX_INLINE_DIFF);
+        plan.inlined = text.is_some();
         let prompt = prompt::reviewer(
             &diff,
             &prompt::Context {
@@ -405,8 +415,12 @@ impl ReviewLoop {
                 gates: &gates,
                 diff_text: text.as_deref(),
                 previous: l.previous.as_ref(),
+                selected: &plan.selected,
+                excluded: &plan.excluded,
             },
         );
+        l.card.coverage = None;
+        l.plan = Some(plan);
         match &l.card.reviewer_task_id {
             Some(reviewer) => Act::PromptReviewer {
                 parent: task.to_string(),
@@ -610,6 +624,7 @@ impl ReviewLoop {
         match &update.kind {
             SessionUpdateKind::TurnStarted { .. } => {
                 state.text.remove(task);
+                state.opened.remove(task);
                 if let Some(l) = state.loops.get_mut(task) {
                     if l.card.state == ReviewState::WaitingCoder {
                         l.replying = true;
@@ -641,6 +656,16 @@ impl ReviewLoop {
                         Some((_, body)) => *body = text.clone(),
                         None => messages.push((message_id.clone(), text.clone())),
                     }
+                }
+                Vec::new()
+            }
+            // E1: what a reviewer opens, to tell the files it saw.
+            SessionUpdateKind::ToolCall { title, input, .. }
+                if state.reviewers.contains_key(task) =>
+            {
+                let seen = state.opened.entry(task.clone()).or_default();
+                if seen.len() < MAX_OPENED {
+                    seen.push(format!("{title}\n{input}"));
                 }
                 Vec::new()
             }
@@ -756,6 +781,17 @@ impl ReviewLoop {
         l.card.summary = verdict.summary;
         l.card.findings = verdict.findings;
         l.card.findings.sort_by_key(|f| f.severity);
+        // E1: what the round rests on, from the files alone.
+        let opened = state.opened.remove(reviewer).unwrap_or_default();
+        let plan = l.plan.clone().unwrap_or_default();
+        let coverage = coverage::judge(&plan, verdict.files.as_deref(), &opened);
+        let unreviewed = coverage.state == CoverageState::Unreviewed;
+        l.card.coverage = Some(coverage);
+        if verdict.pass && unreviewed {
+            l.card.state = ReviewState::Escalated;
+            l.card.raw = Some(coverage::NOT_REVIEWED.into());
+            return None;
+        }
         if verdict.pass {
             l.card.state = ReviewState::Passed;
             return None;
@@ -875,10 +911,15 @@ fn checks_summary(run: &str, items: &[super::update::AutoCheckItem]) -> String {
     out
 }
 
-fn diff_text(diff: &TurnDiff) -> Option<String> {
+/// The turn's diff, without `left_out` (E1: secrets and binaries).
+fn diff_text(diff: &TurnDiff, left_out: &[&str]) -> Option<String> {
     if diff.before.is_empty() {
         return None;
     }
+    let excludes: Vec<String> = left_out
+        .iter()
+        .map(|p| format!(":(top,exclude,literal){p}"))
+        .collect();
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(&diff.top)
@@ -888,7 +929,10 @@ fn diff_text(diff: &TurnDiff) -> Option<String> {
             "--no-ext-diff",
             &diff.before,
             &diff.after,
+            "--",
+            ":(top)",
         ])
+        .args(&excludes)
         .output()
         .ok()?;
     if !output.status.success() {
@@ -900,6 +944,9 @@ fn diff_text(diff: &TurnDiff) -> Option<String> {
             .to_string(),
     )
 }
+
+/// E1: tool calls kept per reviewer turn to tell which files it opened.
+const MAX_OPENED: usize = 2000;
 
 fn cut_raw(text: &str) -> String {
     let text = text.trim();

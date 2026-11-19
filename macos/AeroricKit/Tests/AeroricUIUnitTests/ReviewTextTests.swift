@@ -57,4 +57,38 @@ final class ReviewTextTests: XCTestCase {
                        .object(["agent": .string("claude"), "model": .string("opus")]))
         XCTAssertNil(LiveReviewCard.decode(.object(["state": .string("passed")])))
     }
+
+    /// E1: the card says what the round rests on, file by file.
+    func testTheCardSaysWhichFilesTheReviewerAccountedFor() throws {
+        let decoded = try XCTUnwrap(LiveReviewCard.decode(.object([
+            "reviewId": .string("rv-1"), "state": .string("passed"),
+            "coverage": .object([
+                "state": .string("partial"),
+                "files": .array([
+                    .object(["path": .string("src/a.rs"), "state": .string("reviewed")]),
+                    .object(["path": .string("src/b.rs"), "state": .string("seen")]),
+                    .object(["path": .string("src/c.rs"), "state": .string("missed")]),
+                    .object(["path": .string("gen.rs"), "state": .string("skipped"), "reason": .string("生成的代码")]),
+                    .object(["path": .string(".env"), "state": .string("excluded"),
+                             "reason": .string("可能含有凭据，没有发给审查者")]),
+                ]),
+            ]),
+        ])))
+        let coverage = try XCTUnwrap(decoded.coverage)
+        XCTAssertEqual(coverage.inScope.count, 4)
+        XCTAssertEqual(coverage.looked, 2)
+        XCTAssertEqual(ReviewText.coverage(coverage)?.0, "审查覆盖 2/4 个文件（结果可能不完整）")
+        XCTAssertEqual(coverage.files.map(ReviewText.fileLine), [
+            "src/a.rs · 已审",
+            "src/b.rs · 看过（审查者没有逐个交代）",
+            "src/c.rs · 没看",
+            "gen.rs · 跳过：生成的代码",
+            ".env · 不在范围：可能含有凭据，没有发给审查者",
+        ])
+        XCTAssertEqual(ReviewText.summary(decoded), "第 1 轮 · 通过 · 覆盖 2/4")
+
+        let none = LiveReviewCoverage(state: "unreviewed", files: [.init(path: "a", state: "missed")])
+        XCTAssertEqual(ReviewText.coverage(none)?.0, "没有审查：1 个改动的文件一个都没看")
+        XCTAssertNil(LiveReviewCard.decode(.object(["reviewId": .string("rv-2"), "state": .string("passed")]))?.coverage)
+    }
 }

@@ -111,6 +111,58 @@ pub struct ReviewCard {
     /// round failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
+    /// E1: which of the round's changed files the reviewer accounted for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<ReviewCoverage>,
+}
+
+/// E1 (2026-11-19): every changed file of a round ends one way. The round's
+/// coverage is worked out from these alone, never from the verdict.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewCoverage {
+    pub state: CoverageState,
+    pub files: Vec<CoveredFile>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CoverageState {
+    /// Every file in scope was reviewed or at least in front of the reviewer.
+    Complete,
+    /// Some were, some were skipped or never seen.
+    Partial,
+    /// None was: the verdict rests on nothing ("没有审查").
+    #[default]
+    Unreviewed,
+    /// No changed file was in scope (all excluded).
+    Empty,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoveredFile {
+    pub path: String,
+    pub state: FileCoverage,
+    /// Why it was skipped or excluded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileCoverage {
+    /// The reviewer said it reviewed it.
+    Reviewed,
+    /// The reviewer said it skipped it, with a reason.
+    Skipped,
+    /// The reviewer did not say, but the file was in its prompt or it
+    /// opened it: seen, not vouched for.
+    Seen,
+    /// Neither said nor seen.
+    Missed,
+    /// Left out by the host (a secret, a binary); never sent.
+    Excluded,
 }
 
 impl ReviewCard {
