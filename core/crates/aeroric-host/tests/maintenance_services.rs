@@ -233,6 +233,13 @@ fn directory_entries(directory: &std::path::Path) -> Vec<std::ffi::OsString> {
 #[tokio::test]
 async fn the_usage_and_diagnostics_methods_are_registered_without_any_wiring() {
     let harness = hosted("maint-default", |_dir| HostWiring::default()).await;
+    // 2026-11-19: a test host never asks for the quota sampler, which starts
+    // the real `codex app-server` on the user's login every 10 minutes.
+    assert!(!HostWiring::default().quota_sampler);
+    assert!(
+        !aeroric_host::maintenance_services::quota_sampler_requested(),
+        "a test host started the quota sampler"
+    );
     for method in [
         "usage.read_session_metrics",
         "usage.read_usage_statistics",

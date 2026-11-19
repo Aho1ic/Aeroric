@@ -258,6 +258,12 @@ pub struct HostWiring {
     /// ⇒ the host watches its tasks and advertises `power.keepAwake`; tests pass a
     /// fake, only `serve` passes the real `caffeinate` holder.
     pub keep_awake: Option<Arc<dyn crate::keep_awake::PowerAssertion>>,
+    /// R3-3b's quota sampler: every 10 minutes it starts the real `codex
+    /// app-server` on the user's login to read the subscription. Only `serve`
+    /// turns it on; a test host must never start it (2026-11-19: it was kept
+    /// out by `cfg(not(test))`, which integration tests do not set — a test
+    /// hung for hours started the real Codex every 10 minutes).
+    pub quota_sampler: bool,
 }
 
 /// remote plane 的装配参数(持有 core 的 `RemoteState` 与宿主 handle)。
@@ -511,6 +517,7 @@ impl HostServices {
             &mut set,
             Arc::clone(&context),
             Arc::clone(&wiring.codex_rpc),
+            wiring.quota_sampler,
         );
         crate::maintenance_services::register_diagnostics_services(
             &mut set,

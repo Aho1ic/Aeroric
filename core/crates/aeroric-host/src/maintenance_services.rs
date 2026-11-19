@@ -79,10 +79,12 @@ fn result_frame<T: serde::Serialize>(request: &Request, outcome: Result<T, Strin
 }
 
 /// `usage.*` 六方法。`codex_rpc` 是无头宿主里那个可以为空的进程句柄槽。
+/// `sample`：起不起额度采样线程（见 `HostWiring::quota_sampler`）。
 pub fn register_usage_services(
     set: &mut ServiceSet,
     context: Arc<CoreContext>,
     codex_rpc: Arc<parking_lot::Mutex<Option<aeroric_core::metrics::usage::CodexRpcClient>>>,
+    sample: bool,
 ) {
     {
         let context = Arc::clone(&context);
@@ -182,11 +184,12 @@ pub fn register_usage_services(
             }),
         );
     }
-    #[cfg(not(test))]
-    start_quota_sampler(
-        context.paths.data_dir().to_path_buf(),
-        Arc::clone(&codex_rpc),
-    );
+    if sample {
+        start_quota_sampler(
+            context.paths.data_dir().to_path_buf(),
+            Arc::clone(&codex_rpc),
+        );
+    }
     {
         let context = Arc::clone(&context);
         let codex_rpc = Arc::clone(&codex_rpc);
@@ -234,15 +237,25 @@ pub fn register_usage_services(
     }
 }
 
+/// 这个进程里有没有宿主要求起额度采样线程（不论本机有没有 `codex`）。
+/// 测试用它断言测试宿主从不要求。
+static QUOTA_SAMPLER_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// 这个进程里是否有宿主要求过起额度采样线程。
+pub fn quota_sampler_requested() -> bool {
+    QUOTA_SAMPLER_REQUESTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// R3-3b：每 10 分钟读一次 Codex 订阅额度存成读数，额度节奏要靠历史读数推近期速度。
 /// 只起一次；没有 `codex` 就不起。
-#[cfg(not(test))]
 fn start_quota_sampler(
     data_dir: std::path::PathBuf,
     codex_rpc: Arc<parking_lot::Mutex<Option<aeroric_core::metrics::usage::CodexRpcClient>>>,
 ) {
     use aeroric_core::metrics::quota_pace;
     static STARTED: std::sync::Once = std::sync::Once::new();
+    QUOTA_SAMPLER_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
     if !command_exists("codex") {
         return;
     }
