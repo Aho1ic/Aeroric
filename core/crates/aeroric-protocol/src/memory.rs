@@ -610,6 +610,26 @@ pub struct SkillProposal {
     pub active_version: Option<u32>,
     pub created_ms: u64,
     pub updated_ms: u64,
+    /// C2 (2026-11-19): when the experience it was made from was forgotten
+    /// or archived — 依据已撤回. The user decides; an accepted skill is never
+    /// removed for it. Cleared when the experience is restored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_withdrawn_ms: Option<u64>,
+}
+
+/// C2: what forgetting or archiving an item did beyond the item itself.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Withdrawal {
+    /// Items deleted or archived: the item and the versions it replaced
+    /// (and, on forget, those a dream merged into it).
+    pub items: u32,
+    /// Learned skills made from it, now marked 依据已撤回 (their names).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+    /// Dream proposals that waited on it, withdrawn.
+    #[serde(default)]
+    pub dreams: u32,
 }
 
 /// 编辑: any of these.

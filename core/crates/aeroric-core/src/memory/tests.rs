@@ -115,7 +115,7 @@ fn an_edit_supersedes_and_forgetting_takes_the_old_versions_too() {
     assert_eq!(old_now.state, MemoryState::Superseded);
     assert_eq!(old_now.superseded_by.as_deref(), Some(new.id.as_str()));
 
-    assert_eq!(memory.forget(&new.id, 12).unwrap(), 2);
+    assert_eq!(memory.forget(&new.id, 12).unwrap().items, 2);
     assert!(memory.list(None, None).unwrap().is_empty());
     for text in ["回复用英文", "回复一律用简体中文"] {
         assert_eq!(
@@ -262,12 +262,12 @@ fn archive_pin_and_move() {
         )
         .unwrap();
     assert_eq!(
-        memory.archive(&item.id, true, 2).unwrap().state,
+        memory.archive(&item.id, true, 2).unwrap().0.state,
         MemoryState::Archived
     );
     assert!(memory.profile(Some("p1")).is_none());
     assert_eq!(
-        memory.archive(&item.id, true, 3),
+        memory.archive(&item.id, true, 3).map(|(item, _)| item),
         Err(MemoryError::WrongState)
     );
     memory.archive(&item.id, false, 4).unwrap();

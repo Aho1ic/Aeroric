@@ -2239,6 +2239,20 @@ async fn remembered_words_reach_a_new_session_and_proposals_wait() {
         .await
         .unwrap();
     assert_eq!(kept["item"]["assertion"], "userExplicit");
+    // C2: archiving says what it touched; restoring brings it back.
+    let kept_id = kept["item"]["id"].clone();
+    let archived = host
+        .call("memory.archive", json!({"id": kept_id, "archived": true}))
+        .await
+        .unwrap();
+    assert_eq!(archived["item"]["state"], "archived", "{archived}");
+    assert_eq!(archived["withdrawal"]["items"], 1, "{archived}");
+    let back = host
+        .call("memory.archive", json!({"id": kept_id, "archived": false}))
+        .await
+        .unwrap();
+    assert_eq!(back["item"]["state"], "active", "{back}");
+    assert_eq!(back["withdrawal"]["items"], 0, "{back}");
     // C1: what the user said with /记住 has no session place to look up.
     let item_id = kept["item"]["id"].as_str().unwrap().to_string();
     let place = host
@@ -2322,7 +2336,11 @@ async fn remembered_words_reach_a_new_session_and_proposals_wait() {
         .unwrap();
     assert_eq!(found["items"][0]["assertion"], "agentConfirmed", "{found}");
 
-    host.call("memory.forget", json!({"id": id})).await.unwrap();
+    // C2: `removed` stays the count; `withdrawal` says what else it touched.
+    let forgot = host.call("memory.forget", json!({"id": id})).await.unwrap();
+    assert_eq!(forgot["removed"], 1, "{forgot}");
+    assert_eq!(forgot["withdrawal"]["items"], 1, "{forgot}");
+    assert_eq!(forgot["withdrawal"]["dreams"], 0, "{forgot}");
     let again = host
         .call(
             "context.memoryPropose",

@@ -23,12 +23,14 @@ mod store;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod withdraw_tests;
 
 use std::path::PathBuf;
 
 use aeroric_protocol::memory::{
-    Assertion, Evidence, MemoryDraft, MemoryItem, MemoryState, MAX_EXCERPT_CHARS, MAX_TEXT_CHARS,
-    RECALL_LIMIT,
+    Assertion, Evidence, MemoryDraft, MemoryItem, MemoryState, Withdrawal, MAX_EXCERPT_CHARS,
+    MAX_TEXT_CHARS, RECALL_LIMIT,
 };
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
@@ -261,12 +263,15 @@ impl Memory {
         Ok(done)
     }
 
+    /// 归档 / 恢复. C2: archiving withdraws the words from runs still going,
+    /// marks skills made from it 依据已撤回 and withdraws dream proposals
+    /// about it; restoring takes the skills' mark back.
     pub fn archive(
         &self,
         id: &str,
         archived: bool,
         now_ms: u64,
-    ) -> Result<MemoryItem, MemoryError> {
+    ) -> Result<(MemoryItem, Withdrawal), MemoryError> {
         self.with(|store| {
             let item = store.get(id)?.ok_or(MemoryError::UnknownItem)?;
             let (from, to) = if archived {
@@ -277,7 +282,17 @@ impl Memory {
             if item.state != from {
                 return Err(MemoryError::WrongState);
             }
-            store.set_state(id, to, now_ms)
+            let ids = [id.to_string()];
+            let mut withdrawal = Withdrawal::default();
+            if archived {
+                store.withdraw(&[&item.text], now_ms)?;
+                withdrawal.items = 1;
+                withdrawal.skills = store.mark_skill_sources(&ids, Some(now_ms))?;
+                withdrawal.dreams = store.withdraw_dreams(&ids)?;
+            } else {
+                store.mark_skill_sources(&ids, None)?;
+            }
+            Ok((store.set_state(id, to, now_ms)?, withdrawal))
         })
     }
 
@@ -311,10 +326,34 @@ impl Memory {
 
     /// 永久遗忘: the item and the versions it replaced are deleted; their
     /// signatures stay so they cannot come back.
-    pub fn forget(&self, id: &str, now_ms: u64) -> Result<usize, MemoryError> {
+    /// C2: and what it touched beyond the item (see [`Withdrawal`]).
+    pub fn forget(&self, id: &str, now_ms: u64) -> Result<Withdrawal, MemoryError> {
         self.with(|store| {
             let item = store.get(id)?.ok_or(MemoryError::UnknownItem)?;
-            store.forget(&item, now_ms)
+            let ids = store.forget(&item, now_ms)?;
+            Ok(Withdrawal {
+                items: ids.len() as u32,
+                skills: store.mark_skill_sources(&ids, Some(now_ms))?,
+                dreams: store.withdraw_dreams(&ids)?,
+            })
+        })
+    }
+
+    /// C2: the number of the last withdrawal; a run reads it before its
+    /// model call and checks [`Self::withdrawn_since`] before writing.
+    pub fn epoch(&self) -> u64 {
+        self.with(|store| store.epoch()).unwrap_or(0)
+    }
+
+    /// C2: which of `texts` were deleted, archived or replaced after
+    /// `epoch` (compared as [`normalize`] does).
+    pub fn withdrawn_since(&self, epoch: u64, texts: &[&str]) -> Result<Vec<bool>, MemoryError> {
+        self.with(|store| {
+            let gone = store.withdrawn_since(epoch)?;
+            Ok(texts
+                .iter()
+                .map(|text| gone.contains(&store.signature(text)))
+                .collect())
         })
     }
 

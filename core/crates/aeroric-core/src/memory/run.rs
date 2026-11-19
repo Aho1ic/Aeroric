@@ -222,6 +222,9 @@ impl Memory {
         let ids: HashSet<String> = kept.iter().map(|item| item.id.clone()).collect();
         let prompt = extract::prompt(&transcript, &kept);
         run.model = Some(model.clone());
+        // C2: what is deleted, archived or replaced while the model works
+        // is not written back.
+        let epoch = self.epoch();
         let reply = match call(extract::SYSTEM, &prompt) {
             Ok(reply) => reply,
             Err(error) => {
@@ -241,7 +244,7 @@ impl Memory {
             )
             .0
         });
-        let extracted = match extract::parse(&reply.text, &transcript, &ids) {
+        let mut extracted = match extract::parse(&reply.text, &transcript, &ids) {
             Ok(extracted) => extracted,
             Err(error) => {
                 run.state = MemoryRunState::Failed;
@@ -250,6 +253,9 @@ impl Memory {
                 return Ok(run);
             }
         };
+        let withdrawn = self
+            .drop_withdrawn(epoch, &mut extracted)
+            .map_err(|e| e.to_string())?;
         let mut writes = Writes::default();
         if let Some(fact) = &extracted.fact {
             let proof = evidence(
@@ -330,6 +336,11 @@ impl Memory {
         if extracted.dropped > 0 {
             notes.push(format!("丢掉 {} 条没有原话依据的候选", extracted.dropped));
         }
+        if withdrawn > 0 {
+            notes.push(format!(
+                "整理期间有 {withdrawn} 条相同的记忆被删除、归档或取代，没有写回"
+            ));
+        }
         if writes.refused > 0 {
             notes.push(format!(
                 "{} 条被记忆规则拦下（已遗忘或疑似密钥）",
@@ -352,6 +363,37 @@ impl Memory {
         run.state = MemoryRunState::Done;
         self.record(&run, session.task_id, &transcript.hash, now_ms)?;
         Ok(run)
+    }
+
+    /// C2: candidates and experiences whose words were withdrawn after
+    /// `epoch` leave `extracted`; how many.
+    fn drop_withdrawn(
+        &self,
+        epoch: u64,
+        extracted: &mut extract::Extracted,
+    ) -> Result<usize, MemoryError> {
+        let texts: Vec<&str> = extracted
+            .candidates
+            .iter()
+            .map(|c| c.text.as_str())
+            .chain(
+                extracted
+                    .experiences
+                    .iter()
+                    .map(|(title, _)| title.as_str()),
+            )
+            .collect();
+        let gone = self.withdrawn_since(epoch, &texts)?;
+        let (candidates, experiences) = gone.split_at(extracted.candidates.len());
+        let mut flags = candidates.iter();
+        extracted
+            .candidates
+            .retain(|_| !flags.next().copied().unwrap_or(false));
+        let mut flags = experiences.iter();
+        extracted
+            .experiences
+            .retain(|_| !flags.next().copied().unwrap_or(false));
+        Ok(gone.iter().filter(|g| **g).count())
     }
 
     fn record(
@@ -541,6 +583,77 @@ mod tests {
             forced,
             verified: true,
         }
+    }
+
+    /// C2: what the user archives or replaces while the model works is not
+    /// written back as a new candidate; the run says how many it held back.
+    #[test]
+    fn what_is_withdrawn_during_a_run_is_not_written_back() {
+        let memory = rig();
+        let talk = talk();
+        let kept = memory
+            .remember(
+                aeroric_protocol::memory::MemoryDraft {
+                    project_id: None,
+                    kind: MemoryKind::Profile,
+                    category: None,
+                    text: "回复用简体中文".into(),
+                    supersedes: None,
+                },
+                evidence(None, None, None, "/记住 回复用简体中文", 1),
+                1,
+            )
+            .unwrap();
+        let run = memory
+            .extract_session(
+                session(&talk, "p1", false),
+                None,
+                |_, _| {
+                    // The user archives it while the model reads the session.
+                    memory.archive(&kept.id, true, 2).unwrap();
+                    Ok(ChatOnce {
+                        text: REPLY.into(),
+                        input_tokens: 10,
+                        output_tokens: 10,
+                    })
+                },
+                3,
+            )
+            .unwrap();
+        assert_eq!(run.candidates, 1, "only the other candidate");
+        assert!(
+            run.reason
+                .as_deref()
+                .unwrap()
+                .contains("整理期间有 1 条相同的记忆被删除、归档或取代，没有写回"),
+            "{:?}",
+            run.reason
+        );
+        let same: Vec<_> = memory
+            .list(None, None)
+            .unwrap()
+            .into_iter()
+            .filter(|i| i.text == "回复用简体中文")
+            .collect();
+        assert_eq!(same.len(), 1, "no new pending copy");
+        assert_eq!(same[0].state, MemoryState::Archived);
+        // A later run, started after, may propose it again: the user may
+        // have said it again.
+        let again = memory
+            .extract_session(
+                session(&talk, "p1", true),
+                None,
+                |_, _| {
+                    Ok(ChatOnce {
+                        text: REPLY.into(),
+                        input_tokens: 10,
+                        output_tokens: 10,
+                    })
+                },
+                4,
+            )
+            .unwrap();
+        assert_eq!(again.candidates, 2);
     }
 
     #[test]

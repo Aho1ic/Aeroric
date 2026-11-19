@@ -2,6 +2,7 @@
 //! their state flipped; text never changes. `forget` is the one real delete
 //! (items, evidence and index together) and it writes the barrier.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use aeroric_protocol::memory::{
@@ -17,6 +18,8 @@ use super::{normalize, MemoryError};
 use crate::notebook::rag::cjk;
 
 const SCHEMA_VERSION: i64 = 2;
+/// C2: how long withdrawn words are kept for runs still going.
+const WITHDRAWN_KEPT_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 const COLUMNS: &str = "id, project, kind, category, text, assertion, state, pinned, \
                        supersedes, superseded_by, created_ms, updated_ms, detail, confidence, \
                        retrieved, injected, helpful, wrong";
@@ -122,7 +125,9 @@ impl Store {
                 diff TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS chain_turn ON chain(task_id, turn_id);
              CREATE INDEX IF NOT EXISTS chain_project ON chain(project, at_ms);
-             CREATE TABLE IF NOT EXISTS vectors(item_id TEXT PRIMARY KEY, vec BLOB NOT NULL);",
+             CREATE TABLE IF NOT EXISTS vectors(item_id TEXT PRIMARY KEY, vec BLOB NOT NULL);
+             CREATE TABLE IF NOT EXISTS withdrawn(seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                sig TEXT NOT NULL, at_ms INTEGER NOT NULL);",
             cjk::FTS_TOKENIZER
         ))?;
         // B5-3a: schema 1 → 2 only adds columns.
@@ -513,11 +518,26 @@ impl Store {
     /// B6: mark an active item replaced by `keep`; false when it is no
     /// longer active.
     pub(super) fn retire(&self, id: &str, keep: &str, now_ms: u64) -> Result<bool, MemoryError> {
-        Ok(self.conn.execute(
+        let text = self.text_of(id)?;
+        let retired = self.conn.execute(
             "UPDATE items SET state = 'superseded', superseded_by = ?2, updated_ms = ?3
              WHERE id = ?1 AND state = 'active'",
             params![id, keep, now_ms as i64],
-        )? == 1)
+        )? == 1;
+        if let (true, Some(text)) = (retired, text) {
+            self.withdraw(&[&text], now_ms)?;
+        }
+        Ok(retired)
+    }
+
+    /// An item's words, if it is there.
+    fn text_of(&self, id: &str) -> Result<Option<String>, MemoryError> {
+        Ok(self
+            .conn
+            .query_row("SELECT text FROM items WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?)
     }
 
     /// B6: take a dream's merge back — only while the item is still the one
@@ -698,6 +718,8 @@ impl Store {
                 |row| row.get(0),
             )
             .optional()?;
+        // C2: the words an item replaced (recorded once the write is in).
+        let mut replaced: Option<String> = None;
         let tx = self.conn.transaction()?;
         let id = if let Some(id) = existing {
             tx.execute(
@@ -763,6 +785,11 @@ impl Store {
             )?;
             if let (Some(old), MemoryState::Active) = (&draft.supersedes, state) {
                 // The old item keeps its text; it is only marked replaced.
+                replaced = tx
+                    .query_row("SELECT text FROM items WHERE id = ?1", [old], |row| {
+                        row.get(0)
+                    })
+                    .optional()?;
                 let changed = tx.execute(
                     "UPDATE items SET state = 'superseded', superseded_by = ?2, updated_ms = ?3
                      WHERE id = ?1",
@@ -775,6 +802,9 @@ impl Store {
             id
         };
         tx.commit()?;
+        if let Some(text) = replaced {
+            self.withdraw(&[&text], now_ms)?;
+        }
         self.must(&id)
     }
 
@@ -790,11 +820,15 @@ impl Store {
         )?;
         // B5-2: a proposal that replaces an item takes effect only now.
         if let Some(old) = &item.supersedes {
-            self.conn.execute(
+            let text = self.text_of(old)?;
+            let replaced = self.conn.execute(
                 "UPDATE items SET state = 'superseded', superseded_by = ?2, updated_ms = ?3
                  WHERE id = ?1 AND state = 'active'",
                 params![old, item.id, now_ms as i64],
-            )?;
+            )? == 1;
+            if let (true, Some(text)) = (replaced, text) {
+                self.withdraw(&[&text], now_ms)?;
+            }
         }
         self.must(&item.id)
     }
@@ -959,16 +993,122 @@ impl Store {
         self.must(id)
     }
 
-    /// The item and the chain of versions it replaced.
+    /// The item and the chain of versions it replaced — C2: with the items
+    /// a dream merged into it (they say the same; undoing that dream would
+    /// otherwise bring a forgotten memory back).
     fn chain(&self, item: &MemoryItem) -> Result<Vec<MemoryItem>, MemoryError> {
         let mut out = vec![item.clone()];
-        let mut next = item.supersedes.clone();
-        while let Some(id) = next {
-            let Some(old) = self.get(&id)? else { break };
-            next = old.supersedes.clone();
-            out.push(old);
+        let mut seen: HashSet<String> = [item.id.clone()].into();
+        let mut queue = vec![item.clone()];
+        while let Some(current) = queue.pop() {
+            let mut older: Vec<String> = self
+                .conn
+                .prepare_cached("SELECT id FROM items WHERE superseded_by = ?1")?
+                .query_map([&current.id], |row| row.get::<_, String>(0))?
+                .collect::<Result<_, _>>()?;
+            older.extend(current.supersedes.clone());
+            for id in older {
+                if !seen.insert(id.clone()) {
+                    continue;
+                }
+                if let Some(old) = self.get(&id)? {
+                    queue.push(old.clone());
+                    out.push(old);
+                }
+            }
         }
         Ok(out)
+    }
+
+    /// C2: words deleted, archived or replaced, as signatures numbered in
+    /// order; an extraction compares what it is about to write with those
+    /// numbered after it started. Kept a week (no run lasts that long).
+    pub(super) fn withdraw(&self, texts: &[&str], now_ms: u64) -> Result<(), MemoryError> {
+        for text in texts {
+            self.conn.execute(
+                "INSERT INTO withdrawn(sig, at_ms) VALUES (?1, ?2)",
+                params![self.barrier.sign(&normalize(text)), now_ms as i64],
+            )?;
+        }
+        self.conn.execute(
+            "DELETE FROM withdrawn WHERE at_ms < ?1",
+            [now_ms.saturating_sub(WITHDRAWN_KEPT_MS) as i64],
+        )?;
+        Ok(())
+    }
+
+    /// C2: the number of the last withdrawal (0: none yet).
+    pub(super) fn epoch(&self) -> Result<u64, MemoryError> {
+        let seq: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'withdrawn'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(seq.unwrap_or(0).max(0) as u64)
+    }
+
+    /// C2: the signatures withdrawn after `epoch`.
+    pub(super) fn withdrawn_since(&self, epoch: u64) -> Result<HashSet<String>, MemoryError> {
+        let mut statement = self
+            .conn
+            .prepare_cached("SELECT sig FROM withdrawn WHERE seq > ?1")?;
+        let sigs = statement
+            .query_map([epoch as i64], |row| row.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(sigs)
+    }
+
+    /// C2: a text's signature, as [`Self::withdraw`] keeps it.
+    pub(super) fn signature(&self, text: &str) -> String {
+        self.barrier.sign(&normalize(text))
+    }
+
+    /// C2: skill proposals made from these experiences marked 依据已撤回
+    /// (`Some`), or back (`None`); the names of those changed.
+    pub(super) fn mark_skill_sources(
+        &self,
+        experience_ids: &[String],
+        withdrawn_ms: Option<u64>,
+    ) -> Result<Vec<String>, MemoryError> {
+        let mut names = Vec::new();
+        for id in experience_ids {
+            let Some(mut proposal) = self.proposal_for(id)? else {
+                continue;
+            };
+            if proposal.source_withdrawn_ms.is_some() == withdrawn_ms.is_some() {
+                continue;
+            }
+            proposal.source_withdrawn_ms = withdrawn_ms;
+            self.put_proposal(&proposal)?;
+            names.push(proposal.name);
+        }
+        Ok(names)
+    }
+
+    /// C2: pending dream proposals about any of these items, withdrawn (a
+    /// merge of what is gone cannot be decided); how many.
+    pub(super) fn withdraw_dreams(&self, ids: &[String]) -> Result<u32, MemoryError> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT body FROM dream_proposals WHERE state = 'pending'")?;
+        let pending: Vec<aeroric_protocol::memory::DreamProposal> = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .filter_map(|b| serde_json::from_str(b).ok())
+            .collect();
+        let mut count = 0;
+        for mut proposal in pending {
+            if proposal.ids.iter().any(|id| ids.contains(id)) {
+                proposal.state = aeroric_protocol::memory::DreamProposalState::Withdrawn;
+                self.put_dream_proposal(&proposal)?;
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     pub(super) fn delete(&mut self, item: &MemoryItem) -> Result<(), MemoryError> {
@@ -987,8 +1127,15 @@ impl Store {
     }
 
     /// Delete the item and its older versions; keep only their signatures.
-    pub(super) fn forget(&mut self, item: &MemoryItem, now_ms: u64) -> Result<usize, MemoryError> {
+    /// Returns the ids deleted.
+    pub(super) fn forget(
+        &mut self,
+        item: &MemoryItem,
+        now_ms: u64,
+    ) -> Result<Vec<String>, MemoryError> {
         let chain = self.chain(item)?;
+        let texts: Vec<&str> = chain.iter().map(|i| i.text.as_str()).collect();
+        self.withdraw(&texts, now_ms)?;
         for old in &chain {
             let sig = self.barrier.sign(&normalize(&old.text));
             self.conn.execute(
@@ -1000,7 +1147,7 @@ impl Store {
         // Old pages in the write-ahead log go too.
         self.conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
-        Ok(chain.len())
+        Ok(chain.into_iter().map(|i| i.id).collect())
     }
 
     pub(super) fn barred(&self, norm: &str) -> Result<bool, MemoryError> {

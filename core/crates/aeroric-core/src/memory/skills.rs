@@ -120,6 +120,7 @@ impl Memory {
                 active_version: None,
                 created_ms: now_ms,
                 updated_ms: now_ms,
+                source_withdrawn_ms: None,
             };
             store.put_proposal(&proposal)?;
             Ok(Some(proposal))

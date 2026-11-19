@@ -270,7 +270,11 @@ fn memory_archive(live: &Live, request: &Request) -> Frame {
         .executor
         .memory()
         .archive(&p.id, p.archived.unwrap_or(true), now_ms());
-    answer(request, result, "item")
+    // C2: what archiving touched beyond the item.
+    match result {
+        Ok((item, withdrawal)) => ok(request, json!({ "item": item, "withdrawal": withdrawal })),
+        Err(error) => memory_failure(request, error),
+    }
 }
 
 /// `memory.pin {id, pinned}`.
@@ -314,11 +318,15 @@ fn memory_forget(live: &Live, request: &Request) -> Frame {
         Ok(p) => p,
         Err(frame) => return *frame,
     };
-    answer(
-        request,
-        live.executor.memory().forget(&p.id, now_ms()),
-        "removed",
-    )
+    // `removed` stays the count older clients read; C2: `withdrawal` says
+    // what else it touched.
+    match live.executor.memory().forget(&p.id, now_ms()) {
+        Ok(withdrawal) => ok(
+            request,
+            json!({ "removed": withdrawal.items, "withdrawal": withdrawal }),
+        ),
+        Err(error) => memory_failure(request, error),
+    }
 }
 
 #[derive(serde::Deserialize)]
