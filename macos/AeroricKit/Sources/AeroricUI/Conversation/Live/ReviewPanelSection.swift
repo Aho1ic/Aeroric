@@ -11,6 +11,8 @@ public struct ReviewPanelModel: Equatable, Sendable {
     public var card: LiveReviewCard?
     /// This task reviews that one.
     public var reviewOf: String?
+    /// E4: the review rules in force for the task's project.
+    public var rules: LiveReviewRules?
 
     public init(settings: LiveReviewSettings?, candidates: [LiveReviewerCandidate] = [],
                 auto: LiveReviewerCandidate? = nil, card: LiveReviewCard? = nil, reviewOf: String? = nil) {
@@ -33,6 +35,38 @@ public struct ReviewPanelModel: Equatable, Sendable {
         }
     }
 
+    /// E4: "审查规则 · 内置 9 条 · 项目 2 条（关了 1 条内置）".
+    public var rulesTitle: String? {
+        guard let rules else { return nil }
+        let builtin = rules.rules.filter { $0.source == "builtin" }
+        let on = builtin.filter { !$0.disabled }.count
+        let project = rules.rules.count - builtin.count
+        var title = "审查规则 · 内置 \(on) 条"
+        if project > 0 { title += " · 项目 \(project) 条" }
+        if on < builtin.count { title += "（关了 \(builtin.count - on) 条内置）" }
+        return title
+    }
+
+    /// E4: where the project's own rules come from.
+    public var rulesHint: String? {
+        guard let rules else { return nil }
+        switch rules.state {
+        case "missing": return "项目可以在 \(rules.file) 里加规则、关掉或替换内置规则"
+        case "loaded": return "项目规则来自 \(rules.file)；审查时按改动前的版本"
+        case "invalid": return "规则文件读不懂，只用了内置规则：\(rules.error ?? rules.file)"
+        case "unavailable": return "远程项目读不到规则文件，只用内置规则"
+        default: return nil
+        }
+    }
+
+    /// E4: one rule, e.g. "rust · 重要 · *.rs" or "money · 阻断 · src/billing/**（项目）".
+    public static func ruleLine(_ rule: LiveReviewRules.Rule) -> String {
+        var line = "\(rule.id) · \(ReviewText.severity(rule.severity).0) · \(rule.paths.joined(separator: ", "))"
+        if rule.source == "project" { line += "（项目）" }
+        if rule.disabled { line += "（已关闭）" }
+        return line
+    }
+
     /// One line under the picker.
     public var reviewerHint: String {
         if case .auto = settings?.reviewer ?? .auto, auto?.sameFamily == true {
@@ -52,6 +86,7 @@ public enum ReviewPanelAction: Equatable, Sendable {
 struct ReviewPanelSection: View {
     let model: ReviewPanelModel
     let onAction: (ReviewPanelAction) -> Void
+    @State private var showsRules = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
@@ -111,6 +146,41 @@ struct ReviewPanelSection: View {
                     .foregroundStyle(AeroricColor.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                if let title = model.rulesTitle, let rules = model.rules {
+                    Button { showsRules.toggle() } label: {
+                        HStack(spacing: AeroricSpace.xs) {
+                            Image(systemName: "list.bullet.rectangle")
+                            Text(title).lineLimit(1).truncationMode(.tail)
+                            Image(systemName: showsRules ? "chevron.down" : "chevron.right")
+                                .font(.system(size: AeroricType.caption - 2))
+                        }
+                        .font(.system(size: AeroricType.caption))
+                        .foregroundStyle(rules.state == "invalid" ? AeroricColor.warning : AeroricColor.textSecondary)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("按文件路径匹配的审查规则；只有命中改动文件的规则会交给审查者")
+                    .accessibilityIdentifier("progress.review.rules")
+                    if showsRules {
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let hint = model.rulesHint {
+                                Text(hint)
+                                    .foregroundStyle(rules.state == "invalid" ? AeroricColor.warning : AeroricColor.textTertiary)
+                                    .lineLimit(2)
+                                    .textSelection(.enabled)
+                            }
+                            ForEach(rules.rules) { rule in
+                                Text(ReviewPanelModel.ruleLine(rule))
+                                    .foregroundStyle(rule.disabled ? AeroricColor.textTertiary : AeroricColor.textSecondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .help(rule.text)
+                            }
+                        }
+                        .font(.system(size: AeroricType.caption))
+                        .padding(.leading, AeroricSpace.l)
+                    }
+                }
                 if let card = model.card {
                     Button {
                         if let reviewer = card.reviewerTaskId { onAction(.open(reviewer)) }

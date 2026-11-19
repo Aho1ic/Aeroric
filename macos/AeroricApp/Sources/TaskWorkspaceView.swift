@@ -804,9 +804,11 @@ struct TaskWorkspaceView: View {
         if let known = reviewPanel, reviewPanelTask == taskID {
             next.candidates = known.candidates
             next.auto = known.auto
+            next.rules = known.rules
         } else if review.settings != nil, let who = try? await client.reviewers(taskId: taskID) {
             next.candidates = who.candidates
             next.auto = who.auto
+            next.rules = try? await client.reviewRules(taskId: taskID)
         }
         reviewPanel = next
         reviewPanelTask = taskID

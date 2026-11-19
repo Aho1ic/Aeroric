@@ -10,6 +10,7 @@ use aeroric_core::sessions::live::review::{ReviewError, ReviewHost, Reviewer};
 use aeroric_core::storage::Record;
 use aeroric_core::tasks::launch_plan::working_directory;
 use aeroric_core::tasks::session_owner::launch_family_of;
+use aeroric_core::tasks::WorkingDirectory;
 use aeroric_core::tasks::{NewTask, ProtocolFamily};
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
@@ -51,6 +52,7 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>, probe_installed: b
     set.register(wire::RETRY_METHOD, blocking(live, review_retry));
     set.register(wire::REVIEWERS_METHOD, blocking(live, review_reviewers));
     set.register(wire::ATTENTION_METHOD, blocking(live, review_attention));
+    set.register(wire::RULES_METHOD, blocking(live, review_rules));
 }
 
 /// One harness that could review a task.
@@ -420,6 +422,46 @@ fn review_reviewers(live: &Live, request: &Request) -> Frame {
         .ok()
         .map(|(c, _, _, same)| json!({"agent": c.agent, "label": c.label, "sameFamily": same}));
     ok(request, json!({ "candidates": candidates, "auto": auto }))
+}
+
+/// `review.rules {taskId}` (E4): the review rules in force for the task's
+/// repository as it is on disk now — built-ins, and the project file's.
+fn review_rules(live: &Live, request: &Request) -> Frame {
+    let p = match task_params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let Some((project, record)) = live.record(&p.task_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no task with that id in any known project",
+        );
+    };
+    use aeroric_core::sessions::live::review::rules;
+    let rules = match working_directory(&record, &project) {
+        Some(WorkingDirectory::Local { path }) => rules::load(&repo_top(&path), ""),
+        _ => wire::ReviewRules {
+            file: rules::FILE.into(),
+            state: wire::RulesFileState::Unavailable,
+            error: None,
+            rules: rules::builtin(),
+        },
+    };
+    ok(request, json!({ "rules": rules }))
+}
+
+/// The repository's top for `cwd`, or `cwd` itself outside one.
+fn repo_top(cwd: &str) -> std::path::PathBuf {
+    std::process::Command::new("git")
+        .args(["-C", cwd, "rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|top| !top.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| cwd.into())
 }
 
 /// `review.attention {}`: loops that need the user ("需要我处理").

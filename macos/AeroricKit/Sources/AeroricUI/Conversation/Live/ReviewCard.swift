@@ -258,6 +258,9 @@ public enum ReviewText {
         if finding.merged > 0 {
             notes.append("合并了 \(finding.merged) 条说同一处的意见")
         }
+        if let rule = finding.rule {
+            notes.append("依据规则：\(rule)")
+        }
         if let earlier = finding.repeats {
             notes.append("上一轮也提过（当时是 \(earlier)），还没改好")
         }

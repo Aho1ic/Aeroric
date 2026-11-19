@@ -334,6 +334,12 @@ extension SessionsClient {
                 LiveReviewerCandidate.decode(frame.result["auto"]))
     }
 
+    /// E4: the review rules in force for the task's project.
+    public func reviewRules(taskId: String) async throws -> LiveReviewRules? {
+        let frame = try await connection.request("review.rules", params: .object(["taskId": .string(taskId)]))
+        return LiveReviewRules.decode(frame.result["rules"])
+    }
+
     /// B4-1: `review.request` / `review.send` / `review.retry`.
     public func reviewAction(_ method: String, taskId: String) async throws {
         _ = try await connection.request(method, params: .object(["taskId": .string(taskId)]))

@@ -26,6 +26,9 @@ pub struct Plan {
     pub excluded: Vec<(String, String)>,
     /// The selected files' diff was in the prompt.
     pub inlined: bool,
+    /// E4: the ids of the review rules the prompt carried.
+    #[serde(default)]
+    pub rules: Vec<String>,
 }
 
 /// What the reviewer said about one file.
@@ -186,6 +189,7 @@ mod tests {
             selected: vec!["src/a.rs".into(), "src/b.rs".into(), "src/c.rs".into()],
             excluded: vec![("x/.env".into(), SECRET.into())],
             inlined: false,
+            rules: Vec::new(),
         };
         let claims = [
             claim("./src/a.rs", true, None),

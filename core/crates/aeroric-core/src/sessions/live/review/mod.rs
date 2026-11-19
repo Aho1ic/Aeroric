@@ -17,6 +17,7 @@ pub mod gates;
 pub mod locate;
 pub mod parse;
 pub mod prompt;
+pub mod rules;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -407,6 +408,13 @@ impl ReviewLoop {
         let gates = full.as_deref().map(gates::flags).unwrap_or_default();
         let text = full.filter(|t| t.len() <= prompt::MAX_INLINE_DIFF);
         plan.inlined = text.is_some();
+        // E4: the rules for the files in scope, as the project had them
+        // before this turn.
+        let in_force = rules::load(&diff.top, &diff.before);
+        let applied = rules::applicable(&in_force, &plan.selected);
+        let touched = diff.files.iter().any(|f| f.path == rules::FILE);
+        let (rules_text, rule_ids) = rules::section(&applied, touched);
+        plan.rules = rule_ids;
         let prompt = prompt::reviewer(
             &diff,
             &prompt::Context {
@@ -419,6 +427,7 @@ impl ReviewLoop {
                 previous: l.previous.as_ref(),
                 selected: &plan.selected,
                 excluded: &plan.excluded,
+                rules: &rules_text,
             },
         );
         l.card.coverage = None;
@@ -787,6 +796,10 @@ impl ReviewLoop {
         // the same thing said twice is said once.
         let mut findings = verdict.findings;
         for f in &mut findings {
+            // E4: only a rule the prompt carried.
+            if f.rule.as_ref().is_some_and(|r| !plan.rules.contains(r)) {
+                f.rule = None;
+            }
             if let Some(file) = &f.file {
                 if let Some(path) = plan.selected.iter().find(|p| coverage::same_path(file, p)) {
                     f.file = Some(path.clone());

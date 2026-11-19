@@ -1711,6 +1711,26 @@ async fn a_changed_turn_is_reviewed_by_another_family_and_answered() {
         .await
         .unwrap();
     assert_eq!(reviewers["auto"]["agent"], "claude", "{reviewers}");
+    // E4: the rules in force, built-ins and the project's own.
+    std::fs::create_dir_all(workspace.join(".aeroric")).unwrap();
+    std::fs::write(
+        workspace.join(".aeroric/review-rules.json"),
+        r#"{"disable": ["shell"], "rules": [{"id": "money", "paths": ["*.rs"], "text": "金额用整数分"}]}"#,
+    )
+    .unwrap();
+    let rules = host
+        .call("review.rules", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(rules["rules"]["state"], "loaded", "{rules}");
+    let listed = rules["rules"]["rules"].as_array().unwrap();
+    assert!(listed
+        .iter()
+        .any(|r| r["id"] == "money" && r["source"] == "project" && r["severity"] == "major"));
+    assert!(listed
+        .iter()
+        .any(|r| r["id"] == "shell" && r["disabled"] == true));
+    std::fs::remove_dir_all(workspace.join(".aeroric")).unwrap();
 
     let mut peer = tokio::time::timeout(WAIT, host.peers.recv())
         .await

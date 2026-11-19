@@ -144,4 +144,36 @@ final class ReviewTextTests: XCTestCase {
         first.compare = nil
         XCTAssertNil(ReviewText.compare(first), "round 1 has nothing to compare")
     }
+
+    /// E4: the progress page lists the rules in force and where they come from.
+    func testThePanelListsTheReviewRulesInForce() throws {
+        func rule(_ id: String, _ source: String, _ paths: [String], _ severity: String,
+                  disabled: Bool = false) -> JSONValue {
+            .object(["id": .string(id), "source": .string(source), "paths": .array(paths.map(JSONValue.string)),
+                     "severity": .string(severity), "text": .string("说明"), "disabled": .bool(disabled)])
+        }
+        let rules = try XCTUnwrap(LiveReviewRules.decode(.object([
+            "file": .string(".aeroric/review-rules.json"), "state": .string("loaded"),
+            "rules": .array([rule("rust", "builtin", ["*.rs"], "major"),
+                             rule("shell", "builtin", ["*.{sh,bash}"], "major", disabled: true),
+                             rule("money", "project", ["src/billing/**"], "blocker")]),
+        ])))
+        var model = ReviewPanelModel(settings: LiveReviewSettings(enabled: true))
+        XCTAssertNil(model.rulesTitle, "not read yet")
+        model.rules = rules
+        XCTAssertEqual(model.rulesTitle, "审查规则 · 内置 1 条 · 项目 1 条（关了 1 条内置）")
+        XCTAssertEqual(model.rulesHint, "项目规则来自 .aeroric/review-rules.json；审查时按改动前的版本")
+        XCTAssertEqual(rules.rules.map(ReviewPanelModel.ruleLine), [
+            "rust · 重要 · *.rs",
+            "shell · 重要 · *.{sh,bash}（已关闭）",
+            "money · 阻断 · src/billing/**（项目）",
+        ])
+        model.rules?.state = "invalid"
+        model.rules?.error = "规则文件读不懂"
+        XCTAssertEqual(model.rulesHint, "规则文件读不懂，只用了内置规则：规则文件读不懂")
+
+        var finding = LiveReviewFinding(id: "r1", severity: "blocker", text: "用了浮点")
+        finding.rule = "money"
+        XCTAssertEqual(ReviewText.notes(finding), ["依据规则：money"])
+    }
 }

@@ -517,6 +517,7 @@ fn gate_flags_reach_the_reviewer_to_judge() {
         previous: None,
         selected: &[],
         excluded: &[],
+        rules: "",
     };
     let text = prompt::reviewer(&diff(&["a.rs"]), &context(&flags));
     assert!(text.contains("## 门禁完整性"), "{text}");
@@ -793,4 +794,68 @@ fn the_second_round_says_what_persists_what_is_resolved_and_what_went_unchecked(
     assert_eq!(ids(&cmp.resolved), ["r3"]);
     assert_eq!(ids(&cmp.unchecked), ["r2"], "b.rs was not looked at again");
     assert!(sent[3].1.contains("上一轮也提过，还没改好"));
+}
+
+/// E4: the project's rules reach the reviewer for the files they match, as
+/// the project had them before the turn, even when the turn rewrote the
+/// rules file; a finding keeps only a rule the prompt carried.
+#[test]
+fn project_rules_reach_the_reviewer_as_they_were_before_the_turn() {
+    let dir = std::env::temp_dir().join(format!("aeroric-e4-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(dir.join(".aeroric")).unwrap();
+    std::fs::create_dir_all(dir.join("src/billing")).unwrap();
+    let git = |args: &[&str]| -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(
+        dir.join(rules::FILE),
+        r#"{"rules": [{"id": "money", "paths": ["src/billing/**"], "severity": "blocker", "text": "金额一律用整数分"}]}"#,
+    )
+    .unwrap();
+    git(&["add", "-A"]);
+    let before = git(&["write-tree"]);
+    // The turn empties the rules and adds billing code.
+    std::fs::write(dir.join(rules::FILE), r#"{"rules": []}"#).unwrap();
+    std::fs::write(dir.join("src/billing/fee.rs"), "let fee = 0.1 * price;\n").unwrap();
+    git(&["add", "-A"]);
+    let after = git(&["write-tree"]);
+    let mut changed = diff(&[rules::FILE, "src/billing/fee.rs"]);
+    changed.top = dir.clone();
+    changed.before = before;
+    changed.after = after;
+
+    let rig = rig(true, false);
+    rig.settled("t1", "u1", Some(changed), false);
+    let prompt = rig.wait_sent(1)[0].1.clone();
+    assert!(
+        prompt.contains(
+            "### money（违反时按「阻断」报）\n适用于：src/billing/fee.rs\n金额一律用整数分"
+        ),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("### rust（违反时按「重要」报）"),
+        "the built-in rule too"
+    );
+    assert!(prompt.contains("这一轮改了规则文件"));
+    assert!(
+        !prompt.contains("### python"),
+        "only rules that match a file"
+    );
+
+    const CITED: &str = "```json\n{\"verdict\":\"changes\",\"findings\":[{\"id\":\"r1\",\"severity\":\"blocker\",\"file\":\"src/billing/fee.rs\",\"rule\":\"money\",\"text\":\"用了浮点\"},{\"id\":\"r2\",\"severity\":\"minor\",\"file\":\"src/billing/fee.rs\",\"rule\":\"made-up\",\"text\":\"命名\"}]}\n```";
+    rig.wait_reviewer();
+    rig.turn("rev-1", "v1", CITED);
+    let card = rig.reviews.card("t1").unwrap();
+    let cited: Vec<_> = card.findings.iter().map(|f| f.rule.as_deref()).collect();
+    assert_eq!(cited, [Some("money"), None]);
+    std::fs::remove_dir_all(&dir).ok();
 }

@@ -27,6 +27,8 @@ pub struct Context<'a> {
     /// E1: the files in scope, and those left out with why.
     pub selected: &'a [String],
     pub excluded: &'a [(String, String)],
+    /// E4: the review rules that match a file in scope, as a prompt section.
+    pub rules: &'a str,
 }
 
 pub fn reviewer(diff: &TurnDiff, cx: &Context<'_>) -> String {
@@ -79,6 +81,7 @@ pub fn reviewer(diff: &TurnDiff, cx: &Context<'_>) -> String {
             out.push_str(&format!("- {path}（{why}）\n"));
         }
     }
+    out.push_str(cx.rules);
     match cx.diff_text {
         Some(text) => out.push_str(&format!("```diff\n{text}\n```\n")),
         None => out.push_str(&format!(
@@ -91,7 +94,7 @@ pub fn reviewer(diff: &TurnDiff, cx: &Context<'_>) -> String {
 ```json
 {{\"verdict\": \"pass 或 changes\", \"summary\": \"一句话总评\",
  \"files\": [{{\"path\": \"路径\", \"status\": \"reviewed|skipped\", \"reason\": \"跳过时写原因\"}}],
- \"findings\": [{{\"id\": \"r1\", \"severity\": \"blocker|major|minor\", \"category\": \"bug|security|performance|maintainability|test|style|documentation|other\", \"file\": \"路径\", \"line\": 12, \"snippet\": \"问题所在的代码，从改动后的文件里照抄一到几行\", \"text\": \"问题与修改建议\"}}]}}
+ \"findings\": [{{\"id\": \"r1\", \"severity\": \"blocker|major|minor\", \"category\": \"bug|security|performance|maintainability|test|style|documentation|other\", \"file\": \"路径\", \"line\": 12, \"snippet\": \"问题所在的代码，从改动后的文件里照抄一到几行\", \"rule\": \"违反的审查规则编号，没有就省略\", \"text\": \"问题与修改建议\"}}]}}
 ```
 snippet 照抄代码原文，不要改写；行号写错时，Aeroric 会按 snippet 找到正确的位置。
 files 逐个列出上面每个要审查的文件：看过并审查了写 reviewed，没有审查写 skipped 并写原因。不要只审一部分就给结论。

@@ -67,6 +67,8 @@ public struct LiveReviewFinding: Equatable, Sendable {
     public var merged: Int = 0
     /// E3: the previous round's finding this one says again.
     public var repeats: String?
+    /// E4: the review rule it says was broken.
+    public var rule: String?
 
     public init(id: String, severity: String, text: String, file: String? = nil, line: UInt64? = nil,
                 decision: String? = nil, reason: String? = nil) {
@@ -129,6 +131,59 @@ public struct LiveReviewSettings: Equatable, Sendable {
     }
 }
 
+/// E4 (2026-11-19): the review rules in force for a task's project
+/// (`review.rules`); mirrors `aeroric_protocol::review::ReviewRules`.
+public struct LiveReviewRules: Equatable, Sendable {
+    public struct Rule: Equatable, Sendable, Identifiable {
+        public var id: String
+        /// `builtin` / `project`.
+        public var source: String
+        public var paths: [String]
+        /// `blocker` `major` `minor`.
+        public var severity: String
+        public var text: String
+        public var disabled: Bool
+
+        public init(id: String, source: String, paths: [String], severity: String, text: String,
+                    disabled: Bool = false) {
+            self.id = id
+            self.source = source
+            self.paths = paths
+            self.severity = severity
+            self.text = text
+            self.disabled = disabled
+        }
+    }
+
+    /// The project rules file, from the repository's top.
+    public var file: String
+    /// `missing` / `loaded` / `invalid` / `unavailable`.
+    public var state: String
+    public var error: String?
+    public var rules: [Rule]
+
+    public init(file: String, state: String, error: String? = nil, rules: [Rule]) {
+        self.file = file
+        self.state = state
+        self.error = error
+        self.rules = rules
+    }
+
+    public static func decode(_ value: JSONValue?) -> LiveReviewRules? {
+        guard let f = value?.objectValue, let state = f["state"]?.stringValue else { return nil }
+        let rules: [Rule] = (f["rules"]?.arrayValue ?? []).compactMap { item in
+            let g = item.fields
+            guard let id = g["id"]?.stringValue, let text = g["text"]?.stringValue else { return nil }
+            return Rule(id: id, source: g["source"]?.stringValue ?? "builtin",
+                        paths: (g["paths"]?.arrayValue ?? []).compactMap(\.stringValue),
+                        severity: g["severity"]?.stringValue ?? "major", text: text,
+                        disabled: g["disabled"]?.boolValue ?? false)
+        }
+        return LiveReviewRules(file: f["file"]?.stringValue ?? ".aeroric/review-rules.json", state: state,
+                               error: f["error"]?.stringValue, rules: rules)
+    }
+}
+
 /// A harness that could review a task (`review.reviewers`).
 public struct LiveReviewerCandidate: Equatable, Sendable {
     public var agent: String
@@ -179,6 +234,7 @@ extension LiveReviewFinding {
         finding.unlocated = g["unlocated"]?.boolValue ?? false
         finding.merged = g["merged"]?.numberText.flatMap { Int($0) } ?? 0
         finding.repeats = g["repeats"]?.stringValue
+        finding.rule = g["rule"]?.stringValue
         return finding
     }
 }

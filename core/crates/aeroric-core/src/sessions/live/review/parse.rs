@@ -55,6 +55,9 @@ struct RawFinding {
     snippet: Option<String>,
     #[serde(default)]
     category: Option<String>,
+    /// E4: the rule the finding says was broken.
+    #[serde(default)]
+    rule: Option<String>,
 }
 
 /// The reviewer's verdict; `None` when the text holds none.
@@ -94,6 +97,10 @@ pub fn verdict(text: &str) -> Option<Verdict> {
                 .filter(|s| !s.trim().is_empty())
                 .map(|s| cut(s.trim_end())),
             category: f.category.as_deref().and_then(category),
+            rule: f
+                .rule
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty()),
             ..Finding::default()
         });
     }

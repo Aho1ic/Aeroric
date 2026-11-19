@@ -14,6 +14,7 @@ pub const SEND_METHOD: &str = "review.send";
 pub const RETRY_METHOD: &str = "review.retry";
 pub const REVIEWERS_METHOD: &str = "review.reviewers";
 pub const ATTENTION_METHOD: &str = "review.attention";
+pub const RULES_METHOD: &str = "review.rules";
 
 /// Rounds per loop; past this the loop stops and asks the user (P17).
 pub const MAX_ROUNDS: u32 = 3;
@@ -107,6 +108,10 @@ pub struct Finding {
     /// says again. From round 2 on, a finding without it is new.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeats: Option<String>,
+    /// E4 (2026-11-19): the review rule the finding says was broken, one of
+    /// those the round's prompt carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -217,6 +222,59 @@ impl ReviewCard {
             .iter()
             .filter(|f| f.severity == Severity::Blocker)
     }
+}
+
+/// E4 (2026-11-19): a review rule. It applies to the changed files its
+/// `paths` globs match; every matching rule applies, built-in and project
+/// rules alike (OCR #1177), and says at which level a breach is reported
+/// (OCR #96).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewRule {
+    pub id: String,
+    pub source: RuleSource,
+    /// Globs from the repository's top: `**` any directories, `*` and `?`
+    /// within a name, `{a,b}` either. One without `/` matches the file name
+    /// in any directory.
+    pub paths: Vec<String>,
+    pub severity: Severity,
+    pub text: String,
+    /// A built-in rule the project file turned off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuleSource {
+    Builtin,
+    /// The project's rules file; a rule with a built-in's id replaces it.
+    Project,
+}
+
+/// E4: the project rules file as it was read.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RulesFileState {
+    #[default]
+    Missing,
+    Loaded,
+    /// Unreadable or not the expected shape; the built-in rules apply alone.
+    Invalid,
+    /// Not a local project: no file can be read.
+    Unavailable,
+}
+
+/// `review.rules {taskId}`: the rules in force for a task's project.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewRules {
+    /// The rules file, from the repository's top.
+    pub file: String,
+    pub state: RulesFileState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub rules: Vec<ReviewRule>,
 }
 
 /// Who reviews: `"auto"` (another family when there is one) or a named agent.
