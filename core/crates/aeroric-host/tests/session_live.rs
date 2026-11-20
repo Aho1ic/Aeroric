@@ -2939,6 +2939,26 @@ async fn feedback_counts_and_stays_in_the_project() {
         .unwrap();
     assert_eq!(voted["item"]["stats"]["helpful"], 1);
     assert_eq!(voted["item"]["stats"]["retrieved"], 1);
+    // C3: the same session recalling and voting again counts nothing more.
+    host.call(
+        "context.memoryRecall",
+        json!({"token": token, "query": "发布"}),
+    )
+    .await
+    .unwrap();
+    let twice = host
+        .call(
+            "context.memoryFeedback",
+            json!({"token": token, "id": id, "helpful": true}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        twice["text"].as_str().unwrap().contains("不重复计数"),
+        "{twice}"
+    );
+    assert_eq!(twice["item"]["stats"]["helpful"], 1);
+    assert_eq!(twice["item"]["stats"]["retrieved"], 1);
     let other = host
         .call(
             "context.memoryFeedback",
@@ -3915,6 +3935,30 @@ async fn a_queued_run_is_listed_and_canceled() {
         .is_err());
     assert!(host
         .call("memory.runCancel", json!({"runId": "run-nope"}))
+        .await
+        .is_err());
+}
+
+/// C3 second step: 重建索引 is a row in 整理记录 and `memory.runs` says
+/// whether the index is whole; a run with nothing to retry says so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_index_is_rebuilt_as_a_run() {
+    let host = Host::start(true).await;
+    let runs = host.call("memory.runs", json!({})).await.unwrap();
+    assert_eq!(runs["indexHealthy"], json!(true));
+    let rebuilt = host.call("memory.reindex", json!({})).await.unwrap();
+    assert_eq!(rebuilt["run"]["kind"], json!("reindex"));
+    assert_eq!(rebuilt["run"]["state"], json!("done"));
+    let runs = host.call("memory.runs", json!({})).await.unwrap();
+    assert_eq!(runs["runs"][0]["id"], rebuilt["run"]["id"]);
+    assert_eq!(runs["usedToday"], json!(0));
+    assert_eq!(runs["monthCount"], json!(0));
+    assert!(host
+        .call("memory.runRetry", json!({"runId": rebuilt["run"]["id"]}))
+        .await
+        .is_err());
+    assert!(host
+        .call("memory.runRetry", json!({"runId": "run-nope"}))
         .await
         .is_err());
 }

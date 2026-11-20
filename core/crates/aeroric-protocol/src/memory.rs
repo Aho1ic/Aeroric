@@ -28,6 +28,10 @@ pub const RUNS_METHOD: &str = "memory.runs";
 pub const EXTRACT_METHOD: &str = "memory.extract";
 /// C3 (2026-11-20): cancel a queued or running 整理.
 pub const RUN_CANCEL_METHOD: &str = "memory.runCancel";
+/// C3 second step: make a run's failed writes again, without the model.
+pub const RUN_RETRY_METHOD: &str = "memory.runRetry";
+/// C3 second step: 重建索引.
+pub const REINDEX_METHOD: &str = "memory.reindex";
 pub const MODELS_METHOD: &str = "memory.models";
 pub const IMPORT_NATIVE_METHOD: &str = "memory.importNative";
 // B5-3a (2026-10-31): was it any use.
@@ -436,6 +440,8 @@ pub enum MemoryRunKind {
     Extract,
     /// 做梦: a scope's similar items merged or put to the user.
     Dream,
+    /// C3 (2026-11-20): 重建索引 — the full-text index written again.
+    Reindex,
 }
 
 /// B6: one item a dream marked replaced, kept so the run can be undone.

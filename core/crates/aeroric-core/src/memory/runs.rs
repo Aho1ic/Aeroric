@@ -4,7 +4,11 @@
 //! the store for as long as the run is real, so the log always matches
 //! what is going on.
 
-use aeroric_protocol::memory::{MemoryRun, MemoryRunKind, MemoryRunState};
+use aeroric_protocol::memory::{
+    Confidence, Evidence, ExperienceDetail, MemoryDraft, MemoryItem, MemoryRun, MemoryRunKind,
+    MemoryRunState, RunOutcomeSubject,
+};
+use serde::{Deserialize, Serialize};
 
 use super::store::Store;
 use super::{Memory, MemoryError};
@@ -149,5 +153,156 @@ impl Memory {
     /// The run ended (however): its cancel request is spent.
     pub(super) fn end_run(&self, run_id: &str) {
         self.cancels.lock().remove(run_id);
+    }
+}
+
+/// C3 second step: one write an extraction wants to make, whole — so a
+/// write the store failed can be made again without asking the model.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "subject", rename_all = "camelCase")]
+pub(super) enum PendingWrite {
+    #[serde(rename_all = "camelCase")]
+    Fact {
+        project_id: String,
+        text: String,
+        evidence: Evidence,
+    },
+    #[serde(rename_all = "camelCase")]
+    Experience {
+        project_id: String,
+        title: String,
+        detail: ExperienceDetail,
+        confidence: Confidence,
+        evidence: Evidence,
+    },
+    Candidate {
+        draft: MemoryDraft,
+        evidence: Evidence,
+    },
+}
+
+impl PendingWrite {
+    pub(super) fn subject(&self) -> RunOutcomeSubject {
+        match self {
+            Self::Fact { .. } => RunOutcomeSubject::Fact,
+            Self::Experience { .. } => RunOutcomeSubject::Experience,
+            Self::Candidate { .. } => RunOutcomeSubject::Candidate,
+        }
+    }
+
+    /// The words it would keep (what forgetting and withdrawing compare).
+    pub(super) fn text(&self) -> &str {
+        match self {
+            Self::Fact { text, .. } => text,
+            Self::Experience { title, .. } => title,
+            Self::Candidate { draft, .. } => &draft.text,
+        }
+    }
+
+    pub(super) fn apply(&self, memory: &Memory, now_ms: u64) -> Result<MemoryItem, MemoryError> {
+        match self {
+            Self::Fact {
+                project_id,
+                text,
+                evidence,
+            } => memory.add_session_fact(project_id, text, evidence.clone(), now_ms),
+            Self::Experience {
+                project_id,
+                title,
+                detail,
+                confidence,
+                evidence,
+            } => memory.add_experience(
+                project_id,
+                title,
+                detail,
+                *confidence,
+                evidence.clone(),
+                now_ms,
+            ),
+            Self::Candidate { draft, evidence } => {
+                memory.propose(draft.clone(), evidence.clone(), now_ms)
+            }
+        }
+    }
+}
+
+/// C3 second step: what one run still has to write. `index` is the write's
+/// place in the run's `outcomes`; `epoch` the withdrawal number its model
+/// call started at (C2: what was withdrawn since is not written).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct Retry {
+    pub epoch: u64,
+    pub writes: Vec<(usize, PendingWrite)>,
+}
+
+impl Memory {
+    /// Runs with writes waiting to be tried again, oldest first.
+    pub fn retryable(&self, now_ms: u64) -> Vec<String> {
+        self.with(|store| store.retry_ids(now_ms))
+            .unwrap_or_default()
+    }
+
+    pub(super) fn save_retry(
+        &self,
+        run_id: &str,
+        retry: &Retry,
+        now_ms: u64,
+    ) -> Result<(), MemoryError> {
+        let body = serde_json::to_string(retry).map_err(|e| MemoryError::Storage(e.to_string()))?;
+        self.with(|store| store.put_retry(run_id, now_ms, &body))
+    }
+
+    pub(super) fn load_retry(&self, run_id: &str) -> Result<Option<Retry>, MemoryError> {
+        let body = self.with(|store| store.retry(run_id))?;
+        Ok(body.and_then(|body| serde_json::from_str(&body).ok()))
+    }
+
+    pub(super) fn drop_retry(&self, run_id: &str) -> Result<(), MemoryError> {
+        self.with(|store| store.delete_retry(run_id))
+    }
+
+    /// Whether the full-text index is whole (`memory.runs` says so, and
+    /// the App offers 重建索引 when it is not).
+    pub fn index_healthy(&self) -> bool {
+        self.with(|store| Ok(store.index_healthy()))
+            .unwrap_or(false)
+    }
+
+    /// 重建索引: the full-text index written again from the items, vectors
+    /// of items gone dropped — a row of its own in 整理记录. No model is
+    /// asked; the background embeds what lacks a vector.
+    pub fn rebuild_index(&self, now_ms: u64) -> Result<MemoryRun, MemoryError> {
+        let mut run = new_run(
+            MemoryRunKind::Reindex,
+            "",
+            "",
+            "重建索引",
+            MemoryRunState::Running,
+            now_ms,
+        );
+        self.begin_run(&mut run)?;
+        let result = self.with(|store| store.rebuild_index());
+        self.end_run(&run.id);
+        match result {
+            Ok((indexed, dropped, missing)) => {
+                run.state = MemoryRunState::Done;
+                let mut notes = vec![format!("全文索引重写了 {indexed} 条")];
+                if dropped > 0 {
+                    notes.push(format!("清掉 {dropped} 个已不存在的记忆的向量"));
+                }
+                if missing > 0 {
+                    notes.push(format!("{missing} 条的语义向量等后台补算"));
+                }
+                run.reason = Some(notes.join("；"));
+            }
+            Err(error) => {
+                run.state = MemoryRunState::Failed;
+                run.reason = Some(format!("重建索引失败：{error}"));
+            }
+        }
+        self.add_run(&run)?;
+        Ok(run)
     }
 }

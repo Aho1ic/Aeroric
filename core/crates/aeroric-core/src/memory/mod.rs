@@ -534,10 +534,15 @@ impl Memory {
     }
 
     /// B5-3a: [`Memory::profile`] for a starting session — what it carries
-    /// counts as injected.
-    pub fn profile_for_session(&self, project_id: Option<&str>) -> Option<String> {
+    /// counts as injected; C3: once per task (a resumed session is not a
+    /// new use).
+    pub fn profile_for_session(
+        &self,
+        project_id: Option<&str>,
+        task_id: Option<&str>,
+    ) -> Option<String> {
         let (text, ids) = self.render_profile(project_id)?;
-        let _ = self.with(|store| store.bump(&ids, "injected"));
+        let _ = self.with(|store| store.bump(&ids, "injected", task_id));
         Some(text)
     }
 
@@ -600,6 +605,29 @@ impl Memory {
         })
     }
 
+    /// C3: an agent's 有用 / 不对 — one vote per item per task, so one
+    /// session cannot raise (or sink) an experience's confidence on its own.
+    /// `None` when this task already voted on it.
+    pub fn feedback_in_task(
+        &self,
+        id: &str,
+        helpful: bool,
+        task_id: &str,
+        now_ms: u64,
+    ) -> Result<Option<MemoryItem>, MemoryError> {
+        let first = self.with(|store| {
+            let item = store.get(id)?.ok_or(MemoryError::UnknownItem)?;
+            if item.state != MemoryState::Active {
+                return Err(MemoryError::WrongState);
+            }
+            store.first_use(id, task_id, "vote")
+        })?;
+        if !first {
+            return Ok(None);
+        }
+        self.feedback(id, helpful, now_ms).map(Some)
+    }
+
     /// B5-3a: 有用 / 不对 from the user or an agent (Q-M19, Q-M20).
     pub fn feedback(
         &self,
@@ -638,6 +666,18 @@ impl Memory {
         query: &str,
         vector: Option<&[f32]>,
     ) -> Result<Vec<MemoryItem>, MemoryError> {
+        self.recall_in_task(project_id, query, vector, None)
+    }
+
+    /// C3: [`Memory::recall_with`] for an agent's session — an item found
+    /// again in the same task is not counted again.
+    pub fn recall_in_task(
+        &self,
+        project_id: &str,
+        query: &str,
+        vector: Option<&[f32]>,
+        task_id: Option<&str>,
+    ) -> Result<Vec<MemoryItem>, MemoryError> {
         self.with(|store| {
             let mut found = store.search(project_id, query, 30)?;
             if let Some(vector) = vector {
@@ -673,7 +713,7 @@ impl Memory {
                 .take(RECALL_LIMIT)
                 .collect();
             let ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
-            store.bump(&ids, "retrieved")?;
+            store.bump(&ids, "retrieved", task_id)?;
             Ok(items)
         })
     }

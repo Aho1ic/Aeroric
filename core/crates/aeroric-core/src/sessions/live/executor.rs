@@ -343,7 +343,9 @@ impl StructuredExecutor {
         prompt: Option<String>,
         resuming: bool,
     ) -> Option<String> {
-        let profile = self.memory.profile_for_session(Some(project_id));
+        let profile = self
+            .memory
+            .profile_for_session(Some(project_id), Some(task_id));
         self.hand_handoff(task_id, session, prompt, resuming, profile.as_deref())
     }
 

@@ -72,6 +72,8 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     );
     set.register(wire::EXTRACT_METHOD, blocking(live, memory_extract));
     set.register(wire::RUN_CANCEL_METHOD, blocking(live, memory_run_cancel));
+    set.register(wire::RUN_RETRY_METHOD, blocking(live, memory_run_retry));
+    set.register(wire::REINDEX_METHOD, blocking(live, memory_reindex));
     set.register(
         wire::IMPORT_NATIVE_METHOD,
         blocking(live, memory_import_native),
@@ -786,7 +788,7 @@ fn context_recall(live: &Live, request: &Request) -> Frame {
         Ok(p) => p,
         Err(frame) => return *frame,
     };
-    let (_, project) = match token_scope(live, request, &p.token) {
+    let (task, project) = match token_scope(live, request, &p.token) {
         Ok(scope) => scope,
         Err(frame) => return *frame,
     };
@@ -794,7 +796,7 @@ fn context_recall(live: &Live, request: &Request) -> Frame {
     match live
         .executor
         .memory()
-        .recall_with(&project, &p.query, vector.as_deref())
+        .recall_in_task(&project, &p.query, vector.as_deref(), Some(&task))
     {
         Ok(items) => {
             let text = if items.is_empty() {
@@ -967,6 +969,7 @@ fn memory_runs(live: &Live, request: &Request) -> Frame {
         // C3: a queued row has not asked the model yet.
         .filter(|r| {
             r.at_ms >= month_start
+                && r.kind != wire::MemoryRunKind::Reindex
                 && !matches!(
                     r.state,
                     wire::MemoryRunState::Skipped | wire::MemoryRunState::Queued
@@ -986,6 +989,8 @@ fn memory_runs(live: &Live, request: &Request) -> Frame {
             "dailyLimit": memory.settings().daily_limit,
             "monthCount": month.len(),
             "monthCostUsd": cost,
+            // C3 second step: the App offers 重建索引 when it is not.
+            "indexHealthy": memory.index_healthy(),
         }),
     )
 }
@@ -1229,6 +1234,50 @@ fn memory_run_cancel(live: &Live, request: &Request) -> Frame {
     )
 }
 
+/// `memory.runRetry {runId}` (C3 second step): make the writes a run could
+/// not, without the model; a run with none waiting (its call failed, or
+/// they were kept past the retention) has its session extracted again.
+fn memory_run_retry(live: &Live, request: &Request) -> Frame {
+    let p: RunCancelParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let memory = live.executor.memory();
+    let result = match memory.retry_run(&p.run_id, now_ms()) {
+        Ok(Some(run)) => Ok(run),
+        Ok(None) => match memory.run(&p.run_id) {
+            Some(run) if run.kind == wire::MemoryRunKind::Extract && !run.task_id.is_empty() => {
+                extract_task(live, &run.task_id, true, None)
+            }
+            _ => Err("这次整理没有可以重试的内容".to_string()),
+        },
+        Err(error) => return memory_failure(request, error),
+    };
+    match result {
+        Ok(run) => ok(request, json!({ "run": run })),
+        Err(error) => failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
+    }
+}
+
+/// `memory.reindex {}` (C3 second step): 重建索引, a row in 整理记录.
+fn memory_reindex(live: &Live, request: &Request) -> Frame {
+    answer(
+        request,
+        live.executor.memory().rebuild_index(now_ms()),
+        "run",
+    )
+}
+
+/// C3 second step: writes a run could not make are made again — no model,
+/// so whether or not automatic extraction is on.
+fn retry_writes(live: &Live) {
+    let memory = live.executor.memory();
+    let now = now_ms();
+    for id in memory.retryable(now) {
+        let _ = memory.retry_run(&id, now);
+    }
+}
+
 /// C3: one automatic pass at a time, so a session is queued once.
 static SWEEPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -1283,6 +1332,7 @@ fn dream_scope(
 /// been quiet for `DREAM_IDLE_MS`.
 fn sweep(live: &Live) -> usize {
     embed_missing(live);
+    retry_writes(live);
     let done = extract_finished(live);
     dream_due_scopes(live);
     done
@@ -1742,7 +1792,7 @@ fn context_feedback(live: &Live, request: &Request) -> Frame {
         Ok(p) => p,
         Err(frame) => return *frame,
     };
-    let (_, project) = match token_scope(live, request, &p.token) {
+    let (task, project) = match token_scope(live, request, &p.token) {
         Ok(scope) => scope,
         Err(frame) => return *frame,
     };
@@ -1752,12 +1802,20 @@ fn context_feedback(live: &Live, request: &Request) -> Frame {
         Ok(_) => return memory_failure(request, MemoryError::UnknownItem),
         Err(error) => return memory_failure(request, error),
     }
-    match memory.feedback(&p.id, p.helpful, now_ms()) {
-        Ok(item) => ok(
+    // C3: one vote per item per session.
+    match memory.feedback_in_task(&p.id, p.helpful, &task, now_ms()) {
+        Ok(Some(item)) => ok(
             request,
             json!({
                 "text": format!("已记下：[{}] {}", item.id, if p.helpful { "有用" } else { "不对" }),
                 "item": item,
+            }),
+        ),
+        Ok(None) => ok(
+            request,
+            json!({
+                "text": format!("这个会话已经反馈过 [{}]，不重复计数", p.id),
+                "item": memory.item(&p.id).ok().flatten(),
             }),
         ),
         Err(error) => memory_failure(request, error),

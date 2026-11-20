@@ -20,6 +20,10 @@ use crate::notebook::rag::cjk;
 const SCHEMA_VERSION: i64 = 2;
 /// C2: how long withdrawn words are kept for runs still going.
 const WITHDRAWN_KEPT_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// C3: how long the writes a run could not make wait to be tried again.
+/// They hold the words, so they do not stay longer than a run's record of
+/// what was withdrawn.
+pub(super) const RETRY_KEPT_MS: u64 = WITHDRAWN_KEPT_MS;
 const COLUMNS: &str = "id, project, kind, category, text, assertion, state, pinned, \
                        supersedes, superseded_by, created_ms, updated_ms, detail, confidence, \
                        retrieved, injected, helpful, wrong";
@@ -127,7 +131,11 @@ impl Store {
              CREATE INDEX IF NOT EXISTS chain_project ON chain(project, at_ms);
              CREATE TABLE IF NOT EXISTS vectors(item_id TEXT PRIMARY KEY, vec BLOB NOT NULL);
              CREATE TABLE IF NOT EXISTS withdrawn(seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                sig TEXT NOT NULL, at_ms INTEGER NOT NULL);",
+                sig TEXT NOT NULL, at_ms INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS retries(run_id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL,
+                body TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS uses(item_id TEXT NOT NULL, task_id TEXT NOT NULL,
+                kind TEXT NOT NULL, PRIMARY KEY(item_id, task_id, kind));",
             cjk::FTS_TOKENIZER
         ))?;
         // B5-3a: schema 1 → 2 only adds columns.
@@ -582,10 +590,21 @@ impl Store {
             .optional()?)
     }
 
-    /// B5-3a: one more `retrieved` / `injected` for each id.
-    pub(super) fn bump(&self, ids: &[String], column: &str) -> Result<(), MemoryError> {
+    /// B5-3a: one more `retrieved` / `injected` for each id. C3: within a
+    /// task, once per item — the tenth recall in one session is not ten uses.
+    pub(super) fn bump(
+        &self,
+        ids: &[String],
+        column: &str,
+        task_id: Option<&str>,
+    ) -> Result<(), MemoryError> {
         debug_assert!(matches!(column, "retrieved" | "injected"));
         for id in ids {
+            if let Some(task) = task_id {
+                if !self.first_use(id, task, column)? {
+                    continue;
+                }
+            }
             self.conn.execute(
                 &format!("UPDATE items SET {column} = {column} + 1 WHERE id = ?1"),
                 [id],
@@ -1136,6 +1155,7 @@ impl Store {
         tx.execute("DELETE FROM evidence WHERE item_id = ?1", [&item.id])?;
         tx.execute("DELETE FROM items_fts WHERE id = ?1", [&item.id])?;
         tx.execute("DELETE FROM vectors WHERE item_id = ?1", [&item.id])?;
+        tx.execute("DELETE FROM uses WHERE item_id = ?1", [&item.id])?;
         // A newer version that pointed here now starts the chain.
         tx.execute(
             "UPDATE items SET supersedes = NULL WHERE supersedes = ?1",
@@ -1163,6 +1183,8 @@ impl Store {
             )?;
             self.delete(old)?;
         }
+        // C3: a write waiting to be retried with the same words goes too.
+        self.purge_retries()?;
         // Old pages in the write-ahead log go too.
         self.conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
@@ -1281,9 +1303,171 @@ fn location_json(evidence: &Evidence) -> Option<String> {
 /// only) does not; C3: nor a queued row, nor one canceled before its call.
 fn counted(run: &aeroric_protocol::memory::MemoryRun) -> bool {
     use aeroric_protocol::memory::{MemoryRunKind, MemoryRunState};
+    if run.kind == MemoryRunKind::Reindex {
+        return false;
+    }
     match run.state {
         MemoryRunState::Skipped | MemoryRunState::Queued => false,
         MemoryRunState::Canceled => run.model.is_some(),
         _ => !(run.kind == MemoryRunKind::Dream && run.model.is_none()),
+    }
+}
+
+/// C3 (2026-11-20): writes a run could not make, the use counts per task,
+/// and rebuilding the index.
+impl Store {
+    pub(super) fn put_retry(
+        &self,
+        run_id: &str,
+        at_ms: u64,
+        body: &str,
+    ) -> Result<(), MemoryError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO retries(run_id, at_ms, body) VALUES (?1, ?2, ?3)",
+            params![run_id, at_ms as i64, body],
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn retry(&self, run_id: &str) -> Result<Option<String>, MemoryError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT body FROM retries WHERE run_id = ?1",
+                [run_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub(super) fn delete_retry(&self, run_id: &str) -> Result<(), MemoryError> {
+        self.conn
+            .execute("DELETE FROM retries WHERE run_id = ?1", [run_id])?;
+        Ok(())
+    }
+
+    /// The runs with writes waiting, oldest first; those kept past
+    /// [`RETRY_KEPT_MS`] are dropped first.
+    pub(super) fn retry_ids(&self, now_ms: u64) -> Result<Vec<String>, MemoryError> {
+        self.conn.execute(
+            "DELETE FROM retries WHERE at_ms < ?1",
+            [now_ms.saturating_sub(RETRY_KEPT_MS) as i64],
+        )?;
+        let mut statement = self
+            .conn
+            .prepare("SELECT run_id FROM retries ORDER BY at_ms")?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
+    /// Words forgotten since a write was saved leave it (they are refused
+    /// on retry anyway; this keeps them from waiting on disk).
+    pub(super) fn purge_retries(&self) -> Result<(), MemoryError> {
+        let mut statement = self.conn.prepare("SELECT run_id, body FROM retries")?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        for (run_id, body) in rows {
+            let Ok(mut retry) = serde_json::from_str::<super::runs::Retry>(&body) else {
+                continue;
+            };
+            let before = retry.writes.len();
+            let mut keep = Vec::new();
+            for (index, write) in retry.writes {
+                if !self.barred(&normalize(write.text()))? {
+                    keep.push((index, write));
+                }
+            }
+            retry.writes = keep;
+            // Kept even when empty: the next retry settles the run's row.
+            if retry.writes.len() != before {
+                self.conn.execute(
+                    "UPDATE retries SET body = ?2 WHERE run_id = ?1",
+                    params![run_id, serde_json::to_string(&retry).unwrap_or_default()],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether this is the item's first `kind` in this task (and record it).
+    pub(super) fn first_use(
+        &self,
+        item_id: &str,
+        task_id: &str,
+        kind: &str,
+    ) -> Result<bool, MemoryError> {
+        Ok(self.conn.execute(
+            "INSERT OR IGNORE INTO uses(item_id, task_id, kind) VALUES (?1, ?2, ?3)",
+            params![item_id, task_id, kind],
+        )? == 1)
+    }
+
+    /// Whether the full-text index answers and holds every item once.
+    pub(super) fn index_healthy(&self) -> bool {
+        let check = self.conn.execute(
+            "INSERT INTO items_fts(items_fts) VALUES ('integrity-check')",
+            [],
+        );
+        let count = |sql: &str| {
+            self.conn
+                .query_row(sql, [], |row| row.get::<_, i64>(0))
+                .ok()
+        };
+        check.is_ok()
+            && count("SELECT COUNT(*) FROM items")
+                == count("SELECT COUNT(DISTINCT id) FROM items_fts")
+            && count("SELECT COUNT(*) FROM items_fts") == count("SELECT COUNT(*) FROM items")
+    }
+
+    /// The full-text index written again from the items; vectors of items
+    /// no longer there dropped. `(indexed, vectors dropped, active items without a
+    /// vector)` — the background embeds those.
+    pub(super) fn rebuild_index(&mut self) -> Result<(u32, u32, u32), MemoryError> {
+        let rows: Vec<(String, String, Option<String>)> = {
+            let mut statement = self.conn.prepare("SELECT id, text, detail FROM items")?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM items_fts", [])?;
+        for (id, text, detail) in &rows {
+            let body = match detail
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<ExperienceDetail>(d).ok())
+            {
+                Some(detail) => format!(
+                    "{text} {} {} {} {}",
+                    detail.problem,
+                    detail.solution,
+                    detail.search_keys.join(" "),
+                    detail.envs.join(" ")
+                ),
+                None => text.clone(),
+            };
+            tx.execute(
+                "INSERT INTO items_fts(id, body) VALUES (?1, ?2)",
+                params![id, cjk::segment(&body)],
+            )?;
+        }
+        let dropped = tx.execute(
+            "DELETE FROM vectors WHERE item_id NOT IN (SELECT id FROM items)",
+            [],
+        )? as u32;
+        tx.commit()?;
+        let missing = self.conn.query_row(
+            "SELECT COUNT(*) FROM items WHERE state = 'active'
+             AND id NOT IN (SELECT item_id FROM vectors)",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as u32;
+        Ok((rows.len() as u32, dropped, missing))
     }
 }

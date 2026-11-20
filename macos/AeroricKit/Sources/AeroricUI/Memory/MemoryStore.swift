@@ -28,6 +28,9 @@ public protocol MemoryService {
     func runs() async throws -> LiveMemoryRunsPage
     func models() async throws -> [LiveMemoryModelChoice]
     func extract(taskID: String) async throws -> LiveMemoryRun?
+    /// C3 (2026-11-20): 重试 a row — its failed writes again without the
+    /// model, or (none saved) the session extracted again.
+    func retryRun(_ run: LiveMemoryRun) async throws -> LiveMemoryRun?
     func importNative(path: String, projectID: String?) async throws -> (imported: Int, skipped: Int)
     /// Q4: 整理历史会话 — the plan, then one imported session at a time.
     func historyPlan(projectID: String, sinceMs: UInt64?) async throws -> LiveMemoryHistoryPlan
@@ -66,6 +69,7 @@ extension MemoryService {
     public func runs() async throws -> LiveMemoryRunsPage { LiveMemoryRunsPage() }
     public func models() async throws -> [LiveMemoryModelChoice] { [] }
     public func extract(taskID: String) async throws -> LiveMemoryRun? { nil }
+    public func retryRun(_ run: LiveMemoryRun) async throws -> LiveMemoryRun? { try await extract(taskID: run.taskId) }
     public func importNative(path: String, projectID: String?) async throws -> (imported: Int, skipped: Int) { (0, 0) }
     public func historyPlan(projectID: String, sinceMs: UInt64?) async throws -> LiveMemoryHistoryPlan { LiveMemoryHistoryPlan() }
     public func extractImported(id: String) async throws -> LiveMemoryRun? { nil }
@@ -421,7 +425,7 @@ public final class MemoryStore {
 
     /// 重试 a failed row.
     public func retry(_ row: LiveMemoryRun) async {
-        await run("重新整理") { _ = try await $0.extract(taskID: row.taskId) }
+        await run("重新整理") { _ = try await $0.retryRun(row) }
     }
 
     public func refreshPending() async {

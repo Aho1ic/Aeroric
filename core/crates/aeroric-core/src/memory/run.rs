@@ -11,6 +11,7 @@ use aeroric_protocol::memory::{
 };
 
 use super::extract::{self, Transcript};
+use super::runs::{PendingWrite, Retry};
 use super::{evidence, Memory, MemoryError};
 use crate::settings::model_detect::ChatOnce;
 
@@ -25,6 +26,8 @@ struct Writes {
     canceled: u32,
     first_failure: Option<String>,
     outcomes: Vec<RunOutcome>,
+    /// C3 second step: the failed writes, whole, by their outcome's place.
+    retry: Vec<(usize, PendingWrite)>,
 }
 
 impl Writes {
@@ -316,100 +319,64 @@ impl Memory {
         }
         let run_id = run.id.clone();
         let canceled = || self.cancel_requested(&run_id);
-        if let Some(fact) = &extracted.fact {
-            let sig = self.sig(fact);
-            if canceled() {
-                writes.cancel(RunOutcomeSubject::Fact, sig);
-            } else {
-                let proof = evidence(
-                    Some(session.task_id),
-                    Some("analysis"),
-                    Some(model),
-                    fact,
-                    now_ms,
-                );
-                if writes
-                    .note(
-                        RunOutcomeSubject::Fact,
-                        sig,
-                        self.add_session_fact(session.project_id, fact, proof, now_ms),
-                    )
-                    .is_some()
-                {
-                    run.facts = 1;
-                }
-            }
-        }
         let confidence = if session.verified {
             aeroric_protocol::memory::Confidence::Medium
         } else {
             aeroric_protocol::memory::Confidence::Low
         };
-        for (title, detail) in &extracted.experiences {
-            let sig = self.sig(title);
-            if canceled() {
-                writes.cancel(RunOutcomeSubject::Experience, sig);
-                continue;
-            }
-            let proof = evidence(
+        let analysis = |excerpt: &str| {
+            evidence(
                 Some(session.task_id),
                 Some("analysis"),
                 Some(model),
-                &transcript.text,
+                excerpt,
                 now_ms,
-            );
-            if writes
-                .note(
-                    RunOutcomeSubject::Experience,
-                    sig,
-                    self.add_experience(
-                        session.project_id,
-                        title,
-                        detail,
-                        confidence,
-                        proof,
-                        now_ms,
-                    ),
-                )
-                .is_some()
-            {
-                run.experiences += 1;
-            }
+            )
+        };
+        // C3 second step: every write whole first, so one the store fails
+        // can be made again later without the model.
+        let mut todo: Vec<PendingWrite> = Vec::new();
+        if let Some(fact) = &extracted.fact {
+            todo.push(PendingWrite::Fact {
+                project_id: session.project_id.to_string(),
+                text: fact.to_string(),
+                evidence: analysis(fact),
+            });
         }
-        for candidate in extracted.candidates {
-            let sig = self.sig(&candidate.text);
-            if canceled() {
-                writes.cancel(RunOutcomeSubject::Candidate, sig);
-                continue;
-            }
+        for (title, detail) in &extracted.experiences {
+            todo.push(PendingWrite::Experience {
+                project_id: session.project_id.to_string(),
+                title: title.clone(),
+                detail: detail.clone(),
+                confidence,
+                evidence: analysis(&transcript.text),
+            });
+        }
+        for candidate in extracted.candidates.drain(..) {
             // About the user: every project; a project's convention: this one.
             let project_id =
                 (candidate.kind == MemoryKind::Fact).then(|| session.project_id.to_string());
-            let draft = MemoryDraft {
-                project_id,
-                kind: candidate.kind,
-                category: candidate.category,
-                text: candidate.text,
-                supersedes: candidate.supersedes,
-            };
-            let mut proof = evidence(
-                Some(session.task_id),
-                Some("analysis"),
-                Some(model),
-                &candidate.quote,
-                now_ms,
-            );
+            let mut proof = analysis(&candidate.quote);
             // C1: the message the user said it in, when one message holds it.
             proof.location = super::locate::locate(session.messages, &candidate.quote);
-            if let Some(item) = writes.note(
-                RunOutcomeSubject::Candidate,
-                sig,
-                self.propose(draft, proof, now_ms),
-            ) {
-                if item.state == aeroric_protocol::memory::MemoryState::Pending {
-                    run.candidates += 1;
-                }
+            todo.push(PendingWrite::Candidate {
+                draft: MemoryDraft {
+                    project_id,
+                    kind: candidate.kind,
+                    category: candidate.category,
+                    text: candidate.text,
+                    supersedes: candidate.supersedes,
+                },
+                evidence: proof,
+            });
+        }
+        for write in todo {
+            let sig = self.sig(write.text());
+            if canceled() {
+                writes.cancel(write.subject(), sig);
+                continue;
             }
+            self.write_one(run, &mut writes, write, sig, now_ms);
         }
         let mut notes = Vec::new();
         let was_canceled = writes.canceled > 0 || canceled();
@@ -423,10 +390,29 @@ impl Memory {
                 "已取消：模型的回复没有写入".into()
             });
         }
+        // C3 second step: the failed writes wait, whole, to be made again
+        // without the model (not when the user canceled).
+        let saved = writes.failed > 0
+            && !was_canceled
+            && self
+                .save_retry(
+                    &run.id,
+                    &Retry {
+                        epoch,
+                        writes: std::mem::take(&mut writes.retry),
+                    },
+                    now_ms,
+                )
+                .is_ok();
         if writes.failed > 0 {
             notes.push(format!(
-                "{} 条没写进去，下次整理时重试：{}",
+                "{} 条没写进去，{}：{}",
                 writes.failed,
+                if saved {
+                    "会自动重试，不再调用模型"
+                } else {
+                    "下次整理时重试"
+                },
                 writes.first_failure.as_deref().unwrap_or("存储出错")
             ));
         }
@@ -460,12 +446,152 @@ impl Memory {
             } else {
                 MemoryRunState::Failed
             };
+            if saved {
+                // The session is done with the model; the retry writes
+                // the rest.
+                return self.record(run, session.task_id, &transcript.hash, now_ms);
+            }
             // The transcript stays unmarked so the next trigger writes the
             // rest; `insert` merges what is already there.
             return self.add_run(run).map_err(|e| e.to_string());
         }
         run.state = MemoryRunState::Done;
         self.record(run, session.task_id, &transcript.hash, now_ms)
+    }
+
+    /// One write and its outcome; a failed one is kept to be tried again.
+    fn write_one(
+        &self,
+        run: &mut MemoryRun,
+        writes: &mut Writes,
+        write: PendingWrite,
+        sig: String,
+        now_ms: u64,
+    ) {
+        let subject = write.subject();
+        let index = writes.outcomes.len();
+        if let Some(item) = writes.note(subject, sig, write.apply(self, now_ms)) {
+            match subject {
+                RunOutcomeSubject::Fact => run.facts = 1,
+                RunOutcomeSubject::Experience => run.experiences += 1,
+                RunOutcomeSubject::Candidate => {
+                    if item.state == aeroric_protocol::memory::MemoryState::Pending {
+                        run.candidates += 1;
+                    }
+                }
+            }
+        }
+        if writes.outcomes[index].outcome == RunOutcomeKind::Failed {
+            writes.retry.push((index, write));
+        }
+    }
+
+    /// C3 second step: make the writes a run could not, without asking the
+    /// model again. `Ok(None)` when none wait (a failed call, or kept past
+    /// the retention): the caller extracts the session again instead.
+    pub fn retry_run(&self, run_id: &str, now_ms: u64) -> Result<Option<MemoryRun>, MemoryError> {
+        let mut run = self.run(run_id).ok_or(MemoryError::UnknownItem)?;
+        if !matches!(run.state, MemoryRunState::Partial | MemoryRunState::Failed) {
+            return Err(MemoryError::WrongState);
+        }
+        let Some(retry) = self.load_retry(run_id)? else {
+            return Ok(None);
+        };
+        let texts: Vec<&str> = retry.writes.iter().map(|(_, w)| w.text()).collect();
+        let gone = self.withdrawn_since(retry.epoch, &texts)?;
+        let waiting: HashSet<usize> = retry.writes.iter().map(|(index, _)| *index).collect();
+        // A failed write no longer waiting was forgotten meanwhile.
+        for (index, outcome) in run.outcomes.iter_mut().enumerate() {
+            if outcome.outcome == RunOutcomeKind::Failed && !waiting.contains(&index) {
+                outcome.outcome = RunOutcomeKind::Refused;
+                outcome.reason = Some(MemoryError::Forgotten.to_string());
+            }
+        }
+        let mut writes = Writes::default();
+        let mut withdrawn = 0;
+        for ((index, write), gone) in retry.writes.into_iter().zip(gone) {
+            let sig = run
+                .outcomes
+                .get(index)
+                .map(|o| o.sig.clone())
+                .unwrap_or_else(|| self.sig(write.text()));
+            let outcome = if gone {
+                withdrawn += 1;
+                RunOutcome {
+                    subject: write.subject(),
+                    outcome: RunOutcomeKind::Withdrawn,
+                    sig,
+                    item_id: None,
+                    reason: None,
+                }
+            } else {
+                let waiting = writes.retry.len();
+                self.write_one(&mut run, &mut writes, write, sig, now_ms);
+                let outcome = writes.outcomes.pop().expect("one outcome per write");
+                // Failed again: it keeps its place in the run's outcomes.
+                if writes.retry.len() > waiting {
+                    if let Some((_, write)) = writes.retry.pop() {
+                        writes.retry.push((index, write));
+                    }
+                }
+                outcome
+            };
+            match run.outcomes.get_mut(index) {
+                Some(slot) => *slot = outcome,
+                None => run.outcomes.push(outcome),
+            }
+        }
+        let left = writes.retry;
+        let mut notes: Vec<String> = run
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .split('；')
+            .filter(|note| !note.is_empty() && !note.contains("没写进去"))
+            .map(str::to_string)
+            .collect();
+        if writes.written > 0 {
+            notes.push(format!("重试补写了 {} 条", writes.written));
+        }
+        if withdrawn > 0 {
+            notes.push(format!(
+                "重试前有 {withdrawn} 条相同的记忆被删除、归档或取代，没有写"
+            ));
+        }
+        if !left.is_empty() {
+            notes.push(format!(
+                "{} 条还是没写进去，会再自动重试：{}",
+                left.len(),
+                writes.first_failure.as_deref().unwrap_or("存储出错")
+            ));
+        }
+        run.reason = (!notes.is_empty()).then(|| notes.join("；"));
+        run.failed_writes = left.len() as u32;
+        run.state = if left.is_empty() {
+            MemoryRunState::Done
+        } else if run
+            .outcomes
+            .iter()
+            .any(|o| matches!(o.outcome, RunOutcomeKind::Written | RunOutcomeKind::Merged))
+        {
+            MemoryRunState::Partial
+        } else {
+            MemoryRunState::Failed
+        };
+        if left.is_empty() {
+            self.drop_retry(run_id)?;
+        } else {
+            self.save_retry(
+                run_id,
+                &Retry {
+                    epoch: retry.epoch,
+                    writes: left,
+                },
+                now_ms,
+            )?;
+        }
+        self.add_run(&run)?;
+        Ok(Some(run))
     }
 
     /// C3: a text's signature as a run outcome carries it (the keyed one
@@ -609,8 +735,10 @@ mod tests {
     }
 
     /// R1-1: a store that loses one kind of write reports it and retries.
+    /// C3 second step: the retry makes only that write, without the model,
+    /// and the run's row becomes whole.
     #[test]
-    fn a_failed_write_is_partial_and_the_next_run_finishes_it() {
+    fn a_failed_write_is_partial_and_the_retry_writes_only_it() {
         let memory = rig();
         let messages = talk();
         let reply = || {
@@ -632,16 +760,115 @@ mod tests {
             (first.facts, first.experiences, first.failed_writes),
             (1, 0, 1)
         );
-        assert!(first.reason.as_deref().unwrap().contains("没写进去"));
-        assert_eq!(memory.extracted("t1"), None, "stays unmarked to be retried");
+        assert!(first
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("1 条没写进去，会自动重试，不再调用模型："));
+        assert_eq!(
+            first.outcomes[1].outcome,
+            aeroric_protocol::memory::RunOutcomeKind::Failed
+        );
+        assert!(
+            memory.extracted("t1").is_some(),
+            "the model is not asked again"
+        );
+        assert_eq!(memory.retryable(2), vec![first.id.clone()]);
+
+        // Still failing: it waits again, in its place.
+        let again = memory.retry_run(&first.id, 2).unwrap().unwrap();
+        assert_eq!(again.state, MemoryRunState::Partial);
+        assert!(again
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("1 条还是没写进去，会再自动重试"));
+        assert_eq!(memory.retryable(2), vec![first.id.clone()]);
 
         memory.execute_for_test("DROP TRIGGER boom;");
-        let second = memory
-            .extract_session(session(&messages, "p1", false), None, |_, _| reply(), 2)
+        let before =
+            memory.list(None, None).unwrap().len() + memory.list(Some("p1"), None).unwrap().len();
+        let done = memory.retry_run(&first.id, 3).unwrap().unwrap();
+        assert_eq!(done.id, first.id, "the same row");
+        assert_eq!(done.state, MemoryRunState::Done);
+        assert_eq!(
+            (done.facts, done.experiences, done.failed_writes),
+            (1, 1, 0)
+        );
+        assert_eq!(
+            done.outcomes[1].outcome,
+            aeroric_protocol::memory::RunOutcomeKind::Written
+        );
+        assert_eq!(done.outcomes[1].sig, first.outcomes[1].sig);
+        assert!(done.reason.as_deref().unwrap().contains("重试补写了 1 条"));
+        assert!(!done.reason.as_deref().unwrap().contains("没写进去"));
+        let after =
+            memory.list(None, None).unwrap().len() + memory.list(Some("p1"), None).unwrap().len();
+        assert_eq!(
+            after,
+            before + 1,
+            "only the experience, nothing written twice"
+        );
+        assert!(memory.retryable(4).is_empty());
+        assert_eq!(memory.runs(10).unwrap(), vec![done.clone()]);
+        assert!(matches!(
+            memory.retry_run(&first.id, 5),
+            Err(super::super::MemoryError::WrongState)
+        ));
+    }
+
+    /// C3 second step: a saved write whose words were forgotten meanwhile
+    /// leaves the disk at once; one withdrawn meanwhile is not written.
+    #[test]
+    fn a_waiting_write_follows_forgetting_and_withdrawal() {
+        use aeroric_protocol::memory::RunOutcomeKind;
+        let memory = rig();
+        let messages = talk();
+        memory.execute_for_test(
+            "CREATE TRIGGER boom BEFORE INSERT ON items WHEN NEW.state = 'pending'
+             BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+        );
+        let run = memory
+            .extract_session(session(&messages, "p1", false), None, talk_reply, 1)
             .unwrap();
-        assert_eq!(second.state, MemoryRunState::Done);
-        assert_eq!(second.experiences, 1);
-        assert!(memory.extracted("t1").is_some());
+        assert_eq!(run.failed_writes, 2, "both candidates");
+        memory.execute_for_test("DROP TRIGGER boom;");
+        // One is said by the user and forgotten; the other is said and
+        // archived.
+        let draft = |text: &str, kind| aeroric_protocol::memory::MemoryDraft {
+            project_id: (kind == MemoryKind::Fact).then(|| "p1".to_string()),
+            kind,
+            category: None,
+            text: text.into(),
+            supersedes: None,
+        };
+        let said = memory
+            .remember(
+                draft("回复用简体中文", MemoryKind::Profile),
+                evidence(None, None, None, "/记住", 2),
+                2,
+            )
+            .unwrap();
+        memory.forget(&said.id, 2).unwrap();
+        let body = memory.load_retry(&run.id).unwrap().unwrap();
+        assert_eq!(body.writes.len(), 1, "the forgotten words left the disk");
+        let other = memory
+            .remember(
+                draft("发布前跑 native:check sessions", MemoryKind::Fact),
+                evidence(None, None, None, "/记住", 3),
+                3,
+            )
+            .unwrap();
+        memory.archive(&other.id, true, 3).unwrap();
+        let done = memory.retry_run(&run.id, 4).unwrap().unwrap();
+        assert_eq!(done.state, MemoryRunState::Done);
+        assert_eq!(done.outcomes[3].outcome, RunOutcomeKind::Withdrawn);
+        assert_eq!(
+            done.outcomes[2].outcome,
+            RunOutcomeKind::Refused,
+            "forgotten, not retried"
+        );
+        assert!(memory.attention().unwrap().is_empty(), "nothing came back");
     }
 
     /// R1-1: nothing reached the store: failed, not done.
@@ -669,7 +896,13 @@ mod tests {
             .unwrap();
         assert_eq!(run.state, MemoryRunState::Failed);
         assert!(run.failed_writes > 0);
-        assert_eq!(memory.extracted("t1"), None);
+        // C3 second step: every write waits whole; the model is not asked
+        // again.
+        assert!(memory.extracted("t1").is_some());
+        assert_eq!(
+            memory.load_retry(&run.id).unwrap().unwrap().writes.len(),
+            run.failed_writes as usize
+        );
     }
 
     fn talk() -> Vec<(String, String)> {

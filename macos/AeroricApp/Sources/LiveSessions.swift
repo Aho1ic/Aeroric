@@ -665,6 +665,12 @@ struct HostMemoryService: MemoryService {
         try await client().memoryExtract(taskId: taskID)
     }
 
+    func retryRun(_ run: LiveMemoryRun) async throws -> LiveMemoryRun? {
+        let reply = try await client().memoryCall("memory.runRetry", ["runId": .string(run.id)],
+                                                  timeout: .seconds(180))
+        return LiveMemoryRun.decode(reply["run"])
+    }
+
     func importNative(path: String, projectID: String?) async throws -> (imported: Int, skipped: Int) {
         try await client().memoryImportNative(path: path, projectId: projectID)
     }

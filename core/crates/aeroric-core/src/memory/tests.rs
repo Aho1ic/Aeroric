@@ -464,7 +464,7 @@ fn experiences_are_recalled_counted_and_follow_their_votes() {
         .remember(draft(None, MemoryKind::Profile, "回复用中文"), said("c"), 9)
         .unwrap();
     assert!(memory
-        .profile_for_session(Some("p1"))
+        .profile_for_session(Some("p1"), None)
         .unwrap()
         .contains("回复用中文"));
     let counted = memory.feedback(&said_item.id, true, 10).unwrap();
@@ -594,4 +594,153 @@ fn private_parts_never_reach_the_extraction() {
     assert!(!transcript.text.contains("没关上的标签"));
     assert!(transcript.text.contains("再跑一遍测试"));
     assert_eq!(transcript.user_turns, 2);
+}
+
+/// C3 (2026-11-20): an item recalled or injected again in the same task is
+/// one use; another task is another. Forgetting drops its use rows.
+#[test]
+fn uses_are_counted_once_per_task() {
+    let (memory, _) = rig();
+    memory.set_project_enabled("p1", true).unwrap();
+    let item = memory
+        .remember(
+            draft(Some("p1"), MemoryKind::Fact, "发布前先跑 lint"),
+            said("a"),
+            1,
+        )
+        .unwrap();
+    for _ in 0..10 {
+        let found = memory
+            .recall_in_task("p1", "lint", None, Some("t1"))
+            .unwrap();
+        assert_eq!(found[0].id, item.id);
+    }
+    memory
+        .recall_in_task("p1", "lint", None, Some("t2"))
+        .unwrap();
+    let profile = memory
+        .remember(draft(None, MemoryKind::Profile, "回复用中文"), said("b"), 2)
+        .unwrap();
+    for _ in 0..3 {
+        memory.profile_for_session(Some("p1"), Some("t1"));
+    }
+    memory.profile_for_session(Some("p1"), Some("t2"));
+    let stats = |id: &str| memory.item(id).unwrap().unwrap().stats;
+    assert_eq!(stats(&item.id).retrieved, 2);
+    assert_eq!(stats(&profile.id).injected, 2);
+    // Without a task (the App's search), each call counts, as before.
+    memory.recall("p1", "lint").unwrap();
+    assert_eq!(stats(&item.id).retrieved, 3);
+    memory.forget(&item.id, 3).unwrap();
+    let again = memory
+        .remember(
+            draft(Some("p1"), MemoryKind::Fact, "发布前先跑 clippy"),
+            said("c"),
+            4,
+        )
+        .unwrap();
+    memory
+        .recall_in_task("p1", "clippy", None, Some("t1"))
+        .unwrap();
+    assert_eq!(stats(&again.id).retrieved, 1);
+}
+
+/// C3: an agent's 有用 / 不对 is one vote per item per task — ten votes in
+/// one session do not make an experience trusted.
+#[test]
+fn an_agent_votes_once_per_task() {
+    let (memory, _) = rig();
+    let id = memory
+        .add_experience(
+            "p1",
+            "SSH 超时改用 ConnectTimeout",
+            &aeroric_protocol::memory::ExperienceDetail::default(),
+            aeroric_protocol::memory::Confidence::Low,
+            said("x"),
+            1,
+        )
+        .unwrap()
+        .id;
+    let first = memory
+        .feedback_in_task(&id, true, "t1", 2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.stats.helpful, 1);
+    for at in 3..12 {
+        assert_eq!(memory.feedback_in_task(&id, true, "t1", at).unwrap(), None);
+    }
+    assert_eq!(
+        memory.feedback_in_task(&id, false, "t1", 12).unwrap(),
+        None,
+        "one vote, either way"
+    );
+    let second = memory
+        .feedback_in_task(&id, true, "t2", 13)
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.stats.helpful, 2);
+    assert_ne!(
+        second.confidence,
+        Some(aeroric_protocol::memory::Confidence::High),
+        "two sessions are not three"
+    );
+    assert_eq!(
+        memory.feedback_in_task("mem-none", true, "t1", 14),
+        Err(MemoryError::UnknownItem)
+    );
+}
+
+/// C3: a damaged full-text index is seen, and 重建索引 — a row of its own
+/// in 整理记录, using up nothing — makes search find everything again.
+#[test]
+fn a_broken_index_is_seen_and_rebuilt_as_a_run() {
+    use aeroric_protocol::memory::{MemoryRunKind, MemoryRunState};
+    let (memory, _) = rig();
+    memory.set_project_enabled("p1", true).unwrap();
+    let item = memory
+        .remember(
+            draft(Some("p1"), MemoryKind::Fact, "部署前清空缓存目录"),
+            said("a"),
+            1,
+        )
+        .unwrap();
+    memory
+        .add_experience(
+            "p1",
+            "SSH 超时改用 ConnectTimeout",
+            &aeroric_protocol::memory::ExperienceDetail {
+                problem: "连接卡住".into(),
+                solution: "加 ConnectTimeout".into(),
+                ..Default::default()
+            },
+            aeroric_protocol::memory::Confidence::Low,
+            said("x"),
+            1,
+        )
+        .unwrap();
+    assert!(memory.index_healthy());
+    memory.execute_for_test("DELETE FROM items_fts;");
+    assert!(!memory.index_healthy());
+    assert!(memory.recall("p1", "缓存").unwrap().is_empty());
+
+    let run = memory.rebuild_index(2).unwrap();
+    assert_eq!(
+        (run.kind, run.state),
+        (MemoryRunKind::Reindex, MemoryRunState::Done)
+    );
+    assert_eq!(run.title, "重建索引");
+    assert!(run
+        .reason
+        .as_deref()
+        .unwrap()
+        .starts_with("全文索引重写了 2 条"));
+    assert!(memory.index_healthy());
+    assert_eq!(memory.recall("p1", "缓存").unwrap()[0].id, item.id);
+    assert_eq!(
+        memory.recall("p1", "卡住").unwrap().len(),
+        1,
+        "an experience's detail too"
+    );
+    assert_eq!(memory.runs(10).unwrap(), vec![run]);
+    assert_eq!(memory.counted_since(0), 0, "no model, no allowance");
 }
