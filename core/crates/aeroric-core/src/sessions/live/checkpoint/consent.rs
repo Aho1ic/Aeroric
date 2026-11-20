@@ -42,6 +42,12 @@ const SPLIT: &[char] = &[
 /// agent put it there (a status reminder's own lines are cut off the front).
 pub fn typed_text(text: &str) -> Option<&str> {
     let text = text.trim_start();
+    // H3: the opening Aeroric put in front of the first message is not the
+    // user's; their words follow it.
+    let text = match crate::sessions::live::opening::split_attached(text) {
+        Some((_, typed)) => typed,
+        None => text,
+    };
     let text = match text.strip_prefix("[Aeroric 状态提醒]") {
         Some(rest) => rest.split_once("\n\n").map(|(_, typed)| typed)?,
         None => text,
@@ -241,6 +247,10 @@ mod tests {
             None
         );
         assert_eq!(typed_text("[Aeroric 委派] 提交"), None);
+        // H3: the user's words after an attached opening are theirs.
+        let attached =
+            crate::sessions::live::opening::attach("# Aeroric 能做什么\n说明", "可以推送");
+        assert_eq!(typed_text(&attached), Some("可以推送"));
         assert_eq!(
             typed_text("[Aeroric 状态提醒]\n- 未完成：x\n\n推送"),
             Some("推送")

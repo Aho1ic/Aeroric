@@ -1105,3 +1105,81 @@ async fn an_omp_launch_gets_the_server_and_the_opening_and_closing_ends_its_toke
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// H3 (2026-11-20): a session with no system layer (here a remote omp,
+/// whose driver refuses it) gets the opening — and a brief, when one is
+/// armed — in front of its first message, in the envelope the App shows as
+/// "Aeroric 附加的上下文"; a resume with no message carries none.
+#[tokio::test]
+async fn with_no_system_layer_the_opening_goes_in_front_of_the_first_message() {
+    use crate::sessions::live::omp::driver::{OmpSession, OmpSessionSpec, OmpStart};
+    use crate::sessions::live::opening::{split_attached, ATTACHED_MARKER, PURPOSE_HEADER};
+    use crate::sessions::live::surfaces::Opening;
+    use aeroric_protocol::checkpoint::HandoffReason;
+    let s = setup();
+    let launcher: OmpLauncher = Arc::new(|_: &OmpStart| Err("not started".to_string()));
+    let session: Arc<dyn SessionDriver> = OmpSession::start(
+        OmpSessionSpec {
+            task_id: "r1".into(),
+            agent: "omp".into(),
+            remote: true,
+            ..Default::default()
+        },
+        launcher,
+        Arc::new(Sink::default()) as Arc<dyn LiveStatusSink>,
+        SharedLog::new("r1"),
+        &tokio::runtime::Handle::current(),
+    );
+    let opening = format!("{PURPOSE_HEADER}\n用途");
+
+    let (prompt, said) =
+        s.executor
+            .hand_handoff("r1", &session, Some("修好它".into()), false, Some(&opening));
+    let prompt = prompt.unwrap();
+    assert!(prompt.starts_with(ATTACHED_MARKER), "{prompt}");
+    let (body, typed) = split_attached(&prompt).unwrap();
+    assert_eq!((body, typed), (opening.as_str(), "修好它"));
+    assert_eq!(
+        said,
+        Opening::Refused {
+            brief: false,
+            in_message: true
+        }
+    );
+
+    // A brief rides in the same envelope, after the opening.
+    s.executor.checkpoints().note_prompt("r1", "修好登录");
+    s.executor
+        .checkpoints()
+        .arm("r1", HandoffReason::SourceMove);
+    let (prompt, said) =
+        s.executor
+            .hand_handoff("r1", &session, Some("继续".into()), false, Some(&opening));
+    let prompt = prompt.unwrap();
+    let (body, typed) = split_attached(&prompt).unwrap();
+    assert!(
+        body.starts_with(PURPOSE_HEADER) && body.contains("\n\n---\n\n"),
+        "{body}"
+    );
+    assert_eq!(typed, "继续");
+    assert!(matches!(
+        said,
+        Opening::Refused {
+            brief: true,
+            in_message: true
+        }
+    ));
+
+    // A resume with no message: nothing to carry it.
+    let (prompt, said) = s
+        .executor
+        .hand_handoff("r1", &session, None, true, Some(&opening));
+    assert_eq!(prompt, None);
+    assert_eq!(
+        said,
+        Opening::Refused {
+            brief: false,
+            in_message: false
+        }
+    );
+}

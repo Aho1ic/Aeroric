@@ -82,16 +82,20 @@ fn entry(
                 SupportState::Yes,
                 format!("这次启动从系统层给了开场内容（{chars} 字）"),
             ),
+            // H3: with no system layer the opening (and a brief) goes in
+            // front of the first message as "Aeroric 附加的上下文".
             Opening::Refused { brief, in_message } => {
-                let brief = match (brief, in_message) {
-                    (false, _) => "",
-                    (true, true) => "交接简报放在了第一条消息前，",
-                    (true, false) => "这次恢复没有消息可附，交接简报没给出，",
+                let what = if brief {
+                    "开场白和交接简报"
+                } else {
+                    "开场白"
                 };
-                said(
-                    SupportState::No,
-                    format!("这家没有系统层入口：{brief}开场白（用途、记忆档案、指路）没给"),
-                )
+                let note = if in_message {
+                    format!("这家没有系统层入口：{what}以“Aeroric 附加的上下文”放在了第一条消息前")
+                } else {
+                    format!("这家没有系统层入口：这次恢复没有消息可附，{what}没给出")
+                };
+                said(SupportState::No, note)
             }
             Opening::Nothing => CapabilityEntry {
                 note: Some(match &table.note {

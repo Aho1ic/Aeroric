@@ -68,13 +68,13 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
         (P::Codex, F::SurfaceInstructions) => yes(Some("thread/start 的 developerInstructions")),
         (P::Claude, F::SurfaceInstructions) => yes(Some("--append-system-prompt")),
         (P::Omp, F::SurfaceInstructions) if place == Place::Remote => no(
-            "远端 OMP 读不到这台 Mac 上的开场文件；交接简报放在第一条消息前，开场白（用途、记忆档案、指路）不给",
+            "远端 OMP 读不到这台 Mac 上的开场文件；开场白和交接简报以“Aeroric 附加的上下文”放在第一条消息前",
         ),
         (P::Omp, F::SurfaceInstructions) => {
             yes(Some("--append-system-prompt，内容在会话自己的临时文件里"))
         }
         (P::Dsh, F::SurfaceInstructions) => no(
-            "DSH 的 ACP 没有声明 systemPrompt，没有系统层入口；交接简报放在第一条消息前，开场白（用途、记忆档案、指路）不给",
+            "DSH 的 ACP 没有声明 systemPrompt，没有系统层入口；开场白和交接简报以“Aeroric 附加的上下文”放在第一条消息前",
         ),
         (_, F::SurfaceSkills) if place == Place::Remote => no("Aeroric 不给远端会话挂技能"),
         (P::Codex, F::SurfaceSkills) => yes(Some("项目 .agents/skills 下带标记的副本")),

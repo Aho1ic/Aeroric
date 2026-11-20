@@ -448,17 +448,21 @@ impl StructuredExecutor {
             reason.and_then(|_| self.checkpoints.get(task_id).filter(|cp| !cp.is_empty()));
         let (Some(reason), Some(checkpoint)) = (reason, checkpoint) else {
             // H1: what became of the opening is kept with the launch.
-            let opening = match opening {
-                None => Opening::Nothing,
+            return match opening {
+                None => (prompt, Opening::Nothing),
                 Some(text) if session.set_instructions(text.to_string()) => {
-                    Opening::Taken(text.chars().count())
+                    (prompt, Opening::Taken(text.chars().count()))
                 }
-                Some(_) => Opening::Refused {
-                    brief: false,
-                    in_message: false,
-                },
+                // H3: no system layer: in front of the first message, in an
+                // envelope; a resume with no message carries none.
+                Some(text) => {
+                    let opening = Opening::Refused {
+                        brief: false,
+                        in_message: prompt.is_some(),
+                    };
+                    (prompt.map(|p| super::opening::attach(text, &p)), opening)
+                }
             };
-            return (prompt, opening);
         };
         let brief = super::checkpoint::brief::handoff_brief(&checkpoint, reason);
         if let Some(log) = self.registry.log(task_id) {
@@ -471,7 +475,8 @@ impl StructuredExecutor {
             );
             self.sink.update(&update);
         }
-        let instructions = match opening {
+        let opening_text = opening;
+        let instructions = match opening_text {
             Some(opening) => format!("{opening}\n\n---\n\n{brief}"),
             None => brief.clone(),
         };
@@ -483,7 +488,15 @@ impl StructuredExecutor {
             brief: true,
             in_message: prompt.is_some(),
         };
-        (prompt.map(|p| format!("{brief}\n---\n\n{p}")), opening)
+        // H3: the opening and the brief together, in the same envelope.
+        let context = match opening_text {
+            Some(text) => format!("{text}\n\n---\n\n{brief}"),
+            None => brief,
+        };
+        (
+            prompt.map(|p| super::opening::attach(&context, &p)),
+            opening,
+        )
     }
 
     /// B4′: give every session the context server, started as

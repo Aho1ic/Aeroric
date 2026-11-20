@@ -58,7 +58,7 @@ B5 一次做完太大。owner 2026-10-31 定了 Q-M1–Q-M8：拆成三批，先
 - 画像在会话启动或恢复时交给模型：
   - `executor.hand_brief` 先拼出画像，再把它放在交接清单前面，合成一段 instructions；
   - Claude 走 `--append-system-prompt`，Codex 走 `developerInstructions`；
-  - 驱动不支持 instructions 时，画像不会塞进用户消息。
+  - 驱动不支持 instructions 时，画像不会塞进用户消息。（2026-11-20 H3 改动了这一条，见 [H3 第三步笔记](2026-11-20-h3-attached-context.md)：没有系统层的 Harness，开场白（含画像）装进“Aeroric 附加的上下文”信封，附在第一条消息前，界面上不显示为用户的话。这是 [各 Harness 原生融合](../../proposed/architecture/2026-11-16-harness-native-capabilities.md) §8 第 2 问定的最后手段。）
 - 画像的内容：
   - 全局的 profile 一律带上；
   - 项目开启了记忆，再带上这个项目的 profile 和 fact；

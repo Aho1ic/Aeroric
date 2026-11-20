@@ -115,6 +115,21 @@ struct MessageBubble: View {
     static func alignment(role: String) -> Alignment { role == "user" ? .trailing : .leading }
 
     var body: some View {
+        // H3: what Aeroric put in front of the person's first message is
+        // shown above it, folded, not as their words.
+        let split = isUser ? AttachedContext.split(content) : nil
+        VStack(alignment: .trailing, spacing: AeroricSpace.xs) {
+            if let split {
+                AttachedContextRow(text: split.context)
+                    .frame(maxWidth: columnWidth * Self.userWidthRatio, alignment: .trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            bubble(split?.rest ?? content)
+        }
+    }
+
+    @ViewBuilder
+    private func bubble(_ content: [SessionContent]) -> some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
             ForEach(Array(content.enumerated()), id: \.offset) { _, block in
                 ContentBlock(block: block)
@@ -149,5 +164,59 @@ struct OpensAtLatest: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// H3 (2026-11-20): the envelope Aeroric puts in front of the first message
+/// of a session with no system layer (`opening.rs` in core): its first
+/// line opens it, `[Aeroric 附加的上下文结束]` closes it, the person's own
+/// words follow. Its body is escaped, so it cannot close early.
+public enum AttachedContext {
+    public static let marker = "[Aeroric 附加的上下文]"
+    public static let end = "[Aeroric 附加的上下文结束]"
+
+    /// The envelope's body and the message after it, or nil.
+    public static func split(text: String) -> (context: String, rest: String)? {
+        guard text.hasPrefix(marker),
+              let close = text.range(of: "\n" + end) else { return nil }
+        let head = text[text.startIndex..<close.lowerBound]
+        guard let firstBreak = head.firstIndex(of: "\n") else { return nil }
+        let context = String(head[head.index(after: firstBreak)...])
+        let rest = String(text[close.upperBound...]).trimmingCharacters(in: .newlines)
+        return (context, rest)
+    }
+
+    /// For a message whose first text block starts with the envelope: the
+    /// envelope's body, and the content with that block cut to the person's words.
+    public static func split(_ content: [SessionContent]) -> (context: String, rest: [SessionContent])? {
+        guard let first = content.firstIndex(where: { if case .text = $0 { return true }; return false }),
+              case let .text(text) = content[first],
+              let parts = split(text: text) else { return nil }
+        var rest = content
+        if parts.rest.isEmpty {
+            rest.remove(at: first)
+        } else {
+            rest[first] = .text(text: parts.rest)
+        }
+        return (parts.context, rest)
+    }
+}
+
+/// H3: the attached opening, folded under one line.
+struct AttachedContextRow: View {
+    let text: String
+    @State private var expanded = false
+
+    var body: some View {
+        FlatDisclosureRow(symbol: "paperclip", title: "Aeroric 附加的上下文",
+                          summary: "\(text.count) 字 · 这个 Agent 没有系统层，开场内容随第一条消息发出",
+                          expanded: $expanded, identifier: "session.attached-context") {
+            Text(text)
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textSecondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .help("Aeroric 在会话开始时附上的说明和你确认过的偏好；不是你这一轮说的话")
     }
 }

@@ -127,6 +127,36 @@ pub fn compose(purpose: &str, profile: Option<&str>, pointers: Option<&str>) -> 
     }
 }
 
+/// H3 (2026-11-20): a harness with no system layer (DSH) gets the opening
+/// in front of its first message, in an envelope (`envelope.rs`) the App
+/// shows as "Aeroric 附加的上下文", not as the user's words. The body is
+/// escaped, so nothing in it can close the envelope early.
+pub const ATTACHED_MARKER: &str = "[Aeroric 附加的上下文]";
+pub const ATTACHED_END: &str = "[Aeroric 附加的上下文结束]";
+
+/// `context` in its envelope, then `prompt`.
+pub fn attach(context: &str, prompt: &str) -> String {
+    let opened = super::envelope::wrap(
+        ATTACHED_MARKER,
+        "Aeroric",
+        "这个 Agent 没有系统层，开场内容放在第一条消息前",
+        super::envelope::Authority::Background,
+        context,
+    );
+    format!("{}\n{ATTACHED_END}\n\n{prompt}", opened.trim_end())
+}
+
+/// The envelope's body and the message after it, for a message that
+/// starts with one.
+pub fn split_attached(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix(ATTACHED_MARKER)?;
+    let body_start = rest.find('\n')? + 1;
+    let end = rest.find(&format!("\n{ATTACHED_END}"))?;
+    let body = rest.get(body_start..end).unwrap_or_default();
+    let after = &rest[end + 1 + ATTACHED_END.len()..];
+    Some((body, after.trim_start_matches('\n')))
+}
+
 /// H3 (2026-11-20): the context bill's split of a text that holds the
 /// opening (`text` from [`PURPOSE_HEADER`] on): `(kind, chars)` per part in
 /// the bill's kinds — the purpose and the pointers are `instructions`, the
