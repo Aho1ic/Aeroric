@@ -669,6 +669,56 @@ fn only_local_routes_get_the_local_context_server() {
     assert!(!Route::RemoteOmp(remote).runs_locally());
 }
 
+/// H6: a trusted pack's MCP server reaches Codex's `thread/start` beside the
+/// context server; an untrusted pack's does not; the kept list says both.
+#[tokio::test]
+async fn a_launch_is_given_the_trusted_packs_servers() {
+    use aeroric_protocol::packs::{Pack, PackKind, PackServer};
+    let mut s = setup();
+    let data = std::env::temp_dir().join(format!("aeroric-exec-packs-{}", uuid::Uuid::new_v4()));
+    let pack = |id: &str, confirmed: bool, server: &str| Pack {
+        id: id.into(),
+        name: id.into(),
+        confirmed,
+        enabled: true,
+        mcp_servers: vec![PackServer {
+            name: server.into(),
+            command: format!("{server}-mcp"),
+            enabled: true,
+            ..PackServer::default()
+        }],
+        ..Pack::default()
+    };
+    for p in [pack("gh", true, "github"), pack("odd", false, "odd")] {
+        let at = data.join("packs").join(&p.id);
+        std::fs::create_dir_all(&at).unwrap();
+        std::fs::write(at.join("pack.json"), serde_json::to_string(&p).unwrap()).unwrap();
+    }
+    s.executor.tool_log().set_dir(data.clone());
+    s.executor.set_packs_dir(data.clone());
+    s.executor
+        .set_context_program("aeroric-cli".into(), "/d".into());
+    s.executor
+        .launch(&launch("t1", ProtocolFamily::Codex))
+        .unwrap();
+    let mut peer = launched(&mut s.peers).await;
+    peer.handshake().await;
+    let start = peer.expect("thread/start").await;
+    let servers = &start["params"]["config"]["mcp_servers"];
+    assert!(servers["aeroric_context"].is_object(), "{start}");
+    assert_eq!(servers["github"]["command"], "github-mcp");
+    assert!(servers.get("odd").is_none());
+    let kept = s.executor.tool_log().latest("t1").unwrap();
+    let items: Vec<(&str, bool)> = kept
+        .packs
+        .iter()
+        .filter(|i| i.kind == PackKind::McpServer)
+        .map(|i| (i.name.as_str(), i.ready))
+        .collect();
+    assert_eq!(items, [("github", true), ("odd", false)]);
+    std::fs::remove_dir_all(&data).ok();
+}
+
 /// C8 (2026-11-20): the tool list kept for a launch matches what the
 /// session was really started with — the context server in Codex's
 /// `thread/start` exactly when the list says injected; a launch with no

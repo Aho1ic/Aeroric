@@ -736,3 +736,22 @@ async fn an_answer_whose_connection_closed_ends_unsent() {
         SessionUpdateKind::PermissionResolved { id, .. } if id == "perm1"
     )));
 }
+
+/// H6: the context server and the packs' servers share one `--mcp-config`,
+/// whichever is given first.
+#[test]
+fn pack_servers_and_the_context_server_share_the_mcp_config() {
+    let mut config = None;
+    super::add_mcp_server(&mut config, "github", serde_json::json!({"command": "gh"}));
+    super::add_mcp_server(
+        &mut config,
+        "aeroric_context",
+        serde_json::json!({"command": "a"}),
+    );
+    let doc: serde_json::Value = serde_json::from_str(config.as_deref().unwrap()).unwrap();
+    assert_eq!(doc["mcpServers"]["github"]["command"], "gh");
+    assert_eq!(doc["mcpServers"]["aeroric_context"]["command"], "a");
+    let mut broken = Some("not json".to_string());
+    super::add_mcp_server(&mut broken, "x", serde_json::json!({}));
+    assert_eq!(broken.as_deref(), Some(r#"{"mcpServers":{"x":{}}}"#));
+}

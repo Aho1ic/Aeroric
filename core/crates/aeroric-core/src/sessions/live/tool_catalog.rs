@@ -142,6 +142,7 @@ pub fn catalog(harness: &str, injection: Injection, offered: Offered, at_ms: u64
         injected: injection == Injection::Injected,
         reason,
         tools,
+        packs: Vec::new(),
     }
 }
 

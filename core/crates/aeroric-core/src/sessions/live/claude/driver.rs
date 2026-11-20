@@ -231,8 +231,23 @@ impl SessionDriver for ClaudeSession {
         server: crate::sessions::live::context_server::ContextServer,
     ) -> bool {
         use crate::sessions::live::context_server::SERVER_NAME;
-        let config = serde_json::json!({"mcpServers": {SERVER_NAME: server.entry()}});
-        self.state.lock().mcp_config = Some(config.to_string());
+        let mut state = self.state.lock();
+        add_mcp_server(&mut state.mcp_config, SERVER_NAME, server.entry());
+        true
+    }
+
+    /// H6: the packs' servers go in the same `--mcp-config`; their tools
+    /// ask for permission as any other (only Aeroric's are pre-allowed).
+    fn set_pack_servers(&self, servers: Vec<aeroric_protocol::packs::PackServer>) -> bool {
+        let mut state = self.state.lock();
+        for server in servers {
+            let entry = serde_json::json!({
+                "command": server.command,
+                "args": server.args,
+                "env": server.env,
+            });
+            add_mcp_server(&mut state.mcp_config, &server.name, entry);
+        }
         true
     }
 
@@ -1029,6 +1044,20 @@ impl Actor {
             });
         }
     }
+}
+
+/// Put one server in an `--mcp-config` document, keeping the others.
+fn add_mcp_server(config: &mut Option<String>, name: &str, entry: serde_json::Value) {
+    let mut doc: serde_json::Value = config
+        .as_deref()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !doc["mcpServers"].is_object() {
+        doc["mcpServers"] = serde_json::json!({});
+    }
+    doc["mcpServers"][name] = entry;
+    *config = Some(doc.to_string());
 }
 
 #[cfg(test)]

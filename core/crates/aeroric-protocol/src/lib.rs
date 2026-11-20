@@ -21,6 +21,7 @@ pub mod isolated_copy;
 pub mod legacy_cleanup;
 pub mod live_capability;
 pub mod memory;
+pub mod packs;
 pub mod project;
 pub mod review;
 pub mod schedule;

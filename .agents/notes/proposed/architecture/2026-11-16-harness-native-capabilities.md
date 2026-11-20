@@ -244,6 +244,8 @@ Aeroric 是各 Harness 的上级进程，结构化事件流本来就经过宿主
 
 #### H6 能力包：插件和 MCP 的统一投影
 
+2026-11-21 第一步已实现，见 [H6 第一步笔记](../../implemented/feature/2026-11-21-h6-capability-packs-mcp.md)：能力包清单、信任判定和投影计划；包里的 MCP 服务器按会话投到四族（第 1、3 条的服务器部分，第 5 条的“未注入及原因”）。第二步投技能、角色、命令、事件处理（第 2 条其余各格）；第三步做管理界面和接口，并处理 OMP 自己导入的同名服务器（第 4 条）。
+
 **用户会看到：** 在 Aeroric 里装一个插件或加一个 MCP 服务器，所有 Harness 的新会话都能用，不需要到每家的配置里再配一遍；不支持的那家写明原因。
 
 **现状：** `extensions/` 里是分散的守卫和校验：来源信任（[`trust.rs`](../../../../core/crates/aeroric-core/src/extensions/trust.rs)）、MCP 配置校验和掩码（`mcp.rs`）、DSH 插件版本映射（`plugins.rs`）、技能路径守卫（`skills.rs`）、OMP Hook 扩展名守卫（`hooks.rs`）。唯一成形的投影是内置技能的三种挂载（`builtin_skills.rs:707` 的 `Mount`）。

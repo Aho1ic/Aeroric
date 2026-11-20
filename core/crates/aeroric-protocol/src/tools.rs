@@ -92,4 +92,7 @@ pub struct ToolLaunch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub tools: Vec<EffectiveTool>,
+    /// H6: each capability pack item, given to this launch or why not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packs: Vec<crate::packs::PackItem>,
 }

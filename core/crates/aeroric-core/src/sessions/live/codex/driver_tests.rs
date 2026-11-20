@@ -1106,3 +1106,13 @@ async fn a_held_answer_wins_once_and_ends_unsent_when_codex_exits() {
         .iter()
         .any(|a| matches!(a, SessionUpdateKind::PermissionResolved { .. })));
 }
+
+/// H6: the packs' servers go beside the context server in the session config.
+#[test]
+fn pack_servers_go_beside_the_context_server() {
+    let mut config = Some(json!({"mcp_servers": {"aeroric_context": {"required": true}}}));
+    super::add_mcp_server(&mut config, "github", json!({"command": "gh"}));
+    let config = config.unwrap();
+    assert_eq!(config["mcp_servers"]["aeroric_context"]["required"], true);
+    assert_eq!(config["mcp_servers"]["github"]["command"], "gh");
+}

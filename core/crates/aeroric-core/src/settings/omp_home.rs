@@ -434,9 +434,123 @@ pub fn declare_context_server(
     Ok(overlay)
 }
 
+/// H6: which `mcp.json` servers Aeroric wrote from capability packs.
+pub const PACK_SERVERS_LEDGER: &str = "aeroric-pack-servers.json";
+
+/// H6: declare the capability packs' MCP servers in `home`'s `mcp.json`.
+/// Aeroric replaces and removes only the servers its ledger says it wrote;
+/// a server of the same name it did not write stays, and is returned.
+pub fn declare_pack_servers(
+    home: &std::path::Path,
+    servers: &[aeroric_protocol::packs::PackServer],
+) -> Result<Vec<String>, String> {
+    let ledger_path = home.join(PACK_SERVERS_LEDGER);
+    let ours: Vec<String> = fs::read_to_string(&ledger_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    if servers.is_empty() && ours.is_empty() {
+        return Ok(Vec::new());
+    }
+    crate::settings::ensure_private_dir(home)?;
+    let mcp_path = home.join("mcp.json");
+    let raw = fs::read_to_string(&mcp_path).unwrap_or_default();
+    let mut doc: serde_json::Value = if raw.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(&raw)
+            .map_err(|e| format!("{} 不是有效的 JSON，没有改动：{e}", mcp_path.display()))?
+    };
+    let Some(root) = doc.as_object_mut() else {
+        return Err(format!("{} 不是 JSON 对象，没有改动", mcp_path.display()));
+    };
+    let table = root
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(table) = table.as_object_mut() else {
+        return Err(format!(
+            "{} 的 mcpServers 不是对象，没有改动",
+            mcp_path.display()
+        ));
+    };
+    let before = table.clone();
+    for name in &ours {
+        if !servers.iter().any(|s| &s.name == name) {
+            table.remove(name);
+        }
+    }
+    let mut written = Vec::new();
+    let mut kept = Vec::new();
+    for server in servers {
+        if table.contains_key(&server.name) && !ours.contains(&server.name) {
+            kept.push(server.name.clone());
+            continue;
+        }
+        table.insert(
+            server.name.clone(),
+            serde_json::json!({
+                "command": server.command,
+                "args": server.args,
+                "env": server.env,
+            }),
+        );
+        written.push(server.name.clone());
+    }
+    if *table != before {
+        let text = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+        crate::settings::atomic_write_private(&mcp_path, &format!("{text}\n"))?;
+    }
+    if written != ours {
+        let text = serde_json::to_string(&written).map_err(|e| e.to_string())?;
+        crate::settings::atomic_write_private(&ledger_path, &text)?;
+    }
+    Ok(kept)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// H6: pack servers sit beside the context server; Aeroric removes only
+    /// the ones it wrote, and a server of the same name it did not write stays.
+    #[test]
+    fn pack_servers_are_declared_and_only_ours_are_removed() {
+        use aeroric_protocol::packs::PackServer;
+        let home = std::env::temp_dir().join(format!("aeroric-omp-packs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join("mcp.json"),
+            r#"{"mcpServers": {"aeroric_context": {"command": "a"}, "linear": {"command": "mine"}}}"#,
+        )
+        .unwrap();
+        let server = |name: &str| PackServer {
+            name: name.into(),
+            command: format!("{name}-mcp"),
+            env: [("GH_TOKEN".to_string(), "t".to_string())].into(),
+            enabled: true,
+            ..PackServer::default()
+        };
+        let kept = declare_pack_servers(&home, &[server("github"), server("linear")]).unwrap();
+        assert_eq!(kept, ["linear"], "the user's own stays");
+        let read = || -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(home.join("mcp.json")).unwrap()).unwrap()
+        };
+        let doc = read();
+        assert_eq!(doc["mcpServers"]["github"]["command"], "github-mcp");
+        assert_eq!(doc["mcpServers"]["github"]["env"]["GH_TOKEN"], "t");
+        assert_eq!(doc["mcpServers"]["linear"]["command"], "mine");
+        assert_eq!(doc["mcpServers"]["aeroric_context"]["command"], "a");
+
+        assert!(declare_pack_servers(&home, &[]).unwrap().is_empty());
+        let doc = read();
+        assert!(doc["mcpServers"].get("github").is_none(), "ours goes");
+        assert_eq!(doc["mcpServers"]["linear"]["command"], "mine");
+        assert!(doc["mcpServers"].get("aeroric_context").is_some());
+        let none = std::env::temp_dir().join(format!("aeroric-omp-none-{}", uuid::Uuid::new_v4()));
+        assert!(declare_pack_servers(&none, &[]).unwrap().is_empty());
+        assert!(!none.exists(), "nothing to do, nothing made");
+        std::fs::remove_dir_all(&home).ok();
+    }
 
     #[test]
     fn config_marker_parses_version() {

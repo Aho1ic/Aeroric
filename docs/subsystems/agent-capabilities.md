@@ -182,7 +182,35 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
    - ACP 规范原文：`session/new`、`session/load`、`session/resume` 可以带可选的 `systemPrompt`，前提是 Agent 声明了 `sessionCapabilities.systemPrompt`；`mode` 必填，有 `append`（追加）和 `override`（替换，需另外声明 `mode.override`）两种；
    - 规范要求所有 Agent 都支持 stdio 的 MCP 服务器。
 
-## 7. 具名阻塞
+## 7. 能力包（H6，2026-11-21）
+
+一个能力包在 Aeroric 里描述一次，每次启动按各家的原生形式投影过去。包放在 `<数据目录>/packs/<id>/pack.json`，技能文件夹在它旁边；清单格式是协议里的 `packs::Pack`，有五类内容：技能、MCP 服务器、角色、命令、事件处理。
+
+**信任。** 内置包或官方市场的包在已知版本上可信，其余的要用户确认来源（清单里的 `confirmed`）。没有确认的包，MCP 服务器和事件处理都不投影，因为它们会运行命令。
+
+**第一步（2026-11-21）只投影 MCP 服务器**，四族都接：
+
+| Harness | 写到哪里 |
+|---|---|
+| Claude | 本次启动的 `--mcp-config`，和 Aeroric 工具服务器在同一份配置里。配置写进本进程的私有文件（0600），进程结束时删掉，不放命令行参数，因为里面可能有服务器的密钥 |
+| Codex | `thread/start` 的 `config.mcp_servers` |
+| OMP | 受管目录的 `mcp.json`。Aeroric 在旁边的 `aeroric-pack-servers.json` 里记下自己写了哪些，只替换和删除这些；同名但不是 Aeroric 写的服务器原样保留 |
+| ACP（DSH 等） | `session/new`、`session/resume` 的 `mcpServers` |
+
+以下几种服务器不投影，每一项都记下原因：
+
+- 包或服务器已停用；
+- 包未受信任；
+- 远端会话：命令在这台 Mac 上，远端跑不了；
+- 名字不合规，或和 Aeroric 自己的 `aeroric_context` 重名；
+- 命令为空；
+- 名字已被排在前面的包占用（按包 id 排序，先到先得）。
+
+包里的工具和其他服务器的工具一样，要过权限；只有 Aeroric 自己的工具事先放行。
+
+**记在哪里。** 每次启动的工具清单（`session.capabilities` 的 `tools`）多一个 `packs`，逐项写给了没有、给到哪里，或为什么没给。包里的技能、角色、命令、事件处理这一步还没有投影，清单里如实写“还没有投影”。读不了的包（清单坏了、id 和文件夹名不一致）跳过，并写进日志。
+
+## 8. 具名阻塞
 
 - `GAP-AP7-EXTERNAL`:ACP 对端、OAuth 真实账号、媒体 provider 的线上验证需要用户
   授权与凭据。代码侧已实现 fail-closed 语义(版本交集、越界目录拒绝、不支持音频即

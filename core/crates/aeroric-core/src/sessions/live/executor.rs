@@ -219,6 +219,8 @@ pub struct StructuredExecutor {
     /// B4′: how to start the context server (`program`, `data_dir`); unset
     /// gives sessions none (tests, and hosts that opt out).
     context_program: Mutex<Option<(String, String)>>,
+    /// H6: the data folder whose `packs/` each launch is given from.
+    packs_dir: Mutex<Option<std::path::PathBuf>>,
     context_tokens: Arc<super::context_server::ContextTokens>,
     runtime: tokio::runtime::Handle,
     registry: Arc<DriverRegistry>,
@@ -331,6 +333,7 @@ impl StructuredExecutor {
             tool_log: Arc::default(),
             surface_log: Arc::default(),
             context_program: Mutex::new(None),
+            packs_dir: Mutex::new(None),
             context_tokens: Arc::default(),
             runtime: runtime.clone(),
             registry,
@@ -503,6 +506,40 @@ impl StructuredExecutor {
     /// `program --data-dir data_dir mcp-context`.
     pub fn set_context_program(&self, program: String, data_dir: String) {
         *self.context_program.lock() = Some((program, data_dir));
+    }
+
+    /// H6: give every launch on this Mac the capability packs under
+    /// `<data_dir>/packs/`.
+    pub fn set_packs_dir(&self, data_dir: std::path::PathBuf) {
+        *self.packs_dir.lock() = Some(data_dir);
+    }
+
+    /// H6: plan the packs for this launch and hand the driver its servers;
+    /// every item, given or not, with why.
+    fn give_packs(
+        &self,
+        route: &Route,
+        session: &Arc<dyn SessionDriver>,
+    ) -> Vec<aeroric_protocol::packs::PackItem> {
+        use crate::extensions::packs;
+        let Some(data_dir) = self.packs_dir.lock().clone() else {
+            return Vec::new();
+        };
+        let (found, broken) = packs::load(&data_dir);
+        for (folder, why) in broken {
+            eprintln!("[aeroric] capability pack {folder} skipped: {why}");
+        }
+        let mut plan = packs::plan(
+            &found,
+            packs::Target {
+                family: route.family(),
+                remote: !route.runs_locally(),
+            },
+        );
+        if !plan.servers.is_empty() && !session.set_pack_servers(plan.servers) {
+            packs::refused(&mut plan.items, route.family());
+        }
+        plan.items
     }
 
     pub fn context_tokens(&self) -> &Arc<super::context_server::ContextTokens> {
@@ -904,15 +941,14 @@ impl StructuredExecutor {
         } else {
             super::tool_catalog::Injection::Unsupported
         };
-        self.tool_log.note(
-            &spec.task_id,
-            super::tool_catalog::catalog(
-                route.harness(),
-                injection,
-                self.offered_tools(&spec.project_id),
-                crate::clock::now_ms_u64(),
-            ),
+        let mut tools = super::tool_catalog::catalog(
+            route.harness(),
+            injection,
+            self.offered_tools(&spec.project_id),
+            crate::clock::now_ms_u64(),
         );
+        tools.packs = self.give_packs(&route, &session);
+        self.tool_log.note(&spec.task_id, tools);
         self.registry
             .insert(&spec.task_id, Arc::clone(&session), log);
         (session, injection)

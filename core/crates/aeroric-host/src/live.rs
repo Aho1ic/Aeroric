@@ -878,6 +878,10 @@ fn omp_aeroric_extras(
             overlay.to_string_lossy().into_owned(),
         ]);
     }
+    // H6: the capability packs' servers, beside it (and ours that went, removed).
+    for name in aeroric_core::settings::omp_home::declare_pack_servers(home, &start.pack_servers)? {
+        eprintln!("[aeroric] omp: a server named {name} is already in the managed mcp.json and was not Aeroric's; left as it is");
+    }
     let Some(text) = start.append_system.as_deref() else {
         return Ok(None);
     };
@@ -1149,22 +1153,53 @@ fn claude_launcher(context: Arc<CoreContext>, key: ClaudeKey) -> ClaudeLauncher 
                 }
             }
         }
-        match spawn_checked(&spec, claude_version_supported, &args, "Claude Code") {
-            Ok((transport, guard)) => Ok((
-                transport,
-                guard.map(|guard| match revoke {
-                    Some(revoke) => guard.with_cleanup(revoke),
-                    None => guard,
-                }),
-            )),
+        // H6: the MCP config can hold a pack server's keys: a file of this
+        // process's own (0600), never argv.
+        let mcp_file = match private_mcp_config(context.paths.data_dir(), &mut args) {
+            Ok(file) => file,
             Err(reason) => {
                 if let Some(revoke) = revoke {
                     revoke();
                 }
+                return Err(reason);
+            }
+        };
+        let cleanup = move || {
+            if let Some(revoke) = revoke {
+                revoke();
+            }
+            remove_opening(mcp_file);
+        };
+        match spawn_checked(&spec, claude_version_supported, &args, "Claude Code") {
+            Ok((transport, guard)) => {
+                Ok((transport, guard.map(|guard| guard.with_cleanup(cleanup))))
+            }
+            Err(reason) => {
+                cleanup();
                 Err(reason)
             }
         }
     })
+}
+
+/// H6: move `--mcp-config`'s JSON into a private file and point the flag at
+/// it; returns the file, to remove when the process goes.
+fn private_mcp_config(
+    data_dir: &std::path::Path,
+    args: &mut [String],
+) -> Result<Option<std::path::PathBuf>, String> {
+    let Some(at) = args.iter().position(|a| a == "--mcp-config") else {
+        return Ok(None);
+    };
+    let Some(value) = args.get_mut(at + 1) else {
+        return Ok(None);
+    };
+    let dir = data_dir.join("tmp").join("claude-mcp");
+    aeroric_core::settings::ensure_private_dir(&dir)?;
+    let file = dir.join(format!("{}.json", uuid::Uuid::new_v4().simple()));
+    aeroric_core::settings::atomic_write_private(&file, value)?;
+    *value = file.to_string_lossy().into_owned();
+    Ok(Some(file))
 }
 
 /// The flags the Claude Agent SDK starts Claude Code with, minus its isolation
@@ -1393,6 +1428,36 @@ mod linked_folder_args {
             .position(|a| a == "--allowedTools")
             .unwrap();
         assert_eq!(with_context[at + 1], "mcp__aeroric_context");
+    }
+
+    /// H6: Claude's MCP config (which may hold a pack server's keys) goes
+    /// to a private file; the flag points at it.
+    #[test]
+    fn claude_gets_its_mcp_config_as_a_private_file() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-claude-mcp-{}", uuid::Uuid::new_v4()));
+        let config =
+            r#"{"mcpServers":{"github":{"command":"gh-mcp","env":{"GH_TOKEN":"secret"}}}}"#;
+        let mut args = vec![
+            "--verbose".to_string(),
+            "--mcp-config".into(),
+            config.into(),
+        ];
+        let file = private_mcp_config(&root, &mut args)
+            .unwrap()
+            .expect("a file");
+        assert_eq!(args[2], file.to_string_lossy());
+        assert!(!args.iter().any(|a| a.contains("secret")));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), config);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let mut none = vec!["--verbose".to_string()];
+        assert_eq!(private_mcp_config(&root, &mut none).unwrap(), None);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// H2 (2026-11-20): an omp start gets the opening as a 0600 file of its

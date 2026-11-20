@@ -158,6 +158,11 @@ pub trait SessionDriver: Send + Sync {
     fn set_context_server(&self, _server: context_server::ContextServer) -> bool {
         false
     }
+    /// H6: capability packs' MCP servers for the session's next start, beside
+    /// the context server. False when this harness cannot be given them.
+    fn set_pack_servers(&self, _servers: Vec<aeroric_protocol::packs::PackServer>) -> bool {
+        false
+    }
     /// Forget a remembered "always allow in this session" grant.
     fn revoke_grant(&self, _subject: &str) -> Result<(), DriverError> {
         Err(DriverError::Unsupported(

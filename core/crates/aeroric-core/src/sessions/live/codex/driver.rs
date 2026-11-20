@@ -260,7 +260,18 @@ impl SessionDriver for CodexSession {
         // Aeroric's own memory, board and delegations; the user approves
         // what a delegated child does in that child.
         entry["default_tools_approval_mode"] = json!("approve");
-        self.state.lock().config = Some(json!({"mcp_servers": {SERVER_NAME: entry}}));
+        add_mcp_server(&mut self.state.lock().config, SERVER_NAME, entry);
+        true
+    }
+
+    /// H6: the packs' servers go in the same session `config`. Optional
+    /// and asked about as Codex asks for any server's tools.
+    fn set_pack_servers(&self, servers: Vec<aeroric_protocol::packs::PackServer>) -> bool {
+        let mut state = self.state.lock();
+        for server in servers {
+            let entry = json!({"command": server.command, "args": server.args, "env": server.env});
+            add_mcp_server(&mut state.config, &server.name, entry);
+        }
         true
     }
 
@@ -1339,6 +1350,18 @@ fn with_writable_roots(mut policy: Value, extra_dirs: &[String]) -> Value {
         policy["writableRoots"] = json!(extra_dirs);
     }
     policy
+}
+
+/// Put one server in the session `config`'s `mcp_servers`, keeping the others.
+fn add_mcp_server(config: &mut Option<Value>, name: &str, entry: Value) {
+    let doc = config.get_or_insert_with(|| json!({}));
+    if !doc.is_object() {
+        *doc = json!({});
+    }
+    if !doc["mcp_servers"].is_object() {
+        doc["mcp_servers"] = json!({});
+    }
+    doc["mcp_servers"][name] = entry;
 }
 
 #[cfg(test)]

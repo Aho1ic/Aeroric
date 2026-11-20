@@ -27,6 +27,9 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     live.executor
         .surface_log()
         .set_dir(live.context.paths.data_dir().to_path_buf());
+    // H6: each launch on this Mac is given the capability packs' servers.
+    live.executor
+        .set_packs_dir(live.context.paths.data_dir().to_path_buf());
     let weak = Arc::downgrade(live);
     logins.set_resolver(move |task| weak.upgrade().and_then(|live| login_key(&live, task)));
     set.register(

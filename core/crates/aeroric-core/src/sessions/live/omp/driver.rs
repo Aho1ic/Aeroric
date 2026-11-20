@@ -50,6 +50,9 @@ pub struct OmpStart {
     /// H2: the Aeroric context server. The host declares it in the managed
     /// home's `mcp.json` and puts the token in this process's environment.
     pub context: Option<crate::sessions::live::context_server::ContextServer>,
+    /// H6: the capability packs' MCP servers; the host declares them in the
+    /// same `mcp.json`.
+    pub pack_servers: Vec<aeroric_protocol::packs::PackServer>,
 }
 
 pub type OmpLauncher =
@@ -153,6 +156,7 @@ struct State {
     /// H2: what the next start takes for its system layer and context server.
     instructions: Option<String>,
     context: Option<crate::sessions::live::context_server::ContextServer>,
+    pack_servers: Vec<aeroric_protocol::packs::PackServer>,
 }
 
 pub struct OmpSession {
@@ -198,6 +202,7 @@ impl OmpSession {
             remote: spec.remote,
             instructions: None,
             context: None,
+            pack_servers: Vec::new(),
         }));
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (inbox, inbox_rx) = mpsc::unbounded_channel();
@@ -272,6 +277,16 @@ impl SessionDriver for OmpSession {
             return false;
         }
         state.context = Some(server);
+        true
+    }
+
+    /// H6: the packs' servers, declared beside the context server.
+    fn set_pack_servers(&self, servers: Vec<aeroric_protocol::packs::PackServer>) -> bool {
+        let mut state = self.state.lock();
+        if state.remote {
+            return false;
+        }
+        state.pack_servers = servers;
         true
     }
 
@@ -579,6 +594,7 @@ impl Actor {
                 resume: state.resume.clone(),
                 append_system: state.instructions.clone(),
                 context: state.context.clone(),
+                pack_servers: state.pack_servers.clone(),
             }
         };
         let (transport, guard) = (self.launcher)(&start)?;

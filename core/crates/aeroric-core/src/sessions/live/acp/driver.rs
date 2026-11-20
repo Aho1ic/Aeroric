@@ -246,6 +246,8 @@ struct State {
     context_used: Option<u64>,
     context_limit: Option<u64>,
     context: Option<ContextServer>,
+    /// H6: the capability packs' MCP servers, given beside it.
+    pack_servers: Vec<aeroric_protocol::packs::PackServer>,
     idle_since: u64,
     closed: bool,
 }
@@ -285,6 +287,7 @@ impl AcpSession {
             context_used: None,
             context_limit: None,
             context: None,
+            pack_servers: Vec::new(),
             idle_since: now_ms(),
             closed: false,
         }));
@@ -473,6 +476,21 @@ impl SessionDriver for AcpSession {
         self.state.lock().context = Some(server);
         true
     }
+
+    fn set_pack_servers(&self, servers: Vec<aeroric_protocol::packs::PackServer>) -> bool {
+        self.state.lock().pack_servers = servers;
+        true
+    }
+}
+
+/// H6: a capability pack's server, in the same stdio form.
+fn pack_entry(server: &aeroric_protocol::packs::PackServer) -> Value {
+    json!({
+        "name": server.name,
+        "command": server.command,
+        "args": server.args,
+        "env": server.env.iter().map(|(name, value)| json!({"name": name, "value": value})).collect::<Vec<_>>(),
+    })
 }
 
 /// An ACP stdio MCP server entry.
@@ -755,7 +773,7 @@ impl Actor {
         if self.crashes.len() >= CRASH_LIMIT {
             return Err(format!("{label} 进程在 1 分钟内连续退出 {CRASH_LIMIT} 次，已停止自动重启；请检查安装与登录后再试"));
         }
-        let (permission, start, resume, context) = {
+        let (permission, start, resume, context, packs) = {
             let state = self.state.lock();
             (
                 state.permission.clone(),
@@ -768,6 +786,7 @@ impl Actor {
                 },
                 state.session_id.clone(),
                 state.context.clone(),
+                state.pack_servers.clone(),
             )
         };
         // Refused before anything starts: a tier the agent cannot be held to.
@@ -869,7 +888,8 @@ impl Actor {
             .cloned()
             .unwrap_or(Value::Null);
         let cwd = start.cwd.clone();
-        let servers: Vec<Value> = context.iter().map(mcp_entry).collect();
+        let mut servers: Vec<Value> = context.iter().map(mcp_entry).collect();
+        servers.extend(packs.iter().map(pack_entry));
         let since = Instant::now();
         let at = |step: &'static str, since: Instant, error: String| {
             stopped(&handshake, label, &task, watch.as_ref(), step, since, error)
