@@ -15,11 +15,14 @@ public struct LiveSkillProposal: Equatable, Sendable, Identifiable {
     public var versions: [LiveSkillVersion]
     public var activeVersion: Int?
     public var updatedMs: UInt64
+    /// C2 (2026-11-20): when the experience it came from was archived or
+    /// forgotten; nil while it stands. The skill keeps its state.
+    public var sourceWithdrawnMs: UInt64?
 
     public init(id: String, experienceId: String = "", taskId: String? = nil, projectId: String? = nil,
                 global: Bool = false, name: String, description: String = "", body: String = "",
                 state: String = "pending", versions: [LiveSkillVersion] = [], activeVersion: Int? = nil,
-                updatedMs: UInt64 = 0) {
+                updatedMs: UInt64 = 0, sourceWithdrawnMs: UInt64? = nil) {
         self.id = id
         self.experienceId = experienceId
         self.taskId = taskId
@@ -32,6 +35,7 @@ public struct LiveSkillProposal: Equatable, Sendable, Identifiable {
         self.versions = versions
         self.activeVersion = activeVersion
         self.updatedMs = updatedMs
+        self.sourceWithdrawnMs = sourceWithdrawnMs
     }
 
     public static func decode(_ value: JSONValue?) -> LiveSkillProposal? {
@@ -44,7 +48,8 @@ public struct LiveSkillProposal: Equatable, Sendable, Identifiable {
             state: f["state"]?.stringValue ?? "pending",
             versions: (f["versions"]?.arrayValue ?? []).compactMap(LiveSkillVersion.decode),
             activeVersion: f["activeVersion"]?.numberText.flatMap { Int($0) },
-            updatedMs: f["updatedMs"]?.numberText.flatMap { UInt64($0) } ?? 0)
+            updatedMs: f["updatedMs"]?.numberText.flatMap { UInt64($0) } ?? 0,
+            sourceWithdrawnMs: f["sourceWithdrawnMs"]?.numberText.flatMap { UInt64($0) })
     }
 }
 

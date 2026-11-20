@@ -373,6 +373,7 @@ public enum WikiText {
         case "edit": "你编辑"
         case "revert": "回到旧版"
         case "issue": "采纳建议"
+        case "withdraw": "记忆撤回"
         default: "编译"
         }
     }

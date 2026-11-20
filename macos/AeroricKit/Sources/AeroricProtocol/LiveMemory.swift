@@ -240,3 +240,68 @@ public struct LiveNativeMemory: Equatable, Sendable, Identifiable {
                                 truncated: f["truncated"]?.boolValue ?? false)
     }
 }
+
+/// C2 (2026-11-20): what forgetting or archiving one memory did beyond
+/// the item itself (`memory.forget` / `memory.archive`'s `withdrawal`).
+public struct LiveMemoryWithdrawal: Equatable, Sendable {
+    /// Items deleted or archived, with the versions they replaced.
+    public var items: Int
+    /// Adopted or proposed skills now marked 依据已撤回 (their names).
+    public var skills: [String]
+    /// Dream proposals that waited on it, withdrawn.
+    public var dreams: Int
+    /// Wiki pages that lost a paragraph compiled from it.
+    public var wikiPages: Int
+    /// Wiki paragraphs the user had changed: kept, with an issue to check.
+    public var wikiFlagged: Int
+    /// What could not be updated, and why; the host tries again.
+    public var failed: [String]
+
+    public init(items: Int = 0, skills: [String] = [], dreams: Int = 0, wikiPages: Int = 0,
+                wikiFlagged: Int = 0, failed: [String] = []) {
+        self.items = items
+        self.skills = skills
+        self.dreams = dreams
+        self.wikiPages = wikiPages
+        self.wikiFlagged = wikiFlagged
+        self.failed = failed
+    }
+
+    public static func decode(_ value: JSONValue?) -> LiveMemoryWithdrawal? {
+        guard let f = value?.objectValue else { return nil }
+        func count(_ key: String) -> Int { f[key]?.numberText.flatMap { Int($0) } ?? 0 }
+        return LiveMemoryWithdrawal(items: count("items"),
+                                    skills: (f["skills"]?.arrayValue ?? []).compactMap(\.stringValue),
+                                    dreams: count("dreams"), wikiPages: count("wikiPages"),
+                                    wikiFlagged: count("wikiFlagged"),
+                                    failed: (f["failed"]?.arrayValue ?? []).compactMap(\.stringValue))
+    }
+}
+
+/// C2: one project's Wiki still holding paragraphs of withdrawn memories
+/// (`memory.attention`'s `wikiBacklog`). Ids only, never the text.
+public struct LiveWikiBacklog: Equatable, Sendable, Identifiable {
+    public var projectId: String
+    public var ids: [String]
+    public var forgotten: Bool
+    public var reason: String
+    public var atMs: UInt64
+    public var id: String { "wiki#\(projectId)" }
+
+    public init(projectId: String, ids: [String] = [], forgotten: Bool = false, reason: String = "", atMs: UInt64 = 0) {
+        self.projectId = projectId
+        self.ids = ids
+        self.forgotten = forgotten
+        self.reason = reason
+        self.atMs = atMs
+    }
+
+    public static func decode(_ value: JSONValue) -> LiveWikiBacklog? {
+        let f = value.fields
+        guard let project = f["projectId"]?.stringValue else { return nil }
+        return LiveWikiBacklog(projectId: project, ids: (f["ids"]?.arrayValue ?? []).compactMap(\.stringValue),
+                               forgotten: f["forgotten"]?.boolValue ?? false,
+                               reason: f["reason"]?.stringValue ?? "",
+                               atMs: f["atMs"]?.numberText.flatMap { UInt64($0) } ?? 0)
+    }
+}

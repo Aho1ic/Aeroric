@@ -910,6 +910,8 @@ struct TaskWorkspaceView: View {
                         services.openMemory(projectID: dream.projectID,
                                             tab: MemoryTab.allCases.first { $0.kind == dream.kind })
                     },
+                    wikiBacklog: services.wikiBacklog,
+                    onOpenWiki: { services.openWiki(projectID: $0) },
                     onContinue: { id in await services.continueAfterRestart(taskID: id) },
                     todoReview: services.todoReview,
                     todoProposals: services.todoProposals,

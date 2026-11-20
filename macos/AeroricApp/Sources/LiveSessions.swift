@@ -430,8 +430,11 @@ extension AppServices {
             if review != todoReview { todoReview = review }
             if proposals != todoProposals { todoProposals = proposals }
         }
-        // B5-1: memory proposals, under the session that proposed them.
-        if let items = try? await client.memoryAttention() {
+        // B5-1: memory proposals, under the session that proposed them;
+        // B5-3b skill proposals, under the session their experience came
+        // from; C2 Wikis a withdrawal has not reached yet. One call.
+        if let reply = try? await client.memoryAttentionAll() {
+            let items = reply.items
             let now = UInt64(Date().timeIntervalSince1970 * 1000)
             var next: [String: AttentionQueue.CheckFailure] = [:]
             for item in items {
@@ -442,17 +445,14 @@ extension AppServices {
             if next != memoryNeeds { memoryNeeds = next }
             if items.count + dreamCount != memoryPendingCount { memoryPendingCount = items.count + dreamCount }
             await memoryStore.refreshPending()
-        }
-        // B5-3b: skill proposals, under the session their experience came from.
-        if let pending = try? await client.skillAttention() {
-            let now = UInt64(Date().timeIntervalSince1970 * 1000)
-            var next: [String: AttentionQueue.CheckFailure] = [:]
-            for proposal in pending {
-                guard let task = proposal.taskId, next[task] == nil else { continue }
-                next[task] = AttentionQueue.CheckFailure(summary: MemoryText.skillAttention(proposal),
-                                                         atMs: skillNeeds[task]?.atMs ?? now)
+            var skills: [String: AttentionQueue.CheckFailure] = [:]
+            for proposal in reply.proposals {
+                guard let task = proposal.taskId, skills[task] == nil else { continue }
+                skills[task] = AttentionQueue.CheckFailure(summary: MemoryText.skillAttention(proposal),
+                                                           atMs: skillNeeds[task]?.atMs ?? now)
             }
-            if next != skillNeeds { skillNeeds = next }
+            if skills != skillNeeds { skillNeeds = skills }
+            if reply.wikiBacklog != wikiBacklog { wikiBacklog = reply.wikiBacklog }
         }
         // B4-1: review loops that need the user join the same queue; a loop
         // keeps the time it was first seen so the queue order holds still.
@@ -615,8 +615,9 @@ struct HostMemoryService: MemoryService {
         return reply["decided"]?.numberText.flatMap { Int($0) } ?? 0
     }
 
-    func archive(id: String, archived: Bool) async throws {
-        try await client().memoryAction("memory.archive", id: id, ["archived": .bool(archived)])
+    func archive(id: String, archived: Bool) async throws -> LiveMemoryWithdrawal? {
+        let reply = try await client().memoryCall("memory.archive", ["id": .string(id), "archived": .bool(archived)])
+        return LiveMemoryWithdrawal.decode(reply["withdrawal"])
     }
 
     func pin(id: String, pinned: Bool) async throws {
@@ -627,8 +628,9 @@ struct HostMemoryService: MemoryService {
         try await client().memoryAction("memory.move", id: id, projectID.map { ["projectId": .string($0)] } ?? [:])
     }
 
-    func forget(id: String) async throws {
-        try await client().memoryAction("memory.forget", id: id)
+    func forget(id: String) async throws -> LiveMemoryWithdrawal? {
+        let reply = try await client().memoryCall("memory.forget", ["id": .string(id)])
+        return LiveMemoryWithdrawal.decode(reply["withdrawal"])
     }
 
     func setEnabled(projectID: String, enabled: Bool) async throws {

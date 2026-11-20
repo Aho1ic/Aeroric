@@ -19,10 +19,17 @@ private final class FakeMemoryService: MemoryService {
         return LiveMemoryItem(id: "m-new", projectId: projectID, kind: kind, text: text)
     }
     func confirm(id: String, accept: Bool) async throws { calls.append("confirm \(id) \(accept)") }
-    func archive(id: String, archived: Bool) async throws { calls.append("archive \(id) \(archived)") }
+    var withdrawal: LiveMemoryWithdrawal?
+    func archive(id: String, archived: Bool) async throws -> LiveMemoryWithdrawal? {
+        calls.append("archive \(id) \(archived)")
+        return archived ? withdrawal : nil
+    }
     func pin(id: String, pinned: Bool) async throws { calls.append("pin \(id) \(pinned)") }
     func move(id: String, projectID: String?) async throws { calls.append("move \(id) \(projectID ?? "global")") }
-    func forget(id: String) async throws { calls.append("forget \(id)") }
+    func forget(id: String) async throws -> LiveMemoryWithdrawal? {
+        calls.append("forget \(id)")
+        return withdrawal
+    }
     func setEnabled(projectID: String, enabled: Bool) async throws { calls.append("enabled \(projectID) \(enabled)") }
     func native(projectID: String?) async throws -> [LiveNativeMemory] { [] }
     func attention() async throws -> [LiveMemoryItem] { items.filter { $0.state == "pending" } }
@@ -81,6 +88,73 @@ private final class FakeMemoryService: MemoryService {
 /// B5-1: the memory page's model and the words it shares with `/记住`.
 @MainActor
 final class MemoryTests: XCTestCase {
+    /// C2 (2026-11-20): 归档 and 永久遗忘 leave a note of what else they
+    /// reached; restoring, or reaching nothing else, leaves none, and the
+    /// next action clears the last note.
+    func testArchivingAndForgettingSayWhatElseTheyReached() async {
+        let service = FakeMemoryService()
+        let item = LiveMemoryItem(id: "m1", projectId: "p1", kind: "experience", text: "先跑 lint")
+        service.items = [item]
+        let store = MemoryStore(service: service)
+
+        service.withdrawal = LiveMemoryWithdrawal(items: 1, skills: ["lint-first"], wikiPages: 1)
+        await store.archive(item, true)
+        XCTAssertEqual(store.withdrawalNote?.title, "已归档")
+        XCTAssertEqual(store.withdrawalNote?.lines.count, 2)
+        XCTAssertEqual(store.withdrawalNote?.footnote, "你导出到项目目录的 Wiki 文件不会被改动。")
+
+        await store.archive(item, false)
+        XCTAssertNil(store.withdrawalNote, "restoring says nothing")
+
+        service.withdrawal = LiveMemoryWithdrawal(items: 3, wikiFlagged: 1,
+                                                  failed: ["项目「demo」的 Wiki 没能更新：磁盘已满"])
+        await store.forget(item)
+        let note = store.withdrawalNote
+        XCTAssertEqual(note?.title, "已永久遗忘")
+        XCTAssertEqual(note?.lines.first, "连同旧版本和合并进来的重复项共删除 3 条")
+        XCTAssertTrue(note?.failed.first?.hasPrefix("项目「demo」的 Wiki 没能更新：磁盘已满") ?? false)
+        XCTAssertTrue(note?.footnote.contains("修订历史") ?? false)
+
+        service.withdrawal = LiveMemoryWithdrawal(items: 1)
+        await store.forget(item)
+        XCTAssertNil(store.withdrawalNote, "nothing else reached, no note")
+        XCTAssertEqual(service.calls.filter { $0.hasPrefix("archive") || $0.hasPrefix("forget") },
+                       ["archive m1 true", "archive m1 false", "forget m1", "forget m1"])
+    }
+
+    /// C2: the withdrawal, the Wiki backlog and a skill's 依据已撤回 decode
+    /// from the host's camelCase; an older host's reply decodes to nothing.
+    func testWithdrawalBacklogAndWithdrawnSkillsDecode() {
+        let withdrawal = LiveMemoryWithdrawal.decode(.object([
+            "items": .number("2"), "skills": .array([.string("lint-first")]), "dreams": .number("1"),
+            "wikiPages": .number("3"), "wikiFlagged": .number("1"),
+            "failed": .array([.string("项目「demo」的 Wiki 没能更新：x")]),
+        ]))
+        XCTAssertEqual(withdrawal, LiveMemoryWithdrawal(items: 2, skills: ["lint-first"], dreams: 1, wikiPages: 3,
+                                                        wikiFlagged: 1, failed: ["项目「demo」的 Wiki 没能更新：x"]))
+        XCTAssertEqual(LiveMemoryWithdrawal.decode(.object(["items": .number("1")])), LiveMemoryWithdrawal(items: 1))
+        XCTAssertNil(LiveMemoryWithdrawal.decode(nil))
+
+        let row = LiveWikiBacklog.decode(.object([
+            "projectId": .string("p1"), "ids": .array([.string("m1"), .string("m2")]),
+            "forgotten": .bool(true), "reason": .string("Is a directory"), "atMs": .number("5"),
+        ]))
+        XCTAssertEqual(row, LiveWikiBacklog(projectId: "p1", ids: ["m1", "m2"], forgotten: true,
+                                            reason: "Is a directory", atMs: 5))
+        XCTAssertEqual(row.map(MemoryText.wikiBacklog), "Wiki 还留着 2 条已遗忘记忆的段落")
+        XCTAssertEqual(row.map { MemoryText.wikiBacklogDetail($0, project: "demo") },
+                       "demo · 上次失败：Is a directory · 会自动重试")
+
+        let skill = LiveSkillProposal.decode(.object([
+            "id": .string("s1"), "name": .string("lint-first"), "state": .string("accepted"),
+            "sourceWithdrawnMs": .number("9"),
+        ]))
+        XCTAssertEqual(skill?.sourceWithdrawnMs, 9)
+        XCTAssertEqual(skill?.state, "accepted", "the skill keeps its state")
+        XCTAssertNil(LiveSkillProposal.decode(.object(["id": .string("s2"), "name": .string("x")]))?.sourceWithdrawnMs)
+        XCTAssertEqual(WikiText.reason("withdraw"), "记忆撤回")
+    }
+
     /// B6 (2026-11-13): a dream's row and proposals decode, and say what
     /// they did; only a dream that changed something can be undone, once.
     func testADreamRowAndItsProposalsDecodeAndSayWhatTheyDid() {

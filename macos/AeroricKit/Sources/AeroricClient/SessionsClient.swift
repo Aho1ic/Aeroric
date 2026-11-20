@@ -780,6 +780,16 @@ extension SessionsClient {
         return (frame.result["items"]?.arrayValue ?? []).compactMap { LiveMemoryItem.decode($0) }
     }
 
+    /// C2 (2026-11-20): all of `memory.attention` in one call — memory and
+    /// skill proposals, and the Wikis a withdrawal could not reach yet.
+    public func memoryAttentionAll() async throws
+        -> (items: [LiveMemoryItem], proposals: [LiveSkillProposal], wikiBacklog: [LiveWikiBacklog]) {
+        let frame = try await connection.request("memory.attention", params: .object([:]))
+        return ((frame.result["items"]?.arrayValue ?? []).compactMap { LiveMemoryItem.decode($0) },
+                (frame.result["proposals"]?.arrayValue ?? []).compactMap { LiveSkillProposal.decode($0) },
+                (frame.result["wikiBacklog"]?.arrayValue ?? []).compactMap(LiveWikiBacklog.decode))
+    }
+
     // MARK: B5-2 extraction
 
     /// Read, or save, the 整理设置.

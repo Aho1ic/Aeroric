@@ -212,6 +212,9 @@ public struct AttentionListView: View {
     /// B6 second batch: 记忆整理待确认, one row per scope.
     let dreams: [AttentionQueue.DreamRow]
     let onOpenDreams: ((AttentionQueue.DreamRow) -> Void)?
+    /// C2 (2026-11-20): project Wikis a memory withdrawal has not reached.
+    let wikiBacklog: [LiveWikiBacklog]
+    let onOpenWiki: ((String) -> Void)?
     /// 2026-11-14: 继续 a session an Aeroric restart cut.
     let onContinue: ((String) async -> Void)?
     /// 2026-11-15: todos waiting for acceptance, and (第二批) Agent
@@ -223,6 +226,7 @@ public struct AttentionListView: View {
     public init(items: [AttentionQueue.Item], projectName: @escaping (String) -> String?,
                 onOpen: @escaping (String) -> Void, onOpenItem: ((AttentionQueue.Item) -> Bool)? = nil,
                 dreams: [AttentionQueue.DreamRow] = [], onOpenDreams: ((AttentionQueue.DreamRow) -> Void)? = nil,
+                wikiBacklog: [LiveWikiBacklog] = [], onOpenWiki: ((String) -> Void)? = nil,
                 onContinue: ((String) async -> Void)? = nil, todoReview: Int = 0, todoProposals: Int = 0,
                 onOpenTodos: (() -> Void)? = nil) {
         self.items = items
@@ -231,6 +235,8 @@ public struct AttentionListView: View {
         self.onOpenItem = onOpenItem
         self.dreams = dreams
         self.onOpenDreams = onOpenDreams
+        self.wikiBacklog = wikiBacklog
+        self.onOpenWiki = onOpenWiki
         self.onContinue = onContinue
         self.todoReview = todoReview
         self.todoProposals = todoProposals
@@ -238,7 +244,7 @@ public struct AttentionListView: View {
     }
 
     private var todoCount: Int { todoReview + todoProposals }
-    private var total: Int { items.count + dreams.count + (todoCount > 0 ? 1 : 0) }
+    private var total: Int { items.count + dreams.count + wikiBacklog.count + (todoCount > 0 ? 1 : 0) }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -252,6 +258,11 @@ public struct AttentionListView: View {
                         Button { onOpenTodos?() } label: { todoRow }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("attention.todos")
+                    }
+                    ForEach(wikiBacklog) { row in
+                        Button { onOpenWiki?(row.projectId) } label: { wikiRow(row) }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("attention.\(row.id)")
                     }
                     ForEach(dreams) { dream in
                         Button { onOpenDreams?(dream) } label: { dreamRow(dream) }
@@ -298,6 +309,30 @@ public struct AttentionListView: View {
                     .foregroundStyle(AeroricColor.textSecondary)
             }
             Spacer()
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 2)
+    }
+
+    private func wikiRow(_ row: LiveWikiBacklog) -> some View {
+        HStack(spacing: AeroricSpace.m) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.warning)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(MemoryText.wikiBacklog(row)).lineLimit(1)
+                Text(MemoryText.wikiBacklogDetail(row, project: projectName(row.projectId) ?? row.projectId))
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .lineLimit(2)
+            }
+            Spacer()
+            if row.atMs > 0 {
+                Text(RelativeTime.short(Date(timeIntervalSince1970: Double(row.atMs) / 1000)))
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.textTertiary)
+            }
         }
         .contentShape(Rectangle())
         .padding(.vertical, 2)

@@ -108,7 +108,7 @@ public struct MemoryPage: View {
         ), presenting: forgetting) { item in
             Button("永久遗忘", role: .destructive) { Task { await store.forget(item) } }
         } message: { _ in
-            Text("原文和它的旧版本都会删除，只留一个不含原文的签名，Agent 以后不能再把它提回来。")
+            Text("原文和它的旧版本都会删除，由它编译的 Wiki 段落和修订历史里的原文也会清掉，只留一个不含原文的签名，Agent 以后不能再把它提回来。你导出到项目目录的文件不会被改动。")
         }
         .alert("操作失败", isPresented: Binding(get: { store.errorText != nil }, set: { if !$0 { store.errorText = nil } })) {
             Button("好") { store.errorText = nil }
@@ -228,6 +228,7 @@ public struct MemoryPage: View {
                 .padding(.horizontal, AeroricSpace.s)
                 .accessibilityIdentifier("memory.dream.note")
         }
+        if let note = store.withdrawalNote { withdrawalBanner(note) }
         let dreams = store.pendingDreams(store.tab)
         if !dreams.isEmpty {
             sectionLabel("整理建议 · \(dreams.count)", tint: AeroricColor.warning)
@@ -572,6 +573,11 @@ public struct MemoryPage: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(proposal.body)
             CheckpointBadge(text: proposal.global ? "所有项目" : "本项目", tint: AeroricColor.textSecondary)
+            if proposal.sourceWithdrawnMs != nil {
+                CheckpointBadge(text: MemoryText.sourceWithdrawn, tint: AeroricColor.warning)
+                    .help(MemoryText.sourceWithdrawnHelp)
+                    .accessibilityIdentifier("memory.skill.withdrawn")
+            }
             if let v = proposal.activeVersion {
                 CheckpointBadge(text: "v\(v)", tint: AeroricColor.accent)
             }
@@ -632,6 +638,37 @@ public struct MemoryPage: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+    }
+
+    /// C2: what the last 归档 / 永久遗忘 reached beyond the item.
+    private func withdrawalBanner(_ note: MemoryWithdrawalNote) -> some View {
+        HStack(alignment: .top, spacing: AeroricSpace.m) {
+            Image(systemName: note.failed.isEmpty ? "checkmark.circle" : "exclamationmark.triangle")
+                .foregroundStyle(note.failed.isEmpty ? AeroricColor.success : AeroricColor.warning)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(note.title).font(.system(size: AeroricType.secondary, weight: .medium))
+                ForEach(note.lines, id: \.self) { line in
+                    Text(line).foregroundStyle(AeroricColor.textSecondary)
+                }
+                ForEach(note.failed, id: \.self) { line in
+                    Text(line).foregroundStyle(AeroricColor.warning)
+                }
+                if !note.footnote.isEmpty {
+                    Text(note.footnote).foregroundStyle(AeroricColor.textTertiary)
+                }
+            }
+            .font(.system(size: AeroricType.caption))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button { store.withdrawalNote = nil } label: {
+                Image(systemName: "xmark").foregroundStyle(AeroricColor.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .help("关闭")
+        }
+        .padding(AeroricSpace.m)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(AeroricColor.layer2))
+        .accessibilityIdentifier("memory.withdrawal.note")
     }
 
     /// B5-2 整理记录.

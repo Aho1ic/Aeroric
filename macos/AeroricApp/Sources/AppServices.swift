@@ -86,6 +86,8 @@ final class AppServices {
     var todoProposals = 0
     /// B5-3b → A19: source task id → a skill proposal waiting for the user.
     var skillNeeds: [String: AttentionQueue.CheckFailure] = [:]
+    /// C2 (2026-11-20): project Wikis a memory withdrawal has not reached yet.
+    var wikiBacklog: [LiveWikiBacklog] = []
     /// The sidebar's "打开远程项目…" asks the workspace to show its sheet.
     var openRemoteRequested = false
     let keepAwakeStore = KeepAwakeStore()
@@ -1332,7 +1334,7 @@ extension AppServices: WorkspaceStateProviding {
         let count = AttentionQueue.items(taskStore.tasks, checkFailures: checkFailures, reviews: reviewNeeds,
                                          delegations: delegationNeeds, boards: boardNeeds, memories: memoryNeeds,
                                          skills: skillNeeds, deliveries: deliveryNeeds, retries: retryNeeds, nowMs: UInt64(Date().timeIntervalSince1970 * 1000)).count
-            + dreamNeeds.count + (todoReview + todoProposals > 0 ? 1 : 0)
+            + dreamNeeds.count + wikiBacklog.count + (todoReview + todoProposals > 0 ? 1 : 0)
         return count > 0 ? count : nil
     }
 

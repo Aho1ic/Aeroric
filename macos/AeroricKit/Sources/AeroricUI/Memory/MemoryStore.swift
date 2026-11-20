@@ -12,10 +12,12 @@ public protocol MemoryService {
     func confirm(id: String, accept: Bool) async throws
     /// 全部确认 / 全部拒绝 in one call; how many were decided.
     func confirmMany(ids: [String], accept: Bool) async throws -> Int
-    func archive(id: String, archived: Bool) async throws
+    /// C2 (2026-11-20): archiving, and forgetting, say what else they
+    /// reached (nil when restoring, or from an older host).
+    func archive(id: String, archived: Bool) async throws -> LiveMemoryWithdrawal?
     func pin(id: String, pinned: Bool) async throws
     func move(id: String, projectID: String?) async throws
-    func forget(id: String) async throws
+    func forget(id: String) async throws -> LiveMemoryWithdrawal?
     func setEnabled(projectID: String, enabled: Bool) async throws
     func native(projectID: String?) async throws -> [LiveNativeMemory]
     func attention() async throws -> [LiveMemoryItem]
@@ -145,6 +147,9 @@ public final class MemoryStore {
     public private(set) var dreamProposals: [LiveDreamProposal] = []
     public private(set) var dreaming = false
     public private(set) var dreamNote: String?
+    /// C2: what the last 归档 / 永久遗忘 reached beyond the item, until
+    /// the user closes it or does something else.
+    public var withdrawalNote: MemoryWithdrawalNote?
     /// 导入为候选's result per file path.
     public private(set) var importNotes: [String: String] = [:]
     /// Q4: 整理历史会话's plan and how the run is going.
@@ -502,7 +507,10 @@ public final class MemoryStore {
     public private(set) var busyText: String?
 
     public func archive(_ item: LiveMemoryItem, _ archived: Bool) async {
-        await run(archived ? "归档" : "恢复") { try await $0.archive(id: item.id, archived: archived) }
+        withdrawalNote = nil
+        var reached: LiveMemoryWithdrawal?
+        await run(archived ? "归档" : "恢复") { reached = try await $0.archive(id: item.id, archived: archived) }
+        if archived, let reached { withdrawalNote = MemoryText.withdrawal(reached, forgotten: false) }
     }
 
     public func pin(_ item: LiveMemoryItem) async {
@@ -514,7 +522,10 @@ public final class MemoryStore {
     }
 
     public func forget(_ item: LiveMemoryItem) async {
-        await run("永久遗忘") { try await $0.forget(id: item.id) }
+        withdrawalNote = nil
+        var reached: LiveMemoryWithdrawal?
+        await run("永久遗忘") { reached = try await $0.forget(id: item.id) }
+        if let reached { withdrawalNote = MemoryText.withdrawal(reached, forgotten: true) }
     }
 
     public func setEnabled(_ on: Bool) async {
@@ -721,6 +732,46 @@ public enum MemoryText {
         case "accepted": "已成技能"
         default: nil
         }
+    }
+
+    /// C2: the badge of a skill whose experience was archived or forgotten.
+    public static let sourceWithdrawn = "依据已撤回"
+    public static let sourceWithdrawnHelp =
+        "这个技能依据的经验已被归档或永久遗忘。技能照旧按你的选择生效，不再需要可以编辑或停用；经验恢复后标记会撤掉。"
+
+    /// C2: what one 归档 / 永久遗忘 reached beyond the item. nil when it
+    /// reached nothing else worth saying.
+    public static func withdrawal(_ w: LiveMemoryWithdrawal, forgotten: Bool) -> MemoryWithdrawalNote? {
+        var parts: [String] = []
+        if w.items > 1 {
+            parts.append(forgotten ? "连同旧版本和合并进来的重复项共删除 \(w.items) 条"
+                                   : "连同旧版本共归档 \(w.items) 条")
+        }
+        if w.wikiPages > 0 { parts.append("Wiki 有 \(w.wikiPages) 页去掉了由它编译的段落") }
+        if w.wikiFlagged > 0 { parts.append("\(w.wikiFlagged) 段你改过的 Wiki 内容先保留，已开待核对") }
+        if !w.skills.isEmpty {
+            parts.append("技能 \(w.skills.map { "「\($0)」" }.joined(separator: "、")) 标为\(sourceWithdrawn)，仍然生效，由你决定是否停用")
+        }
+        if w.dreams > 0 { parts.append("撤回了 \(w.dreams) 条涉及它的整理建议") }
+        guard !parts.isEmpty || !w.failed.isEmpty else { return nil }
+        var notes: [String] = []
+        if w.wikiPages > 0 || w.wikiFlagged > 0 || !w.failed.isEmpty {
+            notes.append("你导出到项目目录的 Wiki 文件不会被改动。")
+        }
+        if forgotten, w.wikiPages + w.wikiFlagged > 0 { notes.append("Wiki 的修订历史里也已清掉这段原文。") }
+        return MemoryWithdrawalNote(title: forgotten ? "已永久遗忘" : "已归档", lines: parts,
+                                    failed: w.failed.map { $0 + "；之后会自动重试，仍未成功的会出现在“需要我处理”。" },
+                                    footnote: notes.joined())
+    }
+
+    /// C2: 需要我处理's row for a Wiki a withdrawal has not reached yet.
+    public static func wikiBacklog(_ row: LiveWikiBacklog) -> String {
+        "Wiki 还留着 \(row.ids.count) 条已\(row.forgotten ? "遗忘" : "归档")记忆的段落"
+    }
+
+    public static func wikiBacklogDetail(_ row: LiveWikiBacklog, project: String) -> String {
+        [project, row.reason.isEmpty ? nil : "上次失败：\(row.reason)", "会自动重试"]
+            .compactMap { $0 }.joined(separator: " · ")
     }
 
     /// 需要我处理's detail.
@@ -937,5 +988,21 @@ public struct MemoryHistoryProgress: Equatable, Sendable {
         case "skipped": skipped += 1
         default: failed += 1
         }
+    }
+}
+
+/// C2 (2026-11-20): the note the memory page shows after 归档 / 永久遗忘.
+public struct MemoryWithdrawalNote: Equatable, Sendable {
+    public var title: String
+    public var lines: [String]
+    /// Places that could not be updated yet, each with why.
+    public var failed: [String]
+    public var footnote: String
+
+    public init(title: String, lines: [String], failed: [String] = [], footnote: String = "") {
+        self.title = title
+        self.lines = lines
+        self.failed = failed
+        self.footnote = footnote
     }
 }
