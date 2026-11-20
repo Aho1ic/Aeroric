@@ -71,7 +71,7 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
             "还没接：OMP 有 --append-system-prompt，Aeroric 没传（H2）；交接简报放在第一条消息前，记忆档案不给",
         ),
         (P::Dsh, F::SurfaceInstructions) => no(
-            "还没接：ACP 驱动没有系统层入口；交接简报放在第一条消息前，记忆档案不给",
+            "DSH 的 ACP 没有声明 systemPrompt，没有系统层入口；交接简报放在第一条消息前，记忆档案不给",
         ),
         (_, F::SurfaceSkills) if place == Place::Remote => no("Aeroric 不给远端会话挂技能"),
         (P::Codex, F::SurfaceSkills) => yes(Some("项目 .agents/skills 下带标记的副本")),
@@ -82,9 +82,13 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
         (P::Claude, F::SurfaceEvents) => {
             no("还没接：会话插件可以带 hooks/hooks.json，Aeroric 没放（H4）")
         }
-        (P::Codex, F::SurfaceEvents) => unknown("还没核对：Hook 能否经 thread/start 的 config 按次下发"),
+        (P::Codex, F::SurfaceEvents) => no(
+            "还没接：Hook 可以经 thread/start 的 config 按次下发，要同时给出信任哈希，未实测（H4）",
+        ),
         (P::Omp, F::SurfaceEvents) => no("还没接：OMP 可以按次传 --hook，Aeroric 没传（H4）"),
-        (P::Dsh, F::SurfaceEvents) => unknown("还没核对：DSH 的 Hook 能否由受管配置给出"),
+        (P::Dsh, F::SurfaceEvents) => {
+            no("DSH 没有能从外部配置的 Hook：它的扩展点是同进程插件")
+        }
         (P::Claude, F::SurfaceSubagents) => {
             yes(Some("Task、Agent 工具和 task_* 事件显示为子代理"))
         }
@@ -92,7 +96,9 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
             yes(Some("subAgentActivity、collabAgentToolCall 显示为子代理"))
         }
         (P::Omp, F::SurfaceSubagents) => yes(Some("启动时订阅子代理事件")),
-        (P::Dsh, F::SurfaceSubagents) => no("DSH 的子代理事件没有接"),
+        (P::Dsh, F::SurfaceSubagents) => {
+            no("DSH 的 ACP 不发子代理事件，只有消息、思考、工具调用和用量")
+        }
         (_, F::SurfaceCli) => no("命令行入口（aeroric-cli ctx）还没做（H2）"),
         (P::Dsh, F::PermChange) => degraded("DSH 启动时固定权限：下次启动生效"),
         (P::Dsh, F::PlanMode) => degraded("用只读沙盒代替规划：写入要你批准"),

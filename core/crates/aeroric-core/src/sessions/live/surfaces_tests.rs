@@ -165,13 +165,13 @@ fn tools_and_skills_follow_the_launch() {
 /// at start and lifecycle mapping (`omp/driver_tests.rs`, `omp/map_tests.rs`).
 #[test]
 fn the_untried_surfaces_are_the_drivers_facts() {
-    use SupportState::{No, Unknown, Yes};
+    use SupportState::{No, Yes};
     let row = |family, feature| support(family, Place::Local, feature).state;
     let expect = [
         (ProtocolFamily::Claude, [Yes, No, Yes, No]),
-        (ProtocolFamily::Codex, [Yes, Unknown, Yes, No]),
+        (ProtocolFamily::Codex, [Yes, No, Yes, No]),
         (ProtocolFamily::Omp, [No, No, Yes, No]),
-        (ProtocolFamily::Dsh, [No, Unknown, No, No]),
+        (ProtocolFamily::Dsh, [No, No, No, No]),
     ];
     for (family, [instructions, events, subagents, cli]) in expect {
         assert_eq!(

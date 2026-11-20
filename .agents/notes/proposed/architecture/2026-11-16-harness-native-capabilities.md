@@ -125,7 +125,7 @@ Aeroric 已经有长期记忆、项目 Wiki、委派和共享黑板、内置与�
 
 #### H1 入口表：每个 Harness 有哪些入口，凭什么说有
 
-2026-11-20 第一步已实现，见 [H1 第一步笔记](../../implemented/feature/2026-11-20-h1-surfaces-per-launch.md)：能力表加了系统层、技能、事件、子代理、命令行五个入口项，工具沿用 C9 的 `contextTools`，没有另加 `SurfaceTools`；每次启动按实际情况记下系统层（驱动是否收下开场内容、多少字）、工具、技能（Aeroric 自己的技能挂了几个），其余三项取能力表，`session.capabilities {taskId}` 返回 `surfaces`；假 Codex、假 Claude 的启动测试核对记录与启动参数一致，远端 Claude 的系统层有了断言；`delegateChild` 写明含义。第 4 条（七条待实测）留给第二步，会话信息里的显示留给第三步。
+2026-11-20 第一步已实现，见 [H1 第一步笔记](../../implemented/feature/2026-11-20-h1-surfaces-per-launch.md)：能力表加了系统层、技能、事件、子代理、命令行五个入口项，工具沿用 C9 的 `contextTools`，没有另加 `SurfaceTools`；每次启动按实际情况记下系统层（驱动是否收下开场内容、多少字）、工具、技能（Aeroric 自己的技能挂了几个），其余三项取能力表，`session.capabilities {taskId}` 返回 `surfaces`；假 Codex、假 Claude 的启动测试核对记录与启动参数一致，远端 Claude 的系统层有了断言；`delegateChild` 写明含义。第 4 条（七条待实测）留给第二步，会话信息里的显示留给第三步。第二步也已实现，见 [H1 第二步笔记](../../implemented/feature/2026-11-20-h1-pending-checks-settled.md)：七条逐条定论，写进 `docs/subsystems/agent-capabilities.md` §6；OMP 18.12.0 三样都有，不抬最低版本（没设的 `${VAR}` 原样保留，H2 要用 `${VAR:-}`）；Codex 的 Hook 和角色可经 `config` 按次下发，子代理继承 Aeroric 服务器和 token；DSH 的 ACP 没有 `systemPrompt`、不发子代理事件；Claude 插件的 Hook 和代理、三家子代理的真实工具调用为 NOT RUN。能力表里 Codex、DSH 的事件改为"没有"并写明原因。
 
 **用户会看到：** 会话信息里除了工具清单（C8），还有一行"这个 Harness 通过哪些入口用 Aeroric"：系统层、工具、技能、事件、子代理、命令行，各自是"已接通""这家不支持""还没核对"。
 
