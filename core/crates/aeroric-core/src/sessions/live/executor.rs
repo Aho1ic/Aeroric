@@ -93,11 +93,12 @@ pub enum Route {
 impl Route {
     /// Whether the agent runs on this Mac and can start the local
     /// `aeroric-cli` context server. A remote `codex app-server` cannot.
+    /// H2 (2026-11-20): OMP on this Mac can (its managed home's `mcp.json`).
     pub fn runs_locally(&self) -> bool {
         match self {
             Route::Codex(ServerKey::Remote(_)) => false,
-            Route::Codex(_) | Route::Claude(_) | Route::Acp(_) => true,
-            Route::Omp(_) | Route::RemoteClaude(_) | Route::RemoteOmp(_) => false,
+            Route::Codex(_) | Route::Claude(_) | Route::Acp(_) | Route::Omp(_) => true,
+            Route::RemoteClaude(_) | Route::RemoteOmp(_) => false,
         }
     }
 
@@ -562,8 +563,7 @@ impl StructuredExecutor {
     }
 
     /// C7: a launch on this Mac keeps what skills it is given (a remote
-    /// one is given none by Aeroric). C8: OMP on this Mac is mounted too,
-    /// though it gets no context server.
+    /// one is given none by Aeroric). C8: OMP on this Mac is mounted too.
     /// H1: how many of Aeroric's own skills it was given (`None`: not kept).
     fn note_skills(
         &self,
@@ -793,6 +793,7 @@ impl StructuredExecutor {
                     model: spec.model.clone(),
                     effort: spec.effort.clone(),
                     session: spec.thread_id.clone(),
+                    remote: true,
                 },
                 self.routing.remote_omp_launcher(key),
                 Arc::clone(&self.sink),
@@ -833,6 +834,7 @@ impl StructuredExecutor {
                     model: spec.model.clone(),
                     effort: spec.effort.clone(),
                     session: spec.thread_id.clone(),
+                    remote: false,
                 },
                 self.routing.omp_launcher(key),
                 Arc::clone(&self.sink),

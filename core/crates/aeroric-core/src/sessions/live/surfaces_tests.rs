@@ -170,7 +170,7 @@ fn the_untried_surfaces_are_the_drivers_facts() {
     let expect = [
         (ProtocolFamily::Claude, [Yes, No, Yes, No]),
         (ProtocolFamily::Codex, [Yes, No, Yes, No]),
-        (ProtocolFamily::Omp, [No, No, Yes, No]),
+        (ProtocolFamily::Omp, [Yes, No, Yes, No]),
         (ProtocolFamily::Dsh, [No, No, No, No]),
     ];
     for (family, [instructions, events, subagents, cli]) in expect {

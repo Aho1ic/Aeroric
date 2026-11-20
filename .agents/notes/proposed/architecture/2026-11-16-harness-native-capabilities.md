@@ -144,6 +144,8 @@ Aeroric 已经有长期记忆、项目 Wiki、委派和共享黑板、内置与�
 
 #### H2 OMP 接上系统层和工具；命令行兜底留给两样都没有的 Harness
 
+2026-11-20 第一步已实现，见 [H2 第一步笔记](../../implemented/feature/2026-11-20-h2-omp-opening-and-tools.md)：本机 OMP 的开场内容写进会话自己的 0600 临时文件，用 `--append-system-prompt` 传入，进程退出即删；工具服务器声明在受管目录的 `mcp.json`（token 写成 `${AERORIC_CONTEXT_TOKEN:-}`，只在进程环境里），`runs_locally()` 对本机 OMP 为真；OMP 的 `always-ask` 会拦 MCP 工具，用 `--config` 叠加层按工具名只放行这 21 个，不动用户的 `config.yml`；远端 OMP 两样都不收。真实 OMP 会话为 NOT RUN（这台 Mac 没装 omp）。第 5、6 条（`aeroric-cli ctx` 与内置技能 `aeroric`）留给第二步。
+
 **用户会看到：** OMP 会话和 Claude、Codex 会话一样，知道用户的偏好，能查记忆、读 Wiki、看交接清单、发委派。以后接入一个既不能配 MCP 也没有系统层的 Agent，它也能通过命令行用到同样的东西。
 
 **现状：** OMP 的启动参数由 `omp_rpc_args` 生成，只有 `--mode rpc`、审批模式、`--cwd`、模型、思考档、恢复和 `--add-dir`（[`launch.rs:157–179`](../../../../core/crates/aeroric-core/src/agents/launch.rs)）。受管 home 和技能挂载在 [`live.rs:598–658`](../../../../core/crates/aeroric-host/src/live.rs)。Context 服务器的命令、参数和 token 环境变量在 [`context_server.rs`](../../../../core/crates/aeroric-core/src/sessions/live/context_server.rs)（`TOKEN_ENV` 在 `:14`）。工具表只有一份，在 [`mcp_context.rs:16`](../../../../core/crates/aeroric-cli/src/mcp_context.rs) 的 `tools()`。

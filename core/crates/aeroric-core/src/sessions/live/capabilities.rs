@@ -56,9 +56,9 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
         (_, F::ContextTools) if place == Place::Remote => {
             no("远端会话还没有接入 Aeroric 工具：工具服务器要能连回这台 Mac 的宿主（批次 D）")
         }
-        (P::Omp, F::ContextTools) => no(
-            "OMP 还不能在启动时接入 Aeroric 工具：查不到记忆和 Wiki，也不能自己发起委派、读写黑板",
-        ),
+        (P::Omp, F::ContextTools) => yes(Some(
+            "启动时写进受管目录的 mcp.json，token 只在这次进程的环境里",
+        )),
         (P::Codex, F::ContextTools) => yes(Some("启动时在 thread/start 里接入")),
         (P::Claude, F::ContextTools) => yes(Some("启动时用 --mcp-config 接入")),
         (P::Dsh, F::ContextTools) => yes(Some("经 ACP 的 session/new 接入")),
@@ -67,9 +67,12 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
         // really happened; the rest rest on these rows and their tests.
         (P::Codex, F::SurfaceInstructions) => yes(Some("thread/start 的 developerInstructions")),
         (P::Claude, F::SurfaceInstructions) => yes(Some("--append-system-prompt")),
-        (P::Omp, F::SurfaceInstructions) => no(
-            "还没接：OMP 有 --append-system-prompt，Aeroric 没传（H2）；交接简报放在第一条消息前，记忆档案不给",
+        (P::Omp, F::SurfaceInstructions) if place == Place::Remote => no(
+            "远端 OMP 读不到这台 Mac 上的开场文件；交接简报放在第一条消息前，记忆档案不给",
         ),
+        (P::Omp, F::SurfaceInstructions) => {
+            yes(Some("--append-system-prompt，内容在会话自己的临时文件里"))
+        }
         (P::Dsh, F::SurfaceInstructions) => no(
             "DSH 的 ACP 没有声明 systemPrompt，没有系统层入口；交接简报放在第一条消息前，记忆档案不给",
         ),
@@ -126,9 +129,6 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
         (_, F::Goal) => no("目标模式还没接通"),
         (P::Codex | P::Omp, F::Steer) => yes(None),
         (P::Claude, F::Steer) => degraded("Claude 会作为下一轮发出"),
-        (P::Omp, F::DelegateChild | F::Reviewer) if place == Place::Local => degraded(
-            "能做子会话和审查者，结果照常送回；但它没有 Aeroric 工具，读写不了共享黑板、查不到记忆",
-        ),
         (P::Codex | P::Claude | P::Omp, F::DelegateChild | F::Reviewer) => match place {
             Place::Local => yes(None),
             Place::Remote => unknown("远程主机上还没核对"),
@@ -228,15 +228,19 @@ mod tests {
             support(ProtocolFamily::Dsh, Place::Remote, Feature::Receipts).state,
             SupportState::No
         );
-        // C9: OMP has no Aeroric tools yet, so as a child it is degraded,
-        // not refused; DSH has them over ACP.
+        // C9, H2: OMP has the Aeroric tools on this Mac, so as a child it
+        // is a full one; DSH has them over ACP.
         assert_eq!(
             at(ProtocolFamily::Omp, Feature::ContextTools).state,
-            SupportState::No
+            SupportState::Yes
         );
         assert_eq!(
             at(ProtocolFamily::Omp, Feature::DelegateChild).state,
-            SupportState::Degraded
+            SupportState::Yes
+        );
+        assert_eq!(
+            support(ProtocolFamily::Omp, Place::Remote, Feature::ContextTools).state,
+            SupportState::No
         );
         assert_eq!(
             at(ProtocolFamily::Dsh, Feature::ContextTools).state,

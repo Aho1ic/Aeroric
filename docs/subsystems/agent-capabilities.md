@@ -71,14 +71,14 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
 | Claude Code | 有 | `--mcp-config` 加 `--allowedTools mcp__aeroric_context` | 没有 |
 | Codex | 有 | `thread/start` 的 `config.mcp_servers`，标 `required` | 没有 |
 | DSH | 有 | ACP `session/new` 的 `mcpServers`（stdio） | 不支持远端 |
-| OMP | 没有 | 驱动不接受；上游支持 agent 目录下的 `mcp.json`，接线见 [各 Harness 原生融合](../../.agents/notes/proposed/architecture/2026-11-16-harness-native-capabilities.md) H2 | 没有 |
+| OMP | 有 | 受管目录（`PI_CODING_AGENT_DIR`）的 `mcp.json` 声明服务器，token 写成 `${AERORIC_CONTEXT_TOKEN:-}`、只放进这次进程的环境；工具的放行规则在受管目录的 `aeroric-context-tools.yml`，用 `--config` 传入（H2） | 没有 |
 
 - 远端会话都没有：工具服务器要能连回这台 Mac 的宿主，跨设备的身份和回执由批次 D 处理。
 - 能力表（`session.capabilities`）的"Aeroric 工具"（`contextTools`）按上表给出；`executor_tests.rs` 的 `the_capability_table_matches_who_gets_the_context_server` 核对它与执行器的路由一致。
 - 每次启动实际给了哪些工具、没给的原因，记在任务的工具清单里（C8），会话信息的"工具"一行显示。
-- OMP 作为子会话和审查者在能力表里是"有差异"：结果照常送回，但它读写不了共享黑板、查不到记忆。
+- OMP 的审批模式会拦 MCP 工具（它们一律算"会写"，`always-ask` 下要问）。Aeroric 用 `--config` 叠加层按工具名给出 `tools.approval.mcp__aeroric_context_<工具>: allow`，只放行这 21 个，和 Codex 只给这一个服务器设 `approve` 一样，不改整个会话的审批模式，也不动用户的 `config.yml`。
 - App 里的"新委派"、角色库、黑板面板、记忆页都由 App 直接调宿主，不依赖会话里的 Agent 有没有工具。依赖工具的是 Agent 自己发起的委派、检索和记忆提议，这部分在没有工具的会话里不会发生，会话信息里写明原因。
-- 记忆档案只进系统层：Claude、Codex 有；DSH 和 OMP 的驱动没有系统层接口，拿不到档案。
+- 记忆档案只进系统层：Claude、Codex、本机 OMP 有；DSH 的驱动没有系统层接口，拿不到档案。
 
 ## 6. 每个 Harness 用哪些入口接 Aeroric（H1，2026-11-20）
 
@@ -90,10 +90,10 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
 |---|---|---|---|---|---|---|
 | Claude Code | 有：`--append-system-prompt` | 有 | 有：会话插件或受管 home | 没有：会话插件可带 `hooks/hooks.json`，未放（H4） | 有：`Task`、`Agent` 工具与 `task_*` 事件 | 没有（H2） |
 | Codex | 有：`thread/start` 的 `developerInstructions` | 有 | 有：项目 `.agents/skills` 下带标记的副本 | 没有：可经 `thread/start` 的 `config` 按次下发，未接（H4） | 有：`subAgentActivity`、`collabAgentToolCall` | 没有（H2） |
-| OMP | 没有：上游有 `--append-system-prompt`，未传（H2） | 没有（H2） | 有：受管 home | 没有：上游可按次传 `--hook`，未传（H4） | 有：启动时订阅子代理事件 | 没有（H2） |
+| OMP | 有：`--append-system-prompt`，内容在会话自己的 0600 临时文件里，进程退出时删除 | 有 | 有：受管 home | 没有：上游可按次传 `--hook`，未传（H4） | 有：启动时订阅子代理事件 | 没有（H2） |
 | DSH | 没有：DSH 的 ACP 没有声明 `systemPrompt` | 有 | 有：受管配置目录 | 没有：没有能从外部配置的 Hook | 没有：ACP 不发子代理事件 | 没有（H2） |
 
-远端：系统层和子代理同本机（远端 Claude、Codex 的系统层有测试断言）；工具、技能、事件都没有；DSH 不支持远端。
+远端：子代理同本机；系统层 Claude、Codex 同本机（有测试断言），OMP 没有（开场文件在这台 Mac 上，远端读不到）；工具、技能、事件都没有；DSH 不支持远端。
 
 **依据从哪来。**
 
@@ -125,7 +125,7 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
    - Aeroric 没有设 Claude Code 的最低版本。
 4. **原生子代理能不能调到 `aeroric_context`，用的是不是父任务的 token。**
    - Codex：能，用的是父任务的 token。子代理的配置是父回合配置的副本（`core/src/agent/child_config.rs`），`mcp_servers` 里的 Aeroric 服务器连同环境变量里的 token 一起带过去，开场内容（`developer_instructions`）也一样；
-   - OMP：子代理借用父会话的 MCP 连接（上游 `mcp-runtime-lifecycle.md`），父会话接上工具后子代理自然有，前提是 H2；
+   - OMP：子代理借用父会话的 MCP 连接（上游 `mcp-runtime-lifecycle.md`）。H2 第一步已给本机父会话接上工具，子代理的真实调用 NOT RUN；
    - Claude：NOT RUN。官方文档说子代理继承主会话的 MCP 工具，要用真实会话让子代理调一次 `aeroric_context` 才能确认；
    - 三家的真实调用都没跑。
 5. **DSH。**

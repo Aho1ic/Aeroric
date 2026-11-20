@@ -988,3 +988,96 @@ async fn a_claude_launch_hands_what_its_surfaces_say() {
     assert_eq!(entry(Feature::SurfaceSkills).state, SupportState::No);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// H2 (2026-11-20): an OMP session on this Mac gets the context server and
+/// the opening at start, the record says so, and closing the session ends
+/// its token.
+#[tokio::test]
+async fn an_omp_launch_gets_the_server_and_the_opening_and_closing_ends_its_token() {
+    use crate::sessions::live::context_server::TOKEN_ENV;
+    use crate::sessions::live::omp::driver::OmpStart;
+    use aeroric_protocol::checkpoint::HandoffReason;
+    use aeroric_protocol::live_capability::{Feature, SupportState};
+
+    struct Capture(Launcher, Arc<Mutex<Vec<OmpStart>>>);
+    impl Routing for Capture {
+        fn route(&self, _: ProtocolFamily, agent: &str, _: Option<&str>) -> Option<Route> {
+            Some(Route::Omp(OmpKey {
+                agent: agent.to_string(),
+                config: None,
+            }))
+        }
+        fn codex_launcher(&self, _key: &ServerKey) -> Launcher {
+            Arc::clone(&self.0)
+        }
+        fn claude_launcher(&self, _key: &ClaudeKey) -> ClaudeLauncher {
+            Arc::new(|_: &crate::sessions::live::claude::driver::ClaudeStart| {
+                Err("none".to_string())
+            })
+        }
+        fn omp_launcher(&self, _key: &OmpKey) -> OmpLauncher {
+            let starts = Arc::clone(&self.1);
+            Arc::new(move |start: &OmpStart| {
+                starts.lock().push(start.clone());
+                Err("no omp in this test".to_string())
+            })
+        }
+    }
+
+    let (codex, _peers) = launcher();
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let executor = StructuredExecutor::new(
+        Arc::new(Inner::default()) as Arc<dyn TaskExecutor>,
+        Arc::new(Capture(codex, Arc::clone(&starts))),
+        Arc::new(Sink::default()) as Arc<dyn LiveStatusSink>,
+        tokio::runtime::Handle::current(),
+    );
+    let dir = std::env::temp_dir().join(format!("aeroric-exec-omp-{}", uuid::Uuid::new_v4()));
+    executor.surface_log().set_dir(dir.clone());
+    executor.set_context_program("aeroric-cli".into(), "/d".into());
+    executor.checkpoints().arm("o1", HandoffReason::SourceMove);
+    let _ = executor.launch(&LaunchRequest {
+        agent: "omp".into(),
+        ..launch("o1", ProtocolFamily::Omp)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while starts.lock().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "omp never asked to start"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let start = starts.lock()[0].clone();
+    let opening = start.append_system.expect("the opening");
+    let server = start.context.expect("the context server");
+    let token = server
+        .env
+        .iter()
+        .find(|(k, _)| k == TOKEN_ENV)
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    assert_eq!(
+        executor.context_tokens().resolve(&token),
+        Some(("o1".to_string(), "p1".to_string()))
+    );
+    let kept = executor.surface_log().latest("o1").unwrap();
+    let entry = |f: Feature| kept.surfaces.iter().find(|e| e.feature == f).unwrap();
+    assert_eq!(kept.harness, "omp");
+    assert_eq!(entry(Feature::ContextTools).state, SupportState::Yes);
+    assert_eq!(
+        entry(Feature::SurfaceInstructions).note,
+        Some(format!(
+            "这次启动从系统层给了开场内容（{} 字）",
+            opening.chars().count()
+        ))
+    );
+
+    assert!(executor.close_session("o1"));
+    assert_eq!(
+        executor.context_tokens().resolve(&token),
+        None,
+        "closed: the token ends"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

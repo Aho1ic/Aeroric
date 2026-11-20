@@ -804,16 +804,17 @@ fn omp_launcher(context: Arc<CoreContext>, key: OmpKey) -> OmpLauncher {
             spec.env.retain(|(existing, _)| existing != name);
             spec.unset_env.push((*name).to_string());
         }
-        if let Some((_, home)) = spec
+        let home = spec
             .env
             .iter()
             .find(|(name, _)| name == "PI_CODING_AGENT_DIR")
-        {
+            .map(|(_, home)| std::path::PathBuf::from(home));
+        if let Some(home) = &home {
             crate::builtin_skills_services::prepare(
                 &context,
                 "omp",
                 Some(std::path::Path::new(&start.cwd)),
-                crate::builtin_skills_services::Mount::Home(std::path::Path::new(home)),
+                crate::builtin_skills_services::Mount::Home(home),
             );
         }
         let mut args = aeroric_core::agents::launch::omp_rpc_args(
@@ -830,8 +831,71 @@ fn omp_launcher(context: Arc<CoreContext>, key: OmpKey) -> OmpLauncher {
                 .iter()
                 .map(|dir| format!("--add-dir={dir}")),
         );
-        spawn_checked(&spec, omp_version_supported, &args, "omp")
+        let opening = match &home {
+            Some(home) => {
+                omp_aeroric_extras(context.paths.data_dir(), home, start, &mut spec, &mut args)?
+            }
+            None => None,
+        };
+        match spawn_checked(&spec, omp_version_supported, &args, "omp") {
+            Ok((transport, guard)) => Ok((
+                transport,
+                guard.map(|guard| guard.with_cleanup(move || remove_opening(opening))),
+            )),
+            Err(reason) => {
+                remove_opening(opening);
+                Err(reason)
+            }
+        }
     })
+}
+
+/// H2 (2026-11-20): what Aeroric gives one omp start beyond its own argv.
+/// The context server is declared in the managed `home`'s `mcp.json` (no
+/// token in the file), its token goes in this process's environment, and
+/// its tools are allowed by an overlay (`--config`). The opening goes in a
+/// file of the session's own (0600) for `--append-system-prompt`, so memory
+/// never sits in argv. Returns that file, to remove when the process goes.
+fn omp_aeroric_extras(
+    data_dir: &std::path::Path,
+    home: &std::path::Path,
+    start: &OmpStart,
+    spec: &mut ProcessSpec,
+    args: &mut Vec<String>,
+) -> Result<Option<std::path::PathBuf>, String> {
+    if let Some(server) = &start.context {
+        let overlay = aeroric_core::settings::omp_home::declare_context_server(
+            home,
+            &server.command,
+            &server.args,
+        )?;
+        for (name, value) in &server.env {
+            spec.env.retain(|(existing, _)| existing != name);
+            spec.env.push((name.clone(), value.clone()));
+        }
+        args.extend([
+            "--config".to_string(),
+            overlay.to_string_lossy().into_owned(),
+        ]);
+    }
+    let Some(text) = start.append_system.as_deref() else {
+        return Ok(None);
+    };
+    let dir = data_dir.join("tmp").join("omp-openings");
+    aeroric_core::settings::ensure_private_dir(&dir)?;
+    let file = dir.join(format!("{}.md", uuid::Uuid::new_v4().simple()));
+    aeroric_core::settings::atomic_write_private(&file, text)?;
+    args.extend([
+        "--append-system-prompt".to_string(),
+        file.to_string_lossy().into_owned(),
+    ]);
+    Ok(Some(file))
+}
+
+fn remove_opening(file: Option<std::path::PathBuf>) {
+    if let Some(file) = file {
+        let _ = std::fs::remove_file(file);
+    }
 }
 
 /// omp pinned to an Agent configuration: the built-in omp with the
@@ -936,18 +1000,33 @@ fn omp_config_launcher(context: Arc<CoreContext>, config_id: String) -> OmpLaunc
                 .iter()
                 .map(|dir| format!("--add-dir={dir}")),
         );
+        let opening = match omp_aeroric_extras(
+            context.paths.data_dir(),
+            &home,
+            start,
+            &mut spec,
+            &mut args,
+        ) {
+            Ok(opening) => opening,
+            Err(reason) => {
+                aeroric_core::local_router::task_tokens::revoke_token(&token);
+                return Err(reason);
+            }
+        };
         let own = token.clone();
         match spawn_checked(&spec, omp_version_supported, &args, "omp") {
             Ok((transport, guard)) => Ok((
                 transport,
                 guard.map(|guard| {
                     guard.with_cleanup(move || {
-                        aeroric_core::local_router::task_tokens::revoke_token(&own)
+                        aeroric_core::local_router::task_tokens::revoke_token(&own);
+                        remove_opening(opening);
                     })
                 }),
             )),
             Err(reason) => {
                 aeroric_core::local_router::task_tokens::revoke_token(&token);
+                remove_opening(opening);
                 Err(reason)
             }
         }
@@ -1314,5 +1393,79 @@ mod linked_folder_args {
             .position(|a| a == "--allowedTools")
             .unwrap();
         assert_eq!(with_context[at + 1], "mcp__aeroric_context");
+    }
+
+    /// H2 (2026-11-20): an omp start gets the opening as a 0600 file of its
+    /// own (never argv), the context server in the managed home's
+    /// `mcp.json` with no token in the file, the token in the process
+    /// environment, and the tools' approval overlay; with neither, nothing.
+    #[test]
+    fn omp_gets_the_opening_as_a_file_and_the_server_in_its_home() {
+        use aeroric_core::sessions::live::context_server::{ContextServer, TOKEN_ENV};
+        let root =
+            std::env::temp_dir().join(format!("aeroric-omp-extras-{}", uuid::Uuid::new_v4()));
+        let home = root.join("agent-homes").join("omp");
+        let start = OmpStart {
+            cwd: "/w".into(),
+            append_system: Some("# 交接清单\n- 目标".into()),
+            context: Some(ContextServer {
+                command: "/a/aeroric-cli".into(),
+                args: vec!["--data-dir".into(), "/d".into(), "mcp-context".into()],
+                env: vec![(TOKEN_ENV.into(), "secret-token".into())],
+            }),
+            ..OmpStart::default()
+        };
+        let mut spec = ProcessSpec::default();
+        let mut args = vec!["--mode".to_string(), "rpc".into()];
+        let file = omp_aeroric_extras(&root, &home, &start, &mut spec, &mut args)
+            .unwrap()
+            .expect("an opening file");
+
+        let at = args
+            .iter()
+            .position(|a| a == "--append-system-prompt")
+            .unwrap();
+        assert_eq!(args[at + 1], file.to_string_lossy());
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "# 交接清单\n- 目标"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        assert!(!args.join(" ").contains("交接清单"), "no memory in argv");
+        assert!(!args.join(" ").contains("secret-token"));
+
+        let at = args.iter().position(|a| a == "--config").unwrap();
+        assert!(args[at + 1].ends_with("aeroric-context-tools.yml"));
+        let mcp = std::fs::read_to_string(home.join("mcp.json")).unwrap();
+        assert!(
+            mcp.contains("aeroric_context") && !mcp.contains("secret-token"),
+            "{mcp}"
+        );
+        assert!(spec
+            .env
+            .iter()
+            .any(|(k, v)| k == TOKEN_ENV && v == "secret-token"));
+
+        remove_opening(Some(file.clone()));
+        assert!(!file.exists());
+
+        let mut bare = ProcessSpec::default();
+        let mut bare_args = Vec::new();
+        let none = omp_aeroric_extras(
+            &root,
+            &home,
+            &OmpStart::default(),
+            &mut bare,
+            &mut bare_args,
+        )
+        .unwrap();
+        assert!(none.is_none());
+        assert!(bare_args.is_empty() && bare.env.is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

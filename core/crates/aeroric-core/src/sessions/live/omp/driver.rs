@@ -44,6 +44,12 @@ pub struct OmpStart {
     pub effort: Option<String>,
     /// `--resume <session file or id>` once the session exists.
     pub resume: Option<String>,
+    /// H2 (2026-11-20): the opening for `--append-system-prompt`; the host
+    /// writes it to a file of the session's own, never into argv.
+    pub append_system: Option<String>,
+    /// H2: the Aeroric context server. The host declares it in the managed
+    /// home's `mcp.json` and puts the token in this process's environment.
+    pub context: Option<crate::sessions::live::context_server::ContextServer>,
 }
 
 pub type OmpLauncher =
@@ -87,6 +93,9 @@ pub struct OmpSessionSpec {
     pub effort: Option<String>,
     /// The session to resume (file path or id).
     pub session: Option<String>,
+    /// H2: on another machine — the opening's file and the context server
+    /// are this Mac's, so neither is taken.
+    pub remote: bool,
 }
 
 #[derive(Debug)]
@@ -140,6 +149,10 @@ struct State {
     /// `session_settled`: omp still has async work that may wake the session.
     settled: bool,
     closed: bool,
+    remote: bool,
+    /// H2: what the next start takes for its system layer and context server.
+    instructions: Option<String>,
+    context: Option<crate::sessions::live::context_server::ContextServer>,
 }
 
 pub struct OmpSession {
@@ -182,6 +195,9 @@ impl OmpSession {
             idle_since: now_ms(),
             settled: true,
             closed: false,
+            remote: spec.remote,
+            instructions: None,
+            context: None,
         }));
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (inbox, inbox_rx) = mpsc::unbounded_channel();
@@ -232,6 +248,31 @@ impl OmpSession {
 impl SessionDriver for OmpSession {
     fn family(&self) -> ProtocolFamily {
         ProtocolFamily::Omp
+    }
+
+    /// H2 (2026-11-20): omp takes `--append-system-prompt` (text or a file).
+    /// A remote one has no file of this Mac to read: not taken.
+    fn set_instructions(&self, text: String) -> bool {
+        let mut state = self.state.lock();
+        if state.remote {
+            return false;
+        }
+        state.instructions = Some(text);
+        true
+    }
+
+    /// H2: omp reads MCP servers from its agent directory's `mcp.json`,
+    /// which the host keeps; the token goes in the process environment.
+    fn set_context_server(
+        &self,
+        server: crate::sessions::live::context_server::ContextServer,
+    ) -> bool {
+        let mut state = self.state.lock();
+        if state.remote {
+            return false;
+        }
+        state.context = Some(server);
+        true
     }
 
     fn attach(&self) -> Result<(), DriverError> {
@@ -536,6 +577,8 @@ impl Actor {
                 permission: state.permission.clone(),
                 effort: state.effort.clone(),
                 resume: state.resume.clone(),
+                append_system: state.instructions.clone(),
+                context: state.context.clone(),
             }
         };
         let (transport, guard) = (self.launcher)(&start)?;

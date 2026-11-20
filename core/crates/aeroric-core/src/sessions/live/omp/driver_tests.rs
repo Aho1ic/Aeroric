@@ -96,6 +96,7 @@ fn start() -> Harness {
             model: None,
             effort: Some("high".into()),
             session: None,
+            remote: false,
         },
         launcher,
         Arc::clone(&sink) as Arc<dyn LiveStatusSink>,
@@ -648,4 +649,52 @@ async fn an_answer_that_is_not_written_keeps_the_question() {
         .any(|t| t == "questionResolved"));
     assert_eq!(session.snapshot().questions.len(), 1, "still open");
     drop(to_client);
+}
+
+/// H2 (2026-11-20): the opening and the context server reach the start the
+/// host turns into argv and environment; a remote omp takes neither.
+#[tokio::test]
+async fn the_opening_and_the_context_server_reach_the_start() {
+    use crate::sessions::live::context_server::{ContextServer, TOKEN_ENV};
+    let mut h = start();
+    let server = ContextServer {
+        command: "/a/aeroric-cli".into(),
+        args: vec!["--data-dir".into(), "/d".into(), "mcp-context".into()],
+        env: vec![(TOKEN_ENV.into(), "tok".into())],
+    };
+    assert!(h.session.set_instructions("# 交接清单\n- 目标".into()));
+    assert!(h.session.set_context_server(server.clone()));
+    h.session.prompt("hi".into()).unwrap();
+    let peer = launched(&mut h).await;
+    assert_eq!(
+        peer.start.append_system.as_deref(),
+        Some("# 交接清单\n- 目标")
+    );
+    assert_eq!(peer.start.context, Some(server.clone()));
+
+    let (launcher, _) = {
+        let (tx, rx) = mpsc::unbounded_channel::<OmpStart>();
+        let launcher: OmpLauncher = Arc::new(move |start: &OmpStart| {
+            let _ = tx.send(start.clone());
+            Err("not started".into())
+        });
+        (launcher, rx)
+    };
+    let remote = OmpSession::start(
+        OmpSessionSpec {
+            task_id: "r1".into(),
+            agent: "omp".into(),
+            remote: true,
+            ..Default::default()
+        },
+        launcher,
+        Arc::new(Sink::default()) as Arc<dyn LiveStatusSink>,
+        SharedLog::new("r1"),
+        &tokio::runtime::Handle::current(),
+    );
+    assert!(
+        !remote.set_instructions("x".into()),
+        "a remote omp has no file of this Mac to read"
+    );
+    assert!(!remote.set_context_server(server));
 }
