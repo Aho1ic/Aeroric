@@ -67,7 +67,9 @@ export CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-ta
 ulimit -n 10240
 cd ~/$dir/Aeroric
 if ! mkdir ~/$dir/.lock 2>/dev/null; then echo "远端正在跑另一次（~/$dir/.lock）"; exit 75; fi
-trap 'rmdir ~/$dir/.lock' EXIT
+# 测试在临时目录里留下的 aeroric-* 目录：结束时删掉这次运行期间新建的那些。
+touch ~/$dir/.lock/started
+trap 'find "\${TMPDIR:-/tmp}" -maxdepth 1 -name "aeroric-*" -newer ~/$dir/.lock/started -exec rm -rf {} + 2>/dev/null; rm -rf ~/$dir/.lock' EXIT
 if [ -d core/target ]; then
   kb=\$(du -sk core/target | cut -f1)
   if [ "\$kb" -gt \$(( $max_gb * 1024 * 1024 )) ]; then
@@ -80,7 +82,7 @@ EOF
 
 report() {
   cat <<'EOF'
-echo "--- 远端磁盘：$(df -h ~ | tail -1 | awk '{print "剩 " $4 "，已用 " $5}')"
+echo "--- 远端磁盘：$(df -h ~ | tail -1 | awk '{print "剩 " $4 "，已用 " $5}')（测试的临时目录在退出时清理）"
 for d in core/target .artifacts macos/AeroricKit/.build; do
   [ -d "$d" ] && echo "    $d $(du -sh "$d" | cut -f1)"
 done

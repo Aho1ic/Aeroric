@@ -43,7 +43,7 @@ scripts/native/remote.sh status          # 远端磁盘余量与产物大小
 - 远端的 Rust 版本由 rustup 钉成本机 `cargo --version` 的版本，两边的 `rustfmt` 和编译警告一致；要先在远端 `rustup toolchain install <版本> --profile minimal --component rustfmt`。
 - `native:generate` 钉死 XcodeGen 2.46.0：远端在 `<目录>/tools/xcodegen-2.46.0/` 放一份（从本机 Homebrew 的 `Cellar/xcodegen/2.46.0` 原样拷过去），脚本把它排在 PATH 最前。
 - 远端磁盘有限：编译不留增量缓存，调试信息只留行号；`core/target` 超过 `AERORIC_REMOTE_MAX_TARGET_GB`（默认 60）时先 `cargo clean`；每次结束报告磁盘余量。
-- 同一时间只跑一次（远端 `.lock` 目录）。日志留在远端 `<目录>/logs/`。
+- 同一时间只跑一次（远端 `.lock` 目录）。日志留在远端 `<目录>/logs/`。测试在远端临时目录里留下的 `aeroric-*` 目录，每次运行结束时删掉这次新建的。
 - 本机打包是临时签名（ad-hoc），远端打包也是，拷回来的 .app 与本机打的等价。
 
 ## 门禁
