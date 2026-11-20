@@ -13,7 +13,7 @@ pub mod dream;
 pub mod extract;
 pub mod locate;
 pub mod native;
-mod profile;
+pub(crate) mod profile;
 pub mod run;
 pub mod runs;
 mod secrets;

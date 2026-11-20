@@ -617,6 +617,15 @@ pub fn codex(lines: &[String]) -> Option<TranscriptStats> {
                     "message" => {
                         for part in payload["content"].as_array().into_iter().flatten() {
                             let text = part["text"].as_str().unwrap_or_default();
+                            // H3: Aeroric's opening (`developerInstructions`, a
+                            // part of its own) goes in by its sections.
+                            if text.starts_with(crate::sessions::live::opening::PURPOSE_HEADER) {
+                                for (kind, size) in crate::sessions::live::opening::bill_parts(text)
+                                {
+                                    ledger.base(kind, size, Some("Aeroric 开场白"));
+                                }
+                                continue;
+                            }
                             let kind = codex_base_kind(text, base_instructions.as_deref());
                             // The system prompt was counted from the session's meta.
                             if kind == "system" {
@@ -827,7 +836,17 @@ fn claude_attachment(ledger: &mut Ledger, attachment: &Value) {
                     .join("\n"),
                 other => other.as_str().unwrap_or_default().to_string(),
             };
-            ledger.base("system", chars(&text), None);
+            // H3: `--append-system-prompt` lands in the system prompt; from
+            // Aeroric's opening on, it goes in by its sections.
+            match text.find(crate::sessions::live::opening::PURPOSE_HEADER) {
+                Some(at) => {
+                    ledger.base("system", chars(&text[..at]), None);
+                    for (kind, size) in crate::sessions::live::opening::bill_parts(&text[at..]) {
+                        ledger.base(kind, size, Some("Aeroric 开场白"));
+                    }
+                }
+                None => ledger.base("system", chars(&text), None),
+            }
         }
         "skill_listing" => ledger.base("skills", size, None),
         "deferred_tools_delta" | "mcp_instructions_delta" | "agent_listing_delta" => {
@@ -1519,5 +1538,86 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(changed.retry, None);
+    }
+
+    /// H3 (2026-11-20): Aeroric's opening — a developer part of its own in
+    /// Codex, the end of the system prompt in Claude — goes in by its
+    /// sections: the purpose and pointers as instructions, the profile as
+    /// memory, a handoff brief after `---` as other.
+    #[test]
+    fn the_opening_goes_in_by_its_sections() {
+        use crate::sessions::live::opening::{POINTERS_HEADER, PURPOSE_HEADER};
+        let n = |s: &str| s.chars().count() as u64;
+        let purpose = format!("{PURPOSE_HEADER}\n{}", "p".repeat(80));
+        let profile = format!(
+            "# Aeroric 记忆（用户确认过的长期信息）\n## 关于用户\n{}",
+            "m".repeat(150)
+        );
+        let pointers = format!("{POINTERS_HEADER}\n{}", "w".repeat(60));
+        let brief = format!("# 交接清单\n{}", "b".repeat(50));
+        let opening = format!("{purpose}\n\n{profile}\n\n{pointers}\n\n---\n\n{brief}");
+        let instructions = n(&purpose) + 2 + n(&pointers) + 7;
+        let memory = n(&profile) + 2;
+        assert_eq!(instructions + memory + n(&brief), n(&opening));
+
+        let t = |s: &str| format!("2026-11-09T01:00:{s}Z");
+        let system = "s".repeat(400);
+        let question = "q".repeat(100);
+        let total = 400 + n(&opening) + 100;
+        let rollout = lines(&[
+            serde_json::json!({"timestamp": t("00.000"), "type": "session_meta", "payload": {"base_instructions": {"text": system}}}),
+            serde_json::json!({"timestamp": t("00.001"), "type": "event_msg", "payload": {"type": "task_started"}}),
+            serde_json::json!({"timestamp": t("00.003"), "type": "response_item", "payload": {"type": "message", "role": "developer", "content": [
+                {"type": "input_text", "text": system},
+                {"type": "input_text", "text": opening}]}}),
+            serde_json::json!({"timestamp": t("00.005"), "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": question}]}}),
+            serde_json::json!({"timestamp": t("01.000"), "type": "event_msg", "payload": {"type": "token_count", "info":
+                {"last_token_usage": {"input_tokens": total, "total_tokens": total}}}}),
+            serde_json::json!({"timestamp": t("02.000"), "type": "event_msg", "payload": {"type": "task_complete"}}),
+        ]);
+        let stats = codex(&rollout).unwrap();
+        let part = |kind: &str| {
+            stats.turns[0]
+                .context
+                .iter()
+                .find(|p| p.kind == kind)
+                .cloned()
+        };
+        assert_eq!(part("system").unwrap().tokens, 400);
+        assert_eq!(part("instructions").unwrap().tokens, instructions);
+        assert_eq!(part("memory").unwrap().tokens, memory);
+        assert_eq!(part("other").unwrap().tokens, n(&brief));
+        assert_eq!(
+            part("memory").unwrap().sources,
+            vec!["Aeroric 开场白".to_string()]
+        );
+
+        // Claude: the appended prompt sits at the end of the system prompt.
+        let total = 300 + 1 + n(&opening) + 2;
+        let jsonl = lines(&[
+            serde_json::json!({"type": "attachment", "attachment": {"type": "prompt_snapshot", "systemPrompt": ["x".repeat(300), opening]}}),
+            serde_json::json!({"timestamp": t("00.000"), "type": "user", "message": {"role": "user", "content": "go"}}),
+            serde_json::json!({"timestamp": t("01.000"), "type": "assistant", "message": {
+                "id": "m1", "content": [], "usage": {"input_tokens": total, "output_tokens": 5}}}),
+        ]);
+        let stats = claude(&jsonl).unwrap();
+        let part = |kind: &str| {
+            stats.turns[0]
+                .context
+                .iter()
+                .find(|p| p.kind == kind)
+                .map(|p| p.tokens)
+        };
+        // Claude's ledger counts a little more than the parts here, so the
+        // scaled numbers may be a few off; the split is what is checked.
+        let near = |kind: &str, want: u64| {
+            let got = part(kind).unwrap_or_else(|| panic!("no {kind}"));
+            assert!(got.abs_diff(want) <= 3, "{kind}: {got} vs {want}");
+        };
+        near("system", 301);
+        near("instructions", instructions);
+        near("memory", memory);
+        near("other", n(&brief));
     }
 }

@@ -110,6 +110,8 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
 
 合计上限 2280 字，超出时先去掉指路。有交接简报时，简报接在开场白后面，中间用 `---` 分隔。
 
+回合账单的"带入的上下文"按段计入开场白（`opening::bill_parts`）：用途说明和指路算"说明"，记忆档案算"记忆"，交接简报算"其他"，来源都写"Aeroric 开场白"。Codex 的开场白是开发者消息里单独的一段；Claude 的在系统提示末尾，从用途说明的标题起拆出来，前面的仍算系统提示。
+
 **没有系统层时开场内容去哪。** 交接简报放在第一条消息前；恢复会话时没有消息可附，简报就没给出，入口记录里写明。记忆档案只进系统层，没有系统层的 Harness 拿不到。
 
 **命令行入口（H2 第二步，2026-11-20）。** `aeroric-cli --data-dir <数据目录> ctx <工具名> [--json '<参数>' | --json -]` 调用 Aeroric 上下文工具。它就是 MCP 服务的 `tools/call`：同一张工具表、同一个宿主方法、同一个令牌（`AERORIC_CONTEXT_TOKEN`），输出同样的结果（`structuredContent.status`），退出码 0 成功、2 参数不对或没有令牌、3 连不上、4 被拒绝或结果不明；`ctx --help` 由工具表生成。配套的内置技能 `aeroric` 教 Agent 用这个命令，只挂给没有 Aeroric 工具的 Harness（`builtin_skills::for_harness`），有工具的不挂，免得同一能力两个入口抢着被调用。现在本机四家都有工具，所以这个技能不挂给任何一家，技能目录里写明原因。给这种 Harness 的启动器要在环境里放 `AERORIC_CLI`、`AERORIC_DATA_DIR` 和令牌（`ContextServer::shell_env`），目前还没有这样的 Harness。

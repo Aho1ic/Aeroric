@@ -127,6 +127,44 @@ pub fn compose(purpose: &str, profile: Option<&str>, pointers: Option<&str>) -> 
     }
 }
 
+/// H3 (2026-11-20): the context bill's split of a text that holds the
+/// opening (`text` from [`PURPOSE_HEADER`] on): `(kind, chars)` per part in
+/// the bill's kinds — the purpose and the pointers are `instructions`, the
+/// profile `memory`, a handoff brief after the `---` `other`. The chars add
+/// up to the whole text, separators going with the part before them.
+pub fn bill_parts(text: &str) -> Vec<(&'static str, usize)> {
+    const BRIEF: &str = "\n\n---\n\n";
+    let (opening, brief) = match text.find(BRIEF) {
+        Some(at) => (&text[..at + BRIEF.len()], Some(&text[at + BRIEF.len()..])),
+        None => (text, None),
+    };
+    let mut parts: Vec<(&'static str, usize)> = Vec::new();
+    let mut rest = opening;
+    while !rest.is_empty() {
+        // A section runs to the next "\n\n# " heading.
+        let from = rest.chars().next().map_or(rest.len(), char::len_utf8);
+        let end = rest[from..]
+            .find("\n\n# ")
+            .map(|at| from + at + 2)
+            .unwrap_or(rest.len());
+        let (section, tail) = rest.split_at(end);
+        let kind = if section.starts_with(crate::memory::profile::HEADER_PREFIX) {
+            "memory"
+        } else {
+            "instructions"
+        };
+        match parts.last_mut() {
+            Some((last, chars)) if *last == kind => *chars += section.chars().count(),
+            _ => parts.push((kind, section.chars().count())),
+        }
+        rest = tail;
+    }
+    if let Some(brief) = brief.filter(|b| !b.is_empty()) {
+        parts.push(("other", brief.chars().count()));
+    }
+    parts
+}
+
 fn cut(text: &str, budget: usize) -> String {
     if text.chars().count() <= budget {
         return text.to_string();

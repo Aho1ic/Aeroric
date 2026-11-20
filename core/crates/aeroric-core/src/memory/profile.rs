@@ -4,6 +4,8 @@
 use aeroric_protocol::memory::{MemoryCategory, MemoryItem, MemoryKind, PROFILE_BUDGET_CHARS};
 
 pub const HEADER: &str = "# Aeroric 记忆（用户确认过的长期信息）";
+/// What every profile starts with (H3: the context bill finds it by this).
+pub const HEADER_PREFIX: &str = "# Aeroric 记忆";
 
 fn category(item: &MemoryItem) -> &'static str {
     match item.category {

@@ -92,3 +92,30 @@ fn the_opening_is_purpose_profile_pointers_under_the_cap() {
     assert!(over.chars().count() <= OPENING_BUDGET_CHARS);
     assert!(over.starts_with(PURPOSE_HEADER));
 }
+
+/// The bill's split adds up to the whole text and keeps each part's kind;
+/// an opening with no profile is all instructions.
+#[test]
+fn the_bill_parts_add_up_and_name_their_kinds() {
+    let purpose = purpose(true, ALL);
+    let profile = "# Aeroric 记忆（用户确认过的长期信息）\n## 关于用户\n- 用中文";
+    let short = pointers(&["登录".into()], &["审查者".into()]).unwrap();
+    let text = format!(
+        "{}\n\n---\n\n# 交接清单\n- 目标",
+        compose(&purpose, Some(profile), Some(&short))
+    );
+    let parts = bill_parts(&text);
+    assert_eq!(
+        parts.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+        ["instructions", "memory", "instructions", "other"]
+    );
+    assert_eq!(
+        parts.iter().map(|(_, n)| n).sum::<usize>(),
+        text.chars().count()
+    );
+    let bare = compose(&purpose, None, None);
+    assert_eq!(
+        bill_parts(&bare),
+        vec![("instructions", bare.chars().count())]
+    );
+}
