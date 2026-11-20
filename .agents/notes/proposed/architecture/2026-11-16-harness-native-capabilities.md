@@ -218,7 +218,7 @@ Aeroric 是各 Harness 的上级进程，结构化事件流本来就经过宿主
 
 #### H5 让原生子代理用上 Aeroric 的东西
 
-2026-11-20 第一步已实现，见 [H5 第一步笔记](../../implemented/feature/2026-11-20-h5-roles-as-native-subagents.md)：第 3 条（给角色）和第 4 条（`delegate` 说明）。角色库里适合原生子代理的角色写成 Claude（会话插件 `aeroric:<id>`、配置的受管目录 `aeroric-<id>`）和 OMP（受管目录 `aeroric-<id>`）的子代理定义，只读角色用工具白名单限住；Codex 不投影，因为它的自定义代理不能收窄父会话的沙盒；内置角色里现在只有调研员可投影。第 1 条（与委派列在一起）和第 2 条（黑板写入标明子代理）留给第二步。
+2026-11-20 第一步已实现，见 [H5 第一步笔记](../../implemented/feature/2026-11-20-h5-roles-as-native-subagents.md)：第 3 条（给角色）和第 4 条（`delegate` 说明）。角色库里适合原生子代理的角色写成 Claude（会话插件 `aeroric:<id>`、配置的受管目录 `aeroric-<id>`）和 OMP（受管目录 `aeroric-<id>`）的子代理定义，只读角色用工具白名单限住；Codex 不投影，因为它的自定义代理不能收窄父会话的沙盒；内置角色里现在只有调研员可投影。2026-11-21 第二步已实现，见 [H5 第二步笔记](../../implemented/feature/2026-11-21-h5-native-subagents-listed.md)：第 1 条，进度页的委派一节同时列出原生子代理（由 Harness 管理，没有打断按钮）和委派子会话，Codex 子线程的开始、结束也发 `Subagent` 更新；第 2 条，Context 服务器分不出调用来自主会话还是子代理，按退路由子代理在 `board_write` 里自报名字，投影的角色定义写明该填的名字。H5 完成。
 
 不和原生子代理抢，也不强迫模型改用 `delegate`。"看见"已经有了，剩三件事。
 

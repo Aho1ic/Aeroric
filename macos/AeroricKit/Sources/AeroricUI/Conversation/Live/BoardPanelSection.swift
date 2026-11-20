@@ -66,7 +66,7 @@ struct BoardPanelSection: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .help("\(entry.text)\n\(BoardText.author(entry.author))")
+                .help("\(entry.text)\n\(BoardText.author(entry.author, subagent: entry.subagent))")
             if entry.kind == "decision" && entry.state == "proposed" {
                 Button("采纳") { onAction(.decide(id: entry.id, accept: true)) }
                     .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
@@ -147,15 +147,19 @@ public enum BoardText {
         }
     }
 
-    /// "假设 · 是 DNS 慢" / "认领 · 查 hyper（task-4）".
+    /// "假设 · 是 DNS 慢" / "认领 · 查 hyper（task-4）" / "证据 · 子代理 aeroric-researcher：日志".
     public static func line(_ entry: LiveBoardEntry) -> String {
-        var out = "\(kind(entry.kind)) · \(entry.text)"
+        var out = "\(kind(entry.kind)) · "
+        if let subagent = entry.subagent { out += "子代理 \(subagent)：" }
+        out += entry.text
         if let member = entry.claimedBy { out += "（\(member)）" }
         return out
     }
 
-    public static func author(_ author: String) -> String {
-        author == "user" ? "你写的" : "会话 \(author) 写的"
+    public static func author(_ author: String, subagent: String? = nil) -> String {
+        if author == "user" { return "你写的" }
+        if let subagent { return "会话 \(author) 的子代理 \(subagent) 写的" }
+        return "会话 \(author) 写的"
     }
 
     /// Goals first, then open questions and proposed decisions, then the rest.

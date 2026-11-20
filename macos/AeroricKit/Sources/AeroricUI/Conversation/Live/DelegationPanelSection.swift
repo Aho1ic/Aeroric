@@ -11,6 +11,9 @@ public struct DelegationPanelModel: Equatable, Sendable {
     public var audit: [LiveDelegationAudit]
     /// R2-3b: child task → hunks of its copy not brought back yet.
     public var copyPending: [String: Int] = [:]
+    /// H5: the harness's own subagents of this session, listed beside the
+    /// delegations; the harness manages them, Aeroric only watches.
+    public var native: [LiveSubagent] = []
 
     public init(delegations: [LiveDelegationCard] = [], delegateOf: String? = nil, roles: [LiveDelegationRole] = [],
                 stats: [LiveReputationRow] = [], audit: [LiveDelegationAudit] = []) {
@@ -19,6 +22,14 @@ public struct DelegationPanelModel: Equatable, Sendable {
         self.roles = roles
         self.stats = stats
         self.audit = audit
+    }
+
+    /// The model with this session's native subagents (background commands
+    /// are not subagents and stay in the session's info).
+    public func with(native subagents: [LiveSubagent]) -> DelegationPanelModel {
+        var next = self
+        next.native = subagents.filter { !$0.isBackgroundCommand }
+        return next
     }
 
     /// Track records that match what the form has picked (shown, never used to pick).
@@ -94,6 +105,17 @@ struct DelegationPanelSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
             CheckpointSectionLabel(title: "委派")
+            if !model.native.isEmpty {
+                // H5: no stop button — the harness gives no structured way to stop one.
+                groupLabel(DelegationText.nativeGroup)
+                ForEach(model.native, id: \.id) { agent in
+                    CheckpointRow(symbol: "cpu", text: DelegationText.native(agent)) { EmptyView() }
+                        .accessibilityIdentifier("progress.delegation.native")
+                }
+                if model.delegateOf == nil && !model.delegations.isEmpty {
+                    groupLabel(DelegationText.delegatedGroup)
+                }
+            }
             if let parent = model.delegateOf {
                 Button { onAction(.open(parent)) } label: {
                     CheckpointRow(symbol: "person.2", text: "这是一个委派出来的子会话，不能再委派") {
@@ -173,6 +195,15 @@ struct DelegationPanelSection: View {
             RoleLibrarySheet(roles: model.roles, onSave: { onAction(.saveRole($0)) },
                              onDelete: { onAction(.deleteRole($0)) }, onClose: { showRoles = false })
         }
+    }
+
+    private func groupLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: AeroricType.caption))
+            .foregroundStyle(AeroricColor.textTertiary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .help(text)
     }
 
     private var roleTitle: String {

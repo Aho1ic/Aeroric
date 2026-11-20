@@ -16,6 +16,9 @@ use aeroric_protocol::board::{
 
 use super::now_ms;
 
+/// A subagent's self-given name is shown as written, cut to this many chars.
+const MAX_SUBAGENT_NAME: usize = 60;
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum BoardError {
     #[error("黑板上没有这一条")]
@@ -122,6 +125,13 @@ impl Boards {
                 ..Board::default()
             });
         let text = write.text.as_deref().map(cut);
+        // H5: only an agent's write can come from its subagent.
+        let subagent = write
+            .subagent
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| agent && !name.is_empty())
+            .map(|name| name.chars().take(MAX_SUBAGENT_NAME).collect::<String>());
         let (entry, action) = match &write.id {
             Some(id) => {
                 let entry = board
@@ -174,6 +184,7 @@ impl Boards {
                         state,
                         author: actor.to_string(),
                         claimed_by: write.claimed_by.clone().filter(|m| !m.trim().is_empty()),
+                        subagent: subagent.clone(),
                         revision: 0,
                         created_ms: now,
                         updated_ms: now,
@@ -193,6 +204,7 @@ impl Boards {
         board.changes.push(BoardChange {
             at_ms: now,
             actor: actor.to_string(),
+            subagent,
             entry_id: entry.id.clone(),
             action: action.into(),
             text: entry.text.chars().take(120).collect(),
@@ -245,6 +257,7 @@ impl Boards {
         board.changes.push(BoardChange {
             at_ms: now,
             actor: actor.to_string(),
+            subagent: None,
             entry_id: entry.id.clone(),
             action: if accept { "accept" } else { "reject" }.into(),
             text: String::new(),
@@ -389,6 +402,84 @@ mod tests {
             .map(|c| c.action.clone())
             .collect();
         assert_eq!(changes, ["add", "accept"]);
+    }
+
+    /// H5: a subagent's write keeps the session as its author and names the
+    /// subagent; a later edit is the editor's, the entry keeps its writer.
+    #[test]
+    fn a_subagents_write_is_marked_with_its_name() {
+        let boards = Boards::default();
+        let entry = boards
+            .write(
+                "p",
+                "p",
+                true,
+                BoardWrite {
+                    subagent: Some("  aeroric-researcher ".into()),
+                    ..add(BoardKind::Evidence, "超时来自 DNS")
+                },
+            )
+            .unwrap();
+        assert_eq!(entry.author, "p");
+        assert_eq!(entry.subagent.as_deref(), Some("aeroric-researcher"));
+        let edited = boards
+            .write(
+                "p",
+                "p",
+                true,
+                BoardWrite {
+                    id: Some(entry.id.clone()),
+                    text: Some("超时来自 DNS 解析".into()),
+                    ..BoardWrite::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(edited.subagent.as_deref(), Some("aeroric-researcher"));
+        let by: Vec<Option<String>> = boards
+            .get("p")
+            .changes
+            .iter()
+            .map(|c| c.subagent.clone())
+            .collect();
+        assert_eq!(by, [Some("aeroric-researcher".to_string()), None]);
+
+        // The user has no subagents; a blank name is none; a long one is cut.
+        let mine = boards
+            .write(
+                "p",
+                "user",
+                false,
+                BoardWrite {
+                    subagent: Some("x".into()),
+                    ..add(BoardKind::Goal, "修好超时")
+                },
+            )
+            .unwrap();
+        assert_eq!(mine.subagent, None);
+        let blank = boards
+            .write(
+                "p",
+                "p",
+                true,
+                BoardWrite {
+                    subagent: Some(" ".into()),
+                    ..add(BoardKind::Question, "要不要重试？")
+                },
+            )
+            .unwrap();
+        assert_eq!(blank.subagent, None);
+        let long = boards
+            .write(
+                "p",
+                "p",
+                true,
+                BoardWrite {
+                    subagent: Some("名".repeat(100)),
+                    ..add(BoardKind::Evidence, "x")
+                },
+            )
+            .unwrap();
+        assert_eq!(long.subagent.unwrap().chars().count(), MAX_SUBAGENT_NAME);
     }
 
     #[test]

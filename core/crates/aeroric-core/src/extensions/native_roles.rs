@@ -84,6 +84,19 @@ fn yaml_quoted(text: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// The name the model dispatches it by: Claude prefixes a plugin's agents
+/// with the plugin's name.
+pub fn shown_name(target: Target, role: &Role) -> String {
+    match target {
+        Target::ClaudePlugin => format!("aeroric:{}", name(target, role)),
+        Target::ClaudeHome | Target::OmpHome => name(target, role),
+    }
+}
+
+/// Aeroric's tool a read-only role may still write with: the shared board
+/// is Aeroric's own record, where a delegated read-only child reports too.
+const BOARD_WRITE: &str = "board_write";
+
 /// The read-only tools a `plan` role gets; `None` for a writable role,
 /// which keeps the parent's (a native subagent never has more than it).
 fn read_only_tools(target: Target) -> Vec<String> {
@@ -94,11 +107,13 @@ fn read_only_tools(target: Target) -> Vec<String> {
                 .map(|t| t.to_string())
                 .collect();
             // Claude lists an MCP tool as `mcp__<server>__<tool>`; only
-            // Aeroric's read-only ones.
+            // Aeroric's read-only ones, and the board to report on.
             tools.extend(
                 AERORIC_TOOLS
                     .iter()
-                    .filter(|(_, _, scope)| *scope == ToolScope::ReadOnly)
+                    .filter(|(name, _, scope)| {
+                        *scope == ToolScope::ReadOnly || *name == BOARD_WRITE
+                    })
                     .map(|(name, _, _)| {
                         format!(
                             "mcp__{}__{name}",
@@ -133,7 +148,10 @@ pub fn definition(target: Target, role: &Role) -> String {
     out.push_str(MARKER);
     out.push('\n');
     out.push_str(role.instruction.trim());
-    out.push('\n');
+    out.push_str(&format!(
+        "\n\n写共享黑板（board_write）时，subagent 填“{}”，黑板上会标明是你写的。\n",
+        shown_name(target, role)
+    ));
     out
 }
 

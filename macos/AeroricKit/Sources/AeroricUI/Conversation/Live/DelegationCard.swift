@@ -177,6 +177,27 @@ struct DelegationCard: View {
 }
 
 public enum DelegationText {
+    /// H5: the two kinds of subagent in one list, each saying who manages it.
+    public static let nativeGroup = "Harness 自己的子代理 · 由 Harness 管理，Aeroric 只能看"
+    public static let delegatedGroup = "经 Aeroric 委派 · 由 Aeroric 管理"
+
+    /// H5: "检索 · 进行中 · 读取 src/main.rs".
+    public static func native(_ agent: LiveSubagent) -> String {
+        var parts = [agent.shownTitle, nativeStatus(agent.status)]
+        if agent.status == "running", let detail = agent.detail, !detail.isEmpty { parts.append(detail) }
+        return parts.joined(separator: " · ")
+    }
+
+    public static func nativeStatus(_ status: String) -> String {
+        switch status {
+        case "running": return "进行中"
+        case "completed": return "已完成"
+        case "failed": return "失败"
+        case "cancelled": return "已取消"
+        default: return status
+        }
+    }
+
     /// "委派 · 调研员" or "委派".
     public static func title(_ card: LiveDelegationCard) -> String {
         card.roleName.map { "委派 · \($0)" } ?? "委派"

@@ -649,6 +649,20 @@ fn spawn_worker(peer: &Peer) {
     );
 }
 
+/// H5: the `Subagent` updates, as `(id, title, status)`.
+fn subagents(sink: &Sink) -> Vec<(String, String, String)> {
+    sink.updates
+        .lock()
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::Subagent {
+                id, title, status, ..
+            } => Some((id.clone(), title.clone(), status.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
 fn card_lines(sink: &Sink) -> Vec<(ToolStatus, String)> {
     lines_on(sink, "col1")
 }
@@ -861,6 +875,15 @@ async fn a_subagent_s_turn_is_a_line_on_its_card_and_leaves_the_session_s_status
             "子代理 worker 完成 · 改了 src/a.rs\n".to_string()
         )
     );
+    // H5: the same child, listed with the delegations.
+    let worker = |status: &str| {
+        (
+            "th-kid".to_string(),
+            "子代理 worker".to_string(),
+            status.to_string(),
+        )
+    };
+    assert_eq!(subagents(&h.sink), [worker("running"), worker("completed")]);
     assert_eq!(
         h.sink.last_status(),
         Some(TaskStatus::Running),
@@ -906,6 +929,33 @@ async fn a_subagent_s_unknown_end_state_is_not_done_on_its_card() {
         (
             ToolStatus::Failed,
             "子代理 worker 结束状态不明\n".to_string()
+        )
+    );
+    let statuses: Vec<String> = subagents(&h.sink).into_iter().map(|(_, _, s)| s).collect();
+    assert_eq!(
+        statuses,
+        ["running", "failed", "running", "failed"],
+        "not done"
+    );
+}
+
+/// H5: a subagent still working when Codex exits does not stay "running".
+#[tokio::test]
+async fn a_working_subagent_ends_with_the_codex_process() {
+    let mut h = start(spec());
+    let peer = running(&mut h).await;
+    spawn_worker(&peer);
+    let sink = Arc::clone(&h.sink);
+    until("started", move || !subagents(&sink).is_empty()).await;
+    drop(peer);
+    let sink = Arc::clone(&h.sink);
+    until("ended", move || subagents(&sink).len() == 2).await;
+    assert_eq!(
+        subagents(&h.sink)[1],
+        (
+            "th-kid".to_string(),
+            "子代理 worker".to_string(),
+            "cancelled".to_string()
         )
     );
 }

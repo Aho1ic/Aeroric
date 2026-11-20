@@ -54,9 +54,20 @@ fn a_definition_holds_its_permission_where_the_harness_can() {
     let tools = claude.lines().find(|l| l.starts_with("tools: ")).unwrap();
     assert!(tools.contains("Read, Grep, Glob"));
     assert!(tools.contains("mcp__aeroric_context__memory_recall"));
-    assert!(!tools.contains("Edit") && !tools.contains("Bash") && !tools.contains("board_write"));
+    assert!(!tools.contains("Edit") && !tools.contains("Bash") && !tools.contains("delegate"));
+    assert!(
+        tools.contains("mcp__aeroric_context__board_write"),
+        "it reports on the board"
+    );
+    assert!(!tools.contains("board_decide"));
     assert!(claude.contains(MARKER));
-    assert!(claude.trim_end().ends_with(researcher.instruction.trim()));
+    assert!(claude.contains(researcher.instruction.trim()));
+    assert!(
+        claude
+            .trim_end()
+            .ends_with("subagent 填“aeroric:researcher”，黑板上会标明是你写的。"),
+        "{claude}"
+    );
 
     let omp = definition(Target::OmpHome, &researcher);
     assert!(
@@ -64,6 +75,7 @@ fn a_definition_holds_its_permission_where_the_harness_can() {
         "a bundled name stays OMP's"
     );
     assert!(omp.contains("tools: read, grep, glob, ast_grep, think\n"));
+    assert!(omp.contains("subagent 填“aeroric-researcher”"));
     assert_eq!(name(Target::ClaudeHome, &researcher), "aeroric-researcher");
 
     let mut writer = researcher.clone();

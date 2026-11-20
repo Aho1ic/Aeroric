@@ -29,16 +29,19 @@ public struct LiveBoardEntry: Equatable, Sendable, Identifiable {
     /// `user` or the task id of the session that wrote it.
     public var author: String
     public var claimedBy: String?
+    /// H5: the harness's own subagent of `author` that wrote it, by its own name.
+    public var subagent: String?
     public var updatedMs: UInt64
 
     public init(id: String, kind: String, text: String, state: String, author: String = "user",
-                claimedBy: String? = nil, updatedMs: UInt64 = 0) {
+                claimedBy: String? = nil, subagent: String? = nil, updatedMs: UInt64 = 0) {
         self.id = id
         self.kind = kind
         self.text = text
         self.state = state
         self.author = author
         self.claimedBy = claimedBy
+        self.subagent = subagent
         self.updatedMs = updatedMs
     }
 
@@ -48,6 +51,7 @@ public struct LiveBoardEntry: Equatable, Sendable, Identifiable {
               let text = f["text"]?.stringValue else { return nil }
         return LiveBoardEntry(id: id, kind: kind, text: text, state: f["state"]?.stringValue ?? "open",
                               author: f["author"]?.stringValue ?? "user", claimedBy: f["claimedBy"]?.stringValue,
+                              subagent: f["subagent"]?.stringValue,
                               updatedMs: f["updatedMs"]?.numberText.flatMap { UInt64($0) } ?? 0)
     }
 }

@@ -233,9 +233,12 @@ struct ContextWriteParams {
     state: Option<BoardState>,
     #[serde(default)]
     claimed_by: Option<String>,
+    /// H5: the harness's own subagent writing, by the name it gives.
+    #[serde(default)]
+    subagent: Option<String>,
 }
 
-/// `context.boardWrite {token, id?, kind?, text?, state?, claimedBy?}`.
+/// `context.boardWrite {token, id?, kind?, text?, state?, claimedBy?, subagent?}`.
 fn context_write(live: &Live, request: &Request) -> Frame {
     let p: ContextWriteParams = match params(request) {
         Ok(p) => p,
@@ -254,6 +257,7 @@ fn context_write(live: &Live, request: &Request) -> Frame {
         text: p.text,
         state: p.state,
         claimed_by: p.claimed_by,
+        subagent: p.subagent,
     };
     match live.executor.boards().write(&owner, &task, true, entry) {
         Ok(entry) => ok(

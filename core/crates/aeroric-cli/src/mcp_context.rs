@@ -111,7 +111,8 @@ fn tools() -> Value {
                 "text": {"type": "string"},
                 "state": {"type": "string", "enum": ["open", "confirmed", "refuted", "proposed", "answered", "done"],
                     "description": "假设：open/confirmed/refuted；认领：open/done；问题：open/answered"},
-                "claimedBy": {"type": "string", "description": "认领这项工作的成员"}
+                "claimedBy": {"type": "string", "description": "认领这项工作的成员"},
+                "subagent": {"type": "string", "description": "你是被派出来的子代理时填自己的名字（如 aeroric-researcher），黑板上会标明是你写的；主会话不填"}
             }}
         },
         {

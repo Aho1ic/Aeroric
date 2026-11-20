@@ -68,6 +68,11 @@ pub struct BoardEntry {
     /// A claim's member (a task id, or a name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_by: Option<String>,
+    /// H5: the harness's own subagent of `author` that wrote it, by the
+    /// name it gave itself (the session cannot tell a subagent's call from
+    /// its own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<String>,
     /// The board revision of its last change.
     pub revision: u64,
     pub created_ms: u64,
@@ -79,6 +84,9 @@ pub struct BoardEntry {
 pub struct BoardChange {
     pub at_ms: u64,
     pub actor: String,
+    /// H5: the subagent of `actor` that made it, by its own name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<String>,
     pub entry_id: String,
     /// `add` `edit` `accept` `reject`.
     pub action: String,
@@ -111,6 +119,9 @@ pub struct BoardWrite {
     pub state: Option<BoardState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_by: Option<String>,
+    /// H5: written by a subagent of the session, which names itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<String>,
 }
 
 /// Something on a board that needs the user.

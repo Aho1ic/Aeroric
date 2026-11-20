@@ -162,6 +162,30 @@ final class DelegationTextTests: XCTestCase {
         XCTAssertEqual(board?.entries.first?.text, "修超时")
     }
 
+    /// H5: native subagents sit beside the delegations, background commands do not;
+    /// a board line written by a subagent names it.
+    func testNativeSubagentsAndTheirBoardWritesAreNamed() {
+        let model = DelegationPanelModel().with(native: [
+            LiveSubagent(id: "t1", title: "检索", status: "running", detail: "读取 src/main.rs"),
+            LiveSubagent(id: "t2", title: "\(LiveSubagent.backgroundCommandPrefix)npm test", status: "running"),
+            LiveSubagent(id: "t3", title: "子代理 worker", status: "completed", detail: "最后一步"),
+        ])
+        XCTAssertEqual(model.native.map(\.id), ["t1", "t3"])
+        XCTAssertEqual(DelegationText.native(model.native[0]), "检索 · 进行中 · 读取 src/main.rs")
+        XCTAssertEqual(DelegationText.native(model.native[1]), "子代理 worker · 已完成")
+        XCTAssertEqual(DelegationText.nativeStatus("cancelled"), "已取消")
+        XCTAssertTrue(DelegationText.nativeGroup.contains("Aeroric 只能看"))
+        XCTAssertTrue(DelegationText.delegatedGroup.contains("由 Aeroric 管理"))
+
+        let entry = LiveBoardEntry.decode(.object(["id": .string("b1"), "kind": .string("evidence"),
+                                                   "text": .string("超时来自 DNS"), "state": .string("open"),
+                                                   "author": .string("task-4"),
+                                                   "subagent": .string("aeroric-researcher")]))!
+        XCTAssertEqual(BoardText.line(entry), "证据 · 子代理 aeroric-researcher：超时来自 DNS")
+        XCTAssertEqual(BoardText.author(entry.author, subagent: entry.subagent),
+                       "会话 task-4 的子代理 aeroric-researcher 写的")
+    }
+
     func testADraftBecomesAContract() {
         var draft = DelegationDraft()
         XCTAssertFalse(draft.ready)

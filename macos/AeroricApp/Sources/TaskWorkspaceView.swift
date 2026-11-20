@@ -723,7 +723,9 @@ struct TaskWorkspaceView: View {
                         Task { await checkpointAction { try await $0.reviewAction("review.request", taskId: taskID) } }
                     }
                 },
-                delegation: delegationPanelTask == taskID ? delegationPanel : nil,
+                // H5: the session's own subagents are listed with its delegations.
+                delegation: delegationPanelTask == taskID
+                    ? delegationPanel?.with(native: services.liveStores[taskID]?.model?.subagents ?? []) : nil,
                 onDelegation: { action in
                     switch action {
                     case let .open(id):

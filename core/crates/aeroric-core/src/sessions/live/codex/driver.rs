@@ -839,11 +839,18 @@ impl Actor {
                 let turn = params.pointer("/turn/id").and_then(Value::as_str);
                 let (card, title) = {
                     let mut state = self.state.lock();
-                    let entry = state.children.entry(child).or_default();
+                    let entry = state.children.entry(child.clone()).or_default();
                     entry.turn = turn.map(str::to_string);
                     entry.files.clear();
                     (entry.card.clone(), entry.title())
                 };
+                // H5: listed with the delegations, as Claude's and OMP's are.
+                self.push(SessionUpdateKind::Subagent {
+                    id: child.clone(),
+                    title: title.clone(),
+                    status: "running".into(),
+                    detail: None,
+                });
                 if let Some(card) = card {
                     self.push(SessionUpdateKind::ToolCallUpdate {
                         id: card,
@@ -893,6 +900,17 @@ impl Actor {
                     "cancelled",
                     Some(ANSWER_ENDED_WITH_TURN),
                 );
+                self.push(SessionUpdateKind::Subagent {
+                    id: child.clone(),
+                    title: title.clone(),
+                    status: match status.and_then(Value::as_str) {
+                        Some("completed") => "completed",
+                        Some("interrupted") => "cancelled",
+                        _ => "failed",
+                    }
+                    .into(),
+                    detail: None,
+                });
                 if let Some(card) = card {
                     // A3: only an explicit `completed` reads as done.
                     let (word, done) = match status.and_then(Value::as_str) {
@@ -1187,14 +1205,28 @@ impl Actor {
 
     fn server_exited(&mut self) {
         self.connection = None;
-        let (turn, lost) = {
+        let (turn, lost, working) = {
             let mut state = self.state.lock();
             state.subscribed = false;
             state.idle_since = now_ms();
             let lost = std::mem::take(&mut state.commands_running).len();
-            state.children.clear();
-            (state.active_turn.take(), lost)
+            // H5: a subagent still working ends with the process.
+            let working: Vec<(String, String)> = state
+                .children
+                .drain()
+                .filter(|(_, child)| child.turn.is_some())
+                .map(|(id, child)| (id, child.title()))
+                .collect();
+            (state.active_turn.take(), lost, working)
         };
+        for (id, title) in working {
+            self.push(SessionUpdateKind::Subagent {
+                id,
+                title,
+                status: "cancelled".into(),
+                detail: Some("Codex 进程已退出".into()),
+            });
+        }
         if lost > 0 && turn.is_none() {
             self.push(SessionUpdateKind::Error {
                 message: format!("Codex 进程已退出，{lost} 个后台命令随之结束"),
