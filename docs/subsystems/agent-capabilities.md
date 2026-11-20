@@ -231,6 +231,18 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
   以上几种都在清单里写明原因。
 - 远端会话什么都不投。
 
+**OMP 里同名的服务器谁生效。** OMP 会自己读用户其他 Harness 的 MCP 配置（Claude、Cursor、Windsurf、Gemini 等），按来源优先级去重：名字相同，或命令和参数相同，都只留优先级高的那个（上游 `capability/index.ts`；`discovery/*.ts` 的 `PRIORITY`，v18.12.0 起未变）。Aeroric 写进的受管目录 `mcp.json` 属于 OMP 自己的配置，优先级 100，最高。所以包里的服务器会盖过从其他 Harness 导入的同名服务器，只有项目里 `.omp/mcp.json` 的同名服务器能盖过它。工具清单里 OMP 一栏写的就是这句。
+
+**管理（第三步，2026-11-21）。** Agent 配置 → 能力包：
+
+- 列出每个包和它在六种去处（Claude、Claude 走预设、Codex、Codex 走预设、OMP、DSH）各给了什么，没给的写明原因；
+- 添加或编辑一个 MCP 服务器：它自成一个包，你写的，算已确认；环境变量里的密钥回显为掩码，原样保存就保留原值；
+- 导入能力包文件夹：来源一律记成那个文件夹，不管清单里写的是什么；先是“待确认来源”，确认后 MCP 服务器和事件处理才会随会话启动；
+- 停用、撤销确认、删除（文件夹移到废纸篓）；
+- 读不了的文件夹单独列出原因。
+
+接口是 `packs.list`、`packs.saveServer`、`packs.import`、`packs.setEnabled`、`packs.setConfirmed`、`packs.remove`。
+
 ## 8. 具名阻塞
 
 - `GAP-AP7-EXTERNAL`:ACP 对端、OAuth 真实账号、媒体 provider 的线上验证需要用户

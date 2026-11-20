@@ -6,6 +6,7 @@ import SwiftUI
 /// an editor on the right; nothing is saved until the user clicks 保存 (G3).
 public struct AgentConfigPage: View {
     @Environment(BuiltinSkillBook.self) private var skillBook: BuiltinSkillBook?
+    @Environment(PackBook.self) private var packBook: PackBook?
     @Bindable var store: AgentConfigStore
     @Environment(AgentUpgradeBook.self) private var upgrades: AgentUpgradeBook?
     @Environment(ChangeCostBook.self) private var changeCost: ChangeCostBook?
@@ -21,6 +22,7 @@ public struct AgentConfigPage: View {
                     .init(value: .routes, title: "模型路由", systemImage: "arrow.triangle.branch"),
                     .init(value: .configs, title: "Agent 预设", systemImage: "slider.horizontal.3"),
                     .init(value: .skills, title: "技能", systemImage: "sparkles"),
+                    .init(value: .packs, title: "能力包", systemImage: "shippingbox"),
                     .init(value: .upgrades, title: "Agent 升级", systemImage: "arrow.up.circle"),
                     .init(value: .changeCost, title: "用量与成本", systemImage: "chart.bar"),
                 ])
@@ -42,6 +44,8 @@ public struct AgentConfigPage: View {
                 case .configs: ConfigsPane(store: store)
                 case .skills:
                     if let skillBook { BuiltinSkillsPane(book: skillBook) }
+                case .packs:
+                    if let packBook { CapabilityPacksPane(book: packBook) }
                 case .upgrades: AgentUpgradePane(book: upgrades)
                 case .changeCost:
                     if let changeCost { ChangeCostPane(book: changeCost) }

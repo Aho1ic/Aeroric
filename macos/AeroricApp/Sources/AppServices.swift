@@ -40,6 +40,8 @@ final class AppServices {
     let documentStore = DocumentStore()
     /// B2 (2026-10-30): built-in skills; actions attach once the host is up.
     let builtinSkillBook = BuiltinSkillBook()
+    /// H6: the capability packs (Agent 配置 → 能力包).
+    let packBook = PackBook()
     let diagnosticsStore = DiagnosticsStore()
     let debugSessionStore = DebugSessionStore()
     let breakpointStore = BreakpointStore()
@@ -1290,6 +1292,7 @@ extension AppServices: WorkspaceStateProviding {
     func attachBuiltinSkills() {
         guard let connection = attachedConnection else { return }
         builtinSkillBook.actions = HostBuiltinSkillActions(client: BuiltinSkillsClient(connection: connection))
+        packBook.attach(client: PacksClient(connection: connection))
         builtinSkillBook.loginOnGateway = { [weak self] harness in
             self?.agentConfigStore.loginGateway[harness]?.active ?? false
         }

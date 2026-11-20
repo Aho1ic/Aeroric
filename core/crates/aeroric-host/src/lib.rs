@@ -28,6 +28,7 @@ pub(crate) mod local_targets;
 pub mod lsp_services;
 pub mod maintenance_services;
 pub mod notebook_services;
+pub mod packs_services;
 pub mod platform_adapter;
 pub mod push_host;
 pub mod remote_headless;

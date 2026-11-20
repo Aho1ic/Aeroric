@@ -118,7 +118,9 @@ impl Target {
         match self.family {
             ProtocolFamily::Claude => "本次启动的 MCP 配置（--mcp-config）",
             ProtocolFamily::Codex => "本次会话的 config.mcp_servers",
-            ProtocolFamily::Omp => "受管目录的 mcp.json",
+            ProtocolFamily::Omp => {
+                "受管目录的 mcp.json（OMP 从其他 Harness 导入的同名服务器让位，项目里 .omp/mcp.json 的同名服务器优先）"
+            }
             ProtocolFamily::Dsh => "session/new 的 mcpServers",
         }
     }

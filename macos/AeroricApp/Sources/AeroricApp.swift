@@ -341,6 +341,7 @@ struct AeroricNativeApp: App {
             .environment(services.skillCatalogBook)
             // B2: built-in skills for the recipe cards and Agent 配置 → 技能.
             .environment(services.builtinSkillBook)
+            .environment(services.packBook)
             // Tags on sidebar rows and in their menus (2026-10-29).
             .environment(services.tagBook)
             .environment(services.linkedFolderBook)

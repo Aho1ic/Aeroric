@@ -457,6 +457,8 @@ impl HostServices {
             &mut set,
             Arc::clone(&context),
         );
+        // H6: capability packs (能力包).
+        crate::packs_services::register_pack_services(&mut set, Arc::clone(&context));
         // Registered unconditionally above, so advertised unconditionally: the
         // native client gates its cleanup screen on this, never on a method probe.
         capabilities.push(aeroric_protocol::capability::Capability {

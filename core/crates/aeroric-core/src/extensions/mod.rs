@@ -13,6 +13,7 @@ pub mod catalog;
 pub mod hooks;
 pub mod mcp;
 pub mod native_roles;
+pub mod pack_store;
 pub mod packs;
 pub mod plugins;
 pub mod skills;
