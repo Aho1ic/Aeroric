@@ -100,6 +100,29 @@ impl Route {
             Route::Omp(_) | Route::RemoteClaude(_) | Route::RemoteOmp(_) => false,
         }
     }
+
+    /// C8: the agent runs on another machine.
+    pub fn is_remote(&self) -> bool {
+        matches!(
+            self,
+            Route::Codex(ServerKey::Remote(_)) | Route::RemoteClaude(_) | Route::RemoteOmp(_)
+        )
+    }
+
+    /// C8: the harness the route starts.
+    pub fn harness(&self) -> &'static str {
+        match self {
+            Route::Codex(_) => "codex",
+            Route::Claude(_) | Route::RemoteClaude(_) => "claude",
+            Route::Omp(_) | Route::RemoteOmp(_) => "omp",
+            Route::Acp(key) => match key.family {
+                ProtocolFamily::Codex => "codex",
+                ProtocolFamily::Claude => "claude",
+                ProtocolFamily::Omp => "omp",
+                ProtocolFamily::Dsh => "dsh",
+            },
+        }
+    }
 }
 
 /// What the host decides per run: whether `(family, agent, agent configuration)`
@@ -184,6 +207,8 @@ pub struct StructuredExecutor {
     references: Arc<crate::knowledge::references::References>,
     /// C7 (2026-11-20): the skills each launch of a session mounted.
     skill_mounts: Arc<crate::extensions::catalog::MountLog>,
+    /// C8 (2026-11-20): the tools each launch of a session had.
+    tool_log: Arc<super::tool_catalog::ToolLog>,
     /// B4′: how to start the context server (`program`, `data_dir`); unset
     /// gives sessions none (tests, and hosts that opt out).
     context_program: Mutex<Option<(String, String)>>,
@@ -296,6 +321,7 @@ impl StructuredExecutor {
             wikis: Arc::default(),
             references: Arc::default(),
             skill_mounts: Arc::default(),
+            tool_log: Arc::default(),
             context_program: Mutex::new(None),
             context_tokens: Arc::default(),
             runtime: runtime.clone(),
@@ -407,10 +433,17 @@ impl StructuredExecutor {
         &self.context_tokens
     }
 
-    /// Hand a starting session its context server and a fresh token.
-    fn give_context(&self, task_id: &str, project_id: &str, session: &Arc<dyn SessionDriver>) {
+    /// Hand a starting session its context server and a fresh token; C8:
+    /// whether it took it.
+    fn give_context(
+        &self,
+        task_id: &str,
+        project_id: &str,
+        session: &Arc<dyn SessionDriver>,
+    ) -> super::tool_catalog::Injection {
+        use super::tool_catalog::Injection;
         let Some((program, data_dir)) = self.context_program.lock().clone() else {
-            return;
+            return Injection::NoServer;
         };
         let token = self.context_tokens.issue(task_id, project_id);
         let server = super::context_server::ContextServer {
@@ -420,7 +453,9 @@ impl StructuredExecutor {
         };
         if !session.set_context_server(server) {
             self.context_tokens.revoke(task_id);
+            return Injection::Unsupported;
         }
+        Injection::Injected
     }
 
     /// B4′: the tasks' checkpoints (the host sets where they are kept).
@@ -485,10 +520,26 @@ impl StructuredExecutor {
         &self.skill_mounts
     }
 
+    pub fn tool_log(&self) -> &Arc<super::tool_catalog::ToolLog> {
+        &self.tool_log
+    }
+
+    /// C8: what the context server's conditional families are offered on,
+    /// asked as `aeroric-cli mcp-context` asks the host.
+    fn offered_tools(&self, project_id: &str) -> super::tool_catalog::Offered {
+        super::tool_catalog::Offered {
+            memory: self.memory.project_enabled(project_id),
+            wiki: self.wikis.has_pages(project_id) && self.wikis.agent_access(project_id),
+            references: !self.references.list().is_empty(),
+            expert: self.delegations.expert().is_some(),
+        }
+    }
+
     /// C7: a launch on this Mac keeps what skills it is given (a remote
-    /// one is given none by Aeroric).
+    /// one is given none by Aeroric). C8: OMP on this Mac is mounted too,
+    /// though it gets no context server.
     fn note_skills(&self, task_id: &str, family: ProtocolFamily, route: &Route, cwd: &str) {
-        if !route.runs_locally() {
+        if route.is_remote() {
             return;
         }
         let harness = match family {
@@ -733,9 +784,23 @@ impl StructuredExecutor {
                 &self.runtime,
             ),
         };
-        if route.runs_locally() {
-            self.give_context(&spec.task_id, &spec.project_id, &session);
-        }
+        // C8: what tools this launch has is kept beside it.
+        let injection = if route.is_remote() {
+            super::tool_catalog::Injection::Remote
+        } else if route.runs_locally() {
+            self.give_context(&spec.task_id, &spec.project_id, &session)
+        } else {
+            super::tool_catalog::Injection::Unsupported
+        };
+        self.tool_log.note(
+            &spec.task_id,
+            super::tool_catalog::catalog(
+                route.harness(),
+                injection,
+                self.offered_tools(&spec.project_id),
+                crate::clock::now_ms_u64(),
+            ),
+        );
         self.registry
             .insert(&spec.task_id, Arc::clone(&session), log);
         session

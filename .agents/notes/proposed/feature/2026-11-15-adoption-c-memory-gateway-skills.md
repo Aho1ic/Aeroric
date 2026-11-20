@@ -178,6 +178,8 @@ Status: proposed
 
 分三步，每步可单独交付。
 
+2026-11-20 第一步已实现、界面待目检，见 [C8 第一步笔记](../../implemented/feature/2026-11-20-c8-effective-tool-catalog.md)：会话每次启动记下 Aeroric 工具（与 `mcp-context` 同一张共享表，测试比对）各自是否提供、依据或原因，以及 Harness 自带的已知工具；`session.capabilities {taskId}` 返回 `tools`；会话信息里有"工具"一节；执行器测试比对记下的清单与启动参数里实际注入的是否一致。顺带修正 C7：本机 OMP 会话的技能挂载之前没有记录。
+
 **第一步：清单。**
 
 1. 会话启动时生成 `EffectiveToolCatalog`：每个工具的名称、所属（Aeroric 注入、Harness 自带）、作用范围（只读、会写、会对外发送）、是否已就绪及依据、未注入的原因。存进启动记录。

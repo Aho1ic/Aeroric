@@ -97,4 +97,57 @@ final class SkillCatalogTests: XCTestCase {
         XCTAssertEqual(SkillText.source("plugin"), "Claude Code 插件")
         XCTAssertEqual(SkillText.harness("dsh"), "DSH")
     }
+
+    /// C8 (2026-11-20): a launch's tools decode from `session.capabilities`;
+    /// 会话信息 says how many of Aeroric's are offered, which are not and
+    /// why, or that none were injected and why; an old session says 未记录.
+    func testALaunchsToolsSayWhatIsOfferedAndWhy() async {
+        func tool(_ name: String, _ owner: String, _ group: String, _ scope: String, ready: Bool, basis: String) -> JSONValue {
+            .object(["name": .string(name), "owner": .string(owner), "group": .string(group),
+                     "scope": .string(scope), "ready": .bool(ready), "basis": .string(basis)])
+        }
+        let book = SkillCatalogBook()
+        var asked: [String] = []
+        book.attach { method, params in
+            asked.append("\(method) \(params["family"]?.stringValue ?? "-") \(params["taskId"]?.stringValue ?? "-")")
+            switch params["taskId"]?.stringValue {
+            case "t1":
+                return .object(["capabilities": .object([:]), "tools": .object([
+                    "atMs": .number("5"), "harness": .string("claude"), "injected": .bool(true),
+                    "tools": .array([
+                        tool("delegate", "aeroric", "base", "writes", ready: true, basis: "Aeroric 工具，所有接入的会话都有"),
+                        tool("memory_recall", "aeroric", "memory", "readOnly", ready: false, basis: "这个项目没有开启记忆"),
+                        tool("memory_propose", "aeroric", "memory", "writes", ready: false, basis: "这个项目没有开启记忆"),
+                        tool("ask_expert", "aeroric", "expert", "sendsOut", ready: false, basis: "还没有设置专家模型"),
+                        tool("Bash", "harness", "harness", "writes", ready: true, basis: "Claude 自带"),
+                    ]),
+                ])])
+            case "t2":
+                return .object(["tools": .object([
+                    "harness": .string("omp"), "injected": .bool(false),
+                    "reason": .string("OMP 还不能在启动时接入 Aeroric 工具"),
+                    "tools": .array([tool("delegate", "aeroric", "base", "writes", ready: false,
+                                          basis: "OMP 还不能在启动时接入 Aeroric 工具")]),
+                ])])
+            default:
+                return .object(["capabilities": .object([:])])
+            }
+        }
+        XCTAssertEqual(ToolText.summary(nil), "读取中…")
+        await book.loadTools(taskID: "t1", family: "claude")
+        await book.loadTools(taskID: "t2", family: "omp")
+        await book.loadTools(taskID: "t0", family: "codex")
+        XCTAssertEqual(asked, ["session.capabilities claude t1", "session.capabilities omp t2",
+                               "session.capabilities codex t0"])
+        let first = book.tools["t1"]!!
+        XCTAssertEqual(first.tools.count, 5)
+        XCTAssertEqual(ToolText.summary(book.tools["t1"]), "Aeroric 工具 1/4 · Claude 自带 1 个")
+        XCTAssertEqual(ToolText.missing(first),
+                       ["memory_recall、memory_propose：这个项目没有开启记忆", "ask_expert：还没有设置专家模型"])
+        XCTAssertEqual(ToolText.line(first.tools[0]), "delegate · 会写")
+        XCTAssertEqual(ToolText.scope("sendsOut"), "会对外发送")
+        XCTAssertEqual(ToolText.summary(book.tools["t2"]), "没有 Aeroric 工具：OMP 还不能在启动时接入 Aeroric 工具")
+        XCTAssertTrue(ToolText.missing(book.tools["t2"]!!).isEmpty, "the reason says it once")
+        XCTAssertEqual(ToolText.summary(book.tools["t0"]), "未记录（这个会话在记录工具之前启动）")
+    }
 }

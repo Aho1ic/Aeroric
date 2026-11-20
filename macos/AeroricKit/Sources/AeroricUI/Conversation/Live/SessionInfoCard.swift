@@ -59,7 +59,13 @@ struct SessionInfoCard: View {
                         planSection
                         subagentSection
                         details
-                        if let taskID { SessionSkillsSection(taskID: taskID) }
+                        if let taskID {
+                            SessionSkillsSection(taskID: taskID)
+                            // C8: what this launch could call.
+                            if let family = state?.family {
+                                SessionToolsSection(taskID: taskID, family: family)
+                            }
+                        }
                     }
                 }
                 .scrollIndicators(.hidden)

@@ -19,13 +19,12 @@ use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 
 use super::builtin_skills::{self as builtin, LearnedIndex};
+use crate::storage::launch_log;
 
 /// The harnesses Aeroric gives skills to.
 pub const HARNESSES: [&str; 4] = ["claude", "codex", "omp", "dsh"];
 /// What a built-in skill's version reads as.
 pub const BUILTIN_VERSION: &str = "随应用内置";
-/// Launches kept per task.
-const LAUNCHES_KEPT: usize = 20;
 const SUMMARY_CHARS: usize = 200;
 
 /// A SKILL.md's `description` (front matter) and a short hash of the file.
@@ -390,6 +389,9 @@ pub struct MountLog {
     data_dir: Mutex<Option<PathBuf>>,
 }
 
+/// The folder under the data folder.
+const FOLDER: &str = "skill-mounts";
+
 impl MountLog {
     pub fn set_dir(&self, data_dir: PathBuf) {
         *self.data_dir.lock() = Some(data_dir);
@@ -397,17 +399,7 @@ impl MountLog {
 
     fn file(&self, task_id: &str) -> Option<PathBuf> {
         let dir = self.data_dir.lock().clone()?;
-        let safe = !task_id.is_empty()
-            && !task_id.starts_with('.')
-            && task_id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-        let name = if safe {
-            task_id.to_string()
-        } else {
-            short_hash(task_id.as_bytes())
-        };
-        Some(dir.join("skill-mounts").join(format!("{name}.json")))
+        Some(launch_log::file(&dir, FOLDER, task_id))
     }
 
     /// A launch of `harness` in `cwd` starts: what it is given is kept.
@@ -428,32 +420,16 @@ impl MountLog {
             harness: harness.to_string(),
             skills: plan(&data_dir, harness, cwd, home),
         };
-        if let Err(error) = self.push(task_id, launch) {
+        let path = launch_log::file(&data_dir, FOLDER, task_id);
+        if let Err(error) = launch_log::push(&path, launch) {
             eprintln!("[aeroric] skills mounted by {task_id} not kept: {error}");
         }
-    }
-
-    fn push(&self, task_id: &str, launch: SkillLaunch) -> Result<(), String> {
-        let Some(path) = self.file(task_id) else {
-            return Ok(());
-        };
-        let mut launches = self.launches(task_id);
-        launches.push(launch);
-        let skip = launches.len().saturating_sub(LAUNCHES_KEPT);
-        let launches: Vec<SkillLaunch> = launches.into_iter().skip(skip).collect();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let raw = serde_json::to_vec(&launches).map_err(|e| e.to_string())?;
-        crate::storage::atomic::write_atomic(&path, &raw, crate::storage::atomic::FileMode::Private)
-            .map_err(|e| e.to_string())
     }
 
     /// Every launch kept for the task, oldest first.
     pub fn launches(&self, task_id: &str) -> Vec<SkillLaunch> {
         self.file(task_id)
-            .and_then(|path| std::fs::read(path).ok())
-            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            .map(|path| launch_log::read(&path))
             .unwrap_or_default()
     }
 

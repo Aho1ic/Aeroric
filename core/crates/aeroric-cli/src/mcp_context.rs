@@ -587,6 +587,38 @@ pub async fn serve(data_dir: &Path) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// C8 (2026-11-20): every tool this server can list is in the shared
+    /// table the tool catalog is built from, with the same family; nothing
+    /// in the table is missing here.
+    #[test]
+    fn the_listed_tools_match_the_shared_table() {
+        use aeroric_protocol::tools::{ToolGroup, AERORIC_TOOLS};
+        let families = [
+            (super::tools(), ToolGroup::Base),
+            (super::memory_tools(), ToolGroup::Memory),
+            (super::wiki_tools(), ToolGroup::Wiki),
+            (super::reference_tools(), ToolGroup::References),
+            (super::expert_tools(), ToolGroup::Expert),
+        ];
+        let mut listed: Vec<(String, ToolGroup)> = families
+            .iter()
+            .flat_map(|(list, group)| {
+                list.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|t| (t["name"].as_str().unwrap().to_string(), *group))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let mut table: Vec<(String, ToolGroup)> = AERORIC_TOOLS
+            .iter()
+            .map(|(name, group, _)| (name.to_string(), *group))
+            .collect();
+        listed.sort();
+        table.sort();
+        assert_eq!(listed, table);
+    }
+
     use super::*;
 
     #[tokio::test]

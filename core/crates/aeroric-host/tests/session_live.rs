@@ -3991,3 +3991,46 @@ async fn the_skill_catalog_and_mounts_answer() {
     assert_eq!(none["launches"], json!([]));
     assert!(host.call("skills.mounted", json!({})).await.is_err());
 }
+
+/// C8 (2026-11-20): `session.capabilities` with a task carries the tools its
+/// latest launch kept; without one kept, or without a task, no `tools`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capabilities_carry_a_launchs_tools() {
+    use aeroric_core::sessions::live::tool_catalog::{catalog, Injection, Offered};
+    let host = Host::start(true).await;
+    let plain = host
+        .call("session.capabilities", json!({"family": "codex"}))
+        .await
+        .unwrap();
+    assert!(plain.get("tools").is_none());
+    let none = host
+        .call(
+            "session.capabilities",
+            json!({"family": "codex", "taskId": "task-none"}),
+        )
+        .await
+        .unwrap();
+    assert!(none.get("tools").is_none());
+    host.structured.tool_log().note(
+        "task-1",
+        catalog("codex", Injection::Injected, Offered::default(), 5),
+    );
+    let kept = host
+        .call(
+            "session.capabilities",
+            json!({"family": "codex", "taskId": "task-1"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(kept["tools"]["injected"], json!(true));
+    assert_eq!(kept["tools"]["harness"], json!("codex"));
+    let delegate = kept["tools"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "delegate")
+        .unwrap();
+    assert_eq!(delegate["owner"], json!("aeroric"));
+    assert_eq!(delegate["scope"], json!("writes"));
+    assert_eq!(delegate["ready"], json!(true));
+}

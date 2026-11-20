@@ -91,6 +91,10 @@ pub struct CapabilitiesParams {
     pub family: ProtocolFamily,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<Place>,
+    /// C8 (2026-11-20): with a task, the reply also carries the tools its
+    /// latest launch had (`tools`, absent when none was kept).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
 }
 
 /// A login the agent refused (401, signed out…), until a turn under it

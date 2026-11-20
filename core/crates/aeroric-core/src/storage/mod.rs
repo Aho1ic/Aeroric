@@ -12,6 +12,7 @@ pub mod atomic;
 pub mod backup;
 pub mod compat;
 pub mod fingerprint;
+pub mod launch_log;
 pub mod projects;
 pub mod runtime;
 pub mod settings;

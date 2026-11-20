@@ -20,6 +20,8 @@ public final class SkillCatalogBook {
     /// Each task's launches, oldest first, once read.
     public private(set) var mounts: [String: [LiveSkillLaunch]] = [:]
     public private(set) var mountErrors: [String: String] = [:]
+    /// C8: each task's latest launch's tools, once read (nil inside: none kept).
+    public private(set) var tools: [String: LiveToolLaunch?] = [:]
 
     @ObservationIgnored private var call: Call?
 
@@ -52,6 +54,17 @@ public final class SkillCatalogBook {
             mountErrors[taskID] = nil
         } catch {
             mountErrors[taskID] = "读取失败：\(AgentConfigStore.describe(error))"
+        }
+    }
+
+    /// C8: the tools the task's latest launch had.
+    public func loadTools(taskID: String, family: String) async {
+        guard let call else { return }
+        do {
+            let reply = try await call("session.capabilities", ["family": .string(family), "taskId": .string(taskID)])
+            tools[taskID] = .some(LiveToolLaunch.decode(reply["tools"]))
+        } catch {
+            tools[taskID] = .some(nil)
         }
     }
 
@@ -306,6 +319,105 @@ struct SessionSkillsSection: View {
             }
             .font(.system(size: AeroricType.caption))
             .task(id: taskID) { await book.loadMounts(taskID: taskID) }
+        }
+    }
+}
+
+/// C8: the words 会话信息's 工具 uses.
+public enum ToolText {
+    public static func scope(_ scope: String) -> String {
+        switch scope {
+        case "readOnly": "只读"
+        case "writes": "会写"
+        case "sendsOut": "会对外发送"
+        default: scope
+        }
+    }
+
+    /// "Aeroric 工具 14/21 · Claude 自带 10 个" or why there are none.
+    public static func summary(_ launch: LiveToolLaunch??) -> String {
+        guard let known = launch else { return "读取中…" }
+        guard let launch = known else { return "未记录（这个会话在记录工具之前启动）" }
+        let own = launch.tools.filter { $0.owner == "harness" }.count
+        let ownText = own > 0 ? " · \(SkillText.harness(launch.harness)) 自带 \(own) 个" : ""
+        guard launch.injected else {
+            return "没有 Aeroric 工具：\(launch.reason ?? "未接入")\(ownText)"
+        }
+        let aeroric = launch.tools.filter { $0.owner == "aeroric" }
+        return "Aeroric 工具 \(aeroric.filter(\.ready).count)/\(aeroric.count)\(ownText)"
+    }
+
+    /// The tools not offered, by why: "memory_recall、memory_propose：这个项目没有开启记忆".
+    public static func missing(_ launch: LiveToolLaunch) -> [String] {
+        guard launch.injected else { return [] }
+        var order: [String] = []
+        var names: [String: [String]] = [:]
+        for tool in launch.tools where tool.owner == "aeroric" && !tool.ready {
+            if names[tool.basis] == nil { order.append(tool.basis) }
+            names[tool.basis, default: []].append(tool.name)
+        }
+        return order.map { "\(names[$0]!.joined(separator: "、"))：\($0)" }
+    }
+
+    /// One offered tool's line: "delegate · 会写".
+    public static func line(_ tool: LiveEffectiveTool) -> String {
+        "\(tool.name) · \(scope(tool.scope))"
+    }
+}
+
+/// C8: 会话信息's 工具 — what the session's latest launch could call.
+struct SessionToolsSection: View {
+    let taskID: String
+    let family: String
+    @Environment(SkillCatalogBook.self) private var book: SkillCatalogBook?
+    @State private var open = false
+
+    var body: some View {
+        if let book {
+            let launch = book.tools[taskID]
+            VStack(alignment: .leading, spacing: 4) {
+                Button { open.toggle() } label: {
+                    HStack(spacing: AeroricSpace.s) {
+                        Text("工具").foregroundStyle(AeroricColor.textSecondary)
+                        Text(ToolText.summary(launch))
+                            .foregroundStyle(launch??.injected == false ? AeroricColor.warning : AeroricColor.text)
+                            .lineLimit(2)
+                        Spacer(minLength: 0)
+                        if launch??.tools.isEmpty == false {
+                            Image(systemName: open ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(AeroricColor.textTertiary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("session.info.tools")
+                if open, let known = launch, let launch = known {
+                    let aeroric = launch.tools.filter { $0.owner == "aeroric" && $0.ready }
+                    if !aeroric.isEmpty {
+                        Text("Aeroric 注入").foregroundStyle(AeroricColor.textTertiary)
+                        ForEach(aeroric, id: \.name) { tool in
+                            Text(ToolText.line(tool)).foregroundStyle(AeroricColor.textSecondary)
+                                .help(tool.basis)
+                        }
+                    }
+                    ForEach(ToolText.missing(launch), id: \.self) { line in
+                        Text("没有 " + line).foregroundStyle(AeroricColor.textTertiary)
+                    }
+                    let own = launch.tools.filter { $0.owner == "harness" }
+                    if !own.isEmpty {
+                        Text("\(SkillText.harness(launch.harness)) 自带（已知的，Aeroric 不控制）")
+                            .foregroundStyle(AeroricColor.textTertiary)
+                        ForEach(own, id: \.name) { tool in
+                            Text(ToolText.line(tool)).foregroundStyle(AeroricColor.textSecondary)
+                                .help(tool.basis)
+                        }
+                    }
+                }
+            }
+            .font(.system(size: AeroricType.caption))
+            .task(id: taskID) { await book.loadTools(taskID: taskID, family: family) }
         }
     }
 }

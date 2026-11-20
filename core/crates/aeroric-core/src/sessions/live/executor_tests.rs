@@ -656,3 +656,73 @@ fn only_local_routes_get_the_local_context_server() {
     assert!(!Route::RemoteClaude(remote.clone()).runs_locally());
     assert!(!Route::RemoteOmp(remote).runs_locally());
 }
+
+/// C8 (2026-11-20): the tool list kept for a launch matches what the
+/// session was really started with — the context server in Codex's
+/// `thread/start` exactly when the list says injected; a launch with no
+/// server set up says so.
+#[tokio::test]
+async fn the_kept_tool_list_matches_what_the_launch_was_given() {
+    let mut s = setup();
+    let dir = std::env::temp_dir().join(format!("aeroric-exec-tools-{}", uuid::Uuid::new_v4()));
+    s.executor.tool_log().set_dir(dir);
+    // No server set up: the list says so, and thread/start carries none.
+    s.executor
+        .launch(&launch("t1", ProtocolFamily::Codex))
+        .unwrap();
+    let mut peer = launched(&mut s.peers).await;
+    peer.handshake().await;
+    let start = peer.expect("thread/start").await;
+    let given = start["params"]["config"]["mcp_servers"]["aeroric_context"].is_object();
+    let kept = s.executor.tool_log().latest("t1").unwrap();
+    assert_eq!(kept.injected, given);
+    assert!(!kept.injected);
+    assert_eq!(kept.harness, "codex");
+
+    // With the server: both say so.
+    s.executor
+        .set_context_program("aeroric-cli".into(), "/d".into());
+    s.executor
+        .launch(&LaunchRequest {
+            agent_config_id: Some("native-a".into()),
+            ..launch("t2", ProtocolFamily::Codex)
+        })
+        .unwrap();
+    let mut peer = launched(&mut s.peers).await;
+    peer.handshake().await;
+    let start = peer.expect("thread/start").await;
+    let given = start["params"]["config"]["mcp_servers"]["aeroric_context"].is_object();
+    let kept = s.executor.tool_log().latest("t2").unwrap();
+    assert!(given, "{start}");
+    assert_eq!(kept.injected, given);
+    assert!(kept.tools.iter().any(|t| t.name == "delegate" && t.ready));
+    assert!(
+        !kept
+            .tools
+            .iter()
+            .any(|t| t.name == "memory_recall" && t.ready),
+        "memory is off"
+    );
+
+    // OMP gets no server: a remote one and an OMP one each say why.
+    let remote = RemoteKey {
+        connection_id: "ssh-1".into(),
+        agent: "claude".into(),
+        config: None,
+    };
+    assert!(Route::RemoteClaude(remote.clone()).is_remote());
+    assert!(!Route::Omp(OmpKey {
+        agent: "omp".into(),
+        config: None
+    })
+    .is_remote());
+    assert_eq!(
+        Route::Omp(OmpKey {
+            agent: "omp".into(),
+            config: None
+        })
+        .harness(),
+        "omp"
+    );
+    assert_eq!(Route::RemoteClaude(remote).harness(), "claude");
+}

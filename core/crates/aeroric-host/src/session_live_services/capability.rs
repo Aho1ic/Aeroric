@@ -19,6 +19,10 @@ use crate::dispatcher::ServiceSet;
 pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     let logins = live.executor.logins();
     logins.set_dir(live.context.paths.data_dir());
+    // C8: each launch's tools are kept beside the data.
+    live.executor
+        .tool_log()
+        .set_dir(live.context.paths.data_dir().to_path_buf());
     let weak = Arc::downgrade(live);
     logins.set_resolver(move |task| weak.upgrade().and_then(|live| login_key(&live, task)));
     set.register(
@@ -28,14 +32,23 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     set.register(wire::LOGIN_STATE_METHOD, blocking(live, login_state));
 }
 
-/// `session.capabilities {family, place?}`: the whole table.
-fn session_capabilities(_live: &Live, request: &Request) -> Frame {
+/// `session.capabilities {family, place?, taskId?}`: the whole table; C8:
+/// with a task, the tools its latest launch had (none kept: no `tools`).
+fn session_capabilities(live: &Live, request: &Request) -> Frame {
     let p: CapabilitiesParams = match params(request) {
         Ok(p) => p,
         Err(frame) => return *frame,
     };
     let table = capabilities::table(p.family, p.place.unwrap_or(Place::Local));
-    ok(request, json!({"family": p.family, "capabilities": table}))
+    let mut reply = json!({"family": p.family, "capabilities": table});
+    if let Some(tools) = p
+        .task_id
+        .as_deref()
+        .and_then(|task| live.executor.tool_log().latest(task))
+    {
+        reply["tools"] = json!(tools);
+    }
+    ok(request, reply)
 }
 
 #[derive(serde::Deserialize)]

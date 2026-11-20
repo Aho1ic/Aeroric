@@ -31,6 +31,7 @@ pub mod submission;
 pub mod task;
 pub mod terminal;
 pub mod todo;
+pub mod tools;
 pub mod turn_ledger;
 pub mod wiki;
 
