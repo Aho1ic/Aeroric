@@ -27,6 +27,22 @@ const HEAD_BYTES: usize = 4096;
 const KEYED: [&str; 4] = ["delegate", "board_write", "board_decide", "memory_propose"];
 const KEY_ARGUMENT: &str = "idempotency_key";
 
+/// C8: every tool of every family, as a host with all of them on would
+/// list them (the trigger evaluation offers the agent the full set).
+#[cfg(test)]
+pub(crate) fn all_tools() -> Vec<Value> {
+    [
+        tools(),
+        memory_tools(),
+        wiki_tools(),
+        reference_tools(),
+        expert_tools(),
+    ]
+    .into_iter()
+    .flat_map(|list| list.as_array().cloned().unwrap_or_default())
+    .collect()
+}
+
 /// MCP tool → host method.
 fn tools() -> Value {
     json!([

@@ -5,6 +5,8 @@ mod args;
 mod attach;
 mod client;
 mod mcp_context;
+#[cfg(test)]
+mod tool_eval;
 
 use args::{exit, ApprovalCmd, BackupCmd, Cli, Command, ProjectCmd, TaskCmd};
 use clap::Parser;

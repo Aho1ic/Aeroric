@@ -194,6 +194,8 @@ Status: proposed
 5. 标准输入读取加单行字节上限。超限时返回结构化错误：`limitKind`、`allowed`、`observed`、`retryable`。解析失败且能取到 `id` 时返回 JSON-RPC 错误，不再静默丢弃。
 6. 有副作用的工具（`delegate`、`board_write`、`board_decide`、`memory_propose`）接受调用方提供的幂等键；重复调用返回第一次的结果。
 
+2026-11-20 第三步已实现（真实 Harness 的评测为 NOT RUN），见 [C8 第三步笔记](../../implemented/testing/2026-11-20-c8-tool-trigger-eval.md)：评测集 `core/crates/aeroric-cli/evals/tool-triggers.json`，21 个工具共 127 条；测试检查它覆盖共享工具表的每个工具；关键词假 Harness 经真服务器跑通全部用例，基线为应触发命中 45/64、误触发 7/63。C8 完成。
+
 **第三步：触发评测。**
 
 7. 给每个工具写 3–5 条"应该触发"和"不应该触发"的提示，用假 Harness 跑通流程，真实 Harness 的评测记为 NOT RUN 并写明需要的条件。评测集放在仓库里，作为以后改工具描述时的回归输入。

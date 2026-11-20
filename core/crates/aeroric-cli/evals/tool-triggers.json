@@ -1,0 +1,259 @@
+{
+  "version": 1,
+  "about": "C8 第三步（2026-11-20）：Aeroric Context 工具的触发评测集。每个工具 3–5 条应该触发（should）和不应该触发（shouldNot）的用户请求；shouldNot 的 instead 写该用什么（另一个工具名，或 none 表示不用 Aeroric 工具）。改工具描述时用它做回归。",
+  "tools": {
+    "search_sessions": {
+      "should": [
+        "上次我们在别的会话里是怎么解决 SSH 连接超时的？找一下那次的讨论。",
+        "之前有个会话专门讨论过网关的代理设置，帮我找出来。",
+        "我记得做过一次数据库迁移，不记得在哪个会话里了，搜一下。"
+      ],
+      "shouldNot": [
+        {"prompt": "把 src/ssh.rs 里的 connect_timeout 改成 10 秒。", "instead": "none"},
+        {"prompt": "用户以前说过回复要用什么语言？", "instead": "memory_recall"},
+        {"prompt": "这个项目的 Wiki 里有没有讲网关为什么走本机？", "instead": "search_wiki"}
+      ]
+    },
+    "read_session": {
+      "should": [
+        "search_sessions 找到了 task-42 那个会话，把它的最后几条消息读给我看。",
+        "继续读刚才那个会话被截断的那条消息，从 nextOffset 往后。",
+        "看看我们这个会话前面说过的最近 40 条消息，确认我当时的要求。"
+      ],
+      "shouldNot": [
+        {"prompt": "这个任务的目标和已确认的决定是什么？", "instead": "read_handoff"},
+        {"prompt": "在所有历史会话里搜一下 ConnectTimeout。", "instead": "search_sessions"},
+        {"prompt": "读一下 README.md。", "instead": "none"}
+      ]
+    },
+    "read_handoff": {
+      "should": [
+        "你刚接手这个任务，先看看交接清单：目标、已确认的决定、还没完成的义务。",
+        "上一轮有没有结果未知的操作？我不想重复执行。",
+        "开始之前确认一下这个任务有哪些约束和已经做过的改动。"
+      ],
+      "shouldNot": [
+        {"prompt": "搜一下以前有没有人做过同样的需求。", "instead": "search_sessions"},
+        {"prompt": "我们项目约定用 pnpm 还是 npm？", "instead": "memory_recall"},
+        {"prompt": "帮我写一个函数把 CSV 转成 JSON。", "instead": "none"}
+      ]
+    },
+    "delegate": {
+      "should": [
+        "这个仓库很大，让一个子会话去调研所有调用 parse_config 的地方，列个清单回来，你继续改主逻辑。",
+        "找一个审查员角色把我刚写的迁移脚本审一遍，验收条款是没有漏掉回滚。",
+        "开一个只读的子会话去跑一遍测试并整理失败用例，你别停下手上的重构。",
+        "把补单元测试这块活儿分出去，测试要能用 cargo test -p parser 判定通过。"
+      ],
+      "shouldNot": [
+        {"prompt": "把这个变量名从 cfg 改成 config。", "instead": "none"},
+        {"prompt": "我之前委派出去的那几个任务现在怎么样了？", "instead": "delegations"},
+        {"prompt": "这个加密实现我拿不准是否安全，想听更强模型的意见。", "instead": "ask_expert"}
+      ]
+    },
+    "delegations": {
+      "should": [
+        "我委派出去的子会话做完没有？结论送到了吗？",
+        "看看上次委派的审查结果，验收条款过了几条。",
+        "有没有哪个委派的结果状态是 unknown？"
+      ],
+      "shouldNot": [
+        {"prompt": "再委派一个子会话去写文档。", "instead": "delegate"},
+        {"prompt": "有哪些角色可以选？", "instead": "list_roles"},
+        {"prompt": "子会话往黑板上写了什么新证据？", "instead": "board_read"}
+      ]
+    },
+    "list_roles": {
+      "should": [
+        "委派之前先看看角色库里有哪些角色，各自是什么权限。",
+        "reviewer 这个角色默认用什么上下文模式、在哪个工作区？",
+        "有没有只读的调研员角色？"
+      ],
+      "shouldNot": [
+        {"prompt": "让测试员角色去跑一遍集成测试。", "instead": "delegate"},
+        {"prompt": "查看已有委派的状态。", "instead": "delegations"},
+        {"prompt": "这个函数的权限检查写对了吗？", "instead": "none"}
+      ]
+    },
+    "board_read": {
+      "should": [
+        "看看共享黑板上子会话写了哪些新证据和假设。",
+        "黑板上有没有待你决定的提议？",
+        "子会话认领了哪些工作？读一下黑板的最新变化。"
+      ],
+      "shouldNot": [
+        {"prompt": "在黑板上记一条假设：内存泄漏来自连接池。", "instead": "board_write"},
+        {"prompt": "采纳黑板上 b3 那条决定。", "instead": "board_decide"},
+        {"prompt": "读一下当前任务的交接清单。", "instead": "read_handoff"}
+      ]
+    },
+    "board_write": {
+      "should": [
+        "把你刚确认的证据写到共享黑板上，让其他子会话也看到：日志显示超时发生在 DNS 解析阶段。",
+        "在黑板上认领'修复登录页样式'这项工作。",
+        "把黑板上 b5 那条假设标记为已推翻，依据是复现失败。"
+      ],
+      "shouldNot": [
+        {"prompt": "作为主会话，否决黑板上提议中的 b7 决定。", "instead": "board_decide"},
+        {"prompt": "把'以后都用 rustfmt 2021'记成长期约定。", "instead": "memory_propose"},
+        {"prompt": "顺手发现的 CSV 解析 bug 留给用户以后处理。", "instead": "todo_propose"}
+      ]
+    },
+    "board_decide": {
+      "should": [
+        "你是主会话，子会话在黑板上提议改用 tokio::sync::Mutex，你看过证据后采纳它。",
+        "否决黑板上 b4 的决定提议，理由是会破坏旧数据兼容。",
+        "黑板上有两条提议中的决定，逐条决定采纳还是否决。"
+      ],
+      "shouldNot": [
+        {"prompt": "在黑板上提议一条决定：先修测试再重构。", "instead": "board_write"},
+        {"prompt": "看看黑板上有什么新内容。", "instead": "board_read"},
+        {"prompt": "决定一下这个函数用 Vec 还是 HashMap。", "instead": "none"}
+      ]
+    },
+    "todo_propose": {
+      "should": [
+        "修这个 bug 的时候你发现日志模块也有个越界问题，这一轮不改，记给用户以后处理。",
+        "这块缺集成测试，但不在这次任务范围里，提议成待办。",
+        "顺带看到依赖版本太旧了，别现在升级，留个待办给我。"
+      ],
+      "shouldNot": [
+        {"prompt": "现在就把这个测试补上。", "instead": "none"},
+        {"prompt": "记住：用户喜欢简短的提交信息。", "instead": "memory_propose"},
+        {"prompt": "在黑板上认领这项工作。", "instead": "board_write"}
+      ]
+    },
+    "artifact_list": {
+      "should": [
+        "子会话交付了哪些文件？每个是第几版、检查过没有？",
+        "列出这个任务的交付物。",
+        "委派结果里说交付了 report.md，看看它有几个版本。"
+      ],
+      "shouldNot": [
+        {"prompt": "读一下交付物 a1 的第 2 版。", "instead": "artifact_read"},
+        {"prompt": "列出 src 目录下的文件。", "instead": "none"},
+        {"prompt": "委派的状态怎么样了？", "instead": "delegations"}
+      ]
+    },
+    "artifact_read": {
+      "should": [
+        "读交付物 a3@2 的内容，看看子会话写的报告。",
+        "把委派结果里那个 diagram.png 交付物的当前版读出来。",
+        "上一版交付物没读完，从 nextOffset 继续读。"
+      ],
+      "shouldNot": [
+        {"prompt": "这个任务都交付了哪些文件？", "instead": "artifact_list"},
+        {"prompt": "读一下 docs/design.md。", "instead": "none"},
+        {"prompt": "读参考库里 ultralytics 的 head.py。", "instead": "read_reference"}
+      ]
+    },
+    "memory_recall": {
+      "should": [
+        "开始之前查一下用户有没有关于提交信息格式的约定。",
+        "这个项目以前定过用哪个包管理器吗？",
+        "用户偏好回复用中文还是英文？查一下长期记忆。"
+      ],
+      "shouldNot": [
+        {"prompt": "记住：这个项目发布前要跑 native:check。", "instead": "memory_propose"},
+        {"prompt": "刚才查到的那条约定这次不适用了，告诉 Aeroric。", "instead": "memory_feedback"},
+        {"prompt": "以前哪个会话讨论过 CI 失败？", "instead": "search_sessions"}
+      ]
+    },
+    "memory_propose": {
+      "should": [
+        "用户刚说以后提交信息一律用中文，把这个记成长期偏好。",
+        "我们刚定下这个项目的数据库迁移必须可回滚，提议记住它。",
+        "用户说他不喜欢在回复里看到表格，提议成长期记忆。"
+      ],
+      "shouldNot": [
+        {"prompt": "把这个 API 密钥记下来下次用：sk-xxxx。", "instead": "none"},
+        {"prompt": "这条记忆没用，降级它。", "instead": "memory_feedback"},
+        {"prompt": "这次对话里临时用的端口号是 8081。", "instead": "none"}
+      ]
+    },
+    "memory_feedback": {
+      "should": [
+        "刚才 memory_recall 查到的那条'用 pnpm'的约定确实有用，告诉 Aeroric。",
+        "查到的经验'SSH 超时改 ConnectTimeout'这次不对，标为不对。",
+        "那条记忆已经过时了，反馈一下让它降级。"
+      ],
+      "shouldNot": [
+        {"prompt": "把'用 pnpm'记成新的约定。", "instead": "memory_propose"},
+        {"prompt": "查一下有没有关于测试的约定。", "instead": "memory_recall"},
+        {"prompt": "Wiki 上这页内容过时了。", "instead": "flag_wiki_issue"}
+      ]
+    },
+    "read_wiki": {
+      "should": [
+        "先读项目 Wiki 的索引页，看看有哪些模块说明。",
+        "读 Wiki 的 decision-delegation 那页，了解委派为什么这样设计。",
+        "search_wiki 找到了 runbook，打开读全文。"
+      ],
+      "shouldNot": [
+        {"prompt": "在 Wiki 里搜一下'网关'相关的页面。", "instead": "search_wiki"},
+        {"prompt": "Wiki 的 runbook 写错了一步，报告一下。", "instead": "flag_wiki_issue"},
+        {"prompt": "读一下 docs/architecture.md。", "instead": "none"}
+      ]
+    },
+    "search_wiki": {
+      "should": [
+        "Wiki 里有没有讲记忆整理流程的页面？搜一下。",
+        "按关键词'代理 出口'检索项目 Wiki。",
+        "改网关代码前，先在 Wiki 里找找有没有设计决定。"
+      ],
+      "shouldNot": [
+        {"prompt": "打开 Wiki 的 runbook 页。", "instead": "read_wiki"},
+        {"prompt": "在参考代码库里搜 ConnectTimeout 的用法。", "instead": "search_references"},
+        {"prompt": "在当前仓库里 grep 一下 proxy。", "instead": "none"}
+      ]
+    },
+    "flag_wiki_issue": {
+      "should": [
+        "Wiki 的 runbook 里说要先跑 npm install，但项目早就改用 pnpm 了，报告这个问题。",
+        "decision-gateway 页提到的函数已经不存在了，告诉用户这页过时。",
+        "Wiki 缺一页讲远端会话的，记一个 issue。"
+      ],
+      "shouldNot": [
+        {"prompt": "直接把 Wiki 的那段改对。", "instead": "none"},
+        {"prompt": "读一下 Wiki 的索引。", "instead": "read_wiki"},
+        {"prompt": "代码里有个 bug，以后再修。", "instead": "todo_propose"}
+      ]
+    },
+    "search_references": {
+      "should": [
+        "实现之前看看我收集的参考代码库里，别人是怎么写 YOLO 检测头的。",
+        "在参考库里搜一下 RetryPolicy 的定义。",
+        "参考仓库里有没有类似的 LRU 缓存实现？"
+      ],
+      "shouldNot": [
+        {"prompt": "读参考库 ultralytics 里 nn/modules/head.py 的 100 到 200 行。", "instead": "read_reference"},
+        {"prompt": "在本项目代码里找 RetryPolicy 的用法。", "instead": "none"},
+        {"prompt": "Wiki 里有没有讲重试策略？", "instead": "search_wiki"}
+      ]
+    },
+    "read_reference": {
+      "should": [
+        "search_references 找到了 ultralytics · nn/modules/head.py:42，把那个文件读出来看看。",
+        "读参考库 tokio 里 src/sync/mutex.rs 的前 200 行。",
+        "接着读参考文件的 400 行以后。"
+      ],
+      "shouldNot": [
+        {"prompt": "在参考库里搜 Detect 类。", "instead": "search_references"},
+        {"prompt": "读一下本项目的 src/main.rs。", "instead": "none"},
+        {"prompt": "读交付物 a2 的最新版。", "instead": "artifact_read"}
+      ]
+    },
+    "ask_expert": {
+      "should": [
+        "这个死锁你已经试了三种改法都失败了，请教一下专家模型。",
+        "要改认证令牌的校验逻辑，涉及安全，先问问更强的模型这个方案有没有漏洞。",
+        "两个方案你拿不准选哪个，把背景和试过的写清楚问专家。"
+      ],
+      "shouldNot": [
+        {"prompt": "把这个函数重命名。", "instead": "none"},
+        {"prompt": "把调研所有调用点这件事交给一个子会话去做。", "instead": "delegate"},
+        {"prompt": "查一下用户对代码风格的偏好。", "instead": "memory_recall"}
+      ]
+    }
+  }
+}
