@@ -23,6 +23,10 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     live.executor
         .tool_log()
         .set_dir(live.context.paths.data_dir().to_path_buf());
+    // H1: and what each launch had on each surface.
+    live.executor
+        .surface_log()
+        .set_dir(live.context.paths.data_dir().to_path_buf());
     let weak = Arc::downgrade(live);
     logins.set_resolver(move |task| weak.upgrade().and_then(|live| login_key(&live, task)));
     set.register(
@@ -33,7 +37,8 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
 }
 
 /// `session.capabilities {family, place?, taskId?}`: the whole table; C8:
-/// with a task, the tools its latest launch had (none kept: no `tools`).
+/// with a task, the tools its latest launch had (none kept: no `tools`);
+/// H1: and its surfaces (none kept: no `surfaces`).
 fn session_capabilities(live: &Live, request: &Request) -> Frame {
     let p: CapabilitiesParams = match params(request) {
         Ok(p) => p,
@@ -47,6 +52,13 @@ fn session_capabilities(live: &Live, request: &Request) -> Frame {
         .and_then(|task| live.executor.tool_log().latest(task))
     {
         reply["tools"] = json!(tools);
+    }
+    if let Some(surfaces) = p
+        .task_id
+        .as_deref()
+        .and_then(|task| live.executor.surface_log().latest(task))
+    {
+        reply["surfaces"] = json!(surfaces);
     }
     ok(request, reply)
 }

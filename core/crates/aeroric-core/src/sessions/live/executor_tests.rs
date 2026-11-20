@@ -775,3 +775,216 @@ fn the_capability_table_matches_who_gets_the_context_server() {
         assert!(route.is_remote() && !route.runs_locally());
     }
 }
+
+/// H1 (2026-11-20): the surfaces kept for a launch rest on what that
+/// launch was given — Codex's `thread/start` carries the opening as
+/// `developerInstructions` and the context server exactly when the record
+/// says so, and the opening's length is the one sent.
+#[tokio::test]
+async fn the_kept_surfaces_match_what_the_launch_was_given() {
+    use aeroric_protocol::checkpoint::HandoffReason;
+    use aeroric_protocol::live_capability::{Feature, Place, SupportState, SurfaceLaunch};
+    let mut s = setup();
+    let dir = std::env::temp_dir().join(format!("aeroric-exec-surf-{}", uuid::Uuid::new_v4()));
+    s.executor.surface_log().set_dir(dir.clone());
+    let at = |kept: &SurfaceLaunch, feature: Feature| {
+        kept.surfaces
+            .iter()
+            .find(|e| e.feature == feature)
+            .cloned()
+            .unwrap()
+    };
+
+    // Nothing to open with, no server set up.
+    s.executor
+        .launch(&launch("t1", ProtocolFamily::Codex))
+        .unwrap();
+    let mut peer = launched(&mut s.peers).await;
+    peer.handshake().await;
+    let start = peer.expect("thread/start").await;
+    let kept = s.executor.surface_log().latest("t1").unwrap();
+    assert_eq!(
+        kept.surfaces.iter().map(|e| e.feature).collect::<Vec<_>>(),
+        Feature::SURFACES.to_vec()
+    );
+    assert_eq!((kept.harness.as_str(), kept.place), ("codex", Place::Local));
+    assert!(
+        start["params"]["developerInstructions"].is_null(),
+        "{start}"
+    );
+    let opening = at(&kept, Feature::SurfaceInstructions);
+    assert!(
+        opening
+            .note
+            .as_deref()
+            .unwrap()
+            .starts_with("这次没有开场内容要给"),
+        "{opening:?}"
+    );
+    let tools = at(&kept, Feature::ContextTools);
+    assert_eq!(tools.state, SupportState::No);
+    assert_eq!(
+        tools.note.as_deref(),
+        Some("宿主没有准备 Aeroric 工具服务器")
+    );
+
+    // A source move arms a brief, and the server is set up: both reach
+    // thread/start, and the record says so.
+    s.executor
+        .set_context_program("aeroric-cli".into(), "/d".into());
+    s.executor
+        .checkpoints()
+        .arm("t2", HandoffReason::SourceMove);
+    s.executor
+        .launch(&LaunchRequest {
+            agent_config_id: Some("native-a".into()),
+            ..launch("t2", ProtocolFamily::Codex)
+        })
+        .unwrap();
+    let mut peer = launched(&mut s.peers).await;
+    peer.handshake().await;
+    let start = peer.expect("thread/start").await;
+    let kept = s.executor.surface_log().latest("t2").unwrap();
+    let given = start["params"]["developerInstructions"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no opening: {start}"));
+    let opening = at(&kept, Feature::SurfaceInstructions);
+    assert_eq!(opening.state, SupportState::Yes);
+    assert_eq!(
+        opening.note,
+        Some(format!(
+            "这次启动从系统层给了开场内容（{} 字）",
+            given.chars().count()
+        ))
+    );
+    assert!(start["params"]["config"]["mcp_servers"]["aeroric_context"].is_object());
+    assert_eq!(at(&kept, Feature::ContextTools).state, SupportState::Yes);
+    // Not exercised per launch: the family's table.
+    assert_eq!(
+        at(&kept, Feature::SurfaceSubagents),
+        crate::sessions::live::capabilities::support(
+            ProtocolFamily::Codex,
+            Place::Local,
+            Feature::SurfaceSubagents
+        )
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// H1: a Claude launch hands its opening and context server to the
+/// `claude` process (`--append-system-prompt`, `--mcp-config`), as the
+/// kept surfaces say. The process is a fake that refuses to start, so
+/// what it was asked to start with is all there is to see.
+#[tokio::test]
+async fn a_claude_launch_hands_what_its_surfaces_say() {
+    use crate::sessions::live::claude::driver::ClaudeStart;
+    use aeroric_protocol::checkpoint::HandoffReason;
+    use aeroric_protocol::live_capability::{Feature, SupportState};
+
+    struct Capture(Launcher, Arc<Mutex<Vec<ClaudeStart>>>);
+    impl Routing for Capture {
+        fn route(&self, _: ProtocolFamily, agent: &str, _: Option<&str>) -> Option<Route> {
+            Some(Route::Claude(ClaudeKey {
+                agent: agent.to_string(),
+                config: None,
+            }))
+        }
+        fn codex_launcher(&self, _key: &ServerKey) -> Launcher {
+            Arc::clone(&self.0)
+        }
+        fn claude_launcher(&self, _key: &ClaudeKey) -> ClaudeLauncher {
+            let starts = Arc::clone(&self.1);
+            Arc::new(move |start: &ClaudeStart| {
+                starts.lock().push(start.clone());
+                Err("no claude in this test".to_string())
+            })
+        }
+        fn route_remote(
+            &self,
+            _: ProtocolFamily,
+            agent: &str,
+            _: Option<&str>,
+            connection_id: &str,
+        ) -> Option<Route> {
+            Some(Route::RemoteClaude(RemoteKey {
+                connection_id: connection_id.to_string(),
+                agent: agent.to_string(),
+                config: None,
+            }))
+        }
+        fn remote_claude_launcher(&self, _key: &RemoteKey) -> ClaudeLauncher {
+            self.claude_launcher(&ClaudeKey {
+                agent: "claude".into(),
+                config: None,
+            })
+        }
+    }
+
+    let (codex, _peers) = launcher();
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let executor = StructuredExecutor::new(
+        Arc::new(Inner::default()) as Arc<dyn TaskExecutor>,
+        Arc::new(Capture(codex, Arc::clone(&starts))),
+        Arc::new(Sink::default()) as Arc<dyn LiveStatusSink>,
+        tokio::runtime::Handle::current(),
+    );
+    let dir = std::env::temp_dir().join(format!("aeroric-exec-surf-c-{}", uuid::Uuid::new_v4()));
+    executor.surface_log().set_dir(dir.clone());
+    executor.set_context_program("aeroric-cli".into(), "/d".into());
+    executor.checkpoints().arm("c1", HandoffReason::SourceMove);
+    let _ = executor.launch(&LaunchRequest {
+        agent: "claude".into(),
+        ..launch("c1", ProtocolFamily::Claude)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while starts.lock().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "claude never asked to start"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let start = starts.lock()[0].clone();
+    let kept = executor.surface_log().latest("c1").unwrap();
+    assert_eq!(kept.harness, "claude");
+    let entry = |f: Feature| kept.surfaces.iter().find(|e| e.feature == f).unwrap();
+    let opening = start.append_system.expect("--append-system-prompt");
+    assert_eq!(entry(Feature::SurfaceInstructions).state, SupportState::Yes);
+    assert_eq!(
+        entry(Feature::SurfaceInstructions).note,
+        Some(format!(
+            "这次启动从系统层给了开场内容（{} 字）",
+            opening.chars().count()
+        ))
+    );
+    assert!(start.mcp_config.unwrap().contains("aeroric_context"));
+    assert_eq!(entry(Feature::ContextTools).state, SupportState::Yes);
+
+    // A remote Claude takes the opening the same way, and no tools.
+    executor.checkpoints().arm("c2", HandoffReason::SourceMove);
+    let _ = executor.launch(&LaunchRequest {
+        agent: "claude".into(),
+        working_directory: WorkingDirectory::Ssh {
+            connection_id: "ssh-1".into(),
+            remote_path: "/srv/w".into(),
+        },
+        ..launch("c2", ProtocolFamily::Claude)
+    });
+    while starts.lock().len() < 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "remote claude never asked to start"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let start = starts.lock()[1].clone();
+    let kept = executor.surface_log().latest("c2").unwrap();
+    assert_eq!(kept.place, aeroric_protocol::live_capability::Place::Remote);
+    let entry = |f: Feature| kept.surfaces.iter().find(|e| e.feature == f).unwrap();
+    assert!(start.append_system.is_some());
+    assert_eq!(entry(Feature::SurfaceInstructions).state, SupportState::Yes);
+    assert!(start.mcp_config.is_none());
+    assert_eq!(entry(Feature::ContextTools).state, SupportState::No);
+    assert_eq!(entry(Feature::SurfaceSkills).state, SupportState::No);
+    std::fs::remove_dir_all(&dir).ok();
+}

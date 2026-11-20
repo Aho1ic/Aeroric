@@ -109,18 +109,23 @@ impl Route {
         )
     }
 
+    /// H1: the family of the harness the route starts.
+    pub fn family(&self) -> ProtocolFamily {
+        match self {
+            Route::Codex(_) => ProtocolFamily::Codex,
+            Route::Claude(_) | Route::RemoteClaude(_) => ProtocolFamily::Claude,
+            Route::Omp(_) | Route::RemoteOmp(_) => ProtocolFamily::Omp,
+            Route::Acp(key) => key.family,
+        }
+    }
+
     /// C8: the harness the route starts.
     pub fn harness(&self) -> &'static str {
-        match self {
-            Route::Codex(_) => "codex",
-            Route::Claude(_) | Route::RemoteClaude(_) => "claude",
-            Route::Omp(_) | Route::RemoteOmp(_) => "omp",
-            Route::Acp(key) => match key.family {
-                ProtocolFamily::Codex => "codex",
-                ProtocolFamily::Claude => "claude",
-                ProtocolFamily::Omp => "omp",
-                ProtocolFamily::Dsh => "dsh",
-            },
+        match self.family() {
+            ProtocolFamily::Codex => "codex",
+            ProtocolFamily::Claude => "claude",
+            ProtocolFamily::Omp => "omp",
+            ProtocolFamily::Dsh => "dsh",
         }
     }
 }
@@ -209,6 +214,7 @@ pub struct StructuredExecutor {
     skill_mounts: Arc<crate::extensions::catalog::MountLog>,
     /// C8 (2026-11-20): the tools each launch of a session had.
     tool_log: Arc<super::tool_catalog::ToolLog>,
+    surface_log: Arc<super::surfaces::SurfaceLog>,
     /// B4′: how to start the context server (`program`, `data_dir`); unset
     /// gives sessions none (tests, and hosts that opt out).
     context_program: Mutex<Option<(String, String)>>,
@@ -322,6 +328,7 @@ impl StructuredExecutor {
             references: Arc::default(),
             skill_mounts: Arc::default(),
             tool_log: Arc::default(),
+            surface_log: Arc::default(),
             context_program: Mutex::new(None),
             context_tokens: Arc::default(),
             runtime: runtime.clone(),
@@ -371,7 +378,7 @@ impl StructuredExecutor {
         session: &Arc<dyn SessionDriver>,
         prompt: Option<String>,
         resuming: bool,
-    ) -> Option<String> {
+    ) -> (Option<String>, super::surfaces::Opening) {
         let profile = self
             .memory
             .profile_for_session(Some(project_id), Some(task_id));
@@ -385,7 +392,8 @@ impl StructuredExecutor {
         prompt: Option<String>,
         resuming: bool,
         profile: Option<&str>,
-    ) -> Option<String> {
+    ) -> (Option<String>, super::surfaces::Opening) {
+        use super::surfaces::Opening;
         use aeroric_protocol::checkpoint::HandoffReason;
         let reason = self.checkpoints.take_armed(task_id).or_else(|| {
             (resuming
@@ -397,10 +405,18 @@ impl StructuredExecutor {
         let checkpoint =
             reason.and_then(|_| self.checkpoints.get(task_id).filter(|cp| !cp.is_empty()));
         let (Some(reason), Some(checkpoint)) = (reason, checkpoint) else {
-            if let Some(profile) = profile {
-                session.set_instructions(profile.to_string());
-            }
-            return prompt;
+            // H1: what became of the opening is kept with the launch.
+            let opening = match profile {
+                None => Opening::Nothing,
+                Some(profile) if session.set_instructions(profile.to_string()) => {
+                    Opening::Taken(profile.chars().count())
+                }
+                Some(_) => Opening::Refused {
+                    brief: false,
+                    in_message: false,
+                },
+            };
+            return (prompt, opening);
         };
         let brief = super::checkpoint::brief::handoff_brief(&checkpoint, reason);
         if let Some(log) = self.registry.log(task_id) {
@@ -417,10 +433,15 @@ impl StructuredExecutor {
             Some(profile) => format!("{profile}\n\n---\n\n{brief}"),
             None => brief.clone(),
         };
+        let chars = instructions.chars().count();
         if session.set_instructions(instructions) {
-            return prompt;
+            return (prompt, Opening::Taken(chars));
         }
-        prompt.map(|p| format!("{brief}\n---\n\n{p}"))
+        let opening = Opening::Refused {
+            brief: true,
+            in_message: prompt.is_some(),
+        };
+        (prompt.map(|p| format!("{brief}\n---\n\n{p}")), opening)
     }
 
     /// B4′: give every session the context server, started as
@@ -524,6 +545,11 @@ impl StructuredExecutor {
         &self.tool_log
     }
 
+    /// H1: each launch's surfaces.
+    pub fn surface_log(&self) -> &Arc<super::surfaces::SurfaceLog> {
+        &self.surface_log
+    }
+
     /// C8: what the context server's conditional families are offered on,
     /// asked as `aeroric-cli mcp-context` asks the host.
     fn offered_tools(&self, project_id: &str) -> super::tool_catalog::Offered {
@@ -538,9 +564,16 @@ impl StructuredExecutor {
     /// C7: a launch on this Mac keeps what skills it is given (a remote
     /// one is given none by Aeroric). C8: OMP on this Mac is mounted too,
     /// though it gets no context server.
-    fn note_skills(&self, task_id: &str, family: ProtocolFamily, route: &Route, cwd: &str) {
+    /// H1: how many of Aeroric's own skills it was given (`None`: not kept).
+    fn note_skills(
+        &self,
+        task_id: &str,
+        family: ProtocolFamily,
+        route: &Route,
+        cwd: &str,
+    ) -> Option<usize> {
         if route.is_remote() {
-            return;
+            return None;
         }
         let harness = match family {
             ProtocolFamily::Codex => "codex",
@@ -555,6 +588,25 @@ impl StructuredExecutor {
             Some(std::path::Path::new(cwd)),
             home.as_deref(),
             crate::clock::now_ms_u64(),
+        )
+    }
+
+    /// H1: keep what this launch had on each surface.
+    fn note_surfaces(&self, task_id: &str, route: &Route, observed: super::surfaces::Observed) {
+        let place = if route.is_remote() {
+            aeroric_protocol::live_capability::Place::Remote
+        } else {
+            aeroric_protocol::live_capability::Place::Local
+        };
+        self.surface_log.note(
+            task_id,
+            super::surfaces::launch(
+                route.family(),
+                place,
+                route.harness(),
+                &observed,
+                crate::clock::now_ms_u64(),
+            ),
         );
     }
 
@@ -653,7 +705,11 @@ impl StructuredExecutor {
         self.route_task(family, agent, config, cwd).is_some()
     }
 
-    fn start_session(&self, spec: CodexSessionSpec, route: &Route) -> Arc<dyn SessionDriver> {
+    fn start_session(
+        &self,
+        spec: CodexSessionSpec,
+        route: &Route,
+    ) -> (Arc<dyn SessionDriver>, super::tool_catalog::Injection) {
         if let Some(old) = self.registry.remove(&spec.task_id) {
             let _ = old.close();
         }
@@ -803,7 +859,7 @@ impl StructuredExecutor {
         );
         self.registry
             .insert(&spec.task_id, Arc::clone(&session), log);
-        session
+        (session, injection)
     }
 
     /// Close and drop a task's driver; false when it has none.
@@ -858,7 +914,7 @@ impl TaskExecutor for StructuredExecutor {
         ) else {
             return self.inner.launch(request);
         };
-        let session = self.start_session(
+        let (session, injection) = self.start_session(
             CodexSessionSpec {
                 task_id: request.task_id.clone(),
                 project_id: request.project_id.clone(),
@@ -873,7 +929,7 @@ impl TaskExecutor for StructuredExecutor {
             },
             &route,
         );
-        self.note_skills(
+        let skills = self.note_skills(
             &request.task_id,
             request.family,
             &route,
@@ -885,15 +941,23 @@ impl TaskExecutor for StructuredExecutor {
             .prompt_override
             .clone()
             .unwrap_or_else(|| request.prompt.clone());
-        let prompt = self
-            .hand_brief(
-                &request.task_id,
-                &request.project_id,
-                &session,
-                Some(prompt),
-                false,
-            )
-            .unwrap_or_default();
+        let (prompt, opening) = self.hand_brief(
+            &request.task_id,
+            &request.project_id,
+            &session,
+            Some(prompt),
+            false,
+        );
+        self.note_surfaces(
+            &request.task_id,
+            &route,
+            super::surfaces::Observed {
+                opening,
+                injection,
+                skills,
+            },
+        );
+        let prompt = prompt.unwrap_or_default();
         let started = if prompt.trim().is_empty() {
             session.attach()
         } else {
@@ -927,7 +991,7 @@ impl TaskExecutor for StructuredExecutor {
                 reason: error.to_string(),
             });
         }
-        let session = self.start_session(
+        let (session, injection) = self.start_session(
             CodexSessionSpec {
                 task_id: request.task_id.clone(),
                 project_id: request.project_id.clone(),
@@ -942,13 +1006,23 @@ impl TaskExecutor for StructuredExecutor {
             },
             &route,
         );
-        self.note_skills(
+        let skills = self.note_skills(
             &request.task_id,
             request.family,
             &route,
             &local_path(&request.working_directory),
         );
-        self.hand_brief(&request.task_id, &request.project_id, &session, None, true);
+        let (_, opening) =
+            self.hand_brief(&request.task_id, &request.project_id, &session, None, true);
+        self.note_surfaces(
+            &request.task_id,
+            &route,
+            super::surfaces::Observed {
+                opening,
+                injection,
+                skills,
+            },
+        );
         session.attach().map_err(|error| ExecutorFailure::Spawn {
             reason: error.to_string(),
         })

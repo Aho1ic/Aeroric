@@ -10,6 +10,9 @@
 //! when the harness itself holds it there — Codex's and DSH's read-only
 //! sandboxes, Claude's plan mode. omp gets `always-ask` for `plan`, which
 //! leaves every write to the user's refusal, so it is not.
+//!
+//! H1 (2026-11-20): the surfaces through which each harness uses Aeroric
+//! (`Feature::SURFACES`); a launch's own record is in `surfaces.rs`.
 
 use aeroric_protocol::live_capability::{CapabilityEntry, Feature, Place, SupportState};
 use aeroric_protocol::project::ProjectTarget;
@@ -59,6 +62,38 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
         (P::Codex, F::ContextTools) => yes(Some("启动时在 thread/start 里接入")),
         (P::Claude, F::ContextTools) => yes(Some("启动时用 --mcp-config 接入")),
         (P::Dsh, F::ContextTools) => yes(Some("经 ACP 的 session/new 接入")),
+        // H1 (2026-11-20): the other surfaces. A launch's own record
+        // (`surfaces.rs`) overrides the opening, tools and skills with what
+        // really happened; the rest rest on these rows and their tests.
+        (P::Codex, F::SurfaceInstructions) => yes(Some("thread/start 的 developerInstructions")),
+        (P::Claude, F::SurfaceInstructions) => yes(Some("--append-system-prompt")),
+        (P::Omp, F::SurfaceInstructions) => no(
+            "还没接：OMP 有 --append-system-prompt，Aeroric 没传（H2）；交接简报放在第一条消息前，记忆档案不给",
+        ),
+        (P::Dsh, F::SurfaceInstructions) => no(
+            "还没接：ACP 驱动没有系统层入口；交接简报放在第一条消息前，记忆档案不给",
+        ),
+        (_, F::SurfaceSkills) if place == Place::Remote => no("Aeroric 不给远端会话挂技能"),
+        (P::Codex, F::SurfaceSkills) => yes(Some("项目 .agents/skills 下带标记的副本")),
+        (P::Claude, F::SurfaceSkills) => yes(Some("会话插件（--plugin-dir）或受管 home")),
+        (P::Omp, F::SurfaceSkills) => yes(Some("受管 home")),
+        (P::Dsh, F::SurfaceSkills) => yes(Some("受管配置目录")),
+        (_, F::SurfaceEvents) if place == Place::Remote => no("远端会话没有接 Harness 自己的 Hook"),
+        (P::Claude, F::SurfaceEvents) => {
+            no("还没接：会话插件可以带 hooks/hooks.json，Aeroric 没放（H4）")
+        }
+        (P::Codex, F::SurfaceEvents) => unknown("还没核对：Hook 能否经 thread/start 的 config 按次下发"),
+        (P::Omp, F::SurfaceEvents) => no("还没接：OMP 可以按次传 --hook，Aeroric 没传（H4）"),
+        (P::Dsh, F::SurfaceEvents) => unknown("还没核对：DSH 的 Hook 能否由受管配置给出"),
+        (P::Claude, F::SurfaceSubagents) => {
+            yes(Some("Task、Agent 工具和 task_* 事件显示为子代理"))
+        }
+        (P::Codex, F::SurfaceSubagents) => {
+            yes(Some("subAgentActivity、collabAgentToolCall 显示为子代理"))
+        }
+        (P::Omp, F::SurfaceSubagents) => yes(Some("启动时订阅子代理事件")),
+        (P::Dsh, F::SurfaceSubagents) => no("DSH 的子代理事件没有接"),
+        (_, F::SurfaceCli) => no("命令行入口（aeroric-cli ctx）还没做（H2）"),
         (P::Dsh, F::PermChange) => degraded("DSH 启动时固定权限：下次启动生效"),
         (P::Dsh, F::PlanMode) => degraded("用只读沙盒代替规划：写入要你批准"),
         (P::Dsh, F::Compact) => no("DSH 没有通过 ACP 提供压缩上下文"),

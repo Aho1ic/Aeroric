@@ -125,6 +125,8 @@ Aeroric 已经有长期记忆、项目 Wiki、委派和共享黑板、内置与�
 
 #### H1 入口表：每个 Harness 有哪些入口，凭什么说有
 
+2026-11-20 第一步已实现，见 [H1 第一步笔记](../../implemented/feature/2026-11-20-h1-surfaces-per-launch.md)：能力表加了系统层、技能、事件、子代理、命令行五个入口项，工具沿用 C9 的 `contextTools`，没有另加 `SurfaceTools`；每次启动按实际情况记下系统层（驱动是否收下开场内容、多少字）、工具、技能（Aeroric 自己的技能挂了几个），其余三项取能力表，`session.capabilities {taskId}` 返回 `surfaces`；假 Codex、假 Claude 的启动测试核对记录与启动参数一致，远端 Claude 的系统层有了断言；`delegateChild` 写明含义。第 4 条（七条待实测）留给第二步，会话信息里的显示留给第三步。
+
 **用户会看到：** 会话信息里除了工具清单（C8），还有一行"这个 Harness 通过哪些入口用 Aeroric"：系统层、工具、技能、事件、子代理、命令行，各自是"已接通""这家不支持""还没核对"。
 
 **现状：** 能力表的 `Feature` 和 `SupportState` 在 [`live_capability.rs:25`、`:64`](../../../../core/crates/aeroric-protocol/src/live_capability.rs)，按家族和本机/远端取值（[`capabilities.rs`](../../../../core/crates/aeroric-core/src/sessions/live/capabilities.rs)）。`set_instructions`、`set_context_server` 返回的 bool 是"这次启动真的接上了没有"的唯一证据，但现在没有存下来：没有交接简报时 `set_instructions` 的返回值直接丢弃（[`executor.rs:321–323`](../../../../core/crates/aeroric-core/src/sessions/live/executor.rs)），`give_context` 只用它决定要不要撤销 token（`:358–372`）。

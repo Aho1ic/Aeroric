@@ -80,7 +80,33 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
 - App 里的"新委派"、角色库、黑板面板、记忆页都由 App 直接调宿主，不依赖会话里的 Agent 有没有工具。依赖工具的是 Agent 自己发起的委派、检索和记忆提议，这部分在没有工具的会话里不会发生，会话信息里写明原因。
 - 记忆档案只进系统层：Claude、Codex 有；DSH 和 OMP 的驱动没有系统层接口，拿不到档案。
 
-## 6. 具名阻塞
+## 6. 每个 Harness 用哪些入口接 Aeroric（H1，2026-11-20）
+
+能力表（`session.capabilities`）里有六个入口项，顺序见 `Feature::SURFACES`：系统层（`surfaceInstructions`）、工具（`contextTools`，即 §5）、技能（`surfaceSkills`）、事件（`surfaceEvents`）、子代理（`surfaceSubagents`）、命令行（`surfaceCli`）。
+
+本机各家：
+
+| Harness | 系统层 | 工具 | 技能 | 事件 | 子代理 | 命令行 |
+|---|---|---|---|---|---|---|
+| Claude Code | 有：`--append-system-prompt` | 有 | 有：会话插件或受管 home | 没有：会话插件可带 `hooks/hooks.json`，未放（H4） | 有：`Task`、`Agent` 工具与 `task_*` 事件 | 没有（H2） |
+| Codex | 有：`thread/start` 的 `developerInstructions` | 有 | 有：项目 `.agents/skills` 下带标记的副本 | 还没核对：Hook 能否经 `thread/start` 的 `config` 按次下发 | 有：`subAgentActivity`、`collabAgentToolCall` | 没有（H2） |
+| OMP | 没有：上游有 `--append-system-prompt`，未传（H2） | 没有（H2） | 有：受管 home | 没有：上游可按次传 `--hook`，未传（H4） | 有：启动时订阅子代理事件 | 没有（H2） |
+| DSH | 没有：ACP 驱动没有系统层入口 | 有 | 有：受管配置目录 | 还没核对 | 没有：子代理事件没接 | 没有（H2） |
+
+远端：系统层和子代理同本机（远端 Claude、Codex 的系统层有测试断言）；工具、技能、事件都没有；DSH 不支持远端。
+
+**依据从哪来。**
+
+- 会话每次启动（含恢复）记下这次各入口实际怎样，存在 `<data>/surfaces/<任务>.json`（每任务保留最近 20 次），`session.capabilities {taskId}` 的 `surfaces` 返回最近一次。
+- 系统层、工具、技能三项按这次启动实际发生的事填：驱动收下了开场内容（记字数）、收下了工具服务器、挂了几个 Aeroric 自己的技能（内置和记忆沉淀的，不算用户自己的）。这次没有开场内容要给时，沿用能力表那一格并写明"这次没有开场内容要给"。
+- 事件、子代理、命令行三项启动时不涉及，取能力表那一格。表里每个"有"都有对应的驱动测试：Claude 的 `Task` 映射（`claude/map_tests.rs`）、Codex 的 `collabAgentToolCall`（`codex/driver_tests.rs`）、OMP 的订阅与生命周期映射（`omp/driver_tests.rs`、`omp/map_tests.rs`）。
+- `executor_tests.rs` 的 `the_kept_surfaces_match_what_the_launch_was_given` 与 `a_claude_launch_hands_what_its_surfaces_say` 用假 Codex、假 Claude 进程核对：记下的"有"与启动参数里实际带的 `developerInstructions`、`--append-system-prompt`、MCP 配置一致，字数一致。
+
+**没有系统层时开场内容去哪。** 交接简报放在第一条消息前；恢复会话时没有消息可附，简报就没给出，入口记录里写明。记忆档案只进系统层，没有系统层的 Harness 拿不到。
+
+**"子会话"（`delegateChild`）的含义。** Aeroric 能把这一家的会话作为委派的子会话启动，并把结果送回上级。它不表示这一家能自己发起委派，那要看工具这一项。
+
+## 7. 具名阻塞
 
 - `GAP-AP7-EXTERNAL`:ACP 对端、OAuth 真实账号、媒体 provider 的线上验证需要用户
   授权与凭据。代码侧已实现 fail-closed 语义(版本交集、越界目录拒绝、不支持音频即

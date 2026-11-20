@@ -403,7 +403,9 @@ impl MountLog {
     }
 
     /// A launch of `harness` in `cwd` starts: what it is given is kept.
-    /// Never fails the launch: a write that fails is only logged.
+    /// Never fails the launch: a write that fails is only logged. H1: how
+    /// many of them are Aeroric's own (built-in, learned); `None` with no
+    /// data folder.
     pub fn note(
         &self,
         task_id: &str,
@@ -411,19 +413,23 @@ impl MountLog {
         cwd: Option<&Path>,
         home: Option<&Path>,
         at_ms: u64,
-    ) {
-        let Some(data_dir) = self.data_dir.lock().clone() else {
-            return;
-        };
+    ) -> Option<usize> {
+        let data_dir = self.data_dir.lock().clone()?;
         let launch = SkillLaunch {
             at_ms,
             harness: harness.to_string(),
             skills: plan(&data_dir, harness, cwd, home),
         };
+        let own = launch
+            .skills
+            .iter()
+            .filter(|s| matches!(s.source, SkillSource::Builtin | SkillSource::Learned))
+            .count();
         let path = launch_log::file(&data_dir, FOLDER, task_id);
         if let Err(error) = launch_log::push(&path, launch) {
             eprintln!("[aeroric] skills mounted by {task_id} not kept: {error}");
         }
+        Some(own)
     }
 
     /// Every launch kept for the task, oldest first.

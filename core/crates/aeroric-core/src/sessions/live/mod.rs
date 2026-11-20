@@ -25,6 +25,7 @@ pub mod read_only;
 pub mod remote;
 pub mod review;
 pub mod staleness;
+pub mod surfaces;
 pub mod tool_catalog;
 pub mod turn_changes;
 pub mod turn_ledger;
