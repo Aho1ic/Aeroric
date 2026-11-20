@@ -12,6 +12,7 @@ pub mod builtin_skills;
 pub mod catalog;
 pub mod hooks;
 pub mod mcp;
+pub mod native_roles;
 pub mod plugins;
 pub mod skills;
 pub mod trust;

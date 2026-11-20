@@ -116,6 +116,21 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
 
 **命令行入口（H2 第二步，2026-11-20）。** `aeroric-cli --data-dir <数据目录> ctx <工具名> [--json '<参数>' | --json -]` 调用 Aeroric 上下文工具。它就是 MCP 服务的 `tools/call`：同一张工具表、同一个宿主方法、同一个令牌（`AERORIC_CONTEXT_TOKEN`），输出同样的结果（`structuredContent.status`），退出码 0 成功、2 参数不对或没有令牌、3 连不上、4 被拒绝或结果不明；`ctx --help` 由工具表生成。配套的内置技能 `aeroric` 教 Agent 用这个命令，只挂给没有 Aeroric 工具的 Harness（`builtin_skills::for_harness`），有工具的不挂，免得同一能力两个入口抢着被调用。现在本机四家都有工具，所以这个技能不挂给任何一家，技能目录里写明原因。给这种 Harness 的启动器要在环境里放 `AERORIC_CLI`、`AERORIC_DATA_DIR` 和令牌（`ContextServer::shell_env`），目前还没有这样的 Harness。
 
+**角色库作为原生子代理（H5 第一步，2026-11-20）。** 挂技能时，把角色库里适合当原生子代理的角色写成各家自己的子代理定义（`extensions/native_roles.rs`）：
+
+| 去处 | 位置 | 模型看到的名字 |
+|---|---|---|
+| Claude 直连 | 会话插件的 `agents/<id>.md` | `aeroric:<id>` |
+| Claude 走 Agent 配置 | 受管目录的 `agents/` | `aeroric-<id>` |
+| OMP | 受管目录（`PI_CODING_AGENT_DIR`）的 `agents/` | `aeroric-<id>`（OMP 自带 `reviewer` 等，避免重名） |
+| Codex、DSH | 不投影 | — |
+
+- 只投影在原生子代理里说得通的角色。要换 Harness 或模型、要隔离的可写副本、带验收或预算的角色不投影，仍然只能经 `delegate`；专家角色（要另一个更强的模型）也不投影。内置角色里现在只有“调研员”。
+- 只读角色（权限 `plan`）用工具白名单限住：Claude 是 `Read, Grep, Glob, WebFetch, WebSearch` 加 Aeroric 的只读工具；OMP 是 `read, grep, glob, ast_grep, think`，MCP 工具由 OMP 自己附加。可写角色不写白名单，沿用父会话的工具，原生子代理本来就不会比父会话多。
+- Codex 的自定义代理不能收窄父会话的沙盒，只读角色投影过去会变成可写，所以不投影。
+- 定义文件带标记 `<!-- aeroric-role -->`，只替换和删除带标记的；同名但不带标记的文件（用户自己的）不动。
+- `delegate` 的说明写明分工：要换 Harness 或模型、要用户能接手、要跑很久、要隔离的可写工作区、要按验收检查时用它；同一会话里快速分头检索用原生子代理。
+
 **"子会话"（`delegateChild`）的含义。** Aeroric 能把这一家的会话作为委派的子会话启动，并把结果送回上级。它不表示这一家能自己发起委派，那要看工具这一项。
 
 ### 七条待实测的结论（H1 第二步，2026-11-20）

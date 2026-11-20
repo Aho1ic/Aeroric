@@ -784,15 +784,40 @@ pub fn mount(
                 _ => BTreeSet::new(),
             };
             link_offers(&dir.join("skills"), &offers, &skip)?;
+            // H5: the role library as the harness's own subagents.
+            let target = match harness {
+                "claude" => Some(super::native_roles::Target::ClaudeHome),
+                "omp" => Some(super::native_roles::Target::OmpHome),
+                _ => None,
+            };
+            if let Some(target) = target {
+                project_roles(data_dir, &dir.join("agents"), target);
+            }
             Ok(None)
         }
-        Mount::ClaudePlugin => claude_plugin_offers(data_dir, &offers).map(Some),
+        Mount::ClaudePlugin => {
+            let plugin = claude_plugin_offers(data_dir, &offers)?;
+            project_roles(
+                data_dir,
+                &plugin.join("agents"),
+                super::native_roles::Target::ClaudePlugin,
+            );
+            Ok(Some(plugin))
+        }
         Mount::CodexProject => {
             let Some(cwd) = cwd else { return Ok(None) };
             sync_offers(cwd, &offers, &move_to_trash)?;
             Ok(None)
         }
         Mount::CodexProjectLearned => Ok(None),
+    }
+}
+
+/// H5: a role projection that fails is logged; the skills still mount.
+fn project_roles(data_dir: &Path, dir: &Path, target: super::native_roles::Target) {
+    let roles = super::native_roles::library(data_dir);
+    if let Err(reason) = super::native_roles::write(dir, target, &roles) {
+        eprintln!("[aeroric] roles not given as {target:?} subagents: {reason}");
     }
 }
 

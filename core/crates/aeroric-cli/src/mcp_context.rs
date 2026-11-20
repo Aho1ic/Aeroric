@@ -71,7 +71,7 @@ fn tools() -> Value {
         },
         {
             "name": "delegate",
-            "description": "把一块工作委派给一个新的子会话（出现在用户侧栏，可随时接手）。适合可以独立完成、能验收的检索、审查、实现或测试。子会话权限不能高于你；同一时刻只能有一个可写的子会话；子会话不能再委派。立即返回；你发起的委派全部结束后，Aeroric 会把结果合并成一条消息发给你。请尽量给出可执行的验收条款。",
+            "description": "把一块工作委派给一个新的子会话（出现在用户侧栏，用户可随时接手）。在这些时候用它：要换一种 Harness 或模型、要用户能随时接手、要跑很久、要一份隔离的可写工作区、要按验收条款检查结果。同一会话里快速分头检索、查资料，用你自己的子代理就够了（在 Claude 和 OMP 里，Aeroric 角色库中适合这样用的角色也提供成了你的子代理，名字带 aeroric）。子会话权限不能高于你；同一时刻只能有一个可写的子会话；子会话不能再委派。立即返回；你发起的委派全部结束后，Aeroric 会把结果合并成一条消息发给你。请尽量给出可执行的验收条款。",
             "inputSchema": {"type": "object", "required": ["instruction"], "properties": {
                 "instruction": {"type": "string", "description": "要子会话做什么，写清目标和边界"},
                 "role": {"type": "string", "description": "角色 id 或名字（见 list_roles），例如 researcher / 调研员、reviewer、implementer、tester"},
