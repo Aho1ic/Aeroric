@@ -92,7 +92,8 @@ public struct LiveMemoryRun: Equatable, Sendable, Identifiable {
     public var projectId: String
     public var title: String
     public var atMs: UInt64
-    /// `done` `failed` `skipped`.
+    /// `done` `partial` `failed` `skipped`; C3 (2026-11-20) `queued`
+    /// `running` `canceled`.
     public var state: String
     public var reason: String?
     public var model: String?
@@ -110,12 +111,18 @@ public struct LiveMemoryRun: Equatable, Sendable, Identifiable {
     public var merged: Int
     public var proposed: Int
     public var undoneMs: UInt64?
+    /// C3: writes the store failed (waiting to be made again), and where
+    /// each thing the model proposed went.
+    public var failedWrites: Int
+    public var outcomes: [LiveRunOutcome]
 
     public init(id: String, taskId: String = "", projectId: String = "", title: String = "", atMs: UInt64 = 0,
                 state: String, reason: String? = nil, model: String? = nil, inputTokens: UInt64 = 0,
                 outputTokens: UInt64 = 0, costUsd: Double? = nil, facts: Int = 0, candidates: Int = 0,
                 experiences: Int = 0, kind: String = "extract", merged: Int = 0, proposed: Int = 0,
-                undoneMs: UInt64? = nil) {
+                undoneMs: UInt64? = nil, failedWrites: Int = 0, outcomes: [LiveRunOutcome] = []) {
+        self.failedWrites = failedWrites
+        self.outcomes = outcomes
         self.experiences = experiences
         self.kind = kind
         self.merged = merged
@@ -147,10 +154,16 @@ public struct LiveMemoryRun: Equatable, Sendable, Identifiable {
                              costUsd: f["costUsd"]?.numberText.flatMap { Double($0) },
                              facts: int("facts"), candidates: int("candidates"), experiences: int("experiences"),
                              kind: f["kind"]?.stringValue ?? "extract", merged: f["retired"]?.arrayValue?.count ?? 0,
-                             proposed: int("proposed"), undoneMs: f["undoneMs"]?.numberText.flatMap { UInt64($0) })
+                             proposed: int("proposed"), undoneMs: f["undoneMs"]?.numberText.flatMap { UInt64($0) },
+                             failedWrites: int("failedWrites"),
+                             outcomes: (f["outcomes"]?.arrayValue ?? []).compactMap(LiveRunOutcome.decode))
     }
 
     public var isDream: Bool { kind == "dream" }
+    /// C3: 重建索引.
+    public var isReindex: Bool { kind == "reindex" }
+    /// C3: still waiting or going — 取消 applies, and the page keeps reading.
+    public var isOpen: Bool { state == "queued" || state == "running" }
 }
 
 /// B6 (2026-11-13): a group a dream put to the user — the same thing said
@@ -295,9 +308,12 @@ public struct LiveMemoryRunsPage: Equatable, Sendable {
     public var dailyLimit: Int
     public var monthCount: Int
     public var monthCostUsd: Double
+    /// C3: whether the full-text index is whole (an older host: assumed).
+    public var indexHealthy: Bool
 
     public init(runs: [LiveMemoryRun] = [], usedToday: Int = 0, dailyLimit: Int = 30, monthCount: Int = 0,
-                monthCostUsd: Double = 0) {
+                monthCostUsd: Double = 0, indexHealthy: Bool = true) {
+        self.indexHealthy = indexHealthy
         self.runs = runs
         self.usedToday = usedToday
         self.dailyLimit = dailyLimit
@@ -311,7 +327,35 @@ public struct LiveMemoryRunsPage: Equatable, Sendable {
         return LiveMemoryRunsPage(runs: (f["runs"]?.arrayValue ?? []).compactMap { LiveMemoryRun.decode($0) },
                                   usedToday: int("usedToday"), dailyLimit: f["dailyLimit"]?.numberText.flatMap { Int($0) } ?? 30,
                                   monthCount: int("monthCount"),
-                                  monthCostUsd: f["monthCostUsd"]?.numberText.flatMap { Double($0) } ?? 0)
+                                  monthCostUsd: f["monthCostUsd"]?.numberText.flatMap { Double($0) } ?? 0,
+                                  indexHealthy: f["indexHealthy"]?.boolValue ?? true)
+    }
+}
+
+/// C3 (2026-11-20): one thing an extraction's model proposed and where it
+/// went. No text: `itemId` is the item it became or joined.
+public struct LiveRunOutcome: Equatable, Sendable {
+    /// `fact` `experience` `candidate`.
+    public var subject: String
+    /// `written` `merged` `refused` `failed` `withdrawn` `canceled`.
+    public var outcome: String
+    public var sig: String
+    public var itemId: String?
+    public var reason: String?
+
+    public init(subject: String, outcome: String, sig: String = "", itemId: String? = nil, reason: String? = nil) {
+        self.subject = subject
+        self.outcome = outcome
+        self.sig = sig
+        self.itemId = itemId
+        self.reason = reason
+    }
+
+    public static func decode(_ value: JSONValue) -> LiveRunOutcome? {
+        let f = value.fields
+        guard let subject = f["subject"]?.stringValue, let outcome = f["outcome"]?.stringValue else { return nil }
+        return LiveRunOutcome(subject: subject, outcome: outcome, sig: f["sig"]?.stringValue ?? "",
+                              itemId: f["itemId"]?.stringValue, reason: f["reason"]?.stringValue)
     }
 }
 

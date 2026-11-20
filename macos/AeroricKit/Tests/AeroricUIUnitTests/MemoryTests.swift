@@ -42,6 +42,15 @@ private final class FakeMemoryService: MemoryService {
     }
     var page = LiveMemoryRunsPage()
     func runs() async throws -> LiveMemoryRunsPage { page }
+    var cancelReply: LiveMemoryRun?
+    func cancelRun(id: String) async throws -> LiveMemoryRun? {
+        calls.append("cancelRun \(id)")
+        return cancelReply
+    }
+    func reindex() async throws -> LiveMemoryRun? {
+        calls.append("reindex")
+        return nil
+    }
     func extract(taskID: String) async throws -> LiveMemoryRun? { calls.append("extract \(taskID)"); return nil }
     func feedback(id: String, helpful: Bool) async throws { calls.append("feedback \(id) \(helpful)") }
     var skills: [LiveSkillProposal] = []
@@ -88,6 +97,78 @@ private final class FakeMemoryService: MemoryService {
 /// B5-1: the memory page's model and the words it shares with `/记住`.
 @MainActor
 final class MemoryTests: XCTestCase {
+    /// C3 (2026-11-20): a run's outcomes, failed writes and the index state
+    /// decode; the words a row shows for them; which rows can be retried.
+    func testRunOutcomesDecodeAndSayWhereEachWent() {
+        let run = LiveMemoryRun.decode(.object([
+            "id": .string("run-1"), "taskId": .string("t1"), "state": .string("partial"),
+            "failedWrites": .number("1"),
+            "outcomes": .array([
+                .object(["subject": .string("fact"), "outcome": .string("written"), "sig": .string("a"),
+                         "itemId": .string("m1")]),
+                .object(["subject": .string("candidate"), "outcome": .string("merged"), "sig": .string("b"),
+                         "itemId": .string("m2")]),
+                .object(["subject": .string("candidate"), "outcome": .string("refused"), "sig": .string("c"),
+                         "reason": .string("已被永久遗忘")]),
+                .object(["subject": .string("experience"), "outcome": .string("failed"), "sig": .string("d"),
+                         "reason": .string("disk full")]),
+                .object(["subject": .string("candidate"), "outcome": .string("written"), "sig": .string("e")]),
+            ]),
+        ]))!
+        XCTAssertEqual(run.failedWrites, 1)
+        XCTAssertEqual(run.outcomes.count, 5)
+        XCTAssertEqual(MemoryText.outcomeSummary(run), "新写入 2 · 并入已有 1 · 被规则拦下 1 · 写入失败 1")
+        XCTAssertEqual(MemoryText.outcomeLine(run.outcomes[1], text: "回复用简体中文"), "候选 · 并入已有 · 回复用简体中文")
+        XCTAssertEqual(MemoryText.outcomeLine(run.outcomes[2], text: nil), "候选 · 被规则拦下 · 已被永久遗忘")
+        XCTAssertEqual(MemoryText.outcomeLine(run.outcomes[3], text: nil), "经验 · 写入失败 · disk full")
+        XCTAssertNil(MemoryText.outcomeSummary(LiveMemoryRun(id: "r", state: "done")))
+        XCTAssertTrue(MemoryText.canRetry(run))
+        XCTAssertFalse(MemoryText.canRetry(LiveMemoryRun(id: "r", state: "failed", kind: "dream")))
+        XCTAssertFalse(MemoryText.canRetry(LiveMemoryRun(id: "r", state: "failed", kind: "reindex")))
+        XCTAssertFalse(MemoryText.canRetry(LiveMemoryRun(id: "r", state: "canceled")))
+
+        let reindex = LiveMemoryRun(id: "r", state: "done", kind: "reindex")
+        XCTAssertTrue(reindex.isReindex)
+        XCTAssertEqual(MemoryText.runTitle(reindex), "重建索引")
+        XCTAssertEqual(MemoryText.runOutput(reindex), "索引已重建")
+        XCTAssertTrue(LiveMemoryRun(id: "r", state: "queued").isOpen)
+        XCTAssertTrue(LiveMemoryRun(id: "r", state: "running").isOpen)
+        XCTAssertFalse(LiveMemoryRun(id: "r", state: "canceled").isOpen)
+
+        XCTAssertFalse(LiveMemoryRunsPage.decode(.object(["indexHealthy": .bool(false)])).indexHealthy)
+        XCTAssertTrue(LiveMemoryRunsPage.decode(.object([:])).indexHealthy, "an older host: assumed whole")
+    }
+
+    /// C3: 取消 a running row reads 正在取消 until the log says it stopped;
+    /// the page knows to keep reading while a row is open; 重建索引 asks.
+    func testCancelingARunWaitsForTheLogAndReindexAsks() async {
+        let service = FakeMemoryService()
+        let running = LiveMemoryRun(id: "run-1", taskId: "t1", state: "running")
+        service.page = LiveMemoryRunsPage(runs: [running])
+        let store = MemoryStore(service: service)
+        await store.refreshRuns()
+        XCTAssertTrue(store.hasOpenRuns)
+
+        service.cancelReply = running
+        await store.cancel(running)
+        XCTAssertTrue(store.canceling.contains("run-1"), "still running: it stops before its next write")
+
+        service.page = LiveMemoryRunsPage(runs: [LiveMemoryRun(id: "run-1", taskId: "t1", state: "canceled")])
+        await store.refreshRuns()
+        XCTAssertTrue(store.canceling.isEmpty)
+        XCTAssertFalse(store.hasOpenRuns)
+
+        // A queued row is canceled at once: nothing to wait for.
+        let queued = LiveMemoryRun(id: "run-2", state: "queued")
+        service.cancelReply = LiveMemoryRun(id: "run-2", state: "canceled")
+        await store.cancel(queued)
+        XCTAssertFalse(store.canceling.contains("run-2"))
+
+        await store.reindex()
+        XCTAssertEqual(service.calls.filter { $0.hasPrefix("cancelRun") || $0 == "reindex" },
+                       ["cancelRun run-1", "cancelRun run-2", "reindex"])
+    }
+
     /// C2 (2026-11-20): 归档 and 永久遗忘 leave a note of what else they
     /// reached; restoring, or reaching nothing else, leaves none, and the
     /// next action clears the last note.

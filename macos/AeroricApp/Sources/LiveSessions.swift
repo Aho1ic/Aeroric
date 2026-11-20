@@ -665,6 +665,16 @@ struct HostMemoryService: MemoryService {
         try await client().memoryExtract(taskId: taskID)
     }
 
+    func cancelRun(id: String) async throws -> LiveMemoryRun? {
+        let reply = try await client().memoryCall("memory.runCancel", ["runId": .string(id)])
+        return LiveMemoryRun.decode(reply["run"])
+    }
+
+    func reindex() async throws -> LiveMemoryRun? {
+        let reply = try await client().memoryCall("memory.reindex", [:], timeout: .seconds(120))
+        return LiveMemoryRun.decode(reply["run"])
+    }
+
     func retryRun(_ run: LiveMemoryRun) async throws -> LiveMemoryRun? {
         let reply = try await client().memoryCall("memory.runRetry", ["runId": .string(run.id)],
                                                   timeout: .seconds(180))

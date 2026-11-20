@@ -31,6 +31,9 @@ public protocol MemoryService {
     /// C3 (2026-11-20): 重试 a row — its failed writes again without the
     /// model, or (none saved) the session extracted again.
     func retryRun(_ run: LiveMemoryRun) async throws -> LiveMemoryRun?
+    /// C3: 取消 a queued or running row; 重建索引.
+    func cancelRun(id: String) async throws -> LiveMemoryRun?
+    func reindex() async throws -> LiveMemoryRun?
     func importNative(path: String, projectID: String?) async throws -> (imported: Int, skipped: Int)
     /// Q4: 整理历史会话 — the plan, then one imported session at a time.
     func historyPlan(projectID: String, sinceMs: UInt64?) async throws -> LiveMemoryHistoryPlan
@@ -70,6 +73,8 @@ extension MemoryService {
     public func models() async throws -> [LiveMemoryModelChoice] { [] }
     public func extract(taskID: String) async throws -> LiveMemoryRun? { nil }
     public func retryRun(_ run: LiveMemoryRun) async throws -> LiveMemoryRun? { try await extract(taskID: run.taskId) }
+    public func cancelRun(id: String) async throws -> LiveMemoryRun? { nil }
+    public func reindex() async throws -> LiveMemoryRun? { nil }
     public func importNative(path: String, projectID: String?) async throws -> (imported: Int, skipped: Int) { (0, 0) }
     public func historyPlan(projectID: String, sinceMs: UInt64?) async throws -> LiveMemoryHistoryPlan { LiveMemoryHistoryPlan() }
     public func extractImported(id: String) async throws -> LiveMemoryRun? { nil }
@@ -428,6 +433,42 @@ public final class MemoryStore {
         await run("重新整理") { _ = try await $0.retryRun(row) }
     }
 
+    /// C3: rows whose 取消 the host has taken but the run has not noticed
+    /// yet (it stops before its next write) — they read 正在取消.
+    public private(set) var canceling: Set<String> = []
+
+    /// C3 取消.
+    public func cancel(_ row: LiveMemoryRun) async {
+        guard let service else { return }
+        do {
+            if let now = try await service.cancelRun(id: row.id), now.isOpen { canceling.insert(row.id) }
+        } catch {
+            errorText = "取消失败：\(AgentConfigStore.describe(error))"
+        }
+        await refreshRuns()
+    }
+
+    /// C3 重建索引.
+    public func reindex() async {
+        await run("重建索引") { _ = try await $0.reindex() }
+        await refreshRuns()
+    }
+
+    /// C3: 整理记录 again — while a row is queued or running the page reads
+    /// it every few seconds.
+    public func refreshRuns() async {
+        guard let service, let page = try? await service.runs() else { return }
+        canceling = canceling.filter { id in page.runs.contains { $0.id == id && $0.isOpen } }
+        if page != runsPage { runsPage = page }
+    }
+
+    public var hasOpenRuns: Bool { runsPage.runs.contains(where: \.isOpen) }
+
+    /// C3: the text of an item a run wrote or joined, when the page has it.
+    public func text(ofItem id: String) -> String? {
+        items.first { $0.id == id }?.text ?? pending.first { $0.id == id }?.text
+    }
+
     public func refreshPending() async {
         guard let service, let next = try? await service.attention() else { return }
         if next != pending { pending = next }
@@ -592,6 +633,54 @@ public enum MemoryText {
         }
     }
 
+    /// C3: what one proposal was.
+    public static func outcomeSubject(_ subject: String) -> String {
+        switch subject {
+        case "fact": "会话线索"
+        case "experience": "经验"
+        default: "候选"
+        }
+    }
+
+    /// C3: where it went.
+    public static func outcomeWord(_ outcome: String) -> String {
+        switch outcome {
+        case "written": "新写入"
+        case "merged": "并入已有"
+        case "refused": "被规则拦下"
+        case "failed": "写入失败"
+        case "withdrawn": "期间被撤回"
+        case "canceled": "取消未写"
+        default: outcome
+        }
+    }
+
+    /// C3: a row's outcomes counted — "新写入 3 · 并入已有 1 · 写入失败 1".
+    public static func outcomeSummary(_ run: LiveMemoryRun) -> String? {
+        guard !run.outcomes.isEmpty else { return nil }
+        let order = ["written", "merged", "refused", "failed", "withdrawn", "canceled"]
+        let counts = Dictionary(grouping: run.outcomes, by: \.outcome).mapValues(\.count)
+        let known = order.compactMap { key in counts[key].map { "\(outcomeWord(key)) \($0)" } }
+        let other = counts.keys.filter { !order.contains($0) }.sorted().map { "\($0) \(counts[$0] ?? 0)" }
+        return (known + other).joined(separator: " · ")
+    }
+
+    /// C3: one outcome's line — "候选 · 并入已有 · 回复用简体中文".
+    public static func outcomeLine(_ outcome: LiveRunOutcome, text: String?) -> String {
+        var parts = [outcomeSubject(outcome.subject), outcomeWord(outcome.outcome)]
+        if let text { parts.append(text) }
+        if let reason = outcome.reason { parts.append(reason) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// C3: a row that can be done again — an extraction that failed in
+    /// part or whole (重建索引 and dreams are run anew instead).
+    public static func canRetry(_ run: LiveMemoryRun) -> Bool {
+        run.kind == "extract" && (run.state == "failed" || run.state == "partial")
+    }
+
+    public static let indexBroken = "搜索索引不完整，部分记忆可能搜不到、Agent 也召回不到"
+
     /// "10:21 · 修复超时 · deepseek-flash · 6.1k tok · 约 $0.002".
     public static func runLine(_ run: LiveMemoryRun) -> String {
         let time = Date(timeIntervalSince1970: Double(run.atMs) / 1000).formatted(date: .omitted, time: .shortened)
@@ -635,6 +724,7 @@ public enum MemoryText {
 
     /// B6: a dream row's title — "整理记忆 · trainer".
     public static func runTitle(_ run: LiveMemoryRun) -> String {
+        if run.isReindex { return "重建索引" }
         if run.isDream { return run.title.isEmpty ? "整理记忆" : "整理记忆 · \(run.title)" }
         return run.title.isEmpty ? "未命名会话" : run.title
     }
@@ -718,6 +808,7 @@ public enum MemoryText {
 
     /// What one extraction produced — "1 线索 · 1 候选 · 1 经验".
     public static func runOutput(_ run: LiveMemoryRun) -> String {
+        if run.isReindex { return "索引已重建" }
         if run.isDream { return dreamResult(run) }
         var parts = ["\(run.facts) 线索", "\(run.candidates) 候选"]
         if run.experiences > 0 { parts.append("\(run.experiences) 经验") }

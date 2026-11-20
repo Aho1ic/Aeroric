@@ -26,6 +26,8 @@ public struct MemoryPage: View {
     @State private var chainOf: LiveMemoryItem?
     /// C1: the evidence whose 查看原话 sheet is open.
     @State private var sourceOf: MemoryEvidenceRef?
+    /// C3: the run whose 每条去向 is open.
+    @State private var outcomesOf: String?
     /// B5-2: a session clue opens its session.
     let onOpenTask: (String) -> Void
 
@@ -673,6 +675,22 @@ public struct MemoryPage: View {
 
     /// B5-2 整理记录.
     @ViewBuilder private var runsContent: some View {
+        // C3: a broken index is said, with the fix beside it.
+        if !store.runsPage.indexHealthy {
+            HStack(spacing: AeroricSpace.m) {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(AeroricColor.warning)
+                Text(MemoryText.indexBroken)
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(AeroricColor.warning)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("重建索引") { Task { await store.reindex() } }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
+                    .fixedSize()
+                    .help("从记忆重写搜索索引，不调用模型，不占每日次数")
+                    .accessibilityIdentifier("memory.reindex")
+            }
+            .padding(.horizontal, AeroricSpace.l)
+        }
         sectionLabel(MemoryText.runsSummary(store.runsPage))
         if store.runsPage.runs.isEmpty {
             Text(store.settings.hasModel ? "还没有整理过。会话结束后会自动整理，也可以在会话菜单里点“整理这次会话”。"
@@ -683,14 +701,25 @@ public struct MemoryPage: View {
                 .padding(.horizontal, AeroricSpace.l)
         }
         ForEach(store.runsPage.runs) { run in runRow(run) }
+            // C3: while a row is queued or running, read the log again.
+            .task(id: store.hasOpenRuns) {
+                while store.hasOpenRuns, !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(2))
+                    await store.refreshRuns()
+                }
+            }
     }
 
     private func runRow(_ run: LiveMemoryRun) -> some View {
         HStack(spacing: AeroricSpace.m) {
-            CheckpointBadge(text: MemoryText.runState(run.state),
+            if run.state == "running" {
+                ProgressView().controlSize(.mini).fixedSize()
+            }
+            CheckpointBadge(text: store.canceling.contains(run.id) ? "正在取消" : MemoryText.runState(run.state),
                             tint: run.state == "done" ? AeroricColor.success
                                 : run.state == "partial" ? AeroricColor.warning
-                                : run.state == "failed" ? AeroricColor.danger : AeroricColor.textSecondary)
+                                : run.state == "failed" ? AeroricColor.danger
+                                : run.isOpen ? AeroricColor.accent : AeroricColor.textSecondary)
             // CU F2: the title gives way; model, tokens, cost and the
             // reason stay readable.
             Text(Date(timeIntervalSince1970: Double(run.atMs) / 1000).formatted(date: .omitted, time: .shortened))
@@ -723,6 +752,26 @@ public struct MemoryPage: View {
             if run.state == "done" || run.state == "partial" {
                 CheckpointBadge(text: MemoryText.runOutput(run), tint: AeroricColor.accent)
             }
+            if let summary = MemoryText.outcomeSummary(run) {
+                Button { outcomesOf = run.id } label: {
+                    Image(systemName: "list.bullet").foregroundStyle(AeroricColor.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .help("每条去向：\(summary)")
+                .accessibilityIdentifier("memory.run.outcomes")
+                .popover(isPresented: Binding(get: { outcomesOf == run.id },
+                                              set: { if !$0 { outcomesOf = nil } })) {
+                    outcomesList(run, summary: summary)
+                }
+            }
+            if run.isOpen, !store.canceling.contains(run.id) {
+                Button("取消") { Task { await store.cancel(run) } }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .fixedSize()
+                    .help(run.state == "queued" ? "不再整理这个会话；需要时可在会话菜单里手动整理"
+                          : "在下一次写入前停下，已写入的保留")
+                    .accessibilityIdentifier("memory.run.cancel")
+            }
             if run.undoneMs != nil {
                 CheckpointBadge(text: "已撤销", tint: AeroricColor.textSecondary)
             } else if MemoryText.canUndo(run) {
@@ -732,10 +781,12 @@ public struct MemoryPage: View {
                     .help("自动合并的经验恢复成生效中，还没确认的整理建议收回；你已确认的不变")
                     .accessibilityIdentifier("memory.dream.undo")
             }
-            if !run.isDream && (run.state == "failed" || run.state == "partial") {
+            if MemoryText.canRetry(run) {
                 Button("重试") { Task { await store.retry(run) } }
                     .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
                     .fixedSize()
+                    .help(run.failedWrites > 0 ? "只补写没写进去的 \(run.failedWrites) 条，不再调用模型"
+                          : "重新整理这个会话")
             }
             if !run.taskId.isEmpty {
                 Button { onOpenTask(run.taskId) } label: {
@@ -750,6 +801,27 @@ public struct MemoryPage: View {
         .background(Capsule(style: .continuous).fill(AeroricColor.layer2))
         .help(MemoryText.runLine(run))
         .accessibilityIdentifier("memory.run.\(run.id)")
+    }
+
+    /// C3: where each thing this run's model proposed went.
+    private func outcomesList(_ run: LiveMemoryRun, summary: String) -> some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            Text("每条去向").font(.system(size: AeroricType.secondary, weight: .medium))
+            Text(summary).font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.textSecondary)
+            Divider()
+            ForEach(Array(run.outcomes.enumerated()), id: \.offset) { _, outcome in
+                Text(MemoryText.outcomeLine(outcome, text: outcome.itemId.flatMap(store.text(ofItem:))))
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(outcome.outcome == "failed" ? AeroricColor.warning : AeroricColor.text)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
+            Text("没有写入的条目不保留原文；写入的显示当前记忆页里能找到的文字。")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+        }
+        .padding(AeroricSpace.l)
+        .frame(width: 360, alignment: .leading)
     }
 
     private func sectionLabel(_ title: String, tint: Color = AeroricColor.textTertiary) -> some View {
