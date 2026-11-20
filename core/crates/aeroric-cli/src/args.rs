@@ -82,6 +82,19 @@ pub enum Command {
     /// Aeroric 上下文 MCP 服务（stdio）。由 Aeroric 给自己的会话启动，令牌从
     /// `AERORIC_CONTEXT_TOKEN` 读，只能访问令牌所属任务的项目。
     McpContext,
+    /// 从命令行调用 Aeroric 上下文工具（H2）：与 MCP 同一张工具表、同一个宿主方法、
+    /// 同一个令牌（`AERORIC_CONTEXT_TOKEN`）。`ctx --help` 列出全部工具。
+    #[command(disable_help_flag = true)]
+    Ctx {
+        /// 工具名，例如 memory_recall。
+        tool: Option<String>,
+        /// 参数，一个 JSON 对象；`-` 表示从标准输入读。
+        #[arg(long, value_name = "JSON")]
+        json: Option<String>,
+        /// 列出全部工具和参数（文字由工具表生成）。
+        #[arg(long, short = 'h')]
+        help: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

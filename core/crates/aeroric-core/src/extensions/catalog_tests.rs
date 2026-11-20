@@ -67,8 +67,17 @@ fn every_source_is_listed_with_its_version() {
     let all = catalog(&data, Some(&project), Some(&home));
     let of = |source| all.iter().filter(move |s| s.source == source);
     assert_eq!(of(SkillSource::Builtin).count(), builtin::catalog().len());
-    let first = of(SkillSource::Builtin).next().unwrap();
+    let first = of(SkillSource::Builtin)
+        .find(|s| s.id == "brainstorming")
+        .unwrap();
     assert!(first.embedded && first.path.is_none() && first.active);
+    // H2: the command-line skill is for a harness with no tools; all four
+    // have them, so it goes to none and says so.
+    let cli = of(SkillSource::Builtin)
+        .find(|s| s.id == builtin::CLI_SKILL)
+        .unwrap();
+    assert!(!cli.active && cli.harnesses.is_empty(), "{cli:?}");
+    assert!(cli.note.as_deref().unwrap().contains("没有 Aeroric 工具"));
     assert_eq!(first.version, BUILTIN_VERSION);
     assert_eq!(first.content_hash, builtin::content_hash());
 

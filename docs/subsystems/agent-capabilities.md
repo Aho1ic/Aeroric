@@ -88,10 +88,10 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
 
 | Harness | 系统层 | 工具 | 技能 | 事件 | 子代理 | 命令行 |
 |---|---|---|---|---|---|---|
-| Claude Code | 有：`--append-system-prompt` | 有 | 有：会话插件或受管 home | 没有：会话插件可带 `hooks/hooks.json`，未放（H4） | 有：`Task`、`Agent` 工具与 `task_*` 事件 | 没有（H2） |
-| Codex | 有：`thread/start` 的 `developerInstructions` | 有 | 有：项目 `.agents/skills` 下带标记的副本 | 没有：可经 `thread/start` 的 `config` 按次下发，未接（H4） | 有：`subAgentActivity`、`collabAgentToolCall` | 没有（H2） |
-| OMP | 有：`--append-system-prompt`，内容在会话自己的 0600 临时文件里，进程退出时删除 | 有 | 有：受管 home | 没有：上游可按次传 `--hook`，未传（H4） | 有：启动时订阅子代理事件 | 没有（H2） |
-| DSH | 没有：DSH 的 ACP 没有声明 `systemPrompt` | 有 | 有：受管配置目录 | 没有：没有能从外部配置的 Hook | 没有：ACP 不发子代理事件 | 没有（H2） |
+| Claude Code | 有：`--append-system-prompt` | 有 | 有：会话插件或受管 home | 没有：会话插件可带 `hooks/hooks.json`，未放（H4） | 有：`Task`、`Agent` 工具与 `task_*` 事件 | 不挂：已有工具 |
+| Codex | 有：`thread/start` 的 `developerInstructions` | 有 | 有：项目 `.agents/skills` 下带标记的副本 | 没有：可经 `thread/start` 的 `config` 按次下发，未接（H4） | 有：`subAgentActivity`、`collabAgentToolCall` | 不挂：已有工具 |
+| OMP | 有：`--append-system-prompt`，内容在会话自己的 0600 临时文件里，进程退出时删除 | 有 | 有：受管 home | 没有：上游可按次传 `--hook`，未传（H4） | 有：启动时订阅子代理事件 | 不挂：已有工具 |
+| DSH | 没有：DSH 的 ACP 没有声明 `systemPrompt` | 有 | 有：受管配置目录 | 没有：没有能从外部配置的 Hook | 没有：ACP 不发子代理事件 | 不挂：已有工具 |
 
 远端：子代理同本机；系统层 Claude、Codex 同本机（有测试断言），OMP 没有（开场文件在这台 Mac 上，远端读不到）；工具、技能、事件都没有；DSH 不支持远端。
 
@@ -103,6 +103,8 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
 - `executor_tests.rs` 的 `the_kept_surfaces_match_what_the_launch_was_given` 与 `a_claude_launch_hands_what_its_surfaces_say` 用假 Codex、假 Claude 进程核对：记下的"有"与启动参数里实际带的 `developerInstructions`、`--append-system-prompt`、MCP 配置一致，字数一致。
 
 **没有系统层时开场内容去哪。** 交接简报放在第一条消息前；恢复会话时没有消息可附，简报就没给出，入口记录里写明。记忆档案只进系统层，没有系统层的 Harness 拿不到。
+
+**命令行入口（H2 第二步，2026-11-20）。** `aeroric-cli --data-dir <数据目录> ctx <工具名> [--json '<参数>' | --json -]` 调用 Aeroric 上下文工具。它就是 MCP 服务的 `tools/call`：同一张工具表、同一个宿主方法、同一个令牌（`AERORIC_CONTEXT_TOKEN`），输出同样的结果（`structuredContent.status`），退出码 0 成功、2 参数不对或没有令牌、3 连不上、4 被拒绝或结果不明；`ctx --help` 由工具表生成。配套的内置技能 `aeroric` 教 Agent 用这个命令，只挂给没有 Aeroric 工具的 Harness（`builtin_skills::for_harness`），有工具的不挂，免得同一能力两个入口抢着被调用。现在本机四家都有工具，所以这个技能不挂给任何一家，技能目录里写明原因。给这种 Harness 的启动器要在环境里放 `AERORIC_CLI`、`AERORIC_DATA_DIR` 和令牌（`ContextServer::shell_env`），目前还没有这样的 Harness。
 
 **"子会话"（`delegateChild`）的含义。** Aeroric 能把这一家的会话作为委派的子会话启动，并把结果送回上级。它不表示这一家能自己发起委派，那要看工具这一项。
 

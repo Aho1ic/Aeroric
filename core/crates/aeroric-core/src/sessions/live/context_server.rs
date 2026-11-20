@@ -14,6 +14,11 @@ use parking_lot::Mutex;
 pub const TOKEN_ENV: &str = "AERORIC_CONTEXT_TOKEN";
 /// The server's name in the agent's MCP list.
 pub const SERVER_NAME: &str = "aeroric_context";
+/// H2 (2026-11-20): for a harness with neither MCP nor a system layer,
+/// where `aeroric-cli` is and which data folder it serves, so the built-in
+/// skill `aeroric` can call `"$AERORIC_CLI" --data-dir "$AERORIC_DATA_DIR" ctx`.
+pub const CLI_ENV: &str = "AERORIC_CLI";
+pub const DATA_DIR_ENV: &str = "AERORIC_DATA_DIR";
 
 /// How to start the context server for one session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +29,24 @@ pub struct ContextServer {
 }
 
 impl ContextServer {
+    /// H2: the environment a shell-only harness gets instead of the server:
+    /// the command, its data folder and the token, never in argv.
+    pub fn shell_env(&self) -> Vec<(String, String)> {
+        let data_dir = self
+            .args
+            .iter()
+            .position(|a| a == "--data-dir")
+            .and_then(|at| self.args.get(at + 1))
+            .cloned()
+            .unwrap_or_default();
+        let mut env = vec![
+            (CLI_ENV.to_string(), self.command.clone()),
+            (DATA_DIR_ENV.to_string(), data_dir),
+        ];
+        env.extend(self.env.iter().cloned());
+        env
+    }
+
     /// One MCP server entry, as both Claude's `mcpServers` and Codex's
     /// `mcp_servers` take it.
     pub fn entry(&self) -> serde_json::Value {
@@ -102,5 +125,24 @@ mod tests {
         let entry = server.entry();
         assert_eq!(entry["env"][TOKEN_ENV], "secret");
         assert!(!entry["args"].to_string().contains("secret"));
+    }
+
+    /// H2: a shell-only harness gets the command, the data folder and the
+    /// token as environment, nothing in argv.
+    #[test]
+    fn a_shell_harness_gets_the_command_its_folder_and_the_token() {
+        let server = ContextServer {
+            command: "/a/aeroric-cli".into(),
+            args: vec!["--data-dir".into(), "/d".into(), "mcp-context".into()],
+            env: vec![(TOKEN_ENV.into(), "secret".into())],
+        };
+        assert_eq!(
+            server.shell_env(),
+            vec![
+                (CLI_ENV.to_string(), "/a/aeroric-cli".to_string()),
+                (DATA_DIR_ENV.to_string(), "/d".to_string()),
+                (TOKEN_ENV.to_string(), "secret".to_string()),
+            ]
+        );
     }
 }

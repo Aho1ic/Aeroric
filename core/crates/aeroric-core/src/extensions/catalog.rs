@@ -173,10 +173,21 @@ pub fn catalog(data_dir: &Path, cwd: Option<&Path>, home: Option<&Path>) -> Vec<
     for skill in builtin::catalog() {
         let off = settings.disabled.contains(&skill.id);
         let shadowed = user_of(&skill.id);
+        // H2: the command-line skill goes only where the tools do not.
+        let given: Vec<String> = HARNESSES
+            .iter()
+            .filter(|h| !shadowed.contains(h))
+            .filter(|h| skill.id != builtin::CLI_SKILL || !builtin::has_context_tools(h))
+            .map(|h| h.to_string())
+            .collect();
         let note = if off {
             Some("已关闭".to_string())
         } else if !shadowed.is_empty() {
             Some(format!("在 {} 里被你自己的同名技能盖过", names(&shadowed)))
+        } else if skill.id == builtin::CLI_SKILL && given.is_empty() {
+            Some(
+                "只给没有 Aeroric 工具的 Harness；现在这几家都有工具，没有挂给任何一家".to_string(),
+            )
         } else {
             None
         };
@@ -189,12 +200,8 @@ pub fn catalog(data_dir: &Path, cwd: Option<&Path>, home: Option<&Path>) -> Vec<
             path: None,
             embedded: true,
             summary: skill.detail.clone(),
-            harnesses: HARNESSES
-                .iter()
-                .filter(|h| !shadowed.contains(h))
-                .map(|h| h.to_string())
-                .collect(),
-            active: !off && shadowed.len() < HARNESSES.len(),
+            harnesses: given.clone(),
+            active: !off && !given.is_empty(),
             note,
         });
     }
@@ -307,16 +314,17 @@ pub fn plan(
     let user = user_skills(harness, cwd, home);
     let user_names: BTreeSet<String> = user.iter().map(|(n, _)| n.clone()).collect();
     let bundle = builtin::content_hash();
-    let mut out: Vec<MountedSkill> = builtin::offered(data_dir, &user_names)
-        .into_iter()
-        .map(|skill| MountedSkill {
-            skill_id: skill.id,
-            source: SkillSource::Builtin,
-            version: BUILTIN_VERSION.into(),
-            content_hash: bundle.clone(),
-            reason: MountReason::Default,
-        })
-        .collect();
+    let mut out: Vec<MountedSkill> =
+        builtin::for_harness(builtin::offered(data_dir, &user_names), harness)
+            .into_iter()
+            .map(|skill| MountedSkill {
+                skill_id: skill.id,
+                source: SkillSource::Builtin,
+                version: BUILTIN_VERSION.into(),
+                content_hash: bundle.clone(),
+                reason: MountReason::Default,
+            })
+            .collect();
     let taken: BTreeSet<String> = out.iter().map(|m| m.skill_id.clone()).collect();
     for offer in builtin::learned_offers(data_dir, cwd) {
         if user_names.contains(&offer.id) || taken.contains(&offer.id) {

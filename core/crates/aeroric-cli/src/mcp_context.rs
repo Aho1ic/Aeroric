@@ -24,12 +24,12 @@ pub const MAX_LINE_BYTES: usize = 1 << 20;
 const HEAD_BYTES: usize = 4096;
 /// C8: tools with a side effect that take an `idempotency_key`; the host
 /// answers a repeated key with the first call's result.
-const KEYED: [&str; 4] = ["delegate", "board_write", "board_decide", "memory_propose"];
-const KEY_ARGUMENT: &str = "idempotency_key";
+pub(crate) const KEYED: [&str; 4] = ["delegate", "board_write", "board_decide", "memory_propose"];
+pub(crate) const KEY_ARGUMENT: &str = "idempotency_key";
 
 /// C8: every tool of every family, as a host with all of them on would
-/// list them (the trigger evaluation offers the agent the full set).
-#[cfg(test)]
+/// list them (the trigger evaluation offers the agent the full set; H2:
+/// `ctx --help` lists them).
 pub(crate) fn all_tools() -> Vec<Value> {
     [
         tools(),
@@ -534,7 +534,9 @@ async fn memory_enabled(client: &mut Option<HostClient>, data_dir: &Path, token:
     }
 }
 
-async fn call_tool(
+/// One MCP `tools/call` → its result. H2: `aeroric-cli ctx` calls it too,
+/// so the command line and MCP answer alike.
+pub(crate) async fn call_tool(
     client: &mut Option<HostClient>,
     data_dir: &Path,
     token: &str,

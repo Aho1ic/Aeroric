@@ -144,7 +144,7 @@ Aeroric 已经有长期记忆、项目 Wiki、委派和共享黑板、内置与�
 
 #### H2 OMP 接上系统层和工具；命令行兜底留给两样都没有的 Harness
 
-2026-11-20 第一步已实现，见 [H2 第一步笔记](../../implemented/feature/2026-11-20-h2-omp-opening-and-tools.md)：本机 OMP 的开场内容写进会话自己的 0600 临时文件，用 `--append-system-prompt` 传入，进程退出即删；工具服务器声明在受管目录的 `mcp.json`（token 写成 `${AERORIC_CONTEXT_TOKEN:-}`，只在进程环境里），`runs_locally()` 对本机 OMP 为真；OMP 的 `always-ask` 会拦 MCP 工具，用 `--config` 叠加层按工具名只放行这 21 个，不动用户的 `config.yml`；远端 OMP 两样都不收。真实 OMP 会话为 NOT RUN（这台 Mac 没装 omp）。第 5、6 条（`aeroric-cli ctx` 与内置技能 `aeroric`）留给第二步。
+2026-11-20 第一步已实现，见 [H2 第一步笔记](../../implemented/feature/2026-11-20-h2-omp-opening-and-tools.md)：本机 OMP 的开场内容写进会话自己的 0600 临时文件，用 `--append-system-prompt` 传入，进程退出即删；工具服务器声明在受管目录的 `mcp.json`（token 写成 `${AERORIC_CONTEXT_TOKEN:-}`，只在进程环境里），`runs_locally()` 对本机 OMP 为真；OMP 的 `always-ask` 会拦 MCP 工具，用 `--config` 叠加层按工具名只放行这 21 个，不动用户的 `config.yml`；远端 OMP 两样都不收。真实 OMP 会话为 NOT RUN（这台 Mac 没装 omp）。第 5、6 条（`aeroric-cli ctx` 与内置技能 `aeroric`）留给第二步。第二步也已实现，见 [H2 第二步笔记](../../implemented/feature/2026-11-20-h2-ctx-command-line.md)：`ctx` 直接调 MCP 服务的 `tools/call`，结果逐字段相同（对照测试用假宿主），`ctx --help` 由工具表生成；内置技能 `aeroric` 只挂给能力表里没有 Aeroric 工具的 Harness，挂载与 C7 记录走同一个筛选，现在四家都有工具所以不挂给任何一家，用只有 Shell 的假 Harness 验证；给这种 Harness 的环境变量由 `ContextServer::shell_env` 得出。H2 完成。
 
 **用户会看到：** OMP 会话和 Claude、Codex 会话一样，知道用户的偏好，能查记忆、读 Wiki、看交接清单、发委派。以后接入一个既不能配 MCP 也没有系统层的 Agent，它也能通过命令行用到同样的东西。
 

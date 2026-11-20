@@ -281,6 +281,36 @@ pub(crate) fn points_into_store(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// H2 (2026-11-20): the built-in skill that teaches the `aeroric-cli ctx`
+/// command line. Only a harness that is not given the context tools gets
+/// it, so one ability never has two ways in competing to be called.
+pub const CLI_SKILL: &str = "aeroric";
+
+/// Whether `harness` on this Mac is given Aeroric's context tools (the
+/// capability table, which tests tie to the executor's routes). One the
+/// table does not know is not.
+pub fn has_context_tools(harness: &str) -> bool {
+    use crate::sessions::live::capabilities::support;
+    use aeroric_protocol::live_capability::{Feature, Place, SupportState};
+    let family = match harness {
+        "claude" => crate::tasks::ProtocolFamily::Claude,
+        "codex" => crate::tasks::ProtocolFamily::Codex,
+        "omp" => crate::tasks::ProtocolFamily::Omp,
+        "dsh" => crate::tasks::ProtocolFamily::Dsh,
+        _ => return false,
+    };
+    support(family, Place::Local, Feature::ContextTools).state == SupportState::Yes
+}
+
+/// `skills` minus the ones not meant for `harness` ([`CLI_SKILL`]).
+pub fn for_harness(skills: Vec<SkillInfo>, harness: &str) -> Vec<SkillInfo> {
+    let cli = !has_context_tools(harness);
+    skills
+        .into_iter()
+        .filter(|skill| skill.id != CLI_SKILL || cli)
+        .collect()
+}
+
 /// What a session should be offered: enabled, and not shadowed by the user's
 /// own skill of the same name.
 pub fn offered(data_dir: &Path, user_names: &BTreeSet<String>) -> Vec<SkillInfo> {
@@ -728,7 +758,7 @@ pub fn mount(
     let root = materialize(data_dir)?;
     let home = crate::settings::home_dir();
     let user = user_skill_names(&user_skill_dirs(harness, cwd, home.as_deref()));
-    let mut offers = builtin_offers(&root, &offered(data_dir, &user));
+    let mut offers = builtin_offers(&root, &for_harness(offered(data_dir, &user), harness));
     // B5-3b: accepted learned skills for this folder; the user's own of the
     // same name still wins, and a built-in name is never shadowed.
     let taken: BTreeSet<String> = offers.iter().map(|o| o.id.clone()).collect();

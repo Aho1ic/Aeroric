@@ -21,10 +21,10 @@ fn git_init(dir: &Path) {
 }
 
 #[test]
-fn the_catalog_lists_all_27_skills_and_each_has_a_skill_md() {
+fn the_catalog_lists_all_28_skills_and_each_has_a_skill_md() {
     let skills = catalog();
-    assert_eq!(skills.len(), 27);
-    assert_eq!(skills.iter().filter(|s| s.group == "develop").count(), 14);
+    assert_eq!(skills.len(), 28);
+    assert_eq!(skills.iter().filter(|s| s.group == "develop").count(), 15);
     assert_eq!(skills.iter().filter(|s| s.group == "science").count(), 13);
     let data = temp();
     let root = materialize(&data).unwrap();
@@ -68,7 +68,7 @@ fn turned_off_and_shadowed_skills_are_not_offered() {
     save_settings(&data, &settings).unwrap();
     let user: BTreeSet<String> = ["brainstorming".to_string()].into();
     let ids: Vec<String> = offered(&data, &user).into_iter().map(|s| s.id).collect();
-    assert_eq!(ids.len(), 25);
+    assert_eq!(ids.len(), 26);
     assert!(!ids.contains(&"peer-review".to_string()));
     assert!(!ids.contains(&"brainstorming".to_string()));
 }
@@ -405,4 +405,53 @@ fn an_edited_copy_that_cannot_go_to_the_trash_is_kept() {
         std::fs::read_to_string(Path::new(kept).join("SKILL.md")).unwrap(),
         "我改过"
     );
+}
+
+/// H2 (2026-11-20): the command-line skill goes only to a harness that is
+/// not given the context tools — today none of the four on this Mac, so a
+/// shell-only harness stands in — and it names the environment the
+/// executor's `shell_env` gives and only tools the server has.
+#[test]
+fn the_command_line_skill_goes_only_where_the_tools_do_not() {
+    use crate::sessions::live::context_server::{CLI_ENV, DATA_DIR_ENV, TOKEN_ENV};
+    for harness in ["claude", "codex", "omp", "dsh"] {
+        assert!(has_context_tools(harness), "{harness}");
+        assert!(
+            !for_harness(catalog(), harness)
+                .iter()
+                .any(|s| s.id == CLI_SKILL),
+            "{harness} has the tools: no second way in"
+        );
+    }
+    assert!(!has_context_tools("shell"));
+    let shell = for_harness(catalog(), "shell");
+    assert!(shell.iter().any(|s| s.id == CLI_SKILL));
+    assert_eq!(shell.len(), catalog().len());
+
+    let data = temp();
+    let root = materialize(&data).unwrap();
+    let info = catalog().into_iter().find(|s| s.id == CLI_SKILL).unwrap();
+    let text = std::fs::read_to_string(skill_dir(&root, &info).join("SKILL.md")).unwrap();
+    assert!(text.starts_with("---\nname: aeroric\n"), "{text}");
+    for env in [CLI_ENV, DATA_DIR_ENV, TOKEN_ENV] {
+        assert!(text.contains(env), "{env}");
+    }
+    let known: Vec<&str> = aeroric_protocol::tools::AERORIC_TOOLS
+        .iter()
+        .map(|(name, _, _)| *name)
+        .collect();
+    let named: Vec<&str> = text
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|w| w.chars().all(|c| c.is_ascii_lowercase() || c == '_') && w.contains('_'))
+        .collect();
+    assert!(!named.is_empty());
+    for name in named {
+        assert!(
+            known.contains(&name) || name == "idempotency_key",
+            "the skill names a tool the server does not have: {name}"
+        );
+    }
+    std::fs::remove_dir_all(&data).ok();
 }

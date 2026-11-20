@@ -15,6 +15,7 @@
     {"id": "using-git-worktrees", "group": "develop", "title": "使用 Git 工作树", "detail": "在隔离的工作树里开发新功能", "symbol": "square.split.2x1", "needs": []},
     {"id": "using-superpowers", "group": "develop", "title": "技能使用指南", "detail": "让 Agent 知道何时该用哪个技能", "symbol": "sparkles", "needs": []},
     {"id": "writing-skills", "group": "develop", "title": "编写技能", "detail": "新建或改进技能并验证效果", "symbol": "pencil.and.list.clipboard", "needs": []},
+    {"id": "aeroric", "group": "develop", "title": "Aeroric 上下文（命令行）", "detail": "没有 Aeroric 工具的 Agent 用命令行查记忆、Wiki，发委派", "symbol": "terminal", "needs": []},
     {"id": "scientific-brainstorming", "group": "science", "title": "科研头脑风暴", "detail": "开放式发散研究思路", "symbol": "brain", "needs": []},
     {"id": "hypothesis-generation", "group": "science", "title": "假设生成", "detail": "从观察出发提出可检验的假设", "symbol": "questionmark.circle", "needs": ["python"]},
     {"id": "experimental-design", "group": "science", "title": "实验设计", "detail": "收数据前定设计、变量与对照", "symbol": "flask", "needs": ["python"]},

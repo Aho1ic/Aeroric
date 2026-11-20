@@ -102,7 +102,12 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
         (P::Dsh, F::SurfaceSubagents) => {
             no("DSH 的 ACP 不发子代理事件，只有消息、思考、工具调用和用量")
         }
-        (_, F::SurfaceCli) => no("命令行入口（aeroric-cli ctx）还没做（H2）"),
+        // H2: `aeroric-cli ctx` and the skill `aeroric` are for a harness
+        // with no tools; one that has them gets no second way in.
+        (_, F::SurfaceCli) if place == Place::Remote => {
+            no("远端没有这台 Mac 的 aeroric-cli 和数据目录")
+        }
+        (_, F::SurfaceCli) => no("不挂：这一家已有 Aeroric 工具，命令行（aeroric-cli ctx）只给没有工具的 Harness"),
         (P::Dsh, F::PermChange) => degraded("DSH 启动时固定权限：下次启动生效"),
         (P::Dsh, F::PlanMode) => degraded("用只读沙盒代替规划：写入要你批准"),
         (P::Dsh, F::Compact) => no("DSH 没有通过 ACP 提供压缩上下文"),
