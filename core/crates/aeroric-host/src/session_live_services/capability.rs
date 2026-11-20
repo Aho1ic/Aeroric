@@ -27,6 +27,12 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
     live.executor
         .surface_log()
         .set_dir(live.context.paths.data_dir().to_path_buf());
+    // H4: per-message recall keeps its mode and decisions beside the data.
+    live.executor
+        .recall()
+        .set_dir(live.context.paths.data_dir().to_path_buf());
+    set.register(RECALL_MODE_METHOD, blocking(live, recall_mode));
+    set.register(RECALL_DECISIONS_METHOD, blocking(live, recall_decisions));
     // H6: each launch on this Mac is given the capability packs' servers.
     live.executor
         .set_packs_dir(live.context.paths.data_dir().to_path_buf());
@@ -154,4 +160,50 @@ fn login_key(live: &Live, task_id: &str) -> Option<LoginKey> {
         config_id: config,
         connection_id: connection,
     })
+}
+
+/// H4: `recall.mode {mode?}` reads (or sets: `off`, `candidate`, `on`)
+/// per-message recall's mode.
+pub const RECALL_MODE_METHOD: &str = "recall.mode";
+/// H4: `recall.decisions {taskId}`: what recall decided for each message.
+pub const RECALL_DECISIONS_METHOD: &str = "recall.decisions";
+
+fn recall_mode(live: &Live, request: &Request) -> Frame {
+    use aeroric_core::sessions::live::recall::RecallMode;
+    let log = live.executor.recall();
+    if let Some(value) = request.params.get("mode") {
+        let Ok(mode) = serde_json::from_value::<RecallMode>(value.clone()) else {
+            return crate::dispatcher::failure(
+                request.id.clone(),
+                aeroric_protocol::error::ErrorCode::InvalidArgument,
+                "recall.mode takes off, candidate or on",
+            );
+        };
+        if let Err(why) = log.set_mode(mode) {
+            return crate::dispatcher::failure(
+                request.id.clone(),
+                aeroric_protocol::error::ErrorCode::IoError,
+                &why,
+            );
+        }
+    }
+    ok(request, serde_json::json!({ "mode": log.mode() }))
+}
+
+fn recall_decisions(live: &Live, request: &Request) -> Frame {
+    let Some(task) = request
+        .params
+        .get("taskId")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return crate::dispatcher::failure(
+            request.id.clone(),
+            aeroric_protocol::error::ErrorCode::InvalidArgument,
+            "recall.decisions requires taskId",
+        );
+    };
+    ok(
+        request,
+        serde_json::json!({ "decisions": live.executor.recall().decisions(task) }),
+    )
 }

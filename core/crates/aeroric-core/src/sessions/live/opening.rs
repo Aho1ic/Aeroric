@@ -136,10 +136,19 @@ pub const ATTACHED_END: &str = "[Aeroric 附加的上下文结束]";
 
 /// `context` in its envelope, then `prompt`.
 pub fn attach(context: &str, prompt: &str) -> String {
+    attach_because(
+        context,
+        prompt,
+        "这个 Agent 没有系统层，开场内容放在第一条消息前",
+    )
+}
+
+/// [`attach`] with its own reason (H4: what was found for this message).
+pub fn attach_because(context: &str, prompt: &str, why: &str) -> String {
     let opened = super::envelope::wrap(
         ATTACHED_MARKER,
         "Aeroric",
-        "这个 Agent 没有系统层，开场内容放在第一条消息前",
+        why,
         super::envelope::Authority::Background,
         context,
     );

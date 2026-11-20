@@ -232,6 +232,8 @@ pub struct StructuredExecutor {
     context_program: Mutex<Option<(String, String)>>,
     /// H6: the data folder whose `packs/` each launch is given from.
     packs_dir: Mutex<Option<std::path::PathBuf>>,
+    /// H4: per-message recall's mode and decisions.
+    recall: Arc<super::recall::RecallLog>,
     context_tokens: Arc<super::context_server::ContextTokens>,
     runtime: tokio::runtime::Handle,
     registry: Arc<DriverRegistry>,
@@ -361,6 +363,7 @@ impl StructuredExecutor {
             surface_log: Arc::default(),
             context_program: Mutex::new(None),
             packs_dir: Mutex::new(None),
+            recall: Arc::default(),
             context_tokens: Arc::default(),
             runtime: runtime.clone(),
             registry,
@@ -569,6 +572,56 @@ impl StructuredExecutor {
             packs::refused(&mut plan.items, route.family());
         }
         plan.items
+    }
+
+    /// H4: per-message recall's mode and decisions.
+    pub fn recall(&self) -> &Arc<super::recall::RecallLog> {
+        &self.recall
+    }
+
+    /// H4 (2026-11-21): what to put in front of the user's `message` in
+    /// `project_id`, if anything; every decision is recorded, whatever the
+    /// mode but off. Local only: full-text memory and Wiki titles.
+    pub fn recall_for(&self, task_id: &str, project_id: &str, message: &str) -> Option<String> {
+        use super::recall::{self, RecallDecision, RecallMode};
+        let mode = self.recall.mode();
+        if mode == RecallMode::Off {
+            return None;
+        }
+        let skipped = recall::skip(message);
+        let hits = if skipped.is_some() {
+            Vec::new()
+        } else {
+            let memories: Vec<_> = if self.memory.project_enabled(project_id) {
+                self.memory
+                    .matches(project_id, &recall::query(message), 30)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(_, item)| item)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let pages = if self.wikis.agent_access(project_id) {
+                self.wikis.pages(project_id).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            recall::hits(message, &memories, &pages)
+        };
+        let attached = mode == RecallMode::On && !hits.is_empty();
+        let block = attached.then(|| recall::block(&hits));
+        self.recall.note(
+            task_id,
+            &RecallDecision {
+                at_ms: crate::clock::now_ms_u64(),
+                mode,
+                hits,
+                attached,
+                skipped: skipped.map(str::to_string),
+            },
+        );
+        block
     }
 
     pub fn context_tokens(&self) -> &Arc<super::context_server::ContextTokens> {

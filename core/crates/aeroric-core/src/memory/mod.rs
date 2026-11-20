@@ -651,6 +651,19 @@ impl Memory {
         Ok(after)
     }
 
+    /// H4 (2026-11-21): active items of the project and global that match
+    /// `query`, with their full-text rank (`bm25 × 1000`, lower is closer).
+    /// Unlike [`Memory::recall`] it counts nothing: a look the agent did
+    /// not ask for is not a retrieval.
+    pub fn matches(
+        &self,
+        project_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<(i64, MemoryItem)>, MemoryError> {
+        self.with(|store| store.search(project_id, query, limit))
+    }
+
     /// `memory_recall`: active items of the project and global that match,
     /// the project's first, pinned and user-stated ones ahead.
     pub fn recall(&self, project_id: &str, query: &str) -> Result<Vec<MemoryItem>, MemoryError> {

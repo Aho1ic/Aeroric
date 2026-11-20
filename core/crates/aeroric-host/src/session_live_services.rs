@@ -1342,9 +1342,26 @@ fn send_user(live: &Live, task_id: &str, id: &str, text: &str) -> Result<bool, S
     let checkpoints = live.executor.checkpoints();
     checkpoints.note_prompt(task_id, text);
     // B4′: same session, new model or compacted — remind it of what is open.
+    let recalled = find_project_of_task(&live.context, task_id)
+        .and_then(|project| {
+            project
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .and_then(|project| live.executor.recall_for(task_id, &project, text));
     let text = match checkpoints.take_reminder(task_id) {
         Some(reminder) => format!("{reminder}{text}"),
         None => text.to_string(),
+    };
+    // H4: what was found for this message, in front of it, when recall is on.
+    let text = match recalled {
+        Some(block) => aeroric_core::sessions::live::opening::attach_because(
+            &block,
+            &text,
+            aeroric_core::sessions::live::recall::WHY,
+        ),
+        None => text,
     };
     let receipts = driver.receipts();
     driver

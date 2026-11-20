@@ -1233,3 +1233,68 @@ async fn with_no_system_layer_the_opening_goes_in_front_of_the_first_message() {
         }
     );
 }
+
+/// H4 (2026-11-21): per-message recall is decided on the host from the
+/// message alone (no harness in the inputs, so every family gets the same
+/// decision): off decides nothing; candidate records the hits and attaches
+/// nothing; on attaches them.
+#[tokio::test]
+async fn per_message_recall_follows_its_mode() {
+    use crate::sessions::live::recall::RecallMode;
+    use aeroric_protocol::memory::{MemoryDraft, MemoryKind};
+    let s = setup();
+    let data = std::env::temp_dir().join(format!("aeroric-exec-recall-{}", uuid::Uuid::new_v4()));
+    s.executor.memory().set_dir(data.join("memory")).unwrap();
+    s.executor.recall().set_dir(data.clone());
+    let item = s
+        .executor
+        .memory()
+        .remember(
+            MemoryDraft {
+                project_id: Some("p".into()),
+                kind: MemoryKind::Fact,
+                category: None,
+                text: "core 依赖仓库外的 dbx，版本钉在 dbx-ref.txt".into(),
+                supersedes: None,
+            },
+            crate::memory::evidence(Some("t"), Some("codex"), None, "x", 1),
+            1,
+        )
+        .unwrap();
+    let message = "dbx 的版本钉在哪里？";
+
+    assert_eq!(
+        s.executor.recall_for("t1", "p", message),
+        None,
+        "candidate attaches nothing"
+    );
+    let kept = s.executor.recall().decisions("t1");
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].mode, RecallMode::Candidate);
+    assert_eq!(kept[0].hits[0].id, item.id);
+    assert!(!kept[0].attached);
+
+    s.executor.recall().set_mode(RecallMode::On).unwrap();
+    let block = s.executor.recall_for("t1", "p", message).unwrap();
+    assert!(block.contains(&item.id), "{block}");
+    assert!(s.executor.recall().decisions("t1")[1].attached);
+    assert_eq!(s.executor.recall_for("t1", "p", "继续"), None);
+    assert_eq!(
+        s.executor.recall().decisions("t1")[2].skipped.as_deref(),
+        Some("消息太短")
+    );
+    assert_eq!(
+        s.executor.recall_for("t1", "other", message),
+        None,
+        "memory off there"
+    );
+
+    s.executor.recall().set_mode(RecallMode::Off).unwrap();
+    assert_eq!(s.executor.recall_for("t1", "p", message), None);
+    assert_eq!(
+        s.executor.recall().decisions("t1").len(),
+        4,
+        "off records nothing"
+    );
+    std::fs::remove_dir_all(&data).ok();
+}
