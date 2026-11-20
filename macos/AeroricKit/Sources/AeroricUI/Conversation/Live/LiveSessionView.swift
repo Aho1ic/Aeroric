@@ -167,7 +167,7 @@ public struct LiveSessionView: View {
                             .padding(.horizontal, AeroricSpace.m)
                             .padding(.top, AeroricSpace.m)
                         SessionInfoCard(state: store.state, model: store.model, facts: facts,
-                                        collapsed: $infoCollapsed, asColumn: true)
+                                        collapsed: $infoCollapsed, asColumn: true, taskID: store.taskID)
                     }
                     .frame(width: SessionInfoLayout.clampWidth(infoWidth))
                     .frame(maxHeight: .infinity)
@@ -277,7 +277,8 @@ public struct LiveSessionView: View {
             }
             .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
             .popover(isPresented: $infoPopover, arrowEdge: .bottom) {
-                SessionInfoCard(state: store.state, model: store.model, facts: facts, collapsed: .constant(false))
+                SessionInfoCard(state: store.state, model: store.model, facts: facts, collapsed: .constant(false),
+                                taskID: store.taskID)
             }
             .accessibilityIdentifier("session.info.open")
             moreMenu

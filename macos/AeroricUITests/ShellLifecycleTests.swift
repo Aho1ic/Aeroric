@@ -272,7 +272,7 @@ final class ShellLifecycleTests: XCTestCase {
         "database": ["database.sidebar-empty"],
         "connections": ["connections.list-empty", "connections.sftp-empty"],
         "infrastructure": ["infrastructure.ports-empty"],
-        "extensions": ["extensions.skills-empty", "extensions.mcp-empty", "extensions.hooks-empty"],
+        "extensions": ["skills.catalog"],
         "operations": ["usage.empty", "diagnostics.empty", "notifications.empty"],
     ]
 

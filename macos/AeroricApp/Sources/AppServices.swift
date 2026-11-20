@@ -57,6 +57,8 @@ final class AppServices {
     let importBook = ImportBook()
     let agentUpgradeBook = AgentUpgradeBook()
     let changeCostBook = ChangeCostBook()
+    /// C7 (2026-11-20): the skill catalog and each session's mounted skills.
+    let skillCatalogBook = SkillCatalogBook()
     /// Project and session tags (2026-10-29).
     let tagBook = TagBook()
     /// Linked folders (2026-10-29).
@@ -291,6 +293,8 @@ final class AppServices {
                     self.sshHostsStore.attach(client: SshClient(connection: connection))
                     self.tagBook.attach(client: WorkspaceClient(connection: connection))
                     self.linkedFolderBook.attach(client: WorkspaceClient(connection: connection))
+                    let skillsClient = SessionsClient(connection: connection)
+                    self.skillCatalogBook.attach { method, params in try await skillsClient.memoryCall(method, params) }
                     self.changeCostBook.attach(client: SessionsClient(connection: connection),
                                               maintenance: MaintenanceClient(connection: connection))
                     self.agentUpgradeBook.attach(

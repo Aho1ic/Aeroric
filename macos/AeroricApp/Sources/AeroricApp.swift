@@ -337,6 +337,8 @@ struct AeroricNativeApp: App {
             // Versions and upgrades for the session capsule and Agent 升级.
             .environment(services.agentUpgradeBook)
             .environment(services.changeCostBook)
+            // C7: 会话信息 lists each launch's skills.
+            .environment(services.skillCatalogBook)
             // B2: built-in skills for the recipe cards and Agent 配置 → 技能.
             .environment(services.builtinSkillBook)
             // Tags on sidebar rows and in their menus (2026-10-29).

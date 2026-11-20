@@ -32,6 +32,8 @@ struct SessionInfoCard: View {
     @Binding var collapsed: Bool
     /// A full-height column next to the conversation instead of a floating card.
     var asColumn = false
+    /// C7 (2026-11-20): whose launches' skills to list.
+    var taskID: String?
 
     private static let dateFormat: Date.FormatStyle = .dateTime.month().day().hour().minute()
 
@@ -57,6 +59,7 @@ struct SessionInfoCard: View {
                         planSection
                         subagentSection
                         details
+                        if let taskID { SessionSkillsSection(taskID: taskID) }
                     }
                 }
                 .scrollIndicators(.hidden)

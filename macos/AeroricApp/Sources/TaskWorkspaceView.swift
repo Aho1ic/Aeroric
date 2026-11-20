@@ -111,7 +111,10 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
         case .infrastructure: .comingSoon("Docker 容器与镜像、端口占用、Conda 环境。")
         case .database: .comingSoon("SQLite、Redis、MongoDB 的浏览与查询。")
         case .notebook: .comingSoon("项目笔记、同步与知识检索。")
-        case .extensions: .comingSoon("技能、MCP 服务器与 Hook 的管理。")
+        // C7 (2026-11-20): the skill catalog is wired; MCP, hooks and
+        // plugins have no host methods yet and say so instead of showing
+        // controls that do nothing.
+        case .extensions: .partial("这里列出 Agent 能用到的全部技能。MCP 服务器、Hook 和插件的管理尚未提供。")
         case .remote: .comingSoon("与手机配对、设备管理与远程访问审计。")
         case .operations: .comingSoon("用量统计、诊断与通知中心。")
         }
@@ -1567,15 +1570,9 @@ struct TaskWorkspaceView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         case .extensions:
-            HSplitView {
-                SkillHubView(store: services.extensionStore)
-                    .frame(minWidth: 240, maxWidth: 360, maxHeight: .infinity)
-                VStack(spacing: 8) {
-                    MCPSettingsView(store: services.extensionStore)
-                    HookStatusView(store: services.extensionStore)
-                }
+            SkillCatalogPage(book: services.skillCatalogBook,
+                             projects: services.taskStore.projects.map { (id: $0.id, name: $0.name) })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
         case .remote:
             RemoteAccessSettingsView(store: services.remoteStore)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
