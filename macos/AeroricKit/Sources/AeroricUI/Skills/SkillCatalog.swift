@@ -22,6 +22,8 @@ public final class SkillCatalogBook {
     public private(set) var mountErrors: [String: String] = [:]
     /// C8: each task's latest launch's tools, once read (nil inside: none kept).
     public private(set) var tools: [String: LiveToolLaunch?] = [:]
+    /// H1: each task's latest launch's surfaces, from the same reply.
+    public private(set) var surfaces: [String: LiveSurfaceLaunch?] = [:]
 
     @ObservationIgnored private var call: Call?
 
@@ -57,14 +59,16 @@ public final class SkillCatalogBook {
         }
     }
 
-    /// C8: the tools the task's latest launch had.
+    /// C8: the tools the task's latest launch had; H1: and its surfaces.
     public func loadTools(taskID: String, family: String) async {
         guard let call else { return }
         do {
             let reply = try await call("session.capabilities", ["family": .string(family), "taskId": .string(taskID)])
             tools[taskID] = .some(LiveToolLaunch.decode(reply["tools"]))
+            surfaces[taskID] = .some(LiveSurfaceLaunch.decode(reply["surfaces"]))
         } catch {
             tools[taskID] = .some(nil)
+            surfaces[taskID] = .some(nil)
         }
     }
 
@@ -418,6 +422,88 @@ struct SessionToolsSection: View {
             }
             .font(.system(size: AeroricType.caption))
             .task(id: taskID) { await book.loadTools(taskID: taskID, family: family) }
+        }
+    }
+}
+
+/// H1 (2026-11-20): the words 会话信息's 入口 uses.
+public enum SurfaceText {
+    public static func name(_ feature: String) -> String {
+        switch feature {
+        case "surfaceInstructions": "系统层"
+        case "contextTools": "工具"
+        case "surfaceSkills": "技能"
+        case "surfaceEvents": "事件"
+        case "surfaceSubagents": "子代理"
+        case "surfaceCli": "命令行"
+        default: feature
+        }
+    }
+
+    public static func state(_ state: String) -> String {
+        switch state {
+        case "yes": "已接通"
+        case "no": "没有"
+        case "degraded": "有差异"
+        case "unknown": "还没核对"
+        default: state
+        }
+    }
+
+    /// "接通 4/6：系统层、工具、技能、子代理" or why there is no record.
+    public static func summary(_ launch: LiveSurfaceLaunch??) -> String {
+        guard let known = launch else { return "读取中…" }
+        guard let launch = known, !launch.surfaces.isEmpty else { return "未记录（这个会话在记录入口之前启动）" }
+        let on = launch.surfaces.filter { $0.state == "yes" }
+        let names = on.map { name($0.feature) }.joined(separator: "、")
+        return "接通 \(on.count)/\(launch.surfaces.count)" + (names.isEmpty ? "" : "：\(names)")
+    }
+
+    /// One surface's line: "系统层 · 已接通 · 这次启动从系统层给了开场内容（312 字）".
+    public static func line(_ entry: LiveCapabilityEntry) -> String {
+        [name(entry.feature), state(entry.state), entry.note ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+}
+
+/// H1: 会话信息's 入口 — through which surfaces the session's latest
+/// launch used Aeroric, and for those it did not, why.
+struct SessionSurfacesSection: View {
+    let taskID: String
+    @Environment(SkillCatalogBook.self) private var book: SkillCatalogBook?
+    @State private var open = false
+
+    var body: some View {
+        if let book {
+            let launch = book.surfaces[taskID]
+            VStack(alignment: .leading, spacing: 4) {
+                Button { open.toggle() } label: {
+                    HStack(spacing: AeroricSpace.s) {
+                        Text("入口").foregroundStyle(AeroricColor.textSecondary)
+                        Text(SurfaceText.summary(launch))
+                            .foregroundStyle(AeroricColor.text)
+                            .lineLimit(2)
+                        Spacer(minLength: 0)
+                        if launch??.surfaces.isEmpty == false {
+                            Image(systemName: open ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(AeroricColor.textTertiary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("这个 Harness 通过哪些入口用到 Aeroric：系统层、工具、技能、事件、子代理、命令行")
+                .accessibilityIdentifier("session.info.surfaces")
+                if open, let known = launch, let launch = known {
+                    ForEach(launch.surfaces, id: \.feature) { entry in
+                        Text(SurfaceText.line(entry))
+                            .foregroundStyle(entry.state == "yes" ? AeroricColor.textSecondary : AeroricColor.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .font(.system(size: AeroricType.caption))
+            // Read with 工具 (`SessionToolsSection`): one `session.capabilities` reply carries both.
         }
     }
 }

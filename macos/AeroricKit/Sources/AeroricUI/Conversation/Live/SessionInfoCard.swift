@@ -63,6 +63,8 @@ struct SessionInfoCard: View {
                             SessionSkillsSection(taskID: taskID)
                             // C8: what this launch could call.
                             if let family = state?.family {
+                                // H1: through which surfaces it uses Aeroric.
+                                SessionSurfacesSection(taskID: taskID)
                                 SessionToolsSection(taskID: taskID, family: family)
                             }
                         }

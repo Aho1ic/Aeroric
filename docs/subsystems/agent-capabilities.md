@@ -97,7 +97,7 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
 
 **依据从哪来。**
 
-- 会话每次启动（含恢复）记下这次各入口实际怎样，存在 `<data>/surfaces/<任务>.json`（每任务保留最近 20 次），`session.capabilities {taskId}` 的 `surfaces` 返回最近一次。
+- 会话每次启动（含恢复）记下这次各入口实际怎样，存在 `<data>/surfaces/<任务>.json`（每任务保留最近 20 次），`session.capabilities {taskId}` 的 `surfaces` 返回最近一次；会话信息的"入口"一行显示它（接通几个、是哪几个，点开逐项写状态和原因）。
 - 系统层、工具、技能三项按这次启动实际发生的事填：驱动收下了开场内容（记字数）、收下了工具服务器、挂了几个 Aeroric 自己的技能（内置和记忆沉淀的，不算用户自己的）。这次没有开场内容要给时，沿用能力表那一格并写明"这次没有开场内容要给"。
 - 事件、子代理、命令行三项启动时不涉及，取能力表那一格。表里每个"有"都有对应的驱动测试：Claude 的 `Task` 映射（`claude/map_tests.rs`）、Codex 的 `collabAgentToolCall`（`codex/driver_tests.rs`）、OMP 的订阅与生命周期映射（`omp/driver_tests.rs`、`omp/map_tests.rs`）。
 - `executor_tests.rs` 的 `the_kept_surfaces_match_what_the_launch_was_given` 与 `a_claude_launch_hands_what_its_surfaces_say` 用假 Codex、假 Claude 进程核对：记下的"有"与启动参数里实际带的 `developerInstructions`、`--append-system-prompt`、MCP 配置一致，字数一致。

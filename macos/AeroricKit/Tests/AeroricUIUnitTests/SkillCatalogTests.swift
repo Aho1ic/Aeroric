@@ -150,4 +150,48 @@ final class SkillCatalogTests: XCTestCase {
         XCTAssertTrue(ToolText.missing(book.tools["t2"]!!).isEmpty, "the reason says it once")
         XCTAssertEqual(ToolText.summary(book.tools["t0"]), "未记录（这个会话在记录工具之前启动）")
     }
+
+    /// H1 (2026-11-20): the same `session.capabilities` reply carries the
+    /// launch's surfaces; 会话信息's 入口 counts the connected ones and
+    /// gives each surface its state and why; an old session says 未记录.
+    func testALaunchsSurfacesSayWhichAreConnectedAndWhy() async {
+        func entry(_ feature: String, _ state: String, _ note: String?) -> JSONValue {
+            var f: [String: JSONValue] = ["feature": .string(feature), "state": .string(state)]
+            if let note { f["note"] = .string(note) }
+            return .object(f)
+        }
+        let book = SkillCatalogBook()
+        var asked = 0
+        book.attach { _, params in
+            asked += 1
+            guard params["taskId"]?.stringValue == "t1" else { return .object(["capabilities": .object([:])]) }
+            return .object(["surfaces": .object([
+                "atMs": .number("5"), "harness": .string("omp"), "place": .string("local"),
+                "surfaces": .array([
+                    entry("surfaceInstructions", "no", "这家没有系统层入口：交接简报放在了第一条消息前，记忆档案没给"),
+                    entry("contextTools", "no", "OMP 还不能在启动时接入 Aeroric 工具"),
+                    entry("surfaceSkills", "yes", "这次挂了 3 个 Aeroric 技能"),
+                    entry("surfaceEvents", "no", "还没接：OMP 可以按次传 --hook，Aeroric 没传（H4）"),
+                    entry("surfaceSubagents", "yes", "启动时订阅子代理事件"),
+                    entry("surfaceCli", "no", "命令行入口（aeroric-cli ctx）还没做（H2）"),
+                ]),
+            ])])
+        }
+        XCTAssertEqual(SurfaceText.summary(nil), "读取中…")
+        await book.loadTools(taskID: "t1", family: "omp")
+        await book.loadTools(taskID: "t0", family: "codex")
+        XCTAssertEqual(asked, 2, "one reply carries tools and surfaces")
+        let launch = book.surfaces["t1"]!!
+        XCTAssertEqual(launch.harness, "omp")
+        XCTAssertEqual(launch.surfaces.map(\.feature), ["surfaceInstructions", "contextTools", "surfaceSkills",
+                                                        "surfaceEvents", "surfaceSubagents", "surfaceCli"])
+        XCTAssertEqual(SurfaceText.summary(book.surfaces["t1"]), "接通 2/6：技能、子代理")
+        XCTAssertEqual(SurfaceText.line(launch.surfaces[2]), "技能 · 已接通 · 这次挂了 3 个 Aeroric 技能")
+        XCTAssertEqual(SurfaceText.line(launch.surfaces[1]), "工具 · 没有 · OMP 还不能在启动时接入 Aeroric 工具")
+        XCTAssertEqual(SurfaceText.line(LiveCapabilityEntry(feature: "surfaceEvents", state: "unknown")), "事件 · 还没核对")
+        XCTAssertEqual(SurfaceText.summary(book.surfaces["t0"]), "未记录（这个会话在记录入口之前启动）")
+        XCTAssertEqual(SurfaceText.summary(.some(LiveSurfaceLaunch(harness: "codex", surfaces: [
+            LiveCapabilityEntry(feature: "surfaceCli", state: "no", note: "x"),
+        ]))), "接通 0/1")
+    }
 }

@@ -87,3 +87,32 @@ public struct ExpiredLogin: Equatable, Sendable, Identifiable {
         }
     }
 }
+
+/// H1 (2026-11-20): what one launch of a session had on each surface
+/// through which a harness uses Aeroric (`session.capabilities {taskId}`'s
+/// `surfaces`), in the host's order.
+public struct LiveSurfaceLaunch: Equatable, Sendable {
+    public var atMs: UInt64
+    public var harness: String
+    /// `local` `remote`.
+    public var place: String
+    public var surfaces: [LiveCapabilityEntry]
+
+    public init(atMs: UInt64 = 0, harness: String, place: String = "local", surfaces: [LiveCapabilityEntry]) {
+        self.atMs = atMs
+        self.harness = harness
+        self.place = place
+        self.surfaces = surfaces
+    }
+
+    public static func decode(_ value: JSONValue?) -> LiveSurfaceLaunch? {
+        guard let f = value?.objectValue, let harness = f["harness"]?.stringValue else { return nil }
+        let surfaces: [LiveCapabilityEntry] = (f["surfaces"]?.arrayValue ?? []).compactMap { item in
+            guard let e = item.objectValue, let feature = e["feature"]?.stringValue,
+                  let state = e["state"]?.stringValue else { return nil }
+            return LiveCapabilityEntry(feature: feature, state: state, note: e["note"]?.stringValue)
+        }
+        return LiveSurfaceLaunch(atMs: f["atMs"]?.numberText.flatMap { UInt64($0) } ?? 0, harness: harness,
+                                 place: f["place"]?.stringValue ?? "local", surfaces: surfaces)
+    }
+}
