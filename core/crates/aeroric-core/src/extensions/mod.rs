@@ -9,6 +9,7 @@
 //! ⚠️ 扫描/列目录**不等于执行**：本模块任何函数都不运行第三方脚本。
 
 pub mod builtin_skills;
+pub mod catalog;
 pub mod hooks;
 pub mod mcp;
 pub mod plugins;

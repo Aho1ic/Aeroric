@@ -166,7 +166,17 @@ fn start(live: &Live, request: &Request) -> Frame {
         permission: original_permission.clone(),
         harness: field(&record, "agent"),
         model: field(&record, "selectedModel"),
-        skills: None,
+        // C7: what the session's launch before that turn was given; none
+        // for a session started before C7.
+        skills: live
+            .executor
+            .skill_mounts()
+            .at(&p.task_id, turn.started_ms)
+            .map(|launch| {
+                vec![aeroric_core::extensions::catalog::fingerprint(
+                    &launch.skills,
+                )]
+            }),
     };
     let context = match &brief {
         Some(brief) => format!("brief:{}", rerun::text_hash(brief)),
@@ -235,8 +245,20 @@ fn start(live: &Live, request: &Request) -> Frame {
             .service
             .rename(&project_id, &task_id, &format!("{title}（重跑 · {label}）"));
         // B7: the tree its copy really holds, read back when it was made.
-        let started = aeroric_core::sessions::live::isolated_copy::load(&copies, &task_id)
-            .and_then(|copy| copy.started);
+        let copy = aeroric_core::sessions::live::isolated_copy::load(&copies, &task_id);
+        // C7: what its launch in that copy will be given, by the same rules.
+        let skills = copy.as_ref().map(|copy| {
+            let home = aeroric_core::settings::home_dir();
+            vec![aeroric_core::extensions::catalog::fingerprint(
+                &aeroric_core::extensions::catalog::plan(
+                    live.context.paths.data_dir(),
+                    aeroric_core::extensions::catalog::harness_of(&configuration.agent),
+                    Some(std::path::Path::new(&copy.path)),
+                    home.as_deref(),
+                ),
+            )]
+        });
+        let started = copy.and_then(|copy| copy.started);
         let inputs = RunInputs {
             base: started,
             prompt: Some(rerun::text_hash(&p.message)),
@@ -244,7 +266,7 @@ fn start(live: &Live, request: &Request) -> Frame {
             permission: Some(permission.clone()),
             harness: Some(configuration.agent.clone()),
             model: target.model.clone(),
-            skills: None,
+            skills,
         };
         runs.push(RerunRun {
             task_id,

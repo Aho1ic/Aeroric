@@ -26,6 +26,7 @@ pub mod review;
 pub mod schedule;
 pub mod session;
 pub mod session_live;
+pub mod skills;
 pub mod submission;
 pub mod task;
 pub mod terminal;

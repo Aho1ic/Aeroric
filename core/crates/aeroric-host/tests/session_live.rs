@@ -3962,3 +3962,32 @@ async fn the_index_is_rebuilt_as_a_run() {
         .await
         .is_err());
 }
+
+/// C7 (2026-11-20): `skills.catalog` lists the App's built-in skills as
+/// living in the App; `skills.mounted` answers for any task (empty before
+/// a launch is kept) and refuses a malformed request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_skill_catalog_and_mounts_answer() {
+    let host = Host::start(true).await;
+    let catalog = host.call("skills.catalog", json!({})).await.unwrap();
+    let skills = catalog["skills"].as_array().unwrap();
+    let builtin: Vec<_> = skills.iter().filter(|s| s["source"] == "builtin").collect();
+    assert_eq!(
+        builtin.len(),
+        aeroric_core::extensions::builtin_skills::catalog().len()
+    );
+    assert!(builtin
+        .iter()
+        .all(|s| s["embedded"] == true && s["version"] == "随应用内置"));
+    let scoped = host
+        .call("skills.catalog", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert!(scoped["skills"].as_array().unwrap().len() >= builtin.len());
+    let none = host
+        .call("skills.mounted", json!({"taskId": "task-none"}))
+        .await
+        .unwrap();
+    assert_eq!(none["launches"], json!([]));
+    assert!(host.call("skills.mounted", json!({})).await.is_err());
+}

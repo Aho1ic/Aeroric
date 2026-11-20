@@ -182,6 +182,8 @@ pub struct StructuredExecutor {
     wikis: Arc<crate::knowledge::Wikis>,
     /// Q-R6: the reference library (one for every project).
     references: Arc<crate::knowledge::references::References>,
+    /// C7 (2026-11-20): the skills each launch of a session mounted.
+    skill_mounts: Arc<crate::extensions::catalog::MountLog>,
     /// B4′: how to start the context server (`program`, `data_dir`); unset
     /// gives sessions none (tests, and hosts that opt out).
     context_program: Mutex<Option<(String, String)>>,
@@ -293,6 +295,7 @@ impl StructuredExecutor {
             memory,
             wikis: Arc::default(),
             references: Arc::default(),
+            skill_mounts: Arc::default(),
             context_program: Mutex::new(None),
             context_tokens: Arc::default(),
             runtime: runtime.clone(),
@@ -476,6 +479,32 @@ impl StructuredExecutor {
 
     pub fn wikis(&self) -> &Arc<crate::knowledge::Wikis> {
         &self.wikis
+    }
+
+    pub fn skill_mounts(&self) -> &Arc<crate::extensions::catalog::MountLog> {
+        &self.skill_mounts
+    }
+
+    /// C7: a launch on this Mac keeps what skills it is given (a remote
+    /// one is given none by Aeroric).
+    fn note_skills(&self, task_id: &str, family: ProtocolFamily, route: &Route, cwd: &str) {
+        if !route.runs_locally() {
+            return;
+        }
+        let harness = match family {
+            ProtocolFamily::Codex => "codex",
+            ProtocolFamily::Claude => "claude",
+            ProtocolFamily::Omp => "omp",
+            ProtocolFamily::Dsh => "dsh",
+        };
+        let home = crate::settings::home_dir();
+        self.skill_mounts.note(
+            task_id,
+            harness,
+            Some(std::path::Path::new(cwd)),
+            home.as_deref(),
+            crate::clock::now_ms_u64(),
+        );
     }
 
     pub fn references(&self) -> &Arc<crate::knowledge::references::References> {
@@ -779,6 +808,12 @@ impl TaskExecutor for StructuredExecutor {
             },
             &route,
         );
+        self.note_skills(
+            &request.task_id,
+            request.family,
+            &route,
+            &local_path(&request.working_directory),
+        );
         self.checkpoints
             .note_prompt(&request.task_id, &request.prompt);
         let prompt = request
@@ -841,6 +876,12 @@ impl TaskExecutor for StructuredExecutor {
                 thread_id: Some(request.session_id.clone()),
             },
             &route,
+        );
+        self.note_skills(
+            &request.task_id,
+            request.family,
+            &route,
+            &local_path(&request.working_directory),
         );
         self.hand_brief(&request.task_id, &request.project_id, &session, None, true);
         session.attach().map_err(|error| ExecutorFailure::Spawn {

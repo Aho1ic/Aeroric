@@ -54,6 +54,7 @@ mod restart;
 mod retry;
 mod review;
 mod schedule;
+mod skills;
 mod todo;
 mod turns;
 mod wiki;
@@ -210,6 +211,8 @@ pub fn register_session_live_services(
     retry::install(set, &live);
     // 2026-11-15: 工作安排第一批（待办）.
     todo::install(set, &live);
+    // C7 (2026-11-20): the skill catalog and what each launch mounted.
+    skills::install(set, &live);
 }
 
 // MARK: B4′ side branches (2026-10-30)

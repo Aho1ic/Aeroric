@@ -271,7 +271,7 @@ pub fn user_skill_names(dirs: &[PathBuf]) -> BTreeSet<String> {
     names
 }
 
-fn points_into_store(path: &Path) -> bool {
+pub(crate) fn points_into_store(path: &Path) -> bool {
     std::fs::read_link(path)
         .map(|target| {
             target
