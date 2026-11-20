@@ -744,3 +744,92 @@ fn a_broken_index_is_seen_and_rebuilt_as_a_run() {
     assert_eq!(memory.runs(10).unwrap(), vec![run]);
     assert_eq!(memory.counted_since(0), 0, "no model, no allowance");
 }
+
+/// H7 (2026-11-21): the harnesses' own memory files read as evidence — a
+/// project's file into the project's pending facts, the user's into their
+/// pending profile, each naming its file; the files stay byte for byte;
+/// an unchanged file is not read again; a rejected line does not return.
+#[test]
+fn native_files_become_proposals_and_stay_untouched() {
+    use aeroric_protocol::memory::{MemoryKind, MemoryState};
+    let (memory, _dir) = rig();
+    let root = std::env::temp_dir().join(format!("aeroric-harvest-{}", uuid::Uuid::new_v4()));
+    let claude = root.join(".claude");
+    let cwd = root.join("proj");
+    let encoded = crate::sessions::discovery::encode_claude_project_path(&cwd.to_string_lossy());
+    let mem = claude.join("projects").join(encoded).join("memory");
+    std::fs::create_dir_all(&mem).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+    let project_file = mem.join("MEMORY.md");
+    std::fs::write(
+        &project_file,
+        "# 记忆\n- 测试用 cargo nextest\n- 发布前跑 verify\n",
+    )
+    .unwrap();
+    std::fs::write(claude.join("CLAUDE.md"), "- 回复一律用简体中文\n").unwrap();
+    let before = std::fs::read(&project_file).unwrap();
+    let homes = [("claude".to_string(), claude.clone())];
+
+    let files = super::native::discover(&homes, Some(&cwd));
+    let first = memory.harvest_native(&files, Some("p1"), 10);
+    assert_eq!((first.read, first.proposed), (2, 3));
+    let facts = memory.list(Some("p1"), None).unwrap();
+    assert_eq!(facts.len(), 2);
+    assert!(facts
+        .iter()
+        .all(|i| i.state == MemoryState::Pending && i.kind == MemoryKind::Fact));
+    assert!(
+        facts[0].evidence[0]
+            .excerpt
+            .starts_with(&super::native::short_path(&project_file.to_string_lossy())),
+        "{:?}",
+        facts[0].evidence
+    );
+    let profile = memory.list(None, None).unwrap();
+    assert_eq!(profile.len(), 1);
+    assert_eq!(profile[0].kind, MemoryKind::Profile);
+    assert_eq!(
+        std::fs::read(&project_file).unwrap(),
+        before,
+        "the file is only read"
+    );
+
+    let again = memory.harvest_native(&files, Some("p1"), 11);
+    assert_eq!(
+        (again.read, again.proposed),
+        (0, 0),
+        "unchanged: not read again"
+    );
+
+    // The user rejects one line; the file changes; only the new line comes.
+    let nextest = facts.iter().find(|i| i.text.contains("nextest")).unwrap();
+    memory.confirm(&nextest.id, false, 12).unwrap();
+    std::fs::write(
+        &project_file,
+        "- 测试用 cargo nextest\n- 发布前跑 verify\n- 文档只写现状\n",
+    )
+    .unwrap();
+    let files = super::native::discover(&homes, Some(&cwd));
+    let changed = memory.harvest_native(&files, Some("p1"), 13);
+    assert_eq!((changed.read, changed.proposed), (1, 1));
+    let texts: Vec<String> = memory
+        .list(Some("p1"), None)
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.state == MemoryState::Pending)
+        .map(|i| i.text)
+        .collect();
+    assert!(texts.contains(&"文档只写现状".to_string()));
+    assert!(
+        !texts.iter().any(|t| t.contains("nextest")),
+        "rejected stays out"
+    );
+    // Without a project, a project's file is left for its project.
+    let none = memory.harvest_native(&files, None, 14);
+    assert_eq!(none.proposed, 0);
+    assert_eq!(
+        super::native::short_path("/x/.claude/projects/-x-proj/memory/MEMORY.md"),
+        "/x/.claude/projects/<本项目>/memory/MEMORY.md"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}

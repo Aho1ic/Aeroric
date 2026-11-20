@@ -1374,6 +1374,11 @@ fn dream_due_scopes(live: &Live) {
             .map(|id| Some(id.to_string())),
     );
     for scope in scopes {
+        // H7: the harnesses' own memory files, read as evidence: new or
+        // changed lines become proposals naming their file (no model).
+        let cwd = scope.as_deref().and_then(|id| project_dir(live, id));
+        let files = memory::native::discover(&homes(live), cwd.as_deref());
+        let _ = memory.harvest_native(&files, scope.as_deref(), now);
         if dreaming && memory.dream_due(scope.as_deref(), now) {
             match dream_scope(live, scope.as_deref(), false, false) {
                 Err(error) if error.contains("到上限") || error.contains("还没有选") => {

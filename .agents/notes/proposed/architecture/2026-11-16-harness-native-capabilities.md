@@ -276,6 +276,8 @@ Aeroric 是各 Harness 的上级进程，结构化事件流本来就经过宿主
 
 #### H7 会话外的整理，跨 Harness
 
+2026-11-21 第一步已实现，见 [H7 第一步笔记](../../implemented/feature/2026-11-21-h7-native-memory-as-evidence.md)：第 1 条，原生记忆文件当证据读，`native.rs` 文件头和路线文档 §6.4 已原地更新。第 2 条（升降）、第 3 条（对照原文纠错）是后面两步。
+
 **用户会看到：** 在 Claude 里让它"记住"的事，换到 Codex 也能用上（先经用户确认）；长期没用上的记忆自己退出开场白；和会话原文对不上的记忆会收到一条带原文位置的改正提议。
 
 **现状：** 后台整理和 Wiki 编译都在宿主侧，和 Harness 无关。各家自己的记忆文件只展示：[`memory/native.rs:1–3`](../../../../core/crates/aeroric-core/src/memory/native.rs) 写明"不索引、不注入、不写"。

@@ -135,6 +135,8 @@ pub struct Memory {
     store: Mutex<Option<Store>>,
     /// B5-3b: the data folder (learned skills live beside the built-in ones).
     data_dir: Mutex<Option<PathBuf>>,
+    /// H7: the store's own folder (which native files were read, by content).
+    dir: Mutex<Option<PathBuf>>,
     /// B6: scopes being dreamt now (one dream per scope at a time).
     dreaming: Mutex<std::collections::HashSet<String>>,
     /// C3: runs the user asked to cancel while they ran.
@@ -149,6 +151,7 @@ impl Memory {
         runs::recover(&store)?;
         *self.store.lock() = Some(store);
         *self.data_dir.lock() = dir.parent().map(PathBuf::from);
+        *self.dir.lock() = Some(dir);
         Ok(())
     }
 
