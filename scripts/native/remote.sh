@@ -9,7 +9,8 @@
 #   scripts/native/remote.sh status      远端磁盘余量与各产物目录大小
 #
 # 远端由环境变量给出，不写进仓库：
-#   AERORIC_REMOTE_HOST            必填，user@host
+#   AERORIC_REMOTE_HOST            必填，user@host；可以写多个、用逗号隔开（如局域网地址和
+#                                  WireGuard 地址），按顺序用第一个连得上的
 #   AERORIC_REMOTE_KEY             登录密钥，默认 ~/.ssh/id_ed25519_mini
 #   AERORIC_REMOTE_DIR             远端目录（相对远端 home），默认 aeroric-build
 #   AERORIC_REMOTE_RUST            远端用的 Rust 版本（rustup），默认取本机 cargo 的版本，
@@ -23,14 +24,32 @@
 # （line-tables-only），每次结束报告磁盘余量。只有 macOS 自带的 bash 3.2，别用 bash 4 语法。
 set -euo pipefail
 
-host="${AERORIC_REMOTE_HOST:?设置 AERORIC_REMOTE_HOST，例如 user@192.168.1.2}"
+hosts="${AERORIC_REMOTE_HOST:?设置 AERORIC_REMOTE_HOST，例如 user@192.168.1.2,user@10.0.0.2}"
 key="${AERORIC_REMOTE_KEY:-$HOME/.ssh/id_ed25519_mini}"
 dir="${AERORIC_REMOTE_DIR:-aeroric-build}"
 max_gb="${AERORIC_REMOTE_MAX_TARGET_GB:-60}"
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 dbx="$(cd -- "$repo/../dbx" && pwd -P)"
 rust="${AERORIC_REMOTE_RUST:-$(cargo --version | awk '{print $2}')}"
-ssh_opts="-i $key -o BatchMode=yes -o ConnectTimeout=10"
+# 几个地址是同一台机器：主机密钥按一个别名记，换了地址照样核对，不会换个地址就信任
+# 一把新密钥；第一次连接时记下（accept-new），之后密钥变了就拒绝。
+ssh_opts="-i $key -o BatchMode=yes -o ConnectTimeout=10 -o HostKeyAlias=${AERORIC_REMOTE_HOST_KEY_ALIAS:-aeroric-remote} -o StrictHostKeyChecking=accept-new"
+host=""
+IFS=',' read -r -a candidates <<< "$hosts"
+for candidate in "${candidates[@]}"; do
+  candidate="$(echo "$candidate" | tr -d '[:space:]')"
+  [ -n "$candidate" ] || continue
+  # shellcheck disable=SC2086
+  if ssh $ssh_opts -o ConnectTimeout=5 "$candidate" true 2>/dev/null; then
+    host="$candidate"
+    break
+  fi
+done
+if [ -z "$host" ]; then
+  echo "远端都连不上：${hosts}（在公司要先连上 WireGuard）" >&2
+  exit 3
+fi
+[ "${#candidates[@]}" -gt 1 ] && echo "--- 远端：$host" >&2
 app_rel=".artifacts/native/DerivedData/Build/Products/Debug/AeroricNative.app"
 
 remote() {

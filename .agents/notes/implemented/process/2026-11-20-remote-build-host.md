@@ -39,6 +39,8 @@ Status: implemented
 
 远端主机、密钥、目录都由环境变量给出，仓库里不写地址。
 
+2026-11-20 补：`AERORIC_REMOTE_HOST` 可以写多个地址、用逗号隔开（如局域网地址和 WireGuard 地址），按顺序用第一个连得上的，都连不上时退出码 3 并提示先连 WireGuard。几个地址是同一台机器，主机密钥按别名 `aeroric-remote` 记（`HostKeyAlias`），第一次连接时记下（`accept-new`），之后换了地址也核对同一把，密钥变了就拒绝。
+
 **同步规则。**
 
 - 按 `git ls-files --others --ignored --exclude-standard --directory` 排除，git 忽略的都不传，不维护名单。
