@@ -243,11 +243,18 @@ fn wiki_page(live: &Live, request: &Request) -> Frame {
     let Some(slug) = p.slug else {
         return missing(request, "slug");
     };
-    answer(
-        request,
-        live.executor.wikis().page(&p.project_id, &slug),
-        "page",
-    )
+    let wikis = live.executor.wikis();
+    match wikis.page(&p.project_id, &slug) {
+        // H4: and the files it cites that a session changed since its compile.
+        Ok(page) => ok(
+            request,
+            json!({
+                "page": page,
+                "changed": wikis.changed_since_compile(&p.project_id, &slug),
+            }),
+        ),
+        Err(error) => wiki_failure(request, error),
+    }
 }
 
 /// `wiki.compile {projectId}`: 重新编译.
@@ -893,10 +900,14 @@ fn context_read(live: &Live, request: &Request) -> Frame {
     let wikis = live.executor.wikis();
     let slug = p.slug.unwrap_or_else(|| "index".into());
     match wikis.page(&project, &slug) {
-        Ok(page) => ok(
-            request,
-            json!({ "text": aeroric_core::knowledge::render(&page), "slug": page.slug }),
-        ),
+        Ok(page) => {
+            // H4: read with the note while a cited file changed since its compile.
+            let note = aeroric_core::knowledge::changed::note(
+                &wikis.changed_since_compile(&project, &page.slug),
+            );
+            let text = format!("{note}{}", aeroric_core::knowledge::render(&page));
+            ok(request, json!({ "text": text, "slug": page.slug }))
+        }
         Err(WikiError::UnknownPage) => {
             let list: Vec<String> = wikis
                 .pages(&project)

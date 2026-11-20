@@ -7,6 +7,7 @@
 //! `<data>/knowledge/<project>/wiki.db`, SQLite with an FTS5 index over the
 //! CJK-segmented text.
 
+pub mod changed;
 pub mod code_index;
 pub mod compile;
 pub mod explain;
@@ -28,8 +29,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aeroric_protocol::wiki::{
-    CompileReport, RevisionReason, WikiBlock, WikiExportPlan, WikiHit, WikiIssue, WikiIssueKind,
-    WikiPage, WikiPageKind, WikiPageSummary, WikiRevision, WikiSourceGaps,
+    CompileReport, RevisionReason, WikiBlock, WikiChangedFile, WikiExportPlan, WikiHit, WikiIssue,
+    WikiIssueKind, WikiPage, WikiPageKind, WikiPageSummary, WikiRevision, WikiSourceGaps,
 };
 use parking_lot::Mutex;
 
@@ -244,21 +245,51 @@ impl Wikis {
             .lock()
             .clone()
             .ok_or_else(|| WikiError::Unavailable("存储未打开".into()))?;
-        let safe: String = project
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        let store = Arc::new(Mutex::new(Store::open(&dir.join(safe))?));
+        let store = Arc::new(Mutex::new(Store::open(&dir.join(safe_name(project)))?));
         self.open
             .lock()
             .insert(project.to_string(), Arc::clone(&store));
         Ok(store)
+    }
+
+    /// The project's store folder (where H4's marks sit beside it).
+    fn project_dir(&self, project: &str) -> Option<PathBuf> {
+        Some(self.dir.lock().clone()?.join(safe_name(project)))
+    }
+
+    /// H4 (2026-11-21): files a session changed (relative to the
+    /// repository's top) mark the pages citing them at once; returns the
+    /// pages marked. A project with no wiki marks nothing.
+    pub fn mark_changed(
+        &self,
+        project: &str,
+        files: &[String],
+        task_id: &str,
+        at_ms: u64,
+    ) -> Vec<String> {
+        if files.is_empty() || !self.has_pages(project) {
+            return Vec::new();
+        }
+        let (Ok(store), Some(dir)) = (self.store(project), self.project_dir(project)) else {
+            return Vec::new();
+        };
+        let store = store.lock();
+        let pages: Vec<WikiPage> = store.pages().unwrap_or_default();
+        let mut marks = changed::read(&dir);
+        let touched = changed::mark(&mut marks, &pages, files, task_id, at_ms);
+        if !touched.is_empty() {
+            if let Err(why) = changed::write(&dir, &marks) {
+                eprintln!("[aeroric] wiki pages not marked out of date: {why}");
+            }
+        }
+        touched
+    }
+
+    /// H4: the files `slug` cites that changed since its compile.
+    pub fn changed_since_compile(&self, project: &str, slug: &str) -> Vec<WikiChangedFile> {
+        self.project_dir(project)
+            .map(|dir| changed::read(&dir).remove(slug).unwrap_or_default())
+            .unwrap_or_default()
     }
 
     pub fn has_pages(&self, project: &str) -> bool {
@@ -408,6 +439,10 @@ impl Wikis {
         }
         report.pages = store.pages()?.len() as u32;
         store.set_gaps(gaps)?;
+        // H4: the compile saw every file as it is; the early marks are done.
+        if let Some(dir) = self.project_dir(project) {
+            let _ = changed::write(&dir, &changed::Marks::new());
+        }
         Ok(report)
     }
 
@@ -760,4 +795,18 @@ fn export_dir(dir: &str) -> Result<String, WikiError> {
         return Err(WikiError::BadExportDir);
     }
     Ok(dir.to_string())
+}
+
+/// A project id as a folder name.
+fn safe_name(project: &str) -> String {
+    project
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }

@@ -266,6 +266,11 @@ public struct WikiPage: View {
                 CheckpointBadge(text: "读自提交 \(commit.prefix(7))", tint: AeroricColor.textSecondary)
                     .help("本页的代码在提交 \(commit) 时读出")
             }
+            if let note = page.changedNote {
+                CheckpointBadge(text: "可能过时", tint: AeroricColor.warning)
+                    .help(note)
+                    .accessibilityIdentifier("wiki.changed")
+            }
             if page.kind == "module" {
                 let has = page.blocks.contains { $0.key.hasSuffix("#duties") }
                 Button { Task { await store.explain() } } label: {

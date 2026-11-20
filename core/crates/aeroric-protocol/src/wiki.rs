@@ -230,3 +230,14 @@ mod tests {
         );
     }
 }
+
+/// H4 (2026-11-21): a file a page cites that a session changed after the
+/// page was compiled; the page may be out of date until the next compile.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikiChangedFile {
+    /// As the page cites it.
+    pub path: String,
+    pub task_id: String,
+    pub at_ms: u64,
+}

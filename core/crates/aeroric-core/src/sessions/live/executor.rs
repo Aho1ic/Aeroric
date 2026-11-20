@@ -291,6 +291,8 @@ impl StructuredExecutor {
         let memory: Arc<crate::memory::Memory> = Arc::default();
         let weak_memory = Arc::downgrade(&memory);
         let weak_tracker = Arc::downgrade(&turn_changes);
+        let wikis: Arc<crate::knowledge::Wikis> = Arc::default();
+        let weak_wikis = Arc::downgrade(&wikis);
         turn_changes.set_hook(Arc::new(move |settled| {
             if let Some(delegations) = weak_delegations.upgrade() {
                 delegations.turn_settled(settled.clone());
@@ -307,6 +309,20 @@ impl StructuredExecutor {
                     tracker.ledger.get(&settled.task_id, &settled.turn_id),
                 ) {
                     crate::memory::chain::record_turn(&memory, &project, &settled.task_id, &record);
+                }
+            }
+            // H4: the pages citing a file this turn changed are marked at once.
+            if let (true, Some(wikis), Some(tracker)) = (
+                settled.diff.is_some(),
+                weak_wikis.upgrade(),
+                weak_tracker.upgrade(),
+            ) {
+                if let (Some(project), Some(record)) = (
+                    tracker.project_of(&settled.task_id),
+                    tracker.ledger.get(&settled.task_id, &settled.turn_id),
+                ) {
+                    let files: Vec<String> = record.files.iter().map(|f| f.path.clone()).collect();
+                    wikis.mark_changed(&project, &files, &settled.task_id, record.ended_ms);
                 }
             }
             if let Some(reviews) = weak.upgrade() {
@@ -338,7 +354,7 @@ impl StructuredExecutor {
             change_review,
             boards: Arc::default(),
             memory,
-            wikis: Arc::default(),
+            wikis,
             references: Arc::default(),
             skill_mounts: Arc::default(),
             tool_log: Arc::default(),

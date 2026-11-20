@@ -386,3 +386,66 @@ fn file_definitions_name_nested_and_private_ones_with_their_span() {
     assert!(swift.iter().any(|d| d.0 == "Page::body"), "{swift:?}");
     assert!(names("a.txt", "x").is_empty());
 }
+
+/// H4 (2026-11-21): a file a session changed marks the module pages citing
+/// it at once (a path from a repository top above the project matches by
+/// its end); the next compile, which reads every file again, clears it.
+#[test]
+fn a_changed_file_marks_its_pages_until_the_next_compile() {
+    let root = fixture();
+    let index = scan(&root);
+    let _ = std::fs::remove_dir_all(&root);
+    let wikis = Wikis::default();
+    let dir = std::env::temp_dir().join(format!("aeroric-knowledge-{}", uuid::Uuid::new_v4()));
+    wikis.set_dir(dir.clone());
+    assert!(
+        wikis
+            .mark_changed("p", &["core/b/src/main.rs".into()], "t1", 5)
+            .is_empty(),
+        "no wiki, nothing marked"
+    );
+    let sources = Sources {
+        code: Some(index),
+        ..Sources::default()
+    };
+    wikis.compile("p", &sources, 1).unwrap();
+    let marked = wikis.mark_changed(
+        "p",
+        &["repo/core/b/src/main.rs".into(), "README.md".into()],
+        "t1",
+        5,
+    );
+    assert!(marked.contains(&"module-core-b".to_string()), "{marked:?}");
+    // a-sessions' dependents paragraph was read from b's main.rs too.
+    assert!(
+        marked.contains(&"module-core-a-sessions".to_string()),
+        "{marked:?}"
+    );
+    assert!(
+        wikis
+            .mark_changed("p", &["README.md".into()], "t1", 5)
+            .is_empty(),
+        "a file no page cites marks nothing"
+    );
+    let changed = wikis.changed_since_compile("p", "module-core-b");
+    assert_eq!(changed.len(), 1);
+    assert_eq!(
+        (
+            changed[0].path.as_str(),
+            changed[0].task_id.as_str(),
+            changed[0].at_ms
+        ),
+        ("core/b/src/main.rs", "t1", 5)
+    );
+    assert!(super::changed::note(&changed)
+        .starts_with("> 可能过时：这页生成后，`core/b/src/main.rs` 在会话里改过"));
+    // Marked again later: one entry, the latest.
+    wikis.mark_changed("p", &["core/b/src/main.rs".into()], "t2", 9);
+    let again = wikis.changed_since_compile("p", "module-core-b");
+    assert_eq!((again.len(), again[0].task_id.as_str()), (1, "t2"));
+
+    wikis.compile("p", &sources, 2).unwrap();
+    assert!(wikis.changed_since_compile("p", "module-core-b").is_empty());
+    assert_eq!(super::changed::note(&[]), "");
+    let _ = std::fs::remove_dir_all(&dir);
+}

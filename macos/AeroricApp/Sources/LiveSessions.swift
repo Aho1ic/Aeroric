@@ -859,7 +859,11 @@ struct HostWikiService: WikiService {
     }
 
     func page(projectID: String, slug: String) async throws -> LiveWikiPage? {
-        LiveWikiPage.decode(try await call("wiki.page", projectID, ["slug": .string(slug)])["page"])
+        let reply = try await call("wiki.page", projectID, ["slug": .string(slug)])
+        var page = LiveWikiPage.decode(reply["page"])
+        // H4: the files a session changed since its compile.
+        page?.changed = (reply["changed"]?.arrayValue ?? []).compactMap { $0["path"]?.stringValue }
+        return page
     }
 
     func compile(projectID: String) async throws -> LiveWikiReport {

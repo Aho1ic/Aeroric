@@ -12,6 +12,9 @@ public struct LiveWikiPage: Equatable, Sendable {
     public var revision: Int
     /// R4-1: the commit a module page's code was read at.
     public var sourceCommit: String?
+    /// H4 (2026-11-21): files it cites that a session changed since its
+    /// compile (`wiki.page`'s `changed`); it may be out of date until the next one.
+    public var changed: [String] = []
 
     public init(slug: String, kind: String = "decision", title: String, status: String? = nil,
                 category: String? = nil, blocks: [LiveWikiBlock] = [], revision: Int = 1,
@@ -34,6 +37,15 @@ public struct LiveWikiPage: Equatable, Sendable {
                             blocks: (f["blocks"]?.arrayValue ?? []).compactMap(LiveWikiBlock.decode),
                             revision: f["revision"]?.numberText.flatMap { Int($0) } ?? 1,
                             sourceCommit: f["sourceCommit"]?.stringValue)
+    }
+
+    /// H4: the line shown under the title while `changed` is not empty.
+    public var changedNote: String? {
+        switch changed.count {
+        case 0: return nil
+        case 1: return "可能过时：生成后 \(changed[0]) 在会话里改过，重新编译后更新"
+        default: return "可能过时：生成后 \(changed[0]) 等 \(changed.count) 个文件在会话里改过，重新编译后更新"
+        }
     }
 
     /// The page as Markdown (what 编辑 starts from); emptied blocks left out.
