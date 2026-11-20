@@ -1774,8 +1774,10 @@ async fn a_handoff_move_starts_a_new_session_instead_of_resuming() {
     .unwrap();
     let fresh = peer.next().await;
     assert_eq!(fresh["method"], "thread/start", "{fresh}");
+    // H3: the opening first, then the brief.
     let brief = fresh["params"]["developerInstructions"].as_str().unwrap();
-    assert!(brief.starts_with("# 交接清单"), "{brief}");
+    assert!(brief.starts_with("# Aeroric 能做什么"), "{brief}");
+    assert!(brief.contains("\n\n---\n\n# 交接清单"), "{brief}");
 }
 
 /// B4-1 (2026-10-30): with the review loop on, a Codex turn that changed a
@@ -2292,8 +2294,16 @@ async fn remembered_words_reach_a_new_session_and_proposals_wait() {
     peer.reply(&init, json!({}));
     peer.expect("initialized").await;
     let start = peer.expect("thread/start").await;
+    // H3: the profile is the opening's second part, after the purpose.
     let instructions = start["params"]["developerInstructions"].as_str().unwrap();
-    assert!(instructions.starts_with("# Aeroric 记忆"), "{instructions}");
+    assert!(
+        instructions.starts_with("# Aeroric 能做什么"),
+        "{instructions}"
+    );
+    assert!(
+        instructions.contains("\n\n# Aeroric 记忆"),
+        "{instructions}"
+    );
     assert!(instructions.contains("[语言] 回复一律用简体中文"));
 
     let token = host

@@ -165,6 +165,8 @@ Aeroric 已经有长期记忆、项目 Wiki、委派和共享黑板、内置与�
 
 #### H3 统一的开场白
 
+2026-11-20 第一步已实现，见 [H3 第一步笔记](../../implemented/feature/2026-11-20-h3-unified-opening.md)：`sessions/live/opening.rs` 拼用途说明（480 字）、记忆档案（1200 字）、指路（Wiki 页标题与角色名，600 字），合计上限 2280 字，超出先去掉指路；每次启动（含恢复）交给系统层，Claude、Codex、本机 OMP 都收下；用途说明里的工具清单那一句与 MCP 服务说明同一个函数（`opening::tool_uses`），原文未改。第 5 条（账单按段计入）留给第二步，没有系统层的 DSH 留给第三步。
+
 **用户会看到：** 换一个 Harness 开会话，Agent 一样知道用户的偏好和项目约定，一样知道这里有 Wiki 和以前的会话可查。
 
 **现状：** 开场内容由 `hand_handoff` 拼（[`executor.rs:302–345`](../../../../core/crates/aeroric-core/src/sessions/live/executor.rs)）：记忆档案（[`memory/profile.rs`](../../../../core/crates/aeroric-core/src/memory/profile.rs)，上限 `PROFILE_BUDGET_CHARS` 1200 字）加交接简报，中间用分隔线。"Aeroric 能做什么"只出现在 MCP 服务器说明那一句里（[`mcp_context.rs:212`](../../../../core/crates/aeroric-cli/src/mcp_context.rs)），没接工具的 Harness 完全看不到。

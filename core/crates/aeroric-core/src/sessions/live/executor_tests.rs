@@ -131,8 +131,20 @@ async fn running(setup: &mut Setup) -> Peer {
     let mut peer = launched(&mut setup.peers).await;
     peer.handshake().await;
     let start = peer.expect("thread/start").await;
+    // H3: every start carries the opening as developerInstructions.
+    let mut params = start["params"].clone();
+    let opening = params
+        .as_object_mut()
+        .and_then(|p| p.remove("developerInstructions"))
+        .unwrap_or_default();
+    assert!(
+        opening
+            .as_str()
+            .is_some_and(|o| o.starts_with(crate::sessions::live::opening::PURPOSE_HEADER)),
+        "{start}"
+    );
     assert_eq!(
-        start["params"],
+        params,
         json!({"cwd": "/w", "approvalPolicy": "untrusted", "sandbox": "workspace-write"})
     );
     peer.reply(&start, json!({"thread": {"id": "th1"}}));
@@ -808,18 +820,22 @@ async fn the_kept_surfaces_match_what_the_launch_was_given() {
         Feature::SURFACES.to_vec()
     );
     assert_eq!((kept.harness.as_str(), kept.place), ("codex", Place::Local));
-    assert!(
-        start["params"]["developerInstructions"].is_null(),
-        "{start}"
-    );
+    // H3: every launch gets the opening; without the server it says the
+    // session has no Aeroric tools and points at nothing they would open.
+    let given = start["params"]["developerInstructions"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no opening: {start}"));
+    assert!(given.starts_with(crate::sessions::live::opening::PURPOSE_HEADER));
+    assert!(given.contains("没有接入它的工具"), "{given}");
+    assert!(!given.contains(crate::sessions::live::opening::POINTERS_HEADER));
     let opening = at(&kept, Feature::SurfaceInstructions);
-    assert!(
-        opening
-            .note
-            .as_deref()
-            .unwrap()
-            .starts_with("这次没有开场内容要给"),
-        "{opening:?}"
+    assert_eq!(opening.state, SupportState::Yes);
+    assert_eq!(
+        opening.note,
+        Some(format!(
+            "这次启动从系统层给了开场内容（{} 字）",
+            given.chars().count()
+        ))
     );
     let tools = at(&kept, Feature::ContextTools);
     assert_eq!(tools.state, SupportState::No);
@@ -848,6 +864,10 @@ async fn the_kept_surfaces_match_what_the_launch_was_given() {
     let given = start["params"]["developerInstructions"]
         .as_str()
         .unwrap_or_else(|| panic!("no opening: {start}"));
+    // H3: the opening with the tools' sentence, then the brief.
+    assert!(given.starts_with(crate::sessions::live::opening::PURPOSE_HEADER));
+    assert!(given.contains("Aeroric 上下文工具："), "{given}");
+    assert!(given.contains("\n\n---\n\n"), "the brief follows: {given}");
     let opening = at(&kept, Feature::SurfaceInstructions);
     assert_eq!(opening.state, SupportState::Yes);
     assert_eq!(
@@ -949,6 +969,8 @@ async fn a_claude_launch_hands_what_its_surfaces_say() {
     assert_eq!(kept.harness, "claude");
     let entry = |f: Feature| kept.surfaces.iter().find(|e| e.feature == f).unwrap();
     let opening = start.append_system.expect("--append-system-prompt");
+    assert!(opening.starts_with(crate::sessions::live::opening::PURPOSE_HEADER));
+    assert!(opening.contains("Aeroric 上下文工具："), "{opening}");
     assert_eq!(entry(Feature::SurfaceInstructions).state, SupportState::Yes);
     assert_eq!(
         entry(Feature::SurfaceInstructions).note,
@@ -1050,6 +1072,8 @@ async fn an_omp_launch_gets_the_server_and_the_opening_and_closing_ends_its_toke
     }
     let start = starts.lock()[0].clone();
     let opening = start.append_system.expect("the opening");
+    assert!(opening.starts_with(crate::sessions::live::opening::PURPOSE_HEADER));
+    assert!(opening.contains("Aeroric 上下文工具："), "{opening}");
     let server = start.context.expect("the context server");
     let token = server
         .env

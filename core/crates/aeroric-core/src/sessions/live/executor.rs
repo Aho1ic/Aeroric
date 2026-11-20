@@ -371,7 +371,9 @@ impl StructuredExecutor {
     /// prompt then carries none). Returns the prompt to send.
     ///
     /// B5-1: the user's memory profile goes in front of the brief, but only
-    /// into a system layer — never into the user's message.
+    /// into a system layer — never into the user's message. H3: the profile
+    /// is one part of the opening (`opening.rs`), with what Aeroric offers
+    /// and where to look.
     fn hand_brief(
         &self,
         task_id: &str,
@@ -379,11 +381,50 @@ impl StructuredExecutor {
         session: &Arc<dyn SessionDriver>,
         prompt: Option<String>,
         resuming: bool,
+        injection: super::tool_catalog::Injection,
     ) -> (Option<String>, super::surfaces::Opening) {
+        let opening = self.opening(task_id, project_id, injection);
+        self.hand_handoff(task_id, session, prompt, resuming, Some(&opening))
+    }
+
+    /// H3: the opening for one launch. The pointers name only what the
+    /// session's tools can open, so a session without them gets none.
+    fn opening(
+        &self,
+        task_id: &str,
+        project_id: &str,
+        injection: super::tool_catalog::Injection,
+    ) -> String {
+        use super::opening;
+        let with_tools = injection == super::tool_catalog::Injection::Injected;
+        let offered = self.offered_tools(project_id);
         let profile = self
             .memory
             .profile_for_session(Some(project_id), Some(task_id));
-        self.hand_handoff(task_id, session, prompt, resuming, profile.as_deref())
+        let pointers = with_tools
+            .then(|| {
+                let wiki: Vec<String> = if offered.wiki {
+                    self.wikis
+                        .pages(project_id)
+                        .map(|pages| pages.into_iter().map(|p| p.title).collect())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let roles: Vec<String> = self
+                    .delegations
+                    .roles()
+                    .into_iter()
+                    .map(|r| r.name)
+                    .collect();
+                opening::pointers(&wiki, &roles)
+            })
+            .flatten();
+        opening::compose(
+            &opening::purpose(with_tools, offered),
+            profile.as_deref(),
+            pointers.as_deref(),
+        )
     }
 
     fn hand_handoff(
@@ -392,7 +433,7 @@ impl StructuredExecutor {
         session: &Arc<dyn SessionDriver>,
         prompt: Option<String>,
         resuming: bool,
-        profile: Option<&str>,
+        opening: Option<&str>,
     ) -> (Option<String>, super::surfaces::Opening) {
         use super::surfaces::Opening;
         use aeroric_protocol::checkpoint::HandoffReason;
@@ -407,10 +448,10 @@ impl StructuredExecutor {
             reason.and_then(|_| self.checkpoints.get(task_id).filter(|cp| !cp.is_empty()));
         let (Some(reason), Some(checkpoint)) = (reason, checkpoint) else {
             // H1: what became of the opening is kept with the launch.
-            let opening = match profile {
+            let opening = match opening {
                 None => Opening::Nothing,
-                Some(profile) if session.set_instructions(profile.to_string()) => {
-                    Opening::Taken(profile.chars().count())
+                Some(text) if session.set_instructions(text.to_string()) => {
+                    Opening::Taken(text.chars().count())
                 }
                 Some(_) => Opening::Refused {
                     brief: false,
@@ -430,8 +471,8 @@ impl StructuredExecutor {
             );
             self.sink.update(&update);
         }
-        let instructions = match profile {
-            Some(profile) => format!("{profile}\n\n---\n\n{brief}"),
+        let instructions = match opening {
+            Some(opening) => format!("{opening}\n\n---\n\n{brief}"),
             None => brief.clone(),
         };
         let chars = instructions.chars().count();
@@ -949,6 +990,7 @@ impl TaskExecutor for StructuredExecutor {
             &session,
             Some(prompt),
             false,
+            injection,
         );
         self.note_surfaces(
             &request.task_id,
@@ -1014,8 +1056,14 @@ impl TaskExecutor for StructuredExecutor {
             &route,
             &local_path(&request.working_directory),
         );
-        let (_, opening) =
-            self.hand_brief(&request.task_id, &request.project_id, &session, None, true);
+        let (_, opening) = self.hand_brief(
+            &request.task_id,
+            &request.project_id,
+            &session,
+            None,
+            true,
+            injection,
+        );
         self.note_surfaces(
             &request.task_id,
             &route,

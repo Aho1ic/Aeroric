@@ -85,7 +85,7 @@ fn the_opening_says_what_became_of_it() {
     });
     assert_eq!(
         profile_only.note.as_deref(),
-        Some("这家没有系统层入口：记忆档案没给")
+        Some("这家没有系统层入口：开场白（用途、记忆档案、指路）没给")
     );
     // Nothing to hand: the family's row, said to be untried this time.
     let nothing = at(Opening::Nothing);

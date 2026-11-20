@@ -21,6 +21,7 @@ pub mod executor;
 pub mod isolated_copy;
 pub mod login;
 pub mod omp;
+pub mod opening;
 pub mod read_only;
 pub mod remote;
 pub mod review;

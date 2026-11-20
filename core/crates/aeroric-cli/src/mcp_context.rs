@@ -321,26 +321,15 @@ async fn answer(
 /// instructions, so a tool family they leave out is never loaded. The first
 /// Wiki evaluation had all 16 sessions skip the Wiki for exactly that reason.
 fn instructions(memory: bool, wiki: bool, references: bool, expert: bool) -> String {
-    let mut parts = vec![
-        "检索本项目的历史会话",
-        "读取当前任务的交接清单",
-        "把工作委派给子会话",
-        "把本轮范围以外、值得以后做的事提议成用户的待办（todo_propose）",
-        "读取任务交付的文件及其各版本（artifact_list、artifact_read）",
-    ];
-    if memory {
-        parts.push("查用户的长期记忆与本项目约定");
-    }
-    if wiki {
-        parts.push("读、搜本项目 Wiki（模块职责与常见坑、设计决定与理由；先读 Wiki 再翻代码更快）");
-    }
-    if references {
-        parts.push("搜、读用户收集的参考代码库（别的仓库怎么实现同类功能）");
-    }
-    if expert {
-        parts.push("遇到难点时请教一个更强的专家模型（ask_expert）");
-    }
-    format!("Aeroric 上下文工具：{}。", parts.join("、"))
+    // H3: the same sentence the opening's purpose carries.
+    aeroric_core::sessions::live::opening::tool_uses(
+        aeroric_core::sessions::live::tool_catalog::Offered {
+            memory,
+            wiki,
+            references,
+            expert,
+        },
+    )
 }
 
 /// 2026-11-13 Smart Friend: offered once the user set an expert model.

@@ -90,7 +90,7 @@ fn entry(
                 };
                 said(
                     SupportState::No,
-                    format!("这家没有系统层入口：{brief}记忆档案没给"),
+                    format!("这家没有系统层入口：{brief}开场白（用途、记忆档案、指路）没给"),
                 )
             }
             Opening::Nothing => CapabilityEntry {
