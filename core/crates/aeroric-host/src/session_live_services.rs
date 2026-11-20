@@ -48,6 +48,7 @@ mod discussion;
 mod expert;
 mod gateway_usage;
 mod memory;
+mod once;
 mod references;
 mod rerun;
 mod restart;
@@ -213,6 +214,9 @@ pub fn register_session_live_services(
     todo::install(set, &live);
     // C7 (2026-11-20): the skill catalog and what each launch mounted.
     skills::install(set, &live);
+    // C8: the context tools with a side effect answer a repeated
+    // idempotency key with the first result (after they are registered).
+    once::install(set, &live);
 }
 
 // MARK: B4′ side branches (2026-10-30)

@@ -4034,3 +4034,50 @@ async fn capabilities_carry_a_launchs_tools() {
     assert_eq!(delegate["scope"], json!("writes"));
     assert_eq!(delegate["ready"], json!(true));
 }
+
+/// C8 (2026-11-20): a context write with an idempotency key runs once per
+/// task and key — the repeat gets the first result, marked `replayed` —
+/// and the key is remembered on disk.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_repeated_key_gets_the_first_result() {
+    let host = Host::start(true).await;
+    host.start_task("修复超时");
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+    let keyed = |key: Option<&str>| {
+        let mut request = json!({"v": 1, "id": "r-board", "method": "context.boardWrite",
+            "params": {"token": token, "kind": "goal", "text": "修好超时"}});
+        if let Some(key) = key {
+            request["idempotencyKey"] = json!(key);
+        }
+        serde_json::from_value::<Request>(request).unwrap()
+    };
+    let call = |request: Request| {
+        let context = Arc::clone(&host.call);
+        async move {
+            match dispatch(request, context).await {
+                Frame::Success(success) => success.result,
+                other => panic!("unexpected frame {other:?}"),
+            }
+        }
+    };
+    let first = call(keyed(Some("k-1"))).await;
+    let again = call(keyed(Some("k-1"))).await;
+    assert_eq!(first["entry"]["id"], again["entry"]["id"]);
+    assert!(first.get("replayed").is_none());
+    assert_eq!(again["replayed"], json!(true));
+    let other = call(keyed(Some("k-2"))).await;
+    assert_ne!(other["entry"]["id"], first["entry"]["id"]);
+    let plain = call(keyed(None)).await;
+    assert_ne!(plain["entry"]["id"], other["entry"]["id"]);
+    assert_eq!(
+        host.structured.boards().get("task-1").entries.len(),
+        3,
+        "three writes, not four"
+    );
+    let kept =
+        std::fs::read_to_string(host.context.paths.data_dir().join("context-once.json")).unwrap();
+    assert!(kept.contains("k-1") && kept.contains("k-2"));
+}

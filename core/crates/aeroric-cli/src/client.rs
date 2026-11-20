@@ -99,6 +99,17 @@ impl HostClient {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, ClientError> {
+        self.call_keyed(method, params, None).await
+    }
+
+    /// C8 (2026-11-20): a call that carries an idempotency key in its
+    /// envelope; the host answers a repeated key with the first result.
+    pub async fn call_keyed(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+        idempotency_key: Option<String>,
+    ) -> Result<serde_json::Value, ClientError> {
         self.next_id += 1;
         let id = format!("{}", self.next_id);
         let request = Frame::Request(Request {
@@ -106,7 +117,7 @@ impl HostClient {
             id: id.clone(),
             method: method.to_string(),
             params,
-            idempotency_key: None,
+            idempotency_key,
             extra: Default::default(),
         });
         let line = encode_line(&request)

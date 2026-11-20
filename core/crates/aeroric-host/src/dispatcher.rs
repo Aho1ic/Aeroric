@@ -50,6 +50,11 @@ impl ServiceSet {
     pub fn is_registered(&self, method: &str) -> bool {
         self.methods.contains_key(method)
     }
+
+    /// C8 (2026-11-20): a registered handler, taken out to be wrapped.
+    pub fn take(&mut self, method: &str) -> Option<Handler> {
+        self.methods.remove(method)
+    }
 }
 
 /// 单帧分发：gate → 查表 → handler。返回的帧由连接循环写回；

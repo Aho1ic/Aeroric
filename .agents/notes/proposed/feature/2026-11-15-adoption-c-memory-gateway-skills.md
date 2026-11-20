@@ -186,6 +186,8 @@ Status: proposed
 2. `session.capabilities` 的返回加可选的 `tools` 字段。
 3. Swift：会话信息里显示。
 
+2026-11-20 第二步已实现，见 [C8 第二步笔记](../../implemented/feature/2026-11-20-c8-structured-tool-results.md)：每次工具调用的返回都带 `structuredContent`（`status`：ok / partial / retry / rejected / unclear，另有 `retryable`、`operationId`、`cursor`、`artifactRefs`、`code`）；单行超过 1 MiB 回结构化错误；解析失败但能读出 `id` 的回 JSON-RPC 错误；四个有副作用的工具接受 `idempotency_key`，宿主按（任务、键）只执行一次，记一天，重启后仍在。
+
 **第二步：结构化结果。**
 
 4. `call_tool` 的返回除文字外加 `structuredContent`：`status`（成功、部分、需要重试、被拒绝、不明）、`operation_id`（有副作用的调用）、`cursor`（还有更多）、`artifact_refs`（B6）。文字部分保留，旧 Harness 不受影响。

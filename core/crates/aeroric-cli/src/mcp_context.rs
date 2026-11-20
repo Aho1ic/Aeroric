@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::client::HostClient;
 
@@ -17,6 +17,15 @@ const PROTOCOL: &str = "2025-06-18";
 const HOST_PROBE: std::time::Duration = std::time::Duration::from_secs(3);
 /// How often `ask_expert` looks for the expert's answer.
 const EXPERT_POLL: std::time::Duration = std::time::Duration::from_secs(3);
+/// C8 (2026-11-20): the longest line read from the agent. Past it the
+/// line is answered with a structured error, never read whole into memory.
+pub const MAX_LINE_BYTES: usize = 1 << 20;
+/// What is kept of a too-long line to find its `id` in.
+const HEAD_BYTES: usize = 4096;
+/// C8: tools with a side effect that take an `idempotency_key`; the host
+/// answers a repeated key with the first call's result.
+const KEYED: [&str; 4] = ["delegate", "board_write", "board_decide", "memory_propose"];
+const KEY_ARGUMENT: &str = "idempotency_key";
 
 /// MCP tool → host method.
 fn tools() -> Value {
@@ -270,6 +279,17 @@ async fn answer(
             {
                 list.extend(expert_tools().as_array().cloned().unwrap_or_default());
             }
+            for tool in &mut list {
+                let keyed = tool["name"].as_str().is_some_and(|n| KEYED.contains(&n));
+                if let (true, Some(properties)) =
+                    (keyed, tool["inputSchema"]["properties"].as_object_mut())
+                {
+                    properties.insert(
+                        KEY_ARGUMENT.into(),
+                        json!({"type": "string", "description": "可选。自己起一个唯一的键；因为超时或断线要重试时带上同一个键，Aeroric 只执行一次并返回第一次的结果"}),
+                    );
+                }
+            }
             Ok(json!({"tools": list}))
         }
         "tools/call" => Ok(call_tool(client, data_dir, token, &params).await),
@@ -514,27 +534,59 @@ async fn call_tool(
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        return ask_expert(client, data_dir, token, &arguments).await;
+        // C8: its answers say how they went too; a failure there (no answer,
+        // a lost host) may be tried again.
+        let mut result = ask_expert(client, data_dir, token, &arguments).await;
+        if result.get("structuredContent").is_none() {
+            let failed = result["isError"].as_bool() == Some(true);
+            result["structuredContent"] = json!({
+                "status": if failed { Status::Unclear.as_str() } else { Status::Ok.as_str() },
+                "retryable": failed,
+            });
+        }
+        return result;
     }
     let Some(method) = method_of(name) else {
-        return tool_error(format!("没有这个工具：{name}"));
+        return outcome(
+            format!("没有这个工具：{name}"),
+            Status::Rejected,
+            &json!({}),
+        );
     };
     let mut arguments = params
         .get("arguments")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    // C8: a call with a side effect always carries a key — the agent's, or
+    // one made here — and says it back as `operationId`.
+    let key = KEYED
+        .contains(&name)
+        .then(|| match arguments.remove(KEY_ARGUMENT) {
+            Some(Value::String(key)) if !key.trim().is_empty() => key,
+            _ => format!("auto-{}", uuid::Uuid::new_v4().simple()),
+        });
     arguments.insert("token".into(), Value::String(token.to_string()));
+    let mut extra = json!({});
+    if let Some(key) = &key {
+        extra["operationId"] = json!(key);
+    }
     if client.is_none() {
         match HostClient::connect(data_dir, &uuid::Uuid::new_v4().to_string()).await {
             Ok(connected) => *client = Some(connected),
-            Err(error) => return tool_error(format!("连不上 Aeroric：{error}")),
+            // Nothing was sent: safe to call again.
+            Err(error) => {
+                return outcome(format!("连不上 Aeroric：{error}"), Status::Retry, &extra)
+            }
         }
     }
     let Some(host) = client.as_mut() else {
-        return tool_error("连不上 Aeroric".into());
+        return outcome("连不上 Aeroric".into(), Status::Retry, &extra);
     };
-    match host.call(method, Value::Object(arguments)).await {
+    match host
+        .call_keyed(method, Value::Object(arguments), key.clone())
+        .await
+    {
         Ok(result) => {
             let text = match result
                 .get("brief")
@@ -544,14 +596,99 @@ async fn call_tool(
                 Some(brief) => brief.to_string(),
                 None => serde_json::to_string_pretty(&result).unwrap_or_default(),
             };
-            json!({"content": [{"type": "text", "text": text}], "isError": false})
+            let status = if result.get("partial").and_then(Value::as_bool) == Some(true) {
+                Status::Partial
+            } else {
+                Status::Ok
+            };
+            if let Some(next) = result.get("nextOffset") {
+                extra["cursor"] = next.clone();
+            }
+            let refs: Vec<Value> = result
+                .get("artifacts")
+                .and_then(Value::as_array)
+                .map(|list| list.iter().filter_map(|a| a.get("id").cloned()).collect())
+                .unwrap_or_default();
+            if !refs.is_empty() {
+                extra["artifactRefs"] = json!(refs);
+            }
+            if result.get("replayed").and_then(Value::as_bool) == Some(true) {
+                extra["replayed"] = json!(true);
+            }
+            outcome(text, status, &extra)
         }
         Err(error) => {
             // A lost connection is retried on the next call.
-            *client = None;
-            tool_error(error.to_string())
+            let (status, text) = match &error {
+                crate::client::ClientError::Rpc { code, message } => {
+                    extra["code"] = json!(code.as_str());
+                    if code.is_retryable_by_default() {
+                        (Status::Retry, message.clone())
+                    } else {
+                        (Status::Rejected, message.clone())
+                    }
+                }
+                // Sent, but no answer: a side effect may or may not have
+                // happened. The same key finds out without doing it twice.
+                crate::client::ClientError::Transport(reason) if key.is_some() => {
+                    *client = None;
+                    (
+                        Status::Unclear,
+                        format!("Aeroric 没有回应（{reason}），不知道这次有没有做成；带上同一个 {KEY_ARGUMENT} 再调用一次，做过的不会重复做，会返回第一次的结果"),
+                    )
+                }
+                other => {
+                    *client = None;
+                    (Status::Retry, other.to_string())
+                }
+            };
+            outcome(text, status, &extra)
         }
     }
+}
+
+/// C8: what a tool call came to, besides its text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Status {
+    Ok,
+    Partial,
+    /// Safe to call again (nothing happened, or the host was busy).
+    Retry,
+    /// The host refused it; calling again the same way will not help.
+    Rejected,
+    /// It may or may not have happened.
+    Unclear,
+}
+
+impl Status {
+    fn as_str(self) -> &'static str {
+        match self {
+            Status::Ok => "ok",
+            Status::Partial => "partial",
+            Status::Retry => "retry",
+            Status::Rejected => "rejected",
+            Status::Unclear => "unclear",
+        }
+    }
+}
+
+/// A tool result: the text, as every harness reads it, and (C8)
+/// `structuredContent` with the status and whatever `extra` carries.
+fn outcome(text: String, status: Status, extra: &Value) -> Value {
+    let mut structured = json!({
+        "status": status.as_str(),
+        "retryable": matches!(status, Status::Retry | Status::Unclear),
+    });
+    if let (Some(into), Some(from)) = (structured.as_object_mut(), extra.as_object()) {
+        for (key, value) in from {
+            into.insert(key.clone(), value.clone());
+        }
+    }
+    json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": structured,
+        "isError": !matches!(status, Status::Ok | Status::Partial),
+    })
 }
 
 fn tool_error(text: String) -> Value {
@@ -567,14 +704,133 @@ pub async fn serve(data_dir: &Path) -> i32 {
         );
         return crate::args::exit::USAGE;
     }
-    let mut client: Option<HostClient> = None;
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut out = tokio::io::stdout();
-    while let Ok(Some(line)) = lines.next_line().await {
-        let Ok(message) = serde_json::from_str::<Value>(&line) else {
+    serve_with(
+        data_dir,
+        &token,
+        BufReader::new(tokio::io::stdin()),
+        tokio::io::stdout(),
+    )
+    .await;
+    0
+}
+
+/// One line from the agent, or (C8) how long it was when past the cap.
+enum Line {
+    Text(Vec<u8>),
+    TooLong { observed: usize, head: Vec<u8> },
+}
+
+/// A line of at most `max` bytes; a longer one is read through to its end
+/// but only its head kept. `None` at the end of the input.
+async fn read_line<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max: usize,
+) -> std::io::Result<Option<Line>> {
+    let mut kept = Vec::new();
+    let mut observed = 0usize;
+    loop {
+        let buf = reader.fill_buf().await?;
+        if buf.is_empty() {
+            if observed == 0 {
+                return Ok(None);
+            }
+            break;
+        }
+        let (chunk, done) = match buf.iter().position(|b| *b == b'\n') {
+            Some(at) => (&buf[..at], Some(at + 1)),
+            None => (buf, None),
+        };
+        observed += chunk.len();
+        let room = if observed <= max { max } else { HEAD_BYTES };
+        let take = room.saturating_sub(kept.len()).min(chunk.len());
+        kept.extend_from_slice(&chunk[..take]);
+        let used = done.unwrap_or(buf.len());
+        reader.consume(used);
+        if done.is_some() {
+            break;
+        }
+    }
+    if observed > max {
+        kept.truncate(HEAD_BYTES);
+        return Ok(Some(Line::TooLong {
+            observed,
+            head: kept,
+        }));
+    }
+    Ok(Some(Line::Text(kept)))
+}
+
+/// C8: the top-level `id` of a line that did not parse (or was cut), when
+/// one can be read from its text: the first `"id":` followed by a number
+/// or a string.
+fn salvage_id(text: &[u8]) -> Option<Value> {
+    let text = String::from_utf8_lossy(text);
+    let mut rest: &str = &text;
+    while let Some(at) = rest.find("\"id\"") {
+        let after = rest[at + 4..].trim_start();
+        rest = &rest[at + 4..];
+        let Some(value) = after.strip_prefix(':').map(str::trim_start) else {
             continue;
         };
-        if let Some(response) = answer(&mut client, data_dir, &token, &message).await {
+        if let Some(string) = value.strip_prefix('"') {
+            if let Some(end) = string.find('"') {
+                return Some(Value::String(string[..end].to_string()));
+            }
+        }
+        let digits: String = value
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
+        if let Ok(number) = digits.parse::<i64>() {
+            return Some(json!(number));
+        }
+    }
+    None
+}
+
+/// The server over any pair of streams (stdio in use, a pipe in tests):
+/// every request with an id gets an answer, whatever its line held.
+pub(crate) async fn serve_with<R, W>(data_dir: &Path, token: &str, mut reader: R, mut out: W)
+where
+    R: AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let mut client: Option<HostClient> = None;
+    loop {
+        let line = match read_line(&mut reader, MAX_LINE_BYTES).await {
+            Ok(Some(line)) => line,
+            Ok(None) | Err(_) => break,
+        };
+        let response = match line {
+            Line::TooLong { observed, head } => match salvage_id(&head) {
+                Some(id) => Some(json!({"jsonrpc": "2.0", "id": id, "error": {
+                    "code": -32600,
+                    "message": format!("这一行有 {observed} 字节，超过 {MAX_LINE_BYTES} 字节的上限，没有处理；请把内容拆小，或写进文件再传路径"),
+                    "data": {"limitKind": "lineBytes", "allowed": MAX_LINE_BYTES, "observed": observed, "retryable": false}
+                }})),
+                None => {
+                    eprintln!("aeroric-cli mcp-context: dropped a {observed}-byte line with no readable id");
+                    None
+                }
+            },
+            Line::Text(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                Ok(message) => answer(&mut client, data_dir, token, &message).await,
+                Err(error) => match salvage_id(&bytes) {
+                    Some(id) => Some(json!({"jsonrpc": "2.0", "id": id, "error": {
+                        "code": -32700,
+                        "message": format!("不是合法的 JSON：{error}"),
+                        "data": {"retryable": false}
+                    }})),
+                    None => {
+                        if !bytes.iter().all(u8::is_ascii_whitespace) {
+                            eprintln!("aeroric-cli mcp-context: dropped a line that is not JSON and has no id: {error}");
+                        }
+                        None
+                    }
+                },
+            },
+        };
+        if let Some(response) = response {
             let mut bytes = serde_json::to_vec(&response).unwrap_or_default();
             bytes.push(b'\n');
             if out.write_all(&bytes).await.is_err() || out.flush().await.is_err() {
@@ -582,11 +838,192 @@ pub async fn serve(data_dir: &Path) -> i32 {
             }
         }
     }
-    0
 }
 
 #[cfg(test)]
 mod tests {
+    /// C8 (2026-11-20): every line with an id is answered — a line past the
+    /// cap with a structured error saying how long it was, a line that is
+    /// not JSON with a parse error — and the server goes on; a line with no
+    /// readable id is not answered (there is no one to answer).
+    #[tokio::test]
+    async fn every_line_with_an_id_gets_an_answer() {
+        let long = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{{\"text\":\"{}\"}}}}\n",
+            "a".repeat(super::MAX_LINE_BYTES + 10)
+        );
+        let input = format!(
+            "{long}{{\"jsonrpc\":\"2.0\",\"id\":\"x8\",\"method\":\nnot json at all\n\n{{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"ping\"}}\n"
+        );
+        let mut out = Vec::new();
+        super::serve_with(
+            Path::new("/nonexistent"),
+            "t",
+            tokio::io::BufReader::new(input.as_bytes()),
+            &mut out,
+        )
+        .await;
+        let answers: Vec<Value> = String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(answers.len(), 3, "{answers:?}");
+        assert_eq!(answers[0]["id"], 7);
+        assert_eq!(answers[0]["error"]["code"], -32600);
+        let data = &answers[0]["error"]["data"];
+        assert_eq!(data["limitKind"], "lineBytes");
+        assert_eq!(data["allowed"], super::MAX_LINE_BYTES);
+        assert!(data["observed"].as_u64().unwrap() > super::MAX_LINE_BYTES as u64);
+        assert_eq!(data["retryable"], false);
+        assert_eq!(answers[1]["id"], "x8");
+        assert_eq!(answers[1]["error"]["code"], -32700);
+        assert_eq!(answers[2]["id"], 9);
+        assert_eq!(answers[2]["result"], json!({}));
+    }
+
+    #[test]
+    fn an_id_is_salvaged_from_a_broken_line() {
+        assert_eq!(
+            super::salvage_id(br#"{"jsonrpc":"2.0", "id" : 12, "me"#),
+            Some(json!(12))
+        );
+        assert_eq!(
+            super::salvage_id(br#"{"id":"abc","params":{"id":3}"#),
+            Some(json!("abc"))
+        );
+        assert_eq!(super::salvage_id(br#"{"method":"x"}"#), None);
+        assert_eq!(super::salvage_id(b"garbage"), None);
+    }
+
+    /// C8: a tool result carries `structuredContent` with its status; a
+    /// keyed tool says its operation id (the agent's key, or one made);
+    /// tools/list offers the key only on the tools that take one.
+    #[tokio::test]
+    async fn results_say_how_the_call_went() {
+        let dir = Path::new("/nonexistent");
+        let mut client = None;
+        let call = |name: &str, arguments: Value| {
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": name, "arguments": arguments}})
+        };
+        let unknown = answer(&mut client, dir, "t", &call("rm_rf", json!({})))
+            .await
+            .unwrap();
+        assert_eq!(unknown["result"]["structuredContent"]["status"], "rejected");
+        assert_eq!(unknown["result"]["structuredContent"]["retryable"], false);
+        assert_eq!(unknown["result"]["isError"], true);
+        let keyed = answer(
+            &mut client,
+            dir,
+            "t",
+            &call(
+                "delegate",
+                json!({"instruction": "x", "idempotency_key": "k-1"}),
+            ),
+        )
+        .await
+        .unwrap();
+        let structured = &keyed["result"]["structuredContent"];
+        assert_eq!(structured["status"], "retry", "no host: nothing was sent");
+        assert_eq!(structured["retryable"], true);
+        assert_eq!(structured["operationId"], "k-1");
+        let made = answer(
+            &mut client,
+            dir,
+            "t",
+            &call("board_write", json!({"text": "x"})),
+        )
+        .await
+        .unwrap();
+        assert!(made["result"]["structuredContent"]["operationId"]
+            .as_str()
+            .unwrap()
+            .starts_with("auto-"));
+        let read = answer(&mut client, dir, "t", &call("board_read", json!({})))
+            .await
+            .unwrap();
+        assert!(read["result"]["structuredContent"]
+            .get("operationId")
+            .is_none());
+
+        let list = answer(
+            &mut client,
+            dir,
+            "t",
+            &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+        )
+        .await
+        .unwrap();
+        let tools = list["result"]["tools"].as_array().unwrap();
+        let schema = |name: &str| {
+            tools.iter().find(|t| t["name"] == name).unwrap()["inputSchema"]["properties"].clone()
+        };
+        assert!(schema("delegate").get("idempotency_key").is_some());
+        assert!(schema("board_decide").get("idempotency_key").is_some());
+        assert!(schema("board_read").get("idempotency_key").is_none());
+    }
+
+    /// C8: the host took a keyed call and went away before answering: the
+    /// result says it is unclear whether it happened, and how to find out.
+    #[tokio::test]
+    async fn a_host_lost_mid_call_is_unclear_for_a_keyed_tool() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let dir = std::env::temp_dir().join(format!(
+            "aeroric-mcp-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("host.token"), "tok").unwrap();
+        let socket = aeroric_host::uds::default_socket_path(&dir);
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let seen = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            let hello: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            let reply = json!({"v": 1, "id": hello["id"], "ok": true, "result": {}});
+            write
+                .write_all(format!("{reply}\n").as_bytes())
+                .await
+                .unwrap();
+            let call: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            // Gone without an answer.
+            call
+        });
+        let mut client = None;
+        let lost = answer(
+            &mut client,
+            &dir,
+            "t",
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "memory_propose", "arguments": {"text": "x", "idempotency_key": "k-9"}}}),
+        )
+        .await
+        .unwrap();
+        let sent = seen.await.unwrap();
+        assert_eq!(sent["method"], "context.memoryPropose");
+        assert_eq!(
+            sent["idempotencyKey"], "k-9",
+            "the key rides in the envelope"
+        );
+        assert!(
+            sent["params"].get("idempotency_key").is_none(),
+            "not in the method's own params"
+        );
+        let structured = &lost["result"]["structuredContent"];
+        assert_eq!(structured["status"], "unclear");
+        assert_eq!(structured["retryable"], true);
+        assert_eq!(structured["operationId"], "k-9");
+        assert!(lost["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("同一个 idempotency_key"));
+        assert!(client.is_none(), "the next call connects again");
+    }
+
     /// C8 (2026-11-20): every tool this server can list is in the shared
     /// table the tool catalog is built from, with the same family; nothing
     /// in the table is missing here.
