@@ -394,8 +394,21 @@ pub fn claude_plugin(
 
 /// [`claude_plugin`] for any offers.
 pub fn claude_plugin_offers(data_dir: &Path, offers: &[Offer]) -> Result<PathBuf, String> {
+    claude_plugin_with(data_dir, offers, None)
+}
+
+/// H6: the plugin, also holding the capability packs' event handlers.
+fn claude_plugin_with(
+    data_dir: &Path,
+    offers: &[Offer],
+    hooks: Option<&serde_json::Value>,
+) -> Result<PathBuf, String> {
     let mut hasher = Sha256::new();
     hasher.update(content_hash());
+    if let Some(hooks) = hooks {
+        hasher.update(hooks.to_string().as_bytes());
+        hasher.update([0]);
+    }
     for skill in offers {
         hasher.update(skill.id.as_bytes());
         hasher.update([0]);
@@ -419,6 +432,19 @@ pub fn claude_plugin_offers(data_dir: &Path, offers: &[Offer]) -> Result<PathBuf
             .map_err(|e| e.to_string())?;
     }
     link_offers(&dir.join("skills"), offers, &BTreeSet::new())?;
+    let hooks_file = dir.join("hooks").join("hooks.json");
+    match hooks {
+        Some(hooks) => {
+            let body = serde_json::to_vec_pretty(hooks).map_err(|e| e.to_string())?;
+            if std::fs::read(&hooks_file).ok().as_deref() != Some(body.as_slice()) {
+                std::fs::create_dir_all(hooks_file.parent().unwrap()).map_err(|e| e.to_string())?;
+                std::fs::write(&hooks_file, body).map_err(|e| e.to_string())?;
+            }
+        }
+        None => {
+            let _ = std::fs::remove_file(&hooks_file);
+        }
+    }
     Ok(dir)
 }
 
@@ -586,7 +612,7 @@ fn install(
 
 /// One `hash  path` line per file under `dir` (but the marker files),
 /// sorted.
-fn manifest_of(dir: &Path) -> Result<String, String> {
+pub(crate) fn manifest_of(dir: &Path) -> Result<String, String> {
     fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) -> Result<(), String> {
         let entries =
             std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
@@ -626,7 +652,7 @@ fn changed_since_made(copy: &Path) -> bool {
     }
 }
 
-fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::create_dir_all(to).map_err(|e| format!("cannot create {}: {e}", to.display()))?;
     let entries =
         std::fs::read_dir(from).map_err(|e| format!("cannot read {}: {e}", from.display()))?;
@@ -759,8 +785,16 @@ pub fn mount(
     let home = crate::settings::home_dir();
     let user = user_skill_names(&user_skill_dirs(harness, cwd, home.as_deref()));
     let mut offers = builtin_offers(&root, &for_harness(offered(data_dir, &user), harness));
+    // H6: the capability packs' skills and commands, for every project; the
+    // user's own of the same name wins, a built-in name is never taken.
+    let builtin: BTreeSet<String> = offers.iter().map(|o| o.id.clone()).collect();
+    offers.extend(
+        super::packs::skill_offers(data_dir)
+            .into_iter()
+            .filter(|o| !user.contains(&o.id) && !builtin.contains(&o.id)),
+    );
     // B5-3b: accepted learned skills for this folder; the user's own of the
-    // same name still wins, and a built-in name is never shadowed.
+    // same name still wins, and a built-in or pack name is never shadowed.
     let taken: BTreeSet<String> = offers.iter().map(|o| o.id.clone()).collect();
     // A home shared by every project (no cwd) never holds learned skills.
     let learned: Vec<Offer> = if matches!(mount, Mount::Home(_)) && cwd.is_none() {
@@ -796,7 +830,9 @@ pub fn mount(
             Ok(None)
         }
         Mount::ClaudePlugin => {
-            let plugin = claude_plugin_offers(data_dir, &offers)?;
+            // H6: the trusted packs' event handlers go in the same plugin.
+            let hooks = super::packs::claude_hooks(&super::packs::load(data_dir).0);
+            let plugin = claude_plugin_with(data_dir, &offers, hooks.as_ref())?;
             project_roles(
                 data_dir,
                 &plugin.join("agents"),

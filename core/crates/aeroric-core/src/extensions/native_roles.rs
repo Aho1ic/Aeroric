@@ -189,9 +189,19 @@ pub fn write(dir: &Path, target: Target, roles: &[Role]) -> Result<Vec<String>, 
     Ok(wanted.into_iter().map(|(n, _)| n).collect())
 }
 
-/// The role library a data folder holds (built-ins and the user's own).
+/// The role library a data folder holds (built-ins and the user's own),
+/// with H6's capability packs' roles whose id it does not have yet.
 pub fn library(data_dir: &Path) -> Vec<Role> {
-    crate::sessions::live::delegation::roles::list(Some(&data_dir.join("delegations")))
+    let mut roles =
+        crate::sessions::live::delegation::roles::list(Some(&data_dir.join("delegations")));
+    let (packs, _) = super::packs::load(data_dir);
+    let extra: Vec<Role> = super::packs::roles(&packs, &roles)
+        .into_iter()
+        .filter(|(_, _, state)| state.is_ok())
+        .map(|(_, role, _)| role)
+        .collect();
+    roles.extend(extra);
+    roles
 }
 
 #[cfg(test)]

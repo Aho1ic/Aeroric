@@ -1,13 +1,15 @@
 //! H6 (2026-11-21): capability packs on disk, whether to trust them, and
-//! what one launch of a harness is given from them. The pure plan here
-//! decides every item; the drivers only put the given MCP servers where
-//! their harness reads them.
+//! what one launch of a harness is given from them. The plan here decides
+//! every item; the drivers put the given MCP servers where their harness
+//! reads them, and the skill mount (`builtin_skills::mount`) places the
+//! skills, commands, roles and event handlers with the same rules.
 //!
 //! An untrusted pack's MCP servers and event handlers are never projected:
 //! they run commands. Nothing here runs anything.
 
 use std::path::{Path, PathBuf};
 
+use aeroric_protocol::delegation::Role;
 use aeroric_protocol::packs::{Pack, PackItem, PackKind, PackServer};
 use aeroric_protocol::ProtocolFamily;
 
@@ -96,6 +98,9 @@ pub struct Target {
     pub family: ProtocolFamily,
     /// The agent runs on another machine: a pack's commands are this Mac's.
     pub remote: bool,
+    /// The session runs in a home Aeroric manages (an Agent configuration,
+    /// OMP, DSH), not the user's own Claude or Codex.
+    pub managed: bool,
 }
 
 impl Target {
@@ -117,6 +122,17 @@ impl Target {
             ProtocolFamily::Dsh => "session/new 的 mcpServers",
         }
     }
+
+    /// Where a skill (or a command, given as a skill) goes.
+    fn skill_place(self, name: &str) -> String {
+        match (self.family, self.managed) {
+            (ProtocolFamily::Claude, false) => {
+                format!("放进会话插件的 skills/（用 /aeroric:{name}）")
+            }
+            (ProtocolFamily::Codex, false) => "复制到项目的 .agents/skills（带标记）".into(),
+            _ => "放进受管目录的 skills/".into(),
+        }
+    }
 }
 
 /// What one launch is given.
@@ -126,35 +142,61 @@ pub struct Plan {
     pub items: Vec<PackItem>,
 }
 
-fn kind_name(kind: PackKind) -> &'static str {
-    match kind {
-        PackKind::Skill => "技能",
-        PackKind::McpServer => "MCP 服务器",
-        PackKind::Role => "角色",
-        PackKind::Command => "命令",
-        PackKind::Hook => "事件处理",
+const OFF: &str = "能力包已停用";
+
+fn item(pack: &Pack, kind: PackKind, name: &str, ready: bool, basis: String) -> PackItem {
+    PackItem {
+        pack: pack.id.clone(),
+        kind,
+        name: name.to_string(),
+        ready,
+        basis,
     }
 }
 
-/// Decide every item of every pack for `target`.
-pub fn plan(packs: &[Pack], target: Target) -> Plan {
+/// Decide every item of every pack for `target`. `data_dir` holds the packs'
+/// skill folders and the role library.
+pub fn plan(data_dir: &Path, packs: &[Pack], target: Target) -> Plan {
     let mut out = Plan::default();
+    plan_servers(packs, target, &mut out);
+    for (pack, kind, name, skill) in skills(data_dir, packs) {
+        let withheld = match skill {
+            Err(why) => Some(why),
+            Ok(_) if target.remote => Some("远端会话不投影这台 Mac 上的技能".into()),
+            Ok(_) => None,
+        };
+        out.items.push(match withheld {
+            Some(why) => item(pack, kind, &name, false, why),
+            None => {
+                let place = target.skill_place(&name);
+                let given = match kind {
+                    PackKind::Command => format!("作为技能{place}"),
+                    _ => place,
+                };
+                item(
+                    pack,
+                    kind,
+                    &name,
+                    true,
+                    format!("{given}；你自己有同名技能时用你的"),
+                )
+            }
+        });
+    }
+    plan_roles(data_dir, packs, target, &mut out);
+    plan_hooks(packs, target, &mut out);
+    out
+}
+
+fn plan_servers(packs: &[Pack], target: Target, out: &mut Plan) {
     let mut taken: Vec<(String, String)> = Vec::new();
     for pack in packs {
-        let trusted = trusted(pack);
-        let item = |kind: PackKind, name: &str, ready: bool, basis: String| PackItem {
-            pack: pack.id.clone(),
-            kind,
-            name: name.to_string(),
-            ready,
-            basis,
-        };
         for server in &pack.mcp_servers {
             let withheld = if !pack.enabled {
-                Some("能力包已停用".to_string())
+                Some(OFF.to_string())
             } else if !server.enabled {
                 Some("这个服务器已停用".to_string())
-            } else if !trusted {
+            } else if !trusted(pack) {
                 Some("能力包的来源还没有确认，会运行命令的 MCP 服务器不投影".to_string())
             } else if target.remote {
                 Some("远端会话不投影这台 Mac 上的 MCP 服务器".to_string())
@@ -171,13 +213,15 @@ pub fn plan(packs: &[Pack], target: Target) -> Plan {
                     .map(|(_, by)| format!("同名服务器已由能力包“{by}”提供"))
             };
             match withheld {
-                Some(why) => out
-                    .items
-                    .push(item(PackKind::McpServer, &server.name, false, why)),
+                Some(why) => {
+                    out.items
+                        .push(item(pack, PackKind::McpServer, &server.name, false, why))
+                }
                 None => {
                     taken.push((server.name.clone(), pack.name.clone()));
                     out.servers.push(server.clone());
                     out.items.push(item(
+                        pack,
                         PackKind::McpServer,
                         &server.name,
                         true,
@@ -186,37 +230,290 @@ pub fn plan(packs: &[Pack], target: Target) -> Plan {
                 }
             }
         }
-        let others = pack
+    }
+}
+
+/// Where a skill comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SkillSource {
+    /// The pack's `skills/<name>/` folder.
+    Folder(PathBuf),
+    /// A command, written as a skill's `SKILL.md`.
+    Text(String),
+}
+
+/// The skills and commands of all packs, in order, each with where it comes
+/// from or why it is not offered. A name is offered once: a built-in skill
+/// keeps its name, an earlier pack keeps one it took.
+pub fn skills<'a>(
+    data_dir: &Path,
+    packs: &'a [Pack],
+) -> Vec<(&'a Pack, PackKind, String, Result<SkillSource, String>)> {
+    let builtin: Vec<String> = super::builtin_skills::catalog()
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    let mut taken: Vec<(String, String)> = Vec::new();
+    let mut out = Vec::new();
+    for pack in packs {
+        let entries = pack
             .skills
             .iter()
-            .map(|s| (PackKind::Skill, s.as_str()))
-            .chain(pack.roles.iter().map(|r| (PackKind::Role, r.id.as_str())))
-            .chain(
-                pack.commands
-                    .iter()
-                    .map(|c| (PackKind::Command, c.name.as_str())),
-            )
-            .chain(
-                pack.hooks
-                    .iter()
-                    .map(|h| (PackKind::Hook, h.event.as_str())),
-            );
-        for (kind, name) in others {
-            let why = if !pack.enabled {
-                "能力包已停用".to_string()
-            } else if kind == PackKind::Hook && !trusted {
-                "能力包的来源还没有确认，会运行命令的事件处理不投影".to_string()
+            .map(|name| {
+                let folder = dir(data_dir).join(&pack.id).join("skills").join(name);
+                let source = if folder.join("SKILL.md").is_file() {
+                    Ok(SkillSource::Folder(folder))
+                } else {
+                    Err(format!("包里没有 skills/{name}/SKILL.md"))
+                };
+                (PackKind::Skill, name.clone(), source)
+            })
+            .chain(pack.commands.iter().map(|command| {
+                let source = if command.body.trim().is_empty() {
+                    Err("命令正文为空".to_string())
+                } else {
+                    let description = if command.description.trim().is_empty() {
+                        format!("能力包“{}”的命令 {}", pack.name, command.name)
+                    } else {
+                        command.description.clone()
+                    };
+                    Ok(SkillSource::Text(format!(
+                        "---\nname: {}\ndescription: {}\n---\n\n{}\n",
+                        command.name,
+                        serde_json::Value::String(description.replace('\n', " ")),
+                        command.body.trim()
+                    )))
+                };
+                (PackKind::Command, command.name.clone(), source)
+            }));
+        for (kind, name, source) in entries {
+            let source = if !pack.enabled {
+                Err(OFF.to_string())
+            } else if !valid_id(&name) {
+                Err("名字只能用字母、数字、- 和 _".to_string())
+            } else if builtin.contains(&name) {
+                Err("和 Aeroric 的内置技能同名，用内置的".to_string())
+            } else if let Some((_, by)) = taken.iter().find(|(n, _)| *n == name) {
+                Err(format!("同名技能已由能力包“{by}”提供"))
             } else {
-                format!(
-                    "Aeroric 还没有把能力包里的{}投影给 {}",
-                    kind_name(kind),
-                    target.harness()
-                )
+                source
             };
-            out.items.push(item(kind, name, false, why));
+            if source.is_ok() {
+                taken.push((name.clone(), pack.name.clone()));
+            }
+            out.push((pack, kind, name, source));
         }
     }
     out
+}
+
+/// Put a pack skill in Aeroric's skill store (so links to it count as
+/// Aeroric's) under a folder named by its content; returns the offer.
+pub fn materialize(
+    data_dir: &Path,
+    pack: &str,
+    name: &str,
+    source: &SkillSource,
+) -> Result<super::builtin_skills::Offer, String> {
+    use sha2::{Digest, Sha256};
+    let digest = match source {
+        SkillSource::Folder(folder) => {
+            Sha256::digest(super::builtin_skills::manifest_of(folder)?.as_bytes())
+        }
+        SkillSource::Text(text) => Sha256::digest(text.as_bytes()),
+    };
+    let hash: String = digest[..6].iter().map(|b| format!("{b:02x}")).collect();
+    let parent = super::builtin_skills::base_dir(data_dir)
+        .join(DIR)
+        .join(pack);
+    let target = parent.join(format!("{name}-{hash}"));
+    let done = parent.join(format!("{name}-{hash}.complete"));
+    if !done.is_file() {
+        let _ = std::fs::remove_dir_all(&target);
+        match source {
+            SkillSource::Folder(folder) => super::builtin_skills::copy_tree(folder, &target)?,
+            SkillSource::Text(text) => {
+                std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+                std::fs::write(target.join("SKILL.md"), text).map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::write(&done, &hash).map_err(|e| e.to_string())?;
+    }
+    Ok(super::builtin_skills::Offer {
+        id: name.to_string(),
+        dir: target,
+        version: format!("pack-{hash}"),
+    })
+}
+
+/// The skills a session on this Mac is offered from the packs; one that
+/// cannot be placed is logged and left out.
+pub fn skill_offers(data_dir: &Path) -> Vec<super::builtin_skills::Offer> {
+    let (packs, _) = load(data_dir);
+    skills(data_dir, &packs)
+        .into_iter()
+        .filter_map(|(pack, _, name, source)| {
+            let source = source.ok()?;
+            materialize(data_dir, &pack.id, &name, &source)
+                .map_err(|why| {
+                    eprintln!("[aeroric] pack skill {}/{name} not placed: {why}", pack.id)
+                })
+                .ok()
+        })
+        .collect()
+}
+
+/// The packs' roles that join the role library for the harnesses' own
+/// subagents: those of enabled packs whose id the library (or an earlier
+/// pack) does not have yet.
+pub fn roles(packs: &[Pack], library: &[Role]) -> Vec<(String, Role, Result<(), String>)> {
+    let mut taken: Vec<String> = library.iter().map(|r| r.id.clone()).collect();
+    let mut out = Vec::new();
+    for pack in packs {
+        for role in &pack.roles {
+            let state = if !pack.enabled {
+                Err(OFF.to_string())
+            } else if taken.contains(&role.id) {
+                Err("角色库里已有同 id 的角色".to_string())
+            } else {
+                taken.push(role.id.clone());
+                Ok(())
+            };
+            out.push((pack.id.clone(), role.clone(), state));
+        }
+    }
+    out
+}
+
+fn plan_roles(data_dir: &Path, packs: &[Pack], target: Target, out: &mut Plan) {
+    let library =
+        crate::sessions::live::delegation::roles::list(Some(&data_dir.join("delegations")));
+    for (pack_id, role, state) in roles(packs, &library) {
+        let pack = packs
+            .iter()
+            .find(|p| p.id == pack_id)
+            .expect("the role's pack");
+        let target_of = match target.family {
+            ProtocolFamily::Claude if target.managed => {
+                Some(super::native_roles::Target::ClaudeHome)
+            }
+            ProtocolFamily::Claude => Some(super::native_roles::Target::ClaudePlugin),
+            ProtocolFamily::Omp => Some(super::native_roles::Target::OmpHome),
+            _ => None,
+        };
+        let withheld = match (&state, target_of) {
+            (Err(why), _) => Some(why.clone()),
+            _ if target.remote => Some("远端会话不投影这台 Mac 上的角色".into()),
+            (_, None) if target.family == ProtocolFamily::Codex => {
+                Some("Codex 的自定义代理不能收窄父会话的沙盒，不投影".into())
+            }
+            (_, None) => Some(format!("{} 没有原生子代理定义", target.harness())),
+            (Ok(()), Some(_)) => super::native_roles::not_projected(&role).map(str::to_string),
+        };
+        out.items.push(match (withheld, target_of) {
+            (Some(why), _) => item(pack, PackKind::Role, &role.id, false, why),
+            (None, Some(native)) => item(
+                pack,
+                PackKind::Role,
+                &role.id,
+                true,
+                format!(
+                    "写成原生子代理 {}",
+                    super::native_roles::shown_name(native, &role)
+                ),
+            ),
+            (None, None) => unreachable!("a role with no native target is withheld"),
+        });
+    }
+}
+
+/// Claude's name for an event, or `None` when it has no such event.
+fn claude_event(event: &str) -> Option<&'static str> {
+    Some(match event {
+        "sessionStart" => "SessionStart",
+        "sessionEnd" => "SessionEnd",
+        "userPromptSubmit" => "UserPromptSubmit",
+        "preToolUse" => "PreToolUse",
+        "postToolUse" => "PostToolUse",
+        "stop" => "Stop",
+        "subagentStop" => "SubagentStop",
+        "preCompact" => "PreCompact",
+        "notification" => "Notification",
+        _ => return None,
+    })
+}
+
+fn plan_hooks(packs: &[Pack], target: Target, out: &mut Plan) {
+    for pack in packs {
+        for hook in &pack.hooks {
+            let withheld = if !pack.enabled {
+                Some(OFF.to_string())
+            } else if !trusted(pack) {
+                Some("能力包的来源还没有确认，会运行命令的事件处理不投影".to_string())
+            } else if target.remote {
+                Some("远端会话不投影这台 Mac 上的事件处理".to_string())
+            } else if hook.command.trim().is_empty() {
+                Some("命令为空".to_string())
+            } else {
+                match (target.family, target.managed) {
+                    (ProtocolFamily::Claude, false) => claude_event(&hook.event)
+                        .is_none()
+                        .then(|| format!("Claude 没有 {} 这个事件", hook.event)),
+                    (ProtocolFamily::Claude, true) => Some(
+                        "走 Agent 配置的 Claude 没有会话插件，事件处理只投给直连的 Claude"
+                            .to_string(),
+                    ),
+                    (ProtocolFamily::Codex, _) => Some(
+                        "Codex 按会话下发的事件处理还没在真实会话里验证过，先不投影".to_string(),
+                    ),
+                    (ProtocolFamily::Omp, _) => {
+                        Some("OMP 的事件处理是 JS/TS 模块，不接受命令".to_string())
+                    }
+                    (ProtocolFamily::Dsh, _) => Some("DSH 没有事件处理的入口".to_string()),
+                }
+            };
+            out.items.push(match withheld {
+                Some(why) => item(pack, PackKind::Hook, &hook.event, false, why),
+                None => item(
+                    pack,
+                    PackKind::Hook,
+                    &hook.event,
+                    true,
+                    "写进会话插件的 hooks/hooks.json".to_string(),
+                ),
+            });
+        }
+    }
+}
+
+/// The `hooks/hooks.json` a direct Claude session's plugin holds: every
+/// trusted, enabled pack's handler for an event Claude has. `None` when
+/// there are none.
+pub fn claude_hooks(packs: &[Pack]) -> Option<serde_json::Value> {
+    let mut events = serde_json::Map::new();
+    for pack in packs.iter().filter(|p| p.enabled && trusted(p)) {
+        for hook in &pack.hooks {
+            let Some(event) = claude_event(&hook.event) else {
+                continue;
+            };
+            if hook.command.trim().is_empty() {
+                continue;
+            }
+            let handler = serde_json::json!({"type": "command", "command": hook.command});
+            let group = if matches!(event, "PreToolUse" | "PostToolUse") {
+                serde_json::json!({"matcher": "*", "hooks": [handler]})
+            } else {
+                serde_json::json!({"hooks": [handler]})
+            };
+            events
+                .entry(event)
+                .or_insert_with(|| serde_json::json!([]))
+                .as_array_mut()
+                .expect("an array")
+                .push(group);
+        }
+    }
+    (!events.is_empty()).then(|| serde_json::json!({ "hooks": events }))
 }
 
 /// The driver did not take the servers: each one planned is not given.
@@ -224,6 +521,7 @@ pub fn refused(items: &mut [PackItem], family: ProtocolFamily) {
     let harness = Target {
         family,
         remote: false,
+        managed: false,
     }
     .harness();
     for item in items

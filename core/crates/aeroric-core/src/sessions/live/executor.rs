@@ -102,6 +102,17 @@ impl Route {
         }
     }
 
+    /// H6: the agent runs in a home Aeroric manages (an Agent configuration,
+    /// OMP, an ACP agent), not the user's own Claude or Codex.
+    pub fn managed_home(&self) -> bool {
+        match self {
+            Route::Codex(key) => matches!(key, ServerKey::Config(_)),
+            Route::Claude(key) => key.config.is_some(),
+            Route::Omp(_) | Route::Acp(_) => true,
+            Route::RemoteClaude(_) | Route::RemoteOmp(_) => false,
+        }
+    }
+
     /// C8: the agent runs on another machine.
     pub fn is_remote(&self) -> bool {
         matches!(
@@ -530,10 +541,12 @@ impl StructuredExecutor {
             eprintln!("[aeroric] capability pack {folder} skipped: {why}");
         }
         let mut plan = packs::plan(
+            &data_dir,
             &found,
             packs::Target {
                 family: route.family(),
                 remote: !route.runs_locally(),
+                managed: route.managed_home(),
             },
         );
         if !plan.servers.is_empty() && !session.set_pack_servers(plan.servers) {
