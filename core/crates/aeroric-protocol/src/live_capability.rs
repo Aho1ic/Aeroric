@@ -43,6 +43,9 @@ pub enum Feature {
     /// delegations) is held read-only by the harness itself, not by the
     /// user refusing each write (A4, 2026-11-17).
     StrictReadOnly,
+    /// C9 (2026-11-20): the session is given Aeroric's context tools
+    /// (memory, Wiki, board, delegation…) at start.
+    ContextTools,
 }
 
 impl Feature {
@@ -61,6 +64,7 @@ impl Feature {
         Feature::Reviewer,
         Feature::Receipts,
         Feature::StrictReadOnly,
+        Feature::ContextTools,
     ];
 }
 

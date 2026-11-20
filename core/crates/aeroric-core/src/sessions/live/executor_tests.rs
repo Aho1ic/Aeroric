@@ -726,3 +726,52 @@ async fn the_kept_tool_list_matches_what_the_launch_was_given() {
     );
     assert_eq!(Route::RemoteClaude(remote).harness(), "claude");
 }
+
+/// C9 (2026-11-20): the capability table's "Aeroric 工具" agrees with what
+/// the executor does — a family's local route gets the context server
+/// exactly when the table says Yes; every remote route gets none and the
+/// table says No. So no entry claims tools a harness cannot reach.
+#[test]
+fn the_capability_table_matches_who_gets_the_context_server() {
+    use crate::sessions::live::capabilities::support;
+    use aeroric_protocol::live_capability::{Feature, Place, SupportState};
+    let remote = RemoteKey {
+        connection_id: "ssh-1".into(),
+        agent: "x".into(),
+        config: None,
+    };
+    for family in ProtocolFamily::ALL {
+        let local = match family {
+            ProtocolFamily::Codex => Route::Codex(ServerKey::Agent("codex".into())),
+            ProtocolFamily::Claude => Route::Claude(ClaudeKey {
+                agent: "claude".into(),
+                config: None,
+            }),
+            ProtocolFamily::Omp => Route::Omp(OmpKey {
+                agent: "omp".into(),
+                config: None,
+            }),
+            ProtocolFamily::Dsh => Route::Acp(AcpKey {
+                family: ProtocolFamily::Dsh,
+                agent: "dsh".into(),
+                config: None,
+            }),
+        };
+        let said = support(*family, Place::Local, Feature::ContextTools);
+        assert_eq!(
+            said.state == SupportState::Yes,
+            local.runs_locally(),
+            "{family:?}: {said:?}"
+        );
+        assert!(said.note.is_some(), "{family:?} says how or why not");
+        let far = support(*family, Place::Remote, Feature::ContextTools);
+        assert_eq!(far.state, SupportState::No, "{family:?} remote");
+    }
+    for route in [
+        Route::Codex(ServerKey::Remote(remote.clone())),
+        Route::RemoteClaude(remote.clone()),
+        Route::RemoteOmp(remote),
+    ] {
+        assert!(route.is_remote() && !route.runs_locally());
+    }
+}

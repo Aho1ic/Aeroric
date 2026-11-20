@@ -62,7 +62,25 @@ UI 隐藏只是体验层。**安全边界在宿主**:
 未广告的项**不从清单里删除、也不放占位按钮**:它们在
 `extra.unsupported` 与本节表里具名存在,等适配器补齐后自动变为可用。
 
-## 5. 具名阻塞
+## 5. Aeroric 工具接到了哪些 Harness（C9，2026-11-20）
+
+Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参考库、专家，共 21 个，表在 `aeroric_protocol::tools::AERORIC_TOOLS`）由执行器在每次启动会话时交给 Harness。逐家事实：
+
+| Harness | 本机 | 怎么接 | 远端 |
+|---|---|---|---|
+| Claude Code | 有 | `--mcp-config` 加 `--allowedTools mcp__aeroric_context` | 没有 |
+| Codex | 有 | `thread/start` 的 `config.mcp_servers`，标 `required` | 没有 |
+| DSH | 有 | ACP `session/new` 的 `mcpServers`（stdio） | 不支持远端 |
+| OMP | 没有 | 驱动不接受；上游支持 agent 目录下的 `mcp.json`，接线见 [各 Harness 原生融合](../../.agents/notes/proposed/architecture/2026-11-16-harness-native-capabilities.md) H2 | 没有 |
+
+- 远端会话都没有：工具服务器要能连回这台 Mac 的宿主，跨设备的身份和回执由批次 D 处理。
+- 能力表（`session.capabilities`）的"Aeroric 工具"（`contextTools`）按上表给出；`executor_tests.rs` 的 `the_capability_table_matches_who_gets_the_context_server` 核对它与执行器的路由一致。
+- 每次启动实际给了哪些工具、没给的原因，记在任务的工具清单里（C8），会话信息的"工具"一行显示。
+- OMP 作为子会话和审查者在能力表里是"有差异"：结果照常送回，但它读写不了共享黑板、查不到记忆。
+- App 里的"新委派"、角色库、黑板面板、记忆页都由 App 直接调宿主，不依赖会话里的 Agent 有没有工具。依赖工具的是 Agent 自己发起的委派、检索和记忆提议，这部分在没有工具的会话里不会发生，会话信息里写明原因。
+- 记忆档案只进系统层：Claude、Codex 有；DSH 和 OMP 的驱动没有系统层接口，拿不到档案。
+
+## 6. 具名阻塞
 
 - `GAP-AP7-EXTERNAL`:ACP 对端、OAuth 真实账号、媒体 provider 的线上验证需要用户
   授权与凭据。代码侧已实现 fail-closed 语义(版本交集、越界目录拒绝、不支持音频即

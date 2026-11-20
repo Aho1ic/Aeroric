@@ -206,6 +206,8 @@ Status: proposed
 
 ### C9 OMP 和 DSH 接上 Context 工具，或如实写明没接
 
+2026-11-20 已实现，见 [C9 笔记](../../implemented/feature/2026-11-20-c9-context-tools-per-harness.md)：核对后 DSH 已经经 ACP 的 `session/new` 接上 Context 工具，不用再接；OMP 的接入属于 H2，本片不做；远端会话都没有。能力表新增"Aeroric 工具"一项，测试核对它与执行器的路由一致；OMP 作为子会话和审查者改为"有差异"；App 里委派、黑板、记忆的入口都由 App 直接调宿主，不依赖 Agent 的工具，无需置灰；事实写进 `docs/subsystems/agent-capabilities.md` §5。批次 C 全部完成。
+
 **用户会看到：** OMP、DSH 会话的工具清单里，Aeroric 工具要么可用，要么写着"这个 Harness 还不能接入 Aeroric 工具"和原因。委派、看板、记忆这些依赖工具的功能，在不可用的 Harness 上入口是灰的。
 
 **现状：** 注入只覆盖本机 Claude 和 Codex。OMP 相关代码在 `core/crates/aeroric-core/src/agents/omp.rs` 和 `sessions/live/omp/`，DSH 在 `agents/dsh_host/`。两者是否支持 MCP 服务器配置需要实测（2026-11-16 更新：OMP 的这部分已在 [各 Harness 原生融合](../architecture/2026-11-16-harness-native-capabilities.md) §2 查清，上游支持，接线在那篇的 H2 做，本片不重复；本片只剩 DSH）。远端会话（[远端会话走本机网关](../../implemented/feature/2026-10-28-remote-sessions-through-local-gateway.md)）同样没有注入。

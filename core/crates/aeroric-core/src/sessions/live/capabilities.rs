@@ -48,6 +48,17 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
     let enforced = enforced_by(family);
     let (state, note) = match (family, feature) {
         (P::Dsh, _) if place == Place::Remote => no("DSH 只在本机工作区上运行原生会话"),
+        // C9 (2026-11-20): who is given the context server at start; the
+        // executor's routes agree (tested below).
+        (_, F::ContextTools) if place == Place::Remote => {
+            no("远端会话还没有接入 Aeroric 工具：工具服务器要能连回这台 Mac 的宿主（批次 D）")
+        }
+        (P::Omp, F::ContextTools) => no(
+            "OMP 还不能在启动时接入 Aeroric 工具：查不到记忆和 Wiki，也不能自己发起委派、读写黑板",
+        ),
+        (P::Codex, F::ContextTools) => yes(Some("启动时在 thread/start 里接入")),
+        (P::Claude, F::ContextTools) => yes(Some("启动时用 --mcp-config 接入")),
+        (P::Dsh, F::ContextTools) => yes(Some("经 ACP 的 session/new 接入")),
         (P::Dsh, F::PermChange) => degraded("DSH 启动时固定权限：下次启动生效"),
         (P::Dsh, F::PlanMode) => degraded("用只读沙盒代替规划：写入要你批准"),
         (P::Dsh, F::Compact) => no("DSH 没有通过 ACP 提供压缩上下文"),
@@ -74,6 +85,9 @@ pub fn support(family: ProtocolFamily, place: Place, feature: Feature) -> Capabi
         (_, F::Goal) => no("目标模式还没接通"),
         (P::Codex | P::Omp, F::Steer) => yes(None),
         (P::Claude, F::Steer) => degraded("Claude 会作为下一轮发出"),
+        (P::Omp, F::DelegateChild | F::Reviewer) if place == Place::Local => degraded(
+            "能做子会话和审查者，结果照常送回；但它没有 Aeroric 工具，读写不了共享黑板、查不到记忆",
+        ),
         (P::Codex | P::Claude | P::Omp, F::DelegateChild | F::Reviewer) => match place {
             Place::Local => yes(None),
             Place::Remote => unknown("远程主机上还没核对"),
@@ -171,6 +185,24 @@ mod tests {
         );
         assert_eq!(
             support(ProtocolFamily::Dsh, Place::Remote, Feature::Receipts).state,
+            SupportState::No
+        );
+        // C9: OMP has no Aeroric tools yet, so as a child it is degraded,
+        // not refused; DSH has them over ACP.
+        assert_eq!(
+            at(ProtocolFamily::Omp, Feature::ContextTools).state,
+            SupportState::No
+        );
+        assert_eq!(
+            at(ProtocolFamily::Omp, Feature::DelegateChild).state,
+            SupportState::Degraded
+        );
+        assert_eq!(
+            at(ProtocolFamily::Dsh, Feature::ContextTools).state,
+            SupportState::Yes
+        );
+        assert_eq!(
+            support(ProtocolFamily::Claude, Place::Remote, Feature::ContextTools).state,
             SupportState::No
         );
     }
