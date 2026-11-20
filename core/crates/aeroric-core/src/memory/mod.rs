@@ -15,6 +15,7 @@ pub mod locate;
 pub mod native;
 mod profile;
 pub mod run;
+pub mod runs;
 mod secrets;
 pub mod semantic;
 pub mod skills;
@@ -136,12 +137,16 @@ pub struct Memory {
     data_dir: Mutex<Option<PathBuf>>,
     /// B6: scopes being dreamt now (one dream per scope at a time).
     dreaming: Mutex<std::collections::HashSet<String>>,
+    /// C3: runs the user asked to cancel while they ran.
+    cancels: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Memory {
     /// Open (or create) the store under `dir`.
     pub fn set_dir(&self, dir: PathBuf) -> Result<(), MemoryError> {
         let store = Store::open(&dir)?;
+        // C3: what was queued or running when Aeroric last stopped.
+        runs::recover(&store)?;
         *self.store.lock() = Some(store);
         *self.data_dir.lock() = dir.parent().map(PathBuf::from);
         Ok(())

@@ -71,6 +71,7 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
         blocking(live, memory_extract_imported),
     );
     set.register(wire::EXTRACT_METHOD, blocking(live, memory_extract));
+    set.register(wire::RUN_CANCEL_METHOD, blocking(live, memory_run_cancel));
     set.register(
         wire::IMPORT_NATIVE_METHOD,
         blocking(live, memory_import_native),
@@ -963,7 +964,14 @@ fn memory_runs(live: &Live, request: &Request) -> Frame {
     let all = memory.runs(2000).unwrap_or_default();
     let month: Vec<_> = all
         .iter()
-        .filter(|r| r.at_ms >= month_start && r.state != wire::MemoryRunState::Skipped)
+        // C3: a queued row has not asked the model yet.
+        .filter(|r| {
+            r.at_ms >= month_start
+                && !matches!(
+                    r.state,
+                    wire::MemoryRunState::Skipped | wire::MemoryRunState::Queued
+                )
+        })
         .collect();
     // `sum()` of no f64 is -0.0 (CU F3: shown as $-0.0000).
     let cost: f64 = month
@@ -1011,7 +1019,12 @@ fn memory_models(live: &Live, request: &Request) -> Frame {
 
 /// Extract one session: the conversation from its transcript, the call over
 /// the chosen connection with its stored key.
-fn extract_task(live: &Live, task_id: &str, forced: bool) -> Result<wire::MemoryRun, String> {
+fn extract_task(
+    live: &Live,
+    task_id: &str,
+    forced: bool,
+    run_id: Option<&str>,
+) -> Result<wire::MemoryRun, String> {
     let (project, record) = live.record(task_id).ok_or("没有这个会话")?;
     let project_id = project
         .get("id")
@@ -1037,6 +1050,7 @@ fn extract_task(live: &Live, task_id: &str, forced: bool) -> Result<wire::Memory
             messages: &messages,
             forced,
             verified,
+            run_id,
         },
         home.as_deref(),
         analysis_call(live, 1200),
@@ -1163,6 +1177,7 @@ fn memory_extract_imported(live: &Live, request: &Request) -> Frame {
                     messages: &pairs,
                     forced: false,
                     verified: false,
+                    run_id: None,
                 },
                 home.as_deref(),
                 analysis_call(live, 1200),
@@ -1187,11 +1202,35 @@ fn memory_extract(live: &Live, request: &Request) -> Frame {
         Ok(p) => p,
         Err(frame) => return *frame,
     };
-    match extract_task(live, &p.task_id, true) {
+    match extract_task(live, &p.task_id, true, None) {
         Ok(run) => ok(request, json!({ "run": run })),
         Err(error) => failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
     }
 }
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunCancelParams {
+    run_id: String,
+}
+
+/// `memory.runCancel {runId}` (C3): a queued 整理 is canceled at once; a
+/// running one stops before its next write. The row as it is now (still
+/// `running` until the run notices).
+fn memory_run_cancel(live: &Live, request: &Request) -> Frame {
+    let p: RunCancelParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    answer(
+        request,
+        live.executor.memory().cancel_run(&p.run_id, now_ms()),
+        "run",
+    )
+}
+
+/// C3: one automatic pass at a time, so a session is queued once.
+static SWEEPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// B6: when a session last ran a turn, as the sweeps saw it (a dream waits
 /// for `DREAM_IDLE_MS` of quiet).
@@ -1302,6 +1341,19 @@ fn dream_due_scopes(live: &Live) {
 }
 
 fn extract_finished(live: &Live) -> usize {
+    use std::sync::atomic::Ordering;
+    if SWEEPING.swap(true, Ordering::AcqRel) {
+        return 0;
+    }
+    let done = extract_due(live);
+    SWEEPING.store(false, Ordering::Release);
+    done
+}
+
+/// C3: every due session is queued first (整理记录 shows them waiting),
+/// then extracted one by one; a row the user canceled meanwhile is left,
+/// and those the pass does not get to leave the log.
+fn extract_due(live: &Live) -> usize {
     let memory = live.executor.memory();
     let settings = memory.settings();
     if !settings.auto || settings.model.is_none() {
@@ -1313,7 +1365,7 @@ fn extract_finished(live: &Live) -> usize {
     else {
         return 0;
     };
-    let mut done = 0;
+    let mut due: Vec<(String, String, String)> = Vec::new();
     for project in projects {
         let Some(project_id) = project.get("id").and_then(Value::as_str) else {
             continue;
@@ -1349,12 +1401,34 @@ fn extract_finished(live: &Live) -> usize {
             if !finished {
                 continue;
             }
-            match extract_task(live, id, false) {
-                Ok(_) => done += 1,
-                Err(error) if error.contains("到上限") || error.contains("还没有选") => {
-                    return done
-                }
-                Err(_) => {}
+            due.push((
+                id.to_string(),
+                project_id.to_string(),
+                super::context_title(&record),
+            ));
+        }
+    }
+    let queued: Vec<(String, String)> = due
+        .into_iter()
+        .filter_map(|(task, project, title)| {
+            memory
+                .queue_run(&task, &project, &title, now)
+                .ok()
+                .map(|run| (task, run))
+        })
+        .collect();
+    let mut done = 0;
+    let mut stop = false;
+    for (task, run) in &queued {
+        if stop || !memory.queued(run) {
+            memory.unqueue(run);
+            continue;
+        }
+        match extract_task(live, task, false, Some(run)) {
+            Ok(_) => done += 1,
+            Err(error) => {
+                memory.unqueue(run);
+                stop = error.contains("到上限") || error.contains("还没有选");
             }
         }
     }

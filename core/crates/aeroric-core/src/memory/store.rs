@@ -856,10 +856,7 @@ impl Store {
         &self,
         run: &aeroric_protocol::memory::MemoryRun,
     ) -> Result<(), MemoryError> {
-        // B6 second batch: a dream that called no model (过时检测 only)
-        // does not use up the allowance.
-        let counted = run.state != aeroric_protocol::memory::MemoryRunState::Skipped
-            && !(run.kind == aeroric_protocol::memory::MemoryRunKind::Dream && run.model.is_none());
+        let counted = counted(run);
         self.conn.execute(
             "INSERT OR REPLACE INTO runs(id, at_ms, body, counted) VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -886,6 +883,28 @@ impl Store {
             .iter()
             .filter_map(|body| serde_json::from_str(body).ok())
             .collect())
+    }
+
+    /// C3: rows still queued or running (the state lives in the body).
+    pub(super) fn open_runs(
+        &self,
+    ) -> Result<Vec<aeroric_protocol::memory::MemoryRun>, MemoryError> {
+        let mut statement = self.conn.prepare(
+            "SELECT body FROM runs
+             WHERE body LIKE '%\"state\":\"queued\"%' OR body LIKE '%\"state\":\"running\"%'",
+        )?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .iter()
+            .filter_map(|body| serde_json::from_str(body).ok())
+            .collect())
+    }
+
+    pub(super) fn delete_run(&self, id: &str) -> Result<(), MemoryError> {
+        self.conn.execute("DELETE FROM runs WHERE id = ?1", [id])?;
+        Ok(())
     }
 
     pub(super) fn counted_since(&self, since_ms: u64) -> Result<u32, MemoryError> {
@@ -915,7 +934,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<(), MemoryError> {
         let tx = self.conn.transaction()?;
-        let counted = run.state != aeroric_protocol::memory::MemoryRunState::Skipped;
+        let counted = counted(run);
         tx.execute(
             "INSERT OR REPLACE INTO runs(id, at_ms, body, counted) VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -1255,4 +1274,16 @@ fn location_json(evidence: &Evidence) -> Option<String> {
         .location
         .as_ref()
         .and_then(|place| serde_json::to_string(place).ok())
+}
+
+/// Whether a 整理记录 row uses up the day's allowance: one that asked the
+/// model, or will. B6 second batch: a dream that called no model (过时检测
+/// only) does not; C3: nor a queued row, nor one canceled before its call.
+fn counted(run: &aeroric_protocol::memory::MemoryRun) -> bool {
+    use aeroric_protocol::memory::{MemoryRunKind, MemoryRunState};
+    match run.state {
+        MemoryRunState::Skipped | MemoryRunState::Queued => false,
+        MemoryRunState::Canceled => run.model.is_some(),
+        _ => !(run.kind == MemoryRunKind::Dream && run.model.is_none()),
+    }
 }

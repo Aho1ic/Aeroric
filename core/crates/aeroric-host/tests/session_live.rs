@@ -3888,3 +3888,33 @@ async fn gateway_requests_answer_with_totals_and_tries() {
         .unwrap_err();
     assert_eq!(bad["code"], "INVALID_ARGUMENT");
 }
+
+/// C3 (2026-11-20): a queued 整理 shows in `memory.runs` and
+/// `memory.runCancel` cancels it at once; an ended or unknown run cannot be
+/// canceled.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_queued_run_is_listed_and_canceled() {
+    let host = Host::start(true).await;
+    let memory = host.structured.memory();
+    let id = memory
+        .queue_run("task-1", "project-1", "修复超时", 1)
+        .unwrap();
+    let runs = host.call("memory.runs", json!({})).await.unwrap();
+    assert_eq!(runs["runs"][0]["id"], json!(id));
+    assert_eq!(runs["runs"][0]["state"], json!("queued"));
+    let canceled = host
+        .call("memory.runCancel", json!({"runId": id}))
+        .await
+        .unwrap();
+    assert_eq!(canceled["run"]["state"], json!("canceled"));
+    let runs = host.call("memory.runs", json!({})).await.unwrap();
+    assert_eq!(runs["runs"][0]["state"], json!("canceled"));
+    assert!(host
+        .call("memory.runCancel", json!({"runId": id}))
+        .await
+        .is_err());
+    assert!(host
+        .call("memory.runCancel", json!({"runId": "run-nope"}))
+        .await
+        .is_err());
+}

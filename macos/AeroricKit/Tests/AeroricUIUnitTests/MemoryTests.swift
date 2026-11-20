@@ -423,6 +423,12 @@ final class MemoryTests: XCTestCase {
         XCTAssertTrue(MemoryText.runLine(store.runsPage.runs[0]).hasSuffix("修超时 · flash · 6.1k tok · 约 $0.0012"))
         XCTAssertTrue(MemoryText.runLine(store.runsPage.runs[1]).hasSuffix("试一下 · 项目没有开启记忆"))
         XCTAssertEqual(MemoryText.runState("failed"), "失败")
+        // C3: the states a run passes through; one a newer host adds reads 进行中.
+        XCTAssertEqual(MemoryText.runState("skipped"), "跳过")
+        XCTAssertEqual(MemoryText.runState("queued"), "排队中")
+        XCTAssertEqual(MemoryText.runState("running"), "进行中")
+        XCTAssertEqual(MemoryText.runState("canceled"), "已取消")
+        XCTAssertEqual(MemoryText.runState("later"), "进行中")
         // CU F2/F3: the details stand on their own; nothing costs "$-0".
         XCTAssertEqual(MemoryText.costText(-0.0), "$0")
         XCTAssertEqual(MemoryText.runOutput(LiveMemoryRun(id: "o", state: "done", facts: 1, candidates: 1, experiences: 1)),

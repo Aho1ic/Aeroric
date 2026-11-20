@@ -26,6 +26,8 @@ pub const PROFILE_METHOD: &str = "memory.profile";
 pub const SETTINGS_METHOD: &str = "memory.settings";
 pub const RUNS_METHOD: &str = "memory.runs";
 pub const EXTRACT_METHOD: &str = "memory.extract";
+/// C3 (2026-11-20): cancel a queued or running 整理.
+pub const RUN_CANCEL_METHOD: &str = "memory.runCancel";
 pub const MODELS_METHOD: &str = "memory.models";
 pub const IMPORT_NATIVE_METHOD: &str = "memory.importNative";
 // B5-3a (2026-10-31): was it any use.
@@ -370,6 +372,59 @@ pub enum MemoryRunState {
     Partial,
     Failed,
     Skipped,
+    /// C3 (2026-11-20): found by the automatic pass, not started yet.
+    /// Added after the end states: an older App shows it as 进行中.
+    Queued,
+    /// C3: the model is being asked, or its reply written.
+    Running,
+    /// C3: the user canceled it; what was written before stays.
+    Canceled,
+}
+
+/// C3: what became of one thing an extraction's model proposed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunOutcomeKind {
+    /// A new item (a candidate waiting, a clue, an experience).
+    Written,
+    /// The same words were already kept: that item gained the evidence.
+    Merged,
+    /// A memory rule held it back (forgotten, looks like a key, too long).
+    Refused,
+    /// The store failed to write it.
+    Failed,
+    /// The same words were deleted, archived or replaced while the model
+    /// worked (C2).
+    Withdrawn,
+    /// The user canceled before it was written.
+    Canceled,
+}
+
+/// C3: what one proposed thing was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunOutcomeSubject {
+    /// The session clue.
+    Fact,
+    Experience,
+    /// A candidate for the user to confirm.
+    Candidate,
+}
+
+/// C3: one proposed thing and where it went. Carries no text: `sig` is the
+/// keyed signature of its words (as forgetting keeps), and `item_id` the
+/// item it became or joined.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunOutcome {
+    pub subject: RunOutcomeSubject,
+    pub outcome: RunOutcomeKind,
+    pub sig: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+    /// Why it was refused or failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// B6: what a 整理记录 row was.
@@ -435,6 +490,9 @@ pub struct MemoryRun {
     /// B6: when the dream was undone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undone_ms: Option<u64>,
+    /// C3 (2026-11-20): an extraction's proposals, one by one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outcomes: Vec<RunOutcome>,
 }
 
 /// B6: one block of one turn's change — the hunks of one file under one

@@ -369,6 +369,7 @@ fn settings_runs_and_the_extracted_mark_persist() {
         retired: Vec::new(),
         proposed: 0,
         undone_ms: None,
+        outcomes: Vec::new(),
     };
     memory
         .add_run(&run("r1", 10, MemoryRunState::Done))

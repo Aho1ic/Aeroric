@@ -636,6 +636,7 @@ impl Memory {
             retired: Vec::new(),
             proposed: 0,
             undone_ms: None,
+            outcomes: Vec::new(),
         };
         let needs_model = !groups.is_empty() || !profile.is_empty();
         if !needs_model && stale.is_empty() {
@@ -667,6 +668,8 @@ impl Memory {
             } else {
                 mark(self).map_err(|e| e.to_string())?;
                 run.model = Some(model.clone());
+                // C3: the row says 进行中 while the model is asked.
+                self.begin_run(&mut run).map_err(|e| e.to_string())?;
                 let spent = |reply: &ChatOnce, run: &mut MemoryRun| {
                     run.input_tokens += reply.input_tokens;
                     run.output_tokens += reply.output_tokens;
@@ -709,6 +712,14 @@ impl Memory {
                     .0
                 });
             }
+        }
+        // C3: canceled while the model was asked — nothing is applied.
+        if self.cancel_requested(&run.id) {
+            self.end_run(&run.id);
+            run.state = MemoryRunState::Canceled;
+            run.reason = Some("已取消：模型的判断没有用上，记忆没有改动".into());
+            self.add_run(&run).map_err(|e| e.to_string())?;
+            return Ok(Some(run));
         }
         let snapshot: HashMap<String, u64> = groups
             .iter()
@@ -827,6 +838,7 @@ impl Memory {
         }
         failures.extend(notes);
         run.reason = (!failures.is_empty()).then(|| failures.join("；"));
+        self.end_run(&run.id);
         self.add_run(&run).map_err(|e| e.to_string())?;
         Ok(Some(run))
     }
@@ -1527,5 +1539,44 @@ mod tests {
         .unwrap_err()
         .contains("条数没有变少"));
         assert!(parse_compress("不是 JSON", &items).is_err());
+    }
+
+    /// C3: a dream says 进行中 while the model is asked; canceled then,
+    /// nothing is merged or proposed and the row says so.
+    #[test]
+    fn a_dream_canceled_while_the_model_works_changes_nothing() {
+        let memory = rig();
+        let e1 = experience(&memory, "SSH 超时改用 ConnectTimeout", Confidence::High, 1);
+        let e2 = experience(&memory, "SSH 超时就用 ConnectTimeout", Confidence::Low, 2);
+        let text = format!(
+            r#"{{"groups": [{{"group": 1, "relation": "duplicate", "ids": ["{e1}", "{e2}"], "keep": "{e1}", "reason": "同一个修法"}}]}}"#
+        );
+        let run = memory
+            .dream(
+                scope(true),
+                |system, user| {
+                    let row = memory.runs(1).unwrap().remove(0);
+                    assert_eq!(
+                        (row.kind, row.state),
+                        (MemoryRunKind::Dream, MemoryRunState::Running)
+                    );
+                    memory.cancel_run(&row.id, 5).unwrap();
+                    reply(text.clone())(system, user)
+                },
+                10,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.state, MemoryRunState::Canceled);
+        assert_eq!(
+            run.reason.as_deref(),
+            Some("已取消：模型的判断没有用上，记忆没有改动")
+        );
+        assert_eq!((run.input_tokens, run.output_tokens), (900, 80));
+        assert!(run.retired.is_empty() && run.proposed == 0);
+        assert_eq!(state(&memory, &e1), MemoryState::Active);
+        assert_eq!(state(&memory, &e2), MemoryState::Active);
+        assert!(memory.dream_proposals(Some("p1")).unwrap().is_empty());
+        assert_eq!(memory.runs(10).unwrap(), vec![run]);
     }
 }

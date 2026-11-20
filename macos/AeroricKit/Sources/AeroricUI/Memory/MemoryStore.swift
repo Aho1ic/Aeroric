@@ -579,7 +579,12 @@ public enum MemoryText {
         case "done": "完成"
         case "partial": "部分成功"
         case "failed": "失败"
-        default: "跳过"
+        case "skipped": "跳过"
+        // C3 (2026-11-20).
+        case "queued": "排队中"
+        case "canceled": "已取消"
+        // "running", and any state a newer host adds.
+        default: "进行中"
         }
     }
 
@@ -985,7 +990,8 @@ public struct MemoryHistoryProgress: Equatable, Sendable {
         finished += 1
         switch run?.state {
         case "done", "partial": written += (run?.facts ?? 0) + (run?.candidates ?? 0) + (run?.experiences ?? 0)
-        case "skipped": skipped += 1
+        // C3: one the user canceled did not fail.
+        case "skipped", "canceled": skipped += 1
         default: failed += 1
         }
     }

@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 
 use aeroric_protocol::memory::{
-    HistoryCandidate, HistoryPlan, MemoryDraft, MemoryKind, MemoryRun, MemoryRunState,
-    EXTRACT_MAX_CHARS,
+    HistoryCandidate, HistoryPlan, MemoryDraft, MemoryItem, MemoryKind, MemoryRun, MemoryRunKind,
+    MemoryRunState, RunOutcome, RunOutcomeKind, RunOutcomeSubject, EXTRACT_MAX_CHARS,
 };
 
 use super::extract::{self, Transcript};
@@ -16,37 +16,71 @@ use crate::settings::model_detect::ChatOnce;
 
 /// R1-1: how one extraction's writes went. A refusal (forgotten, looks like a
 /// key, malformed) is the store doing its job; anything else lost data.
+/// C3: each write leaves an outcome.
 #[derive(Default)]
 struct Writes {
     written: u32,
     refused: u32,
     failed: u32,
+    canceled: u32,
     first_failure: Option<String>,
+    outcomes: Vec<RunOutcome>,
 }
 
 impl Writes {
-    fn note<T>(&mut self, result: Result<T, MemoryError>) -> Option<T> {
-        match result {
-            Ok(value) => {
+    fn note(
+        &mut self,
+        subject: RunOutcomeSubject,
+        sig: String,
+        result: Result<MemoryItem, MemoryError>,
+    ) -> Option<MemoryItem> {
+        let (outcome, item_id, reason, item) = match result {
+            Ok(item) => {
                 self.written += 1;
-                Some(value)
+                // The same words already kept gain this evidence instead.
+                let kind = if item.evidence.len() > 1 {
+                    RunOutcomeKind::Merged
+                } else {
+                    RunOutcomeKind::Written
+                };
+                (kind, Some(item.id.clone()), None, Some(item))
             }
             Err(
-                MemoryError::Empty
+                error @ (MemoryError::Empty
                 | MemoryError::TooLong
                 | MemoryError::Secret(_)
                 | MemoryError::Forgotten
-                | MemoryError::WrongState,
+                | MemoryError::WrongState),
             ) => {
                 self.refused += 1;
-                None
+                (RunOutcomeKind::Refused, None, Some(error.to_string()), None)
             }
             Err(error) => {
                 self.failed += 1;
                 self.first_failure.get_or_insert(error.to_string());
-                None
+                (RunOutcomeKind::Failed, None, Some(error.to_string()), None)
             }
-        }
+        };
+        self.outcomes.push(RunOutcome {
+            subject,
+            outcome,
+            sig,
+            item_id,
+            reason,
+        });
+        item
+    }
+
+    /// Not written: the user canceled first.
+    fn cancel(&mut self, subject: RunOutcomeSubject, sig: String) {
+        self.canceled += 1;
+        self.outcomes.push(RunOutcome {
+            subject,
+            outcome: RunOutcomeKind::Canceled,
+            sig,
+            item_id: None,
+            reason: None,
+        });
     }
 }
 
@@ -62,6 +96,8 @@ pub struct Session<'a> {
     pub forced: bool,
     /// B5-3a: its acceptance criteria all passed (experiences start at 中).
     pub verified: bool,
+    /// C3: the `Queued` row the automatic pass made for it, if any.
+    pub run_id: Option<&'a str>,
 }
 
 /// Why nothing was sent, as the 整理记录 row says it.
@@ -188,27 +224,17 @@ impl Memory {
         {
             return Err("这份对话已经整理过".into());
         }
-        let mut run = MemoryRun {
-            id: format!("run-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]),
-            task_id: session.task_id.to_string(),
-            project_id: session.project_id.to_string(),
-            title: session.title.to_string(),
-            at_ms: now_ms,
-            state: MemoryRunState::Skipped,
-            reason: None,
-            model: None,
-            input_tokens: 0,
-            output_tokens: 0,
-            cost_usd: None,
-            facts: 0,
-            candidates: 0,
-            experiences: 0,
-            failed_writes: 0,
-            kind: aeroric_protocol::memory::MemoryRunKind::Extract,
-            retired: Vec::new(),
-            proposed: 0,
-            undone_ms: None,
-        };
+        let mut run = super::runs::new_run(
+            MemoryRunKind::Extract,
+            session.task_id,
+            session.project_id,
+            session.title,
+            MemoryRunState::Skipped,
+            now_ms,
+        );
+        if let Some(id) = session.run_id {
+            run.id = id.to_string();
+        }
         if let Some(reason) = skip_reason(self, &session, &transcript) {
             run.reason = Some(reason);
             self.record(&run, session.task_id, &transcript.hash, now_ms)?;
@@ -218,10 +244,34 @@ impl Memory {
         if used >= settings.daily_limit {
             return Err(format!("今天已经整理了 {used} 次，到上限了，明天再整理"));
         }
+        // C3: from here the row says 进行中 until the run ends.
+        self.begin_run(&mut run).map_err(|e| e.to_string())?;
+        let result = self.extract_running(&session, &transcript, &model, &mut run, call, now_ms);
+        self.end_run(&run.id);
+        if let Err(error) = result {
+            // The row must not stay 进行中.
+            run.state = MemoryRunState::Failed;
+            run.reason = Some(error.clone());
+            let _ = self.add_run(&run);
+            return Err(error);
+        }
+        Ok(run)
+    }
+
+    /// The run once its row says `Running`: the call, the writes, the row.
+    fn extract_running(
+        &self,
+        session: &Session<'_>,
+        transcript: &Transcript,
+        model: &str,
+        run: &mut MemoryRun,
+        call: impl FnOnce(&str, &str) -> Result<ChatOnce, String>,
+        now_ms: u64,
+    ) -> Result<(), String> {
         let kept = self.kept(session.project_id);
         let ids: HashSet<String> = kept.iter().map(|item| item.id.clone()).collect();
-        let prompt = extract::prompt(&transcript, &kept);
-        run.model = Some(model.clone());
+        let prompt = extract::prompt(transcript, &kept);
+        run.model = Some(model.to_string());
         // C2: what is deleted, archived or replaced while the model works
         // is not written back.
         let epoch = self.epoch();
@@ -230,46 +280,64 @@ impl Memory {
             Err(error) => {
                 run.state = MemoryRunState::Failed;
                 run.reason = Some(format!("调用分析模型失败：{error}"));
-                self.record(&run, session.task_id, &transcript.hash, now_ms)?;
-                return Ok(run);
+                return self.record(run, session.task_id, &transcript.hash, now_ms);
             }
         };
         run.input_tokens = reply.input_tokens;
         run.output_tokens = reply.output_tokens;
         run.cost_usd = (reply.input_tokens + reply.output_tokens > 0).then(|| {
             crate::metrics::analytics::estimate_cost_usd(
-                &model,
+                model,
                 reply.input_tokens,
                 reply.output_tokens,
             )
             .0
         });
-        let mut extracted = match extract::parse(&reply.text, &transcript, &ids) {
+        let mut extracted = match extract::parse(&reply.text, transcript, &ids) {
             Ok(extracted) => extracted,
             Err(error) => {
                 run.state = MemoryRunState::Failed;
                 run.reason = Some(error);
-                self.record(&run, session.task_id, &transcript.hash, now_ms)?;
-                return Ok(run);
+                return self.record(run, session.task_id, &transcript.hash, now_ms);
             }
         };
         let withdrawn = self
             .drop_withdrawn(epoch, &mut extracted)
             .map_err(|e| e.to_string())?;
         let mut writes = Writes::default();
+        for (subject, text) in &withdrawn {
+            writes.outcomes.push(RunOutcome {
+                subject: *subject,
+                outcome: RunOutcomeKind::Withdrawn,
+                sig: self.sig(text),
+                item_id: None,
+                reason: None,
+            });
+        }
+        let run_id = run.id.clone();
+        let canceled = || self.cancel_requested(&run_id);
         if let Some(fact) = &extracted.fact {
-            let proof = evidence(
-                Some(session.task_id),
-                Some("analysis"),
-                Some(&model),
-                fact,
-                now_ms,
-            );
-            if writes
-                .note(self.add_session_fact(session.project_id, fact, proof, now_ms))
-                .is_some()
-            {
-                run.facts = 1;
+            let sig = self.sig(fact);
+            if canceled() {
+                writes.cancel(RunOutcomeSubject::Fact, sig);
+            } else {
+                let proof = evidence(
+                    Some(session.task_id),
+                    Some("analysis"),
+                    Some(model),
+                    fact,
+                    now_ms,
+                );
+                if writes
+                    .note(
+                        RunOutcomeSubject::Fact,
+                        sig,
+                        self.add_session_fact(session.project_id, fact, proof, now_ms),
+                    )
+                    .is_some()
+                {
+                    run.facts = 1;
+                }
             }
         }
         let confidence = if session.verified {
@@ -278,28 +346,42 @@ impl Memory {
             aeroric_protocol::memory::Confidence::Low
         };
         for (title, detail) in &extracted.experiences {
+            let sig = self.sig(title);
+            if canceled() {
+                writes.cancel(RunOutcomeSubject::Experience, sig);
+                continue;
+            }
             let proof = evidence(
                 Some(session.task_id),
                 Some("analysis"),
-                Some(&model),
+                Some(model),
                 &transcript.text,
                 now_ms,
             );
             if writes
-                .note(self.add_experience(
-                    session.project_id,
-                    title,
-                    detail,
-                    confidence,
-                    proof,
-                    now_ms,
-                ))
+                .note(
+                    RunOutcomeSubject::Experience,
+                    sig,
+                    self.add_experience(
+                        session.project_id,
+                        title,
+                        detail,
+                        confidence,
+                        proof,
+                        now_ms,
+                    ),
+                )
                 .is_some()
             {
                 run.experiences += 1;
             }
         }
         for candidate in extracted.candidates {
+            let sig = self.sig(&candidate.text);
+            if canceled() {
+                writes.cancel(RunOutcomeSubject::Candidate, sig);
+                continue;
+            }
             // About the user: every project; a project's convention: this one.
             let project_id =
                 (candidate.kind == MemoryKind::Fact).then(|| session.project_id.to_string());
@@ -313,19 +395,34 @@ impl Memory {
             let mut proof = evidence(
                 Some(session.task_id),
                 Some("analysis"),
-                Some(&model),
+                Some(model),
                 &candidate.quote,
                 now_ms,
             );
             // C1: the message the user said it in, when one message holds it.
             proof.location = super::locate::locate(session.messages, &candidate.quote);
-            if let Some(item) = writes.note(self.propose(draft, proof, now_ms)) {
+            if let Some(item) = writes.note(
+                RunOutcomeSubject::Candidate,
+                sig,
+                self.propose(draft, proof, now_ms),
+            ) {
                 if item.state == aeroric_protocol::memory::MemoryState::Pending {
                     run.candidates += 1;
                 }
             }
         }
         let mut notes = Vec::new();
+        let was_canceled = writes.canceled > 0 || canceled();
+        if was_canceled {
+            notes.push(if writes.written > 0 {
+                format!(
+                    "已取消：取消前写入的 {} 条保留，没有撤回；其余 {} 条没有写入",
+                    writes.written, writes.canceled
+                )
+            } else {
+                "已取消：模型的回复没有写入".into()
+            });
+        }
         if writes.failed > 0 {
             notes.push(format!(
                 "{} 条没写进去，下次整理时重试：{}",
@@ -336,9 +433,10 @@ impl Memory {
         if extracted.dropped > 0 {
             notes.push(format!("丢掉 {} 条没有原话依据的候选", extracted.dropped));
         }
-        if withdrawn > 0 {
+        if !withdrawn.is_empty() {
             notes.push(format!(
-                "整理期间有 {withdrawn} 条相同的记忆被删除、归档或取代，没有写回"
+                "整理期间有 {} 条相同的记忆被删除、归档或取代，没有写回",
+                withdrawn.len()
             ));
         }
         if writes.refused > 0 {
@@ -349,6 +447,13 @@ impl Memory {
         }
         run.reason = (!notes.is_empty()).then(|| notes.join("；"));
         run.failed_writes = writes.failed;
+        run.outcomes = std::mem::take(&mut writes.outcomes);
+        if was_canceled {
+            // The session is marked: the automatic pass leaves it; the
+            // user can still 整理这次会话.
+            run.state = MemoryRunState::Canceled;
+            return self.record(run, session.task_id, &transcript.hash, now_ms);
+        }
         if writes.failed > 0 {
             run.state = if writes.written > 0 {
                 MemoryRunState::Partial
@@ -357,21 +462,29 @@ impl Memory {
             };
             // The transcript stays unmarked so the next trigger writes the
             // rest; `insert` merges what is already there.
-            self.add_run(&run).map_err(|e| e.to_string())?;
-            return Ok(run);
+            return self.add_run(run).map_err(|e| e.to_string());
         }
         run.state = MemoryRunState::Done;
-        self.record(&run, session.task_id, &transcript.hash, now_ms)?;
-        Ok(run)
+        self.record(run, session.task_id, &transcript.hash, now_ms)
+    }
+
+    /// C3: a text's signature as a run outcome carries it (the keyed one
+    /// forgetting keeps, shortened).
+    fn sig(&self, text: &str) -> String {
+        self.with(|store| Ok(store.signature(text)))
+            .unwrap_or_default()
+            .chars()
+            .take(16)
+            .collect()
     }
 
     /// C2: candidates and experiences whose words were withdrawn after
-    /// `epoch` leave `extracted`; how many.
+    /// `epoch` leave `extracted`; C3: which they were.
     fn drop_withdrawn(
         &self,
         epoch: u64,
         extracted: &mut extract::Extracted,
-    ) -> Result<usize, MemoryError> {
+    ) -> Result<Vec<(RunOutcomeSubject, String)>, MemoryError> {
         let texts: Vec<&str> = extracted
             .candidates
             .iter()
@@ -385,15 +498,24 @@ impl Memory {
             .collect();
         let gone = self.withdrawn_since(epoch, &texts)?;
         let (candidates, experiences) = gone.split_at(extracted.candidates.len());
+        let mut dropped = Vec::new();
         let mut flags = candidates.iter();
-        extracted
-            .candidates
-            .retain(|_| !flags.next().copied().unwrap_or(false));
+        extracted.candidates.retain(|c| {
+            let gone = flags.next().copied().unwrap_or(false);
+            if gone {
+                dropped.push((RunOutcomeSubject::Candidate, c.text.clone()));
+            }
+            !gone
+        });
         let mut flags = experiences.iter();
-        extracted
-            .experiences
-            .retain(|_| !flags.next().copied().unwrap_or(false));
-        Ok(gone.iter().filter(|g| **g).count())
+        extracted.experiences.retain(|(title, _)| {
+            let gone = flags.next().copied().unwrap_or(false);
+            if gone {
+                dropped.push((RunOutcomeSubject::Experience, title.clone()));
+            }
+            !gone
+        });
+        Ok(dropped)
     }
 
     fn record(
@@ -582,6 +704,7 @@ mod tests {
             messages,
             forced,
             verified: true,
+            run_id: None,
         }
     }
 
@@ -621,6 +744,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(run.candidates, 1, "only the other candidate");
+        assert!(run.outcomes.iter().any(|o| o.outcome
+            == aeroric_protocol::memory::RunOutcomeKind::Withdrawn
+            && o.subject == aeroric_protocol::memory::RunOutcomeSubject::Candidate));
         assert!(
             run.reason
                 .as_deref()
@@ -842,5 +968,219 @@ mod tests {
             .find(|i| i.state == MemoryState::Superseded)
             .unwrap();
         assert_eq!(old.superseded_by.as_deref(), Some(active[0].id.as_str()));
+    }
+
+    fn talk_reply(_: &str, _: &str) -> Result<ChatOnce, String> {
+        Ok(ChatOnce {
+            text: REPLY.into(),
+            input_tokens: 10,
+            output_tokens: 5,
+        })
+    }
+
+    /// C3: while the model works the row says 进行中; canceling then
+    /// writes nothing, says so, keeps what the call cost, and marks the
+    /// session so the automatic pass leaves it.
+    #[test]
+    fn a_run_is_running_while_the_model_works_and_cancel_stops_its_writes() {
+        use aeroric_protocol::memory::{RunOutcomeKind, RunOutcomeSubject};
+        let memory = rig();
+        let talk = talk();
+        let mut seen = None;
+        let run = memory
+            .extract_session(
+                session(&talk, "p1", false),
+                None,
+                |system, user| {
+                    let row = memory.runs(1).unwrap().remove(0);
+                    assert_eq!(row.state, MemoryRunState::Running);
+                    let asked = memory.cancel_run(&row.id, 2).unwrap();
+                    assert_eq!(asked.state, MemoryRunState::Running, "it stops itself");
+                    seen = Some(row.id);
+                    talk_reply(system, user)
+                },
+                1,
+            )
+            .unwrap();
+        assert_eq!(Some(run.id.clone()), seen);
+        assert_eq!(run.state, MemoryRunState::Canceled);
+        assert_eq!(
+            run.reason.as_deref().unwrap().split('；').next(),
+            Some("已取消：模型的回复没有写入")
+        );
+        assert_eq!((run.facts, run.candidates, run.experiences), (0, 0, 0));
+        assert_eq!((run.input_tokens, run.output_tokens), (10, 5));
+        let subjects: Vec<_> = run
+            .outcomes
+            .iter()
+            .map(|o| (o.subject, o.outcome))
+            .collect();
+        assert_eq!(
+            subjects,
+            vec![
+                (RunOutcomeSubject::Fact, RunOutcomeKind::Canceled),
+                (RunOutcomeSubject::Experience, RunOutcomeKind::Canceled),
+                (RunOutcomeSubject::Candidate, RunOutcomeKind::Canceled),
+                (RunOutcomeSubject::Candidate, RunOutcomeKind::Canceled),
+            ]
+        );
+        assert!(memory.list(None, None).unwrap().is_empty());
+        assert!(memory.list(Some("p1"), None).unwrap().is_empty());
+        assert!(memory.extracted("t1").is_some(), "the pass leaves it");
+        assert_eq!(memory.counted_since(0), 1, "the call was made");
+        assert_eq!(memory.runs(10).unwrap(), vec![run.clone()]);
+        // An ended run cannot be canceled; the request is spent.
+        assert!(matches!(
+            memory.cancel_run(&run.id, 3),
+            Err(super::super::MemoryError::WrongState)
+        ));
+        assert!(!memory.cancel_requested(&run.id));
+        assert!(matches!(
+            memory.cancel_run("run-nope", 3),
+            Err(super::super::MemoryError::UnknownItem)
+        ));
+        // The user can still extract it by hand.
+        let again = memory
+            .extract_session(session(&talk, "p1", true), None, talk_reply, 4)
+            .unwrap();
+        assert_eq!(again.state, MemoryRunState::Done);
+    }
+
+    /// C3: every proposal says where it went — new, joined to the same
+    /// words already kept, or held back by a rule — carrying no text.
+    #[test]
+    fn each_proposal_says_where_it_went() {
+        use aeroric_protocol::memory::{MemoryDraft, RunOutcomeKind, RunOutcomeSubject};
+        let memory = rig();
+        let talk = talk();
+        let draft = |text: &str, kind| MemoryDraft {
+            project_id: (kind == MemoryKind::Fact).then(|| "p1".to_string()),
+            kind,
+            category: None,
+            text: text.into(),
+            supersedes: None,
+        };
+        let kept = memory
+            .remember(
+                draft("回复用简体中文", MemoryKind::Profile),
+                evidence(None, None, None, "/记住 回复用简体中文", 1),
+                1,
+            )
+            .unwrap();
+        let gone = memory
+            .remember(
+                draft("发布前跑 native:check sessions", MemoryKind::Fact),
+                evidence(None, None, None, "/记住", 1),
+                1,
+            )
+            .unwrap();
+        memory.forget(&gone.id, 1).unwrap();
+        let run = memory
+            .extract_session(session(&talk, "p1", false), None, talk_reply, 2)
+            .unwrap();
+        assert_eq!(run.state, MemoryRunState::Done);
+        let got: Vec<_> = run
+            .outcomes
+            .iter()
+            .map(|o| (o.subject, o.outcome, o.item_id.is_some()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (RunOutcomeSubject::Fact, RunOutcomeKind::Written, true),
+                (RunOutcomeSubject::Experience, RunOutcomeKind::Written, true),
+                (RunOutcomeSubject::Candidate, RunOutcomeKind::Merged, true),
+                (RunOutcomeSubject::Candidate, RunOutcomeKind::Refused, false),
+            ]
+        );
+        assert_eq!(run.outcomes[2].item_id.as_deref(), Some(kept.id.as_str()));
+        assert!(run.outcomes[3].reason.is_some());
+        for outcome in &run.outcomes {
+            assert_eq!(outcome.sig.chars().count(), 16);
+        }
+        let body = serde_json::to_string(&run).unwrap();
+        assert!(!body.contains("native:check"), "no text in the outcomes");
+        assert_eq!(memory.runs(1).unwrap()[0].outcomes, run.outcomes);
+    }
+
+    /// C3: the automatic pass's queued row shows at once, uses up nothing,
+    /// and canceling it marks the session so the pass leaves it.
+    #[test]
+    fn a_queued_run_is_shown_and_canceled_at_once() {
+        let memory = rig();
+        let id = memory.queue_run("t1", "p1", "修超时", 1).unwrap();
+        assert!(memory.queued(&id));
+        assert_eq!(memory.runs(10).unwrap()[0].state, MemoryRunState::Queued);
+        assert_eq!(memory.counted_since(0), 0);
+        let run = memory.cancel_run(&id, 2).unwrap();
+        assert_eq!(run.state, MemoryRunState::Canceled);
+        assert_eq!(
+            run.reason.as_deref(),
+            Some(super::super::runs::CANCELED_QUEUED)
+        );
+        assert!(!memory.queued(&id));
+        assert_eq!(memory.extracted("t1").as_deref(), Some(""));
+        assert_eq!(memory.counted_since(0), 0, "no model was asked");
+        // A queued row the pass then runs becomes that run's row.
+        let next = memory.queue_run("t2", "p1", "另一个", 3).unwrap();
+        let talk = talk();
+        let mut s = session(&talk, "p1", false);
+        s.task_id = "t2";
+        s.run_id = Some(&next);
+        let ran = memory.extract_session(s, None, talk_reply, 4).unwrap();
+        assert_eq!(ran.id, next);
+        assert_eq!(ran.state, MemoryRunState::Done);
+        assert_eq!(memory.runs(10).unwrap().len(), 2);
+        // One the pass does not get to leaves the log.
+        let left = memory.queue_run("t3", "p1", "第三个", 5).unwrap();
+        memory.unqueue(&left);
+        assert!(memory.run(&left).is_none());
+        memory.unqueue(&next);
+        assert!(memory.run(&next).is_some(), "only a queued row leaves");
+    }
+
+    /// C3: what was going when Aeroric stopped is failed and can be done
+    /// again, not lost; what was only queued leaves the log.
+    #[test]
+    fn what_was_going_when_aeroric_stopped_fails_and_can_be_retried() {
+        let dir = std::env::temp_dir().join(format!("aeroric-runs-{}", uuid::Uuid::new_v4()));
+        let memory = Memory::default();
+        memory.set_dir(dir.clone()).unwrap();
+        memory.set_project_enabled("p1", true).unwrap();
+        memory
+            .set_settings(&MemorySettings {
+                auto: true,
+                connection_id: Some("c1".into()),
+                model: Some("deepseek-v4.1-flash".into()),
+                ..MemorySettings::default()
+            })
+            .unwrap();
+        let queued = memory.queue_run("t9", "p1", "排着", 1).unwrap();
+        let mut running = super::super::runs::new_run(
+            aeroric_protocol::memory::MemoryRunKind::Extract,
+            "t1",
+            "p1",
+            "修超时",
+            MemoryRunState::Running,
+            2,
+        );
+        running.model = Some("deepseek-v4.1-flash".into());
+        memory.add_run(&running).unwrap();
+
+        let reopened = Memory::default();
+        reopened.set_dir(dir).unwrap();
+        assert!(reopened.run(&queued).is_none());
+        let failed = reopened.run(&running.id).unwrap();
+        assert_eq!(failed.state, MemoryRunState::Failed);
+        assert_eq!(
+            failed.reason.as_deref(),
+            Some(super::super::runs::INTERRUPTED)
+        );
+        assert_eq!(reopened.extracted("t1"), None, "the pass takes it up again");
+        let talk = talk();
+        let again = reopened
+            .extract_session(session(&talk, "p1", false), None, talk_reply, 3)
+            .unwrap();
+        assert_eq!(again.state, MemoryRunState::Done);
     }
 }
