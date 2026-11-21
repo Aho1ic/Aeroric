@@ -44,6 +44,8 @@ final class AppServices {
     let packBook = PackBook()
     /// H8: Agent 配置 → 自动行为.
     let rolloutBook = RolloutBook()
+    /// D1: Git 侧栏 → PR 审查.
+    let pullReviewBook = PullReviewBook()
     let diagnosticsStore = DiagnosticsStore()
     let debugSessionStore = DebugSessionStore()
     let breakpointStore = BreakpointStore()
@@ -1296,6 +1298,7 @@ extension AppServices: WorkspaceStateProviding {
         builtinSkillBook.actions = HostBuiltinSkillActions(client: BuiltinSkillsClient(connection: connection))
         packBook.attach(client: PacksClient(connection: connection))
         rolloutBook.attach(client: RolloutClient(connection: connection))
+        pullReviewBook.attach(client: GitHubClient(connection: connection))
         builtinSkillBook.loginOnGateway = { [weak self] harness in
             self?.agentConfigStore.loginGateway[harness]?.active ?? false
         }

@@ -21,7 +21,7 @@ Status: proposed
 
 ### D1 GitHub 只读：把一个 PR 固定成快照来审
 
-2026-11-21 第一步已实现，见 [D1 第一步笔记](../../implemented/feature/2026-11-21-d1-pull-snapshots.md)：做法第 1、2、6 条和方法的前两个（`github.pullSnapshot`、`github.snapshots`，另加 `github.snapshot`）。2026-11-21 第二步已实现，见 [D1 第二步笔记](../../implemented/feature/2026-11-21-d1-read-only-review.md)：第 3–5 条和 `github.reviewStart`、`github.review`（另加 `github.reviews`）；没有用隔离副本，PR 的 head 在 `.aeroric/pr-reviews/` 下分离检出。界面（第 8 条）是第三步。
+2026-11-21 第一步已实现，见 [D1 第一步笔记](../../implemented/feature/2026-11-21-d1-pull-snapshots.md)：做法第 1、2、6 条和方法的前两个（`github.pullSnapshot`、`github.snapshots`，另加 `github.snapshot`）。2026-11-21 第二步已实现，见 [D1 第二步笔记](../../implemented/feature/2026-11-21-d1-read-only-review.md)：第 3–5 条和 `github.reviewStart`、`github.review`（另加 `github.reviews`）；没有用隔离副本，PR 的 head 在 `.aeroric/pr-reviews/` 下分离检出。2026-11-21 第三步已实现，见 [D1 第三步笔记](../../implemented/feature/2026-11-21-d1-pull-review-section.md)：Git 侧栏的“PR 审查”一段。D1 完成，真实 GitHub 上的全程 NOT RUN。
 
 **前置：** 无硬性前置。有 B3 更好（结论带依据）。
 

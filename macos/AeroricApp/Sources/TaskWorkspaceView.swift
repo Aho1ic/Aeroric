@@ -647,11 +647,15 @@ struct TaskWorkspaceView: View {
                                       kind: change.status == "?" ? .untracked
                                           : change.staged ? .stagedDiff : .unstagedDiff))
                 },
-                onGenerate: { await services.generateCommitMessage(gitStore, projectPath: project.path) }
+                onGenerate: { await services.generateCommitMessage(gitStore, projectPath: project.path) },
+                pulls: services.pullReviewBook,
+                onOpenFinding: { path in openPreview(.init(projectID: project.id, path: path, kind: .file)) },
+                onOpenTask: { taskID in services.requestedSelection = SessionNavigation.task(taskID) }
             )
             .task(id: gitRefreshKey) {
                 guard auxiliaryTab == .git, showsAuxiliary || showsAuxiliaryOverlay else { return }
                 await services.refreshGit(gitStore, projectPath: project.path)
+                await services.pullReviewBook.show(projectID: project.id)
             }
         } else {
             PaneEmptyState(systemImage: "folder.badge.questionmark",

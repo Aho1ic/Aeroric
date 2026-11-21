@@ -81,6 +81,10 @@ public struct GitSidebarPanel: View {
     let onOpenDiff: (GitStore.Change) -> Void
     /// Asks the host for a commit message from the staged diff.
     let onGenerate: () async -> String?
+    /// D1: the project's pinned PRs; a finding's file and a review's session open through these.
+    let pulls: PullReviewBook?
+    let onOpenFinding: (String) -> Void
+    let onOpenTask: (String) -> Void
 
     @State private var selected: String?
     @State private var message = ""
@@ -98,13 +102,19 @@ public struct GitSidebarPanel: View {
     @State private var confirmPublish = false
     @State private var showsStash = false
     @State private var showsHistory = false
+    @State private var showsPulls = false
 
     public init(store: GitStore, onAction: @escaping (GitAction) -> Void,
-                onOpenDiff: @escaping (GitStore.Change) -> Void, onGenerate: @escaping () async -> String?) {
+                onOpenDiff: @escaping (GitStore.Change) -> Void, onGenerate: @escaping () async -> String?,
+                pulls: PullReviewBook? = nil, onOpenFinding: @escaping (String) -> Void = { _ in },
+                onOpenTask: @escaping (String) -> Void = { _ in }) {
         self.store = store
         self.onAction = onAction
         self.onOpenDiff = onOpenDiff
         self.onGenerate = onGenerate
+        self.pulls = pulls
+        self.onOpenFinding = onOpenFinding
+        self.onOpenTask = onOpenTask
     }
 
     private var busy: Bool { store.working != nil }
@@ -120,6 +130,11 @@ public struct GitSidebarPanel: View {
                     changes
                     fold("贮藏", count: store.stashEntries.count, isOpen: $showsStash) { stash }
                     fold("历史", count: nil, isOpen: $showsHistory) { history }
+                    if let pulls {
+                        fold("PR 审查", count: pulls.snapshots.count, isOpen: $showsPulls) {
+                            PullRequestsSection(book: pulls, onOpenFinding: onOpenFinding, onOpenTask: onOpenTask)
+                        }
+                    }
                 }
                 .padding(AeroricSpace.m)
             }
