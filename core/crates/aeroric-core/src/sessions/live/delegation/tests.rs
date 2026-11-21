@@ -1800,3 +1800,89 @@ fn a_delegation_keeps_its_invariants_from_start_to_a_late_proven_delivery() {
     assert_eq!(rig.sent_to("p").len(), 1, "the parent heard it once");
     std::fs::remove_dir_all(&tmp).ok();
 }
+
+/// D5: a plan starts nothing until confirmed; then its free units start as
+/// delegations, a dependent starts when its prerequisite reported, with that
+/// prerequisite named in its brief; after a restart the plan reads back from
+/// the plan and the cards alone.
+#[test]
+fn a_confirmed_plan_starts_its_units_in_order() {
+    use aeroric_protocol::work_plan::{UnitState, WorkPlan, WorkUnit};
+    let tmp = std::env::temp_dir().join(format!("aeroric-plans-{}", uuid::Uuid::new_v4().simple()));
+    let rig = rig("auto_edit");
+    rig.d.set_dir(tmp.clone());
+    let unit = |id: &str, deps: &[&str]| WorkUnit {
+        id: id.into(),
+        title: format!("单元{id}"),
+        brief: format!("做 {id}"),
+        depends_on: deps.iter().map(|d| d.to_string()).collect(),
+        ..WorkUnit::default()
+    };
+    let draft = WorkPlan {
+        parent_task_id: "p".into(),
+        title: "拆开做".into(),
+        units: vec![unit("a", &[]), unit("b", &["a"]), unit("c", &[])],
+        ..WorkPlan::default()
+    };
+    let cyclic = WorkPlan {
+        units: vec![unit("x", &["y"]), unit("y", &["x"])],
+        ..draft.clone()
+    };
+    assert!(rig.d.save_plan(cyclic, 1).unwrap_err().contains("有环"));
+
+    let saved = rig.d.save_plan(draft, 1).unwrap();
+    let id = saved.plan.id.clone();
+    assert!(!saved.plan.confirmed);
+    assert_eq!(saved.statuses[0].reason, "计划还没确认");
+    assert!(
+        rig.host.started.lock().is_empty(),
+        "nothing before the user confirms"
+    );
+
+    let view = rig.d.confirm_plan("p", &id).unwrap();
+    assert_eq!(rig.host.started.lock().len(), 2, "a and c");
+    let status = |v: &super::plans::PlanView, u: &str| {
+        v.statuses.iter().find(|s| s.id == u).unwrap().clone()
+    };
+    assert_eq!(status(&view, "b").reason, "等「单元a」通过验收");
+    let a = view.plan.units[0].delegation_id.clone().unwrap();
+    wait("a running", || {
+        rig.card(&a).state == DelegationState::Running
+    });
+    assert!(rig
+        .d
+        .save_plan(view.plan.clone(), 2)
+        .unwrap_err()
+        .contains("已经确认"));
+
+    // a reports (no criteria: reporting is passing): b starts, told about a.
+    let a_child = rig.card(&a).child_task_id.unwrap();
+    rig.answer(&a_child, "t1", "a 做完了", None, false);
+    wait("b started", || rig.host.started.lock().len() == 3);
+    let (card, prompt) = rig.host.started.lock()[2].clone();
+    assert!(
+        card.contract.instruction.starts_with("做 b"),
+        "{}",
+        card.contract.instruction
+    );
+    assert!(prompt.contains("做 b"));
+    let view = rig.d.plans("p").remove(0);
+    assert_eq!(status(&view, "a").state, UnitState::Passed);
+    assert_eq!(status(&view, "b").state, UnitState::Running);
+
+    // Asking again starts nothing twice.
+    rig.d.advance_plans("p");
+    assert_eq!(rig.host.started.lock().len(), 3);
+
+    // A restart: the plan and the cards say where things stand (the
+    // running ones were interrupted by it).
+    wait("saved", || {
+        std::fs::read_to_string(tmp.join("tasks/p.json")).is_ok()
+    });
+    let again = Delegations::new(Arc::new(Quiet));
+    again.set_dir(tmp.clone());
+    let view = again.plans("p").remove(0);
+    assert_eq!(status(&view, "a").state, UnitState::Passed);
+    assert_eq!(status(&view, "b").state, UnitState::Failed);
+    assert_eq!(status(&view, "b").reason, "失败了，等你处理");
+}

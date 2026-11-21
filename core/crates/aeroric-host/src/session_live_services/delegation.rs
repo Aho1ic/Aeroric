@@ -51,6 +51,10 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>, probe_installed: b
     }));
     set.register(wire::START_METHOD, blocking(live, delegation_start));
     set.register(wire::LIST_METHOD, blocking(live, delegation_list));
+    // D5: work plans.
+    set.register(plan_wire::PLANS_METHOD, blocking(live, plans_list));
+    set.register(plan_wire::PLAN_SAVE_METHOD, blocking(live, plan_save));
+    set.register(plan_wire::PLAN_CONFIRM_METHOD, blocking(live, plan_confirm));
     set.register(wire::STOP_METHOD, blocking(live, delegation_stop));
     set.register(wire::SEND_METHOD, blocking(live, delegation_send));
     set.register(wire::REDO_METHOD, blocking(live, delegation_redo));
@@ -813,4 +817,76 @@ fn context_roles(live: &Live, request: &Request) -> Frame {
         })
         .collect();
     ok(request, json!({ "roles": roles }))
+}
+
+use aeroric_protocol::work_plan as plan_wire;
+
+fn known_task(live: &Live, request: &Request, task: &str) -> Result<(), Box<Frame>> {
+    live.record(task).map(|_| ()).ok_or_else(|| {
+        Box::new(failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no task with that id in any known project",
+        ))
+    })
+}
+
+/// D5: `delegation.plans {taskId}` — what is due starts first (so a host
+/// that restarted picks up where the plan stands), then the plans.
+fn plans_list(live: &Live, request: &Request) -> Frame {
+    let p: TaskParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    if let Err(frame) = known_task(live, request, &p.task_id) {
+        return *frame;
+    }
+    let delegations = live.executor.delegations();
+    delegations.refresh_acceptance(&p.task_id);
+    delegations.advance_plans(&p.task_id);
+    ok(request, json!({ "plans": delegations.plans(&p.task_id) }))
+}
+
+#[derive(serde::Deserialize)]
+struct PlanSaveParams {
+    plan: plan_wire::WorkPlan,
+}
+
+fn plan_save(live: &Live, request: &Request) -> Frame {
+    let p: PlanSaveParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    if let Err(frame) = known_task(live, request, &p.plan.parent_task_id) {
+        return *frame;
+    }
+    match live.executor.delegations().save_plan(p.plan, now_ms()) {
+        Ok(view) => ok(request, json!({ "plan": view })),
+        Err(why) => failure(request.id.clone(), ErrorCode::InvalidArgument, &why),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanConfirmParams {
+    task_id: String,
+    plan_id: String,
+}
+
+fn plan_confirm(live: &Live, request: &Request) -> Frame {
+    let p: PlanConfirmParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    if let Err(frame) = known_task(live, request, &p.task_id) {
+        return *frame;
+    }
+    match live
+        .executor
+        .delegations()
+        .confirm_plan(&p.task_id, &p.plan_id)
+    {
+        Ok(view) => ok(request, json!({ "plan": view })),
+        Err(why) => failure(request.id.clone(), ErrorCode::InvalidArgument, &why),
+    }
 }

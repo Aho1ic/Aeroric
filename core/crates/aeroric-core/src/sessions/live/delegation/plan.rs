@@ -202,13 +202,16 @@ pub fn inputs(
 pub fn schedule(plan: &WorkPlan, observed: &HashMap<String, Observed>) -> Schedule {
     let mut statuses = Vec::new();
     let mut state_of: HashMap<&str, UnitState> = HashMap::new();
-    // Started units first: their state is their delegation's.
+    // Started units first: their state is their delegation's. One that
+    // could not be started counts as failed.
     for unit in &plan.units {
         if unit.delegation_id.is_some() {
             let state = observed
                 .get(&unit.id)
                 .map_or(UnitState::Running, unit_state);
             state_of.insert(unit.id.as_str(), state);
+        } else if unit.start_error.is_some() {
+            state_of.insert(unit.id.as_str(), UnitState::Failed);
         }
     }
     let mut running = state_of
@@ -243,6 +246,15 @@ pub fn schedule(plan: &WorkPlan, observed: &HashMap<String, Observed>) -> Schedu
                     reason
                 },
                 inputs_stale,
+            });
+            continue;
+        }
+        if let Some(error) = &unit.start_error {
+            statuses.push(UnitStatus {
+                id: unit.id.clone(),
+                state: UnitState::Failed,
+                reason: format!("开不起来：{error}"),
+                inputs_stale: false,
             });
             continue;
         }

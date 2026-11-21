@@ -13,6 +13,7 @@
 
 pub mod audit;
 pub mod plan;
+pub mod plans;
 pub mod prompt;
 pub mod roles;
 
@@ -190,6 +191,9 @@ pub struct Delegations {
     me: Mutex<Weak<Delegations>>,
     /// B5-3: one save of a parent's cards at a time, of the newest state.
     writes: Mutex<()>,
+    /// D5: parents whose plans are being advanced; `true` asks for one more
+    /// round (a card changed meanwhile).
+    plan_rounds: Mutex<std::collections::HashMap<String, bool>>,
 }
 
 /// B6: a result names at most this many deliverables.
@@ -219,6 +223,7 @@ impl Delegations {
             state: Mutex::default(),
             me: Mutex::new(Weak::new()),
             writes: Mutex::new(()),
+            plan_rounds: Mutex::default(),
         });
         *this.me.lock() = Arc::downgrade(&this);
         this
@@ -1687,6 +1692,10 @@ impl Delegations {
             }
         }
         drop(write);
+        // D5: a card changed; a plan of this parent may start its next units.
+        if self.has_plans(parent) {
+            self.advance_plans(parent);
+        }
         let Some(card) = card else {
             return;
         };

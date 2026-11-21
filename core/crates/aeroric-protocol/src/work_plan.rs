@@ -52,6 +52,10 @@ pub struct WorkUnit {
     /// changed since).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub started_with: Vec<ArtifactRef>,
+    /// Its delegation could not be started (the reason); it is not tried
+    /// again until the user does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,3 +85,12 @@ pub struct UnitStatus {
     #[serde(default)]
     pub inputs_stale: bool,
 }
+
+/// `delegation.plans {taskId}`: the parent's plans and where each unit
+/// stands (what is due to start is started first).
+pub const PLANS_METHOD: &str = "delegation.plans";
+/// `delegation.planSave {plan}`: save a draft plan (not a confirmed one).
+pub const PLAN_SAVE_METHOD: &str = "delegation.planSave";
+/// `delegation.planConfirm {taskId, planId}`: the user confirms; its units
+/// start as the rules say.
+pub const PLAN_CONFIRM_METHOD: &str = "delegation.planConfirm";

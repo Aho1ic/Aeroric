@@ -4459,3 +4459,61 @@ async fn a_reviews_publishing_draft_is_the_users_alone() {
         "{tools:?}"
     );
 }
+
+/// D5: a work plan over RPC — saved as a draft (nothing starts), listed
+/// with each unit's reason; a cycle and an unknown task are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_work_plan_is_saved_and_listed_before_it_is_confirmed() {
+    let host = Host::start(true).await;
+    host.start_task("拆开做");
+    let unit = |id: &str, deps: &[&str]| json!({"id": id, "title": format!("单元{id}"), "brief": format!("做 {id}"), "dependsOn": deps});
+    let saved = host
+        .call(
+            "delegation.planSave",
+            json!({"plan": {"id": "", "parentTaskId": "task-1", "title": "计划", "createdMs": 0,
+                "units": [unit("a", &[]), unit("b", &["a"])]}}),
+        )
+        .await
+        .unwrap();
+    let id = saved["plan"]["plan"]["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("plan-"));
+    assert_eq!(saved["plan"]["plan"]["confirmed"], false);
+
+    let listed = host
+        .call("delegation.plans", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    let statuses = &listed["plans"][0]["statuses"];
+    assert_eq!(statuses[0]["reason"], "计划还没确认");
+    assert_eq!(statuses[1]["state"], "waitingDeps");
+    assert_eq!(statuses[1]["reason"], "等「单元a」通过验收");
+    let cards = host
+        .call("delegation.list", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(cards["delegations"], json!([]), "nothing started");
+
+    let cyclic = host
+        .call(
+            "delegation.planSave",
+            json!({"plan": {"id": "", "parentTaskId": "task-1", "title": "环", "createdMs": 0,
+                "units": [unit("x", &["y"]), unit("y", &["x"])]}}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        cyclic["message"].as_str().unwrap().contains("有环"),
+        "{cyclic}"
+    );
+    let unknown = host
+        .call(
+            "delegation.planConfirm",
+            json!({"taskId": "nope", "planId": id}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        unknown["message"].as_str().unwrap().contains("no task"),
+        "{unknown}"
+    );
+}
