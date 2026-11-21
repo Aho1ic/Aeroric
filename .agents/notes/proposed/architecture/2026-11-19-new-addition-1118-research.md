@@ -334,6 +334,8 @@ owner 在 `~/Downloads/同步空间/LYX/New-addition-1118/` 整理了四个项�
 
 #### E13 Context MCP 工具注解（0.5 天）
 
+2026-11-21 已实现，见 [E13 笔记](../../implemented/feature/2026-11-21-e13-tool-annotations.md)：注解从共用工具表的范围推出，22 个工具都标了。
+
 - 给 21 个工具标上 `readOnlyHint`、`destructiveHint` 和 `openWorldHint`：`search_sessions`、`read_*` 是只读；`delegate`、`board_write`、`todo_propose` 是写。Codex 等客户端会据此决定要不要审批。
 - **来源**：agent-knowledge-mcp。
 

@@ -31,7 +31,7 @@ pub(crate) const KEY_ARGUMENT: &str = "idempotency_key";
 /// list them (the trigger evaluation offers the agent the full set; H2:
 /// `ctx --help` lists them).
 pub(crate) fn all_tools() -> Vec<Value> {
-    [
+    let mut all: Vec<Value> = [
         tools(),
         memory_tools(),
         wiki_tools(),
@@ -40,7 +40,38 @@ pub(crate) fn all_tools() -> Vec<Value> {
     ]
     .into_iter()
     .flat_map(|list| list.as_array().cloned().unwrap_or_default())
-    .collect()
+    .collect();
+    annotate(&mut all);
+    all
+}
+
+/// E13 (2026-11-21): MCP tool annotations from the shared table's scope,
+/// so a client deciding on approval (Codex) knows what a tool does:
+/// read-only ones are marked so; writes change only Aeroric's own records
+/// (board, memory, todos, plans, delegations) — never destructive; one that
+/// sends content off this Mac (`ask_expert`) reaches the open world.
+pub(crate) fn annotations(name: &str) -> Option<Value> {
+    use aeroric_protocol::tools::{ToolScope, AERORIC_TOOLS};
+    let (_, _, scope) = AERORIC_TOOLS.iter().find(|(n, _, _)| *n == name)?;
+    Some(match scope {
+        ToolScope::ReadOnly => {
+            json!({"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false})
+        }
+        ToolScope::Writes => {
+            json!({"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false})
+        }
+        ToolScope::SendsOut => {
+            json!({"readOnlyHint": true, "destructiveHint": false, "openWorldHint": true})
+        }
+    })
+}
+
+fn annotate(list: &mut [Value]) {
+    for tool in list {
+        if let Some(found) = tool["name"].as_str().and_then(annotations) {
+            tool["annotations"] = found;
+        }
+    }
 }
 
 /// MCP tool → host method.
@@ -314,6 +345,7 @@ async fn answer(
             {
                 list.extend(expert_tools().as_array().cloned().unwrap_or_default());
             }
+            annotate(&mut list);
             for tool in &mut list {
                 let keyed = tool["name"].as_str().is_some_and(|n| KEYED.contains(&n));
                 if let (true, Some(properties)) =
@@ -1133,6 +1165,17 @@ mod tests {
         );
         assert_eq!(method_of("artifact_list"), Some("context.artifactList"));
         assert_eq!(method_of("artifact_read"), Some("context.artifactRead"));
+        let listed = list["result"]["tools"].as_array().unwrap();
+        assert!(listed.iter().all(|t| t["annotations"].is_object()));
+        let by_name = |n: &str| listed.iter().find(|t| t["name"] == n).unwrap().clone();
+        assert_eq!(
+            by_name("search_sessions")["annotations"]["readOnlyHint"],
+            true
+        );
+        assert_eq!(
+            by_name("todo_propose")["annotations"]["readOnlyHint"],
+            false
+        );
         assert!(answer(
             &mut client,
             dir,
@@ -1141,6 +1184,34 @@ mod tests {
         )
         .await
         .is_none());
+    }
+
+    /// E13: every tool carries annotations, and they follow the shared
+    /// table's scope — nothing is destructive, only `ask_expert` reaches out.
+    #[test]
+    fn every_tool_is_annotated_from_its_scope() {
+        use aeroric_protocol::tools::{ToolScope, AERORIC_TOOLS};
+        let all = all_tools();
+        assert_eq!(all.len(), AERORIC_TOOLS.len());
+        for tool in &all {
+            let name = tool["name"].as_str().unwrap();
+            let (_, _, scope) = AERORIC_TOOLS.iter().find(|(n, _, _)| *n == name).unwrap();
+            let a = &tool["annotations"];
+            assert_eq!(a["destructiveHint"], false, "{name}");
+            assert_eq!(
+                a["readOnlyHint"],
+                !matches!(scope, ToolScope::Writes),
+                "{name}"
+            );
+            assert_eq!(
+                a["openWorldHint"],
+                matches!(scope, ToolScope::SendsOut),
+                "{name}"
+            );
+        }
+        assert_eq!(annotations("ask_expert").unwrap()["openWorldHint"], true);
+        assert_eq!(annotations("delegate").unwrap()["readOnlyHint"], false);
+        assert!(annotations("no_such_tool").is_none());
     }
 
     #[test]

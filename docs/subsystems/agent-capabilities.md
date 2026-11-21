@@ -64,7 +64,7 @@ UI 隐藏只是体验层。**安全边界在宿主**:
 
 ## 5. Aeroric 工具接到了哪些 Harness（C9，2026-11-20）
 
-Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、计划提议、交付物、参考库、专家，共 22 个，表在 `aeroric_protocol::tools::AERORIC_TOOLS`）由执行器在每次启动会话时交给 Harness。逐家事实：
+Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、计划提议、交付物、参考库、专家，共 22 个，表在 `aeroric_protocol::tools::AERORIC_TOOLS`）由执行器在每次启动会话时交给 Harness；`tools/list` 按表里的范围给每个工具标 MCP 注解（只读、写、发到外部，E13）。逐家事实：
 
 | Harness | 本机 | 怎么接 | 远端 |
 |---|---|---|---|
