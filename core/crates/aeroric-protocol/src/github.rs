@@ -107,3 +107,54 @@ pub struct PullSnapshot {
     #[serde(default)]
     pub superseded: bool,
 }
+
+/// One finding of a PR review, bound to the head it was made on.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullFinding {
+    pub path: String,
+    /// `None` when the reviewer named no line, or one past the file's end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    /// `high`, `medium` or `low`.
+    pub severity: String,
+    pub body: String,
+    /// What it rests on: the code or check result seen.
+    #[serde(default)]
+    pub basis: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PullReviewState {
+    /// The reviewer is working.
+    #[default]
+    Running,
+    /// Findings were read from its answer (none is a finding too).
+    Done,
+    /// Its answer had no findings block, or the session failed.
+    Failed,
+}
+
+/// A review of one snapshot, by a read-only session in a checkout of its
+/// head. Kept as a draft: nothing is sent to GitHub.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullReview {
+    pub id: String,
+    pub project_id: String,
+    pub snapshot_id: String,
+    pub head_sha: String,
+    pub task_id: String,
+    pub state: PullReviewState,
+    pub findings: Vec<PullFinding>,
+    /// Findings left out (a file not in the PR, no body).
+    #[serde(default)]
+    pub dropped: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub created_ms: u64,
+    /// Set when read: the PR has a newer head (针对旧版本).
+    #[serde(default)]
+    pub outdated: bool,
+}

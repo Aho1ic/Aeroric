@@ -10,8 +10,14 @@
 //! - [`store`] keeps snapshots per project, one per head commit, so fetching
 //!   the same head again (a retry) adds nothing, and an older head is marked
 //!   superseded (PR 已更新).
+//!
+//! Second step: [`review`] fetches the head into a ref of Aeroric's own
+//! (`refs/aeroric/pr/<n>/<sha>`), checks it out in a detached worktree
+//! beside the repository's others, hands a read-only reviewer the snapshot,
+//! and reads its findings back, each bound to a file and line of that head.
 
 pub mod client;
+pub mod review;
 pub mod store;
 
 #[cfg(test)]

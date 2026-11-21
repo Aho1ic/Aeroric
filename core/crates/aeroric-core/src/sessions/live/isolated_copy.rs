@@ -486,7 +486,7 @@ fn file(dir: &Path, task_id: &str) -> PathBuf {
 /// `/.aeroric/` in the repository's own exclude file, so the original
 /// directory's snapshots never see the copies. The user's `.gitignore` is
 /// left alone.
-fn exclude(top: &Path) {
+pub(crate) fn exclude(top: &Path) {
     let Some(rel) = git(top, &["rev-parse", "--git-path", "info/exclude"], None) else {
         return;
     };

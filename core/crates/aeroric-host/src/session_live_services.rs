@@ -47,6 +47,7 @@ mod delivery;
 mod discussion;
 mod expert;
 mod gateway_usage;
+mod github_review;
 mod memory;
 mod once;
 mod references;
@@ -185,6 +186,8 @@ pub fn register_session_live_services(
     review::install(set, &live, live.product);
     // B4-2: delegation.
     delegation::install(set, &live, live.product);
+    // D1: reviewing a pinned GitHub PR in a read-only session.
+    github_review::install(set, &live);
     // B4-3: the shared boards.
     board::install(set, &live);
     // 2026-11-12: discussions (round table).

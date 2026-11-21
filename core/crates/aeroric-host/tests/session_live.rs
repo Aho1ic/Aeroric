@@ -4178,3 +4178,151 @@ async fn github_snapshots_check_their_arguments() {
         .unwrap()
         .contains("没有这份快照"));
 }
+
+/// D1 second step: reviewing a pinned PR fetches its head (here from a
+/// local repository standing in for GitHub through `insteadOf`), checks it
+/// out detached and starts a read-only Claude session there; the review is
+/// kept running. A missing snapshot and a project that is not a repository
+/// are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pinned_pr_is_reviewed_read_only_in_its_own_checkout() {
+    use aeroric_core::github::{snapshot_id, store};
+    use aeroric_protocol::github::{PullFile, PullSnapshot, RepoRef};
+    let mut host = Host::start(true).await;
+    let git = |cwd: &Path, args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let project = ProjectService::new(Arc::clone(&host.context))
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.get("id").and_then(Value::as_str) == Some("project-1"))
+        .unwrap();
+    let work = PathBuf::from(project.get("path").and_then(Value::as_str).unwrap());
+    let data_dir = host.context.paths.data_dir().to_path_buf();
+
+    let missing = host
+        .call(
+            "github.reviewStart",
+            json!({"projectId": "project-1", "snapshotId": "nope"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(missing["message"]
+        .as_str()
+        .unwrap()
+        .contains("没有这份快照"));
+
+    // GitHub's side: a repository whose PR #7 is one commit on main.
+    let remote = work.parent().unwrap().join("gh-widget");
+    std::fs::create_dir_all(&remote).unwrap();
+    git(&remote, &["init", "-q"]);
+    std::fs::write(remote.join("a.rs"), "fn a() {}\n").unwrap();
+    git(&remote, &["add", "."]);
+    git(&remote, &["commit", "-qm", "base"]);
+    let base = git(&remote, &["rev-parse", "HEAD"]);
+    std::fs::write(remote.join("a.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+    git(&remote, &["commit", "-qam", "pr"]);
+    let head = git(&remote, &["rev-parse", "HEAD"]);
+    git(&remote, &["update-ref", "refs/pull/7/head", &head]);
+    git(&remote, &["reset", "-q", "--hard", &base]);
+
+    let snapshot = PullSnapshot {
+        id: snapshot_id(42, 7, &head),
+        project_id: "project-1".into(),
+        repo: RepoRef {
+            host: "github.com".into(),
+            owner: "acme".into(),
+            name: "widget".into(),
+            repo_id: 42,
+        },
+        number: 7,
+        title: "加 b".into(),
+        head_ref: "feature".into(),
+        base_ref: "main".into(),
+        head_sha: head.clone(),
+        base_sha: base.clone(),
+        fetched_ms: 1,
+        files: vec![PullFile {
+            path: "a.rs".into(),
+            status: "modified".into(),
+            additions: 1,
+            ..PullFile::default()
+        }],
+        ..PullSnapshot::default()
+    };
+    store::save(&data_dir, &snapshot).unwrap();
+    let not_repo = host
+        .call(
+            "github.reviewStart",
+            json!({"projectId": "project-1", "snapshotId": snapshot.id}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        not_repo["message"].as_str().unwrap().contains("git"),
+        "{not_repo}"
+    );
+
+    // The user's clone; GitHub's URL leads to the local repository.
+    git(&work, &["init", "-q"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+    let url = format!("url.{}.insteadOf", remote.display());
+    git(
+        &work,
+        &["config", &url, "https://github.com/acme/widget.git"],
+    );
+    let started = host
+        .call(
+            "github.reviewStart",
+            json!({"projectId": "project-1", "snapshotId": snapshot.id}),
+        )
+        .await
+        .unwrap();
+    let review = &started["review"];
+    assert_eq!(review["state"], "running");
+    assert_eq!(review["headSha"], head);
+    let (start, _peer) = tokio::time::timeout(WAIT, host.claude_peers.recv())
+        .await
+        .expect("a reviewer started")
+        .expect("launcher");
+    assert!(
+        start
+            .cwd
+            .ends_with(&format!(".aeroric/pr-reviews/{}", snapshot.id)),
+        "{}",
+        start.cwd
+    );
+    assert_eq!(start.permission, "plan");
+    assert_eq!(git(Path::new(&start.cwd), &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        git(&work, &["log", "-1", "--format=%s"]),
+        "mine",
+        "the user's HEAD is theirs"
+    );
+    let listed = host
+        .call("github.reviews", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert_eq!(listed["reviews"][0]["id"], review["id"]);
+    assert_eq!(listed["reviews"][0]["taskId"], review["taskId"]);
+}

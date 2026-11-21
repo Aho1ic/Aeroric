@@ -34,6 +34,7 @@
 | `runtime.json` | core | 写者 epoch/revision、内容指纹表、`volumeKind`；可丢弃 |
 | `agent-homes/<family>/` | core/host | 托管 Agent home（omp 经 `PI_CODING_AGENT_DIR` 注入） |
 | `github/<project>/<快照 id>.json` | core | PR 快照，每个 head 提交一份（D1） |
+| `github/<project>/reviews/<id>.json` | core/host | PR 审查草稿：快照、审查会话、结论（D1） |
 
 写入规则见 [写入基线](../../.agents/notes/implemented/architecture/2026-09-22-content-fingerprint-write-cover.md) 与 [写者资格](../../.agents/notes/implemented/architecture/2026-09-22-data-dir-writer-eligibility.md)。
 
