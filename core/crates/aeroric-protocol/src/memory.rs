@@ -735,6 +735,18 @@ pub struct NativeMemory {
     pub truncated: bool,
 }
 
+/// H7 (2026-11-21): an item moved out of the opening (still found by
+/// `memory_recall`) or back into it, and why.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryPlacement {
+    pub item_id: String,
+    pub at_ms: u64,
+    /// Out of the opening; `false` is back in.
+    pub demoted: bool,
+    pub reason: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

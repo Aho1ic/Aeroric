@@ -46,7 +46,15 @@ pub(super) fn render(
         .chain(global)
         .filter(|item| item.kind == MemoryKind::Fact)
         .collect();
-    facts.sort_by_key(|item| (!item.pinned, item.project_id.is_none()));
+    // H7: when the budget runs out, the least used facts are the ones left
+    // out (stable: newest first among equals).
+    facts.sort_by_key(|item| {
+        (
+            !item.pinned,
+            item.project_id.is_none(),
+            std::cmp::Reverse(item.stats.helpful + item.stats.retrieved),
+        )
+    });
     if about.is_empty() && facts.is_empty() {
         return None;
     }

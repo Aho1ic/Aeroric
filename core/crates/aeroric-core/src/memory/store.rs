@@ -135,7 +135,12 @@ impl Store {
              CREATE TABLE IF NOT EXISTS retries(run_id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL,
                 body TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS uses(item_id TEXT NOT NULL, task_id TEXT NOT NULL,
-                kind TEXT NOT NULL, PRIMARY KEY(item_id, task_id, kind));",
+                kind TEXT NOT NULL, PRIMARY KEY(item_id, task_id, kind));
+             CREATE TABLE IF NOT EXISTS demoted(item_id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL,
+                retrieved INTEGER NOT NULL, helpful INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS placements(seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id TEXT NOT NULL, at_ms INTEGER NOT NULL, action TEXT NOT NULL,
+                reason TEXT NOT NULL);",
             cjk::FTS_TOKENIZER
         ))?;
         // B5-3a: schema 1 → 2 only adds columns.
@@ -1233,6 +1238,81 @@ impl Store {
             "WHERE project = ?1 AND state = 'active' ORDER BY pinned DESC, updated_ms DESC",
             &[&project_id.unwrap_or("")],
         )
+    }
+
+    /// H7: items taken out of the opening, with their counts then
+    /// (`retrieved`, `helpful`).
+    pub(super) fn demoted(
+        &self,
+    ) -> Result<std::collections::HashMap<String, (u32, u32)>, MemoryError> {
+        let mut statement = self
+            .conn
+            .prepare_cached("SELECT item_id, retrieved, helpful FROM demoted")?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    (row.get::<_, i64>(1)? as u32, row.get::<_, i64>(2)? as u32),
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
+    /// H7: take `item` out of the opening (`demote`) or put it back, and
+    /// keep the reason.
+    pub(super) fn place(
+        &self,
+        item: &MemoryItem,
+        demote: bool,
+        reason: &str,
+        now_ms: u64,
+    ) -> Result<(), MemoryError> {
+        if demote {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO demoted(item_id, at_ms, retrieved, helpful) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    item.id,
+                    now_ms as i64,
+                    item.stats.retrieved as i64,
+                    item.stats.helpful as i64
+                ],
+            )?;
+        } else {
+            self.conn
+                .execute("DELETE FROM demoted WHERE item_id = ?1", [&item.id])?;
+        }
+        self.conn.execute(
+            "INSERT INTO placements(item_id, at_ms, action, reason) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                item.id,
+                now_ms as i64,
+                if demote { "demote" } else { "promote" },
+                reason
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// H7: the latest moves in and out of the opening, newest first.
+    pub(super) fn placements(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<aeroric_protocol::memory::MemoryPlacement>, MemoryError> {
+        let mut statement = self.conn.prepare_cached(
+            "SELECT item_id, at_ms, action, reason FROM placements ORDER BY seq DESC LIMIT ?1",
+        )?;
+        let rows = statement
+            .query_map([limit as i64], |row| {
+                Ok(aeroric_protocol::memory::MemoryPlacement {
+                    item_id: row.get(0)?,
+                    at_ms: row.get::<_, i64>(1)? as u64,
+                    demoted: row.get::<_, String>(2)? == "demote",
+                    reason: row.get(3)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
     }
 
     /// Active items of the project and global matching `query` (any word),

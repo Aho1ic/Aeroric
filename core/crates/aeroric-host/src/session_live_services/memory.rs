@@ -19,6 +19,9 @@ use super::{blocking, failure, ok, params, Live};
 use crate::dispatcher::ServiceSet;
 
 pub const CONTEXT_MEMORY_RECALL_METHOD: &str = "context.memoryRecall";
+/// H7: `memory.placements` → `{placements}`: the latest moves of facts in
+/// and out of the opening, newest first.
+pub const PLACEMENTS_METHOD: &str = "memory.placements";
 pub const CONTEXT_MEMORY_PROPOSE_METHOD: &str = "context.memoryPropose";
 pub const CONTEXT_MEMORY_ENABLED_METHOD: &str = "context.memoryEnabled";
 
@@ -31,6 +34,7 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
         eprintln!("[aeroric-host] memory store unavailable: {error}");
     }
     set.register(wire::LIST_METHOD, blocking(live, memory_list));
+    set.register(PLACEMENTS_METHOD, blocking(live, memory_placements));
     set.register(wire::REMEMBER_METHOD, blocking(live, memory_remember));
     set.register(wire::CONFIRM_METHOD, blocking(live, memory_confirm));
     set.register(
@@ -1379,6 +1383,8 @@ fn dream_due_scopes(live: &Live) {
         let cwd = scope.as_deref().and_then(|id| project_dir(live, id));
         let files = memory::native::discover(&homes(live), cwd.as_deref());
         let _ = memory.harvest_native(&files, scope.as_deref(), now);
+        // H7: facts move in or out of the opening by how they are used.
+        let _ = memory.rebalance(scope.as_deref(), now);
         if dreaming && memory.dream_due(scope.as_deref(), now) {
             match dream_scope(live, scope.as_deref(), false, false) {
                 Err(error) if error.contains("到上限") || error.contains("还没有选") => {
@@ -1758,6 +1764,10 @@ fn memory_import_native(live: &Live, request: &Request) -> Frame {
         }
     }
     ok(request, json!({ "imported": imported, "skipped": skipped }))
+}
+
+fn memory_placements(live: &Live, request: &Request) -> Frame {
+    answer(request, live.executor.memory().placements(50), "placements")
 }
 
 // MARK: B5-3a feedback

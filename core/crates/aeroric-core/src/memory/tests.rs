@@ -833,3 +833,70 @@ fn native_files_become_proposals_and_stay_untouched() {
     );
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// H7 (2026-11-21): a fact the opening carried many times with no use
+/// leaves it (recall still finds it) and the move is recorded; looked up
+/// again twice, it comes back. Pinned facts and the profile stay; a fact
+/// found wrong more than useful leaves early.
+#[test]
+fn facts_move_out_of_the_opening_by_use_and_back() {
+    let (memory, _dir) = rig();
+    let add = |kind: MemoryKind, text: &str| {
+        memory
+            .remember(draft(Some("p1"), kind, text), said(text), 1)
+            .unwrap()
+    };
+    let idle = add(MemoryKind::Fact, "旧的打包脚本在 scripts/old 下");
+    let used = add(MemoryKind::Fact, "测试用 cargo nextest 跑");
+    let pinned = add(MemoryKind::Fact, "只在 main 分支工作");
+    memory.pin(&pinned.id, true, 1).unwrap();
+    let about = add(MemoryKind::Profile, "回复一律用简体中文");
+    let wrong = add(MemoryKind::Fact, "数据库是 Postgres");
+
+    // Carried by eight sessions; one fact is looked up, one is found wrong.
+    for n in 0..8 {
+        let task = format!("t{n}");
+        assert!(memory
+            .profile_for_session(Some("p1"), Some(&task))
+            .is_some());
+    }
+    memory.recall("p1", "nextest").unwrap();
+    memory.feedback(&wrong.id, false, 2).unwrap();
+    let moves = memory.rebalance(Some("p1"), 10).unwrap();
+    let out: Vec<&str> = moves
+        .iter()
+        .filter(|m| m.demoted)
+        .map(|m| m.item_id.as_str())
+        .collect();
+    assert_eq!(moves.len(), 2, "{moves:?}");
+    assert!(out.contains(&idle.id.as_str()) && out.contains(&wrong.id.as_str()));
+    assert!(moves.iter().any(|m| m.reason.contains("带了 8 次")));
+    assert!(moves.iter().any(|m| m.reason.contains("不对")));
+
+    let opening = memory.profile(Some("p1")).unwrap();
+    assert!(!opening.contains("scripts/old") && !opening.contains("Postgres"));
+    assert!(
+        opening.contains("nextest")
+            && opening.contains("main 分支")
+            && opening.contains("简体中文")
+    );
+    assert_eq!(
+        memory.recall("p1", "打包脚本").unwrap()[0].id,
+        idle.id,
+        "recall still finds it"
+    );
+    assert!(
+        memory.rebalance(Some("p1"), 11).unwrap().is_empty(),
+        "one look is not enough"
+    );
+    memory.recall("p1", "旧的 打包").unwrap();
+    let back = memory.rebalance(Some("p1"), 12).unwrap();
+    assert_eq!(back.len(), 1);
+    assert!(!back[0].demoted && back[0].item_id == idle.id);
+    assert!(back[0].reason.contains("又被检索 2 次"));
+    assert!(memory.profile(Some("p1")).unwrap().contains("scripts/old"));
+    let log = memory.placements(10).unwrap();
+    assert_eq!(log.len(), 3);
+    assert_eq!(log[0].item_id, idle.id, "newest first");
+    let _ = (used, about);
+}

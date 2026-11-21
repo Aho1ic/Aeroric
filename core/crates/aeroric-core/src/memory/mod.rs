@@ -13,6 +13,7 @@ pub mod dream;
 pub mod extract;
 pub mod locate;
 pub mod native;
+pub mod placement;
 pub(crate) mod profile;
 pub mod run;
 pub mod runs;
@@ -551,9 +552,17 @@ impl Memory {
 
     fn render_profile(&self, project_id: Option<&str>) -> Option<(String, Vec<String>)> {
         self.with(|store| {
-            let global = store.active(None)?;
+            // H7: a fact moved out of the opening is found by recall only.
+            let demoted = store.demoted()?;
+            let kept = |items: Vec<MemoryItem>| -> Vec<MemoryItem> {
+                items
+                    .into_iter()
+                    .filter(|i| !demoted.contains_key(&i.id))
+                    .collect()
+            };
+            let global = kept(store.active(None)?);
             let project = match project_id {
-                Some(id) if store.enabled(id)? => store.active(Some(id))?,
+                Some(id) if store.enabled(id)? => kept(store.active(Some(id))?),
                 _ => Vec::new(),
             };
             Ok(profile::render(&global, &project))
