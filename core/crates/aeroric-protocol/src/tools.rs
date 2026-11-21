@@ -49,6 +49,7 @@ pub const AERORIC_TOOLS: &[(&str, ToolGroup, ToolScope)] = &[
     ("board_write", ToolGroup::Base, ToolScope::Writes),
     ("board_decide", ToolGroup::Base, ToolScope::Writes),
     ("todo_propose", ToolGroup::Base, ToolScope::Writes),
+    ("plan_propose", ToolGroup::Base, ToolScope::Writes),
     ("artifact_list", ToolGroup::Base, ToolScope::ReadOnly),
     ("artifact_read", ToolGroup::Base, ToolScope::ReadOnly),
     ("memory_recall", ToolGroup::Memory, ToolScope::ReadOnly),

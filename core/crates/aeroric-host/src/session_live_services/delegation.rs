@@ -55,6 +55,10 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>, probe_installed: b
     set.register(plan_wire::PLANS_METHOD, blocking(live, plans_list));
     set.register(plan_wire::PLAN_SAVE_METHOD, blocking(live, plan_save));
     set.register(plan_wire::PLAN_CONFIRM_METHOD, blocking(live, plan_confirm));
+    set.register(
+        plan_wire::CONTEXT_PROPOSE_METHOD,
+        blocking(live, context_plan_propose),
+    );
     set.register(wire::STOP_METHOD, blocking(live, delegation_stop));
     set.register(wire::SEND_METHOD, blocking(live, delegation_send));
     set.register(wire::REDO_METHOD, blocking(live, delegation_redo));
@@ -887,6 +891,60 @@ fn plan_confirm(live: &Live, request: &Request) -> Frame {
         .confirm_plan(&p.task_id, &p.plan_id)
     {
         Ok(view) => ok(request, json!({ "plan": view })),
+        Err(why) => failure(request.id.clone(), ErrorCode::InvalidArgument, &why),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PlanProposeParams {
+    token: String,
+    title: String,
+    units: Vec<plan_wire::WorkUnit>,
+}
+
+/// D5: `context.planPropose {token, title, units}` — an agent proposes a
+/// plan for its own task. It is saved as a draft; only the user confirms.
+/// A delegated child does not split its work further.
+fn context_plan_propose(live: &Live, request: &Request) -> Frame {
+    let p: PlanProposeParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    let Some((task, _project)) = live.executor.context_tokens().resolve(&p.token) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::Unauthenticated,
+            "上下文令牌无效或会话已结束",
+        );
+    };
+    if live
+        .record(&task)
+        .is_some_and(|(_, record)| record.get(DELEGATE_OF_FIELD).is_some())
+    {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "被委派的子会话不能再拆计划",
+        );
+    }
+    let draft = plan_wire::WorkPlan {
+        parent_task_id: task,
+        title: p.title,
+        units: p.units,
+        ..plan_wire::WorkPlan::default()
+    };
+    match live.executor.delegations().save_plan(draft, now_ms()) {
+        Ok(view) => ok(
+            request,
+            json!({
+                "text": format!(
+                    "已提议计划 {}（{} 个单元），等用户在 Aeroric 里确认后才开始",
+                    view.plan.id,
+                    view.plan.units.len()
+                ),
+                "plan": view,
+            }),
+        ),
         Err(why) => failure(request.id.clone(), ErrorCode::InvalidArgument, &why),
     }
 }

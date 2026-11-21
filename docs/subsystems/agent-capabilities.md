@@ -64,7 +64,7 @@ UI 隐藏只是体验层。**安全边界在宿主**:
 
 ## 5. Aeroric 工具接到了哪些 Harness（C9，2026-11-20）
 
-Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参考库、专家，共 21 个，表在 `aeroric_protocol::tools::AERORIC_TOOLS`）由执行器在每次启动会话时交给 Harness。逐家事实：
+Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、计划提议、交付物、参考库、专家，共 22 个，表在 `aeroric_protocol::tools::AERORIC_TOOLS`）由执行器在每次启动会话时交给 Harness。逐家事实：
 
 | Harness | 本机 | 怎么接 | 远端 |
 |---|---|---|---|
@@ -76,7 +76,7 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
 - 远端会话都没有：工具服务器要能连回这台 Mac 的宿主，跨设备的身份和回执由批次 D 处理。
 - 能力表（`session.capabilities`）的"Aeroric 工具"（`contextTools`）按上表给出；`executor_tests.rs` 的 `the_capability_table_matches_who_gets_the_context_server` 核对它与执行器的路由一致。
 - 每次启动实际给了哪些工具、没给的原因，记在任务的工具清单里（C8），会话信息的"工具"一行显示。
-- OMP 的审批模式会拦 MCP 工具（它们一律算"会写"，`always-ask` 下要问）。Aeroric 用 `--config` 叠加层按工具名给出 `tools.approval.mcp__aeroric_context_<工具>: allow`，只放行这 21 个，和 Codex 只给这一个服务器设 `approve` 一样，不改整个会话的审批模式，也不动用户的 `config.yml`。
+- OMP 的审批模式会拦 MCP 工具（它们一律算"会写"，`always-ask` 下要问）。Aeroric 用 `--config` 叠加层按工具名给出 `tools.approval.mcp__aeroric_context_<工具>: allow`，只放行这 22 个，和 Codex 只给这一个服务器设 `approve` 一样，不改整个会话的审批模式，也不动用户的 `config.yml`。
 - App 里的"新委派"、角色库、黑板面板、记忆页都由 App 直接调宿主，不依赖会话里的 Agent 有没有工具。依赖工具的是 Agent 自己发起的委派、检索和记忆提议，这部分在没有工具的会话里不会发生，会话信息里写明原因。
 - 记忆档案随开场白交出：Claude、Codex、本机 OMP 放在系统层；DSH 和远端 OMP 没有系统层，放在第一条消息前的“Aeroric 附加的上下文”里（见 §6）。
 

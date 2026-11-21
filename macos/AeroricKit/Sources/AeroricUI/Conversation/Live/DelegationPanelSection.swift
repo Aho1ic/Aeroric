@@ -14,6 +14,8 @@ public struct DelegationPanelModel: Equatable, Sendable {
     /// H5: the harness's own subagents of this session, listed beside the
     /// delegations; the harness manages them, Aeroric only watches.
     public var native: [LiveSubagent] = []
+    /// D5: the session's work plans.
+    public var plans: [LiveWorkPlan] = []
 
     public init(delegations: [LiveDelegationCard] = [], delegateOf: String? = nil, roles: [LiveDelegationRole] = [],
                 stats: [LiveReputationRow] = [], audit: [LiveDelegationAudit] = []) {
@@ -48,6 +50,8 @@ public enum DelegationPanelAction: Equatable, Sendable {
     case bringBack(String)
     case saveRole(LiveDelegationRole)
     case deleteRole(String)
+    /// D5: the user confirms a plan.
+    case confirmPlan(String)
 }
 
 /// The new-delegation form's choices; `nil` keeps the role's default.
@@ -127,6 +131,7 @@ struct DelegationPanelSection: View {
                 }
                 .buttonStyle(.plain)
             } else {
+                ForEach(model.plans) { plan in planRows(plan) }
                 ForEach(model.delegations.reversed(), id: \.delegationId) { card in
                     Button {
                         if let child = card.childTaskId { onAction(.open(child)) }
@@ -194,6 +199,32 @@ struct DelegationPanelSection: View {
         .sheet(isPresented: $showRoles) {
             RoleLibrarySheet(roles: model.roles, onSave: { onAction(.saveRole($0)) },
                              onDelete: { onAction(.deleteRole($0)) }, onClose: { showRoles = false })
+        }
+    }
+
+    /// D5: a plan's units, each with its state and why; an unconfirmed plan
+    /// waits for the user's word.
+    @ViewBuilder private func planRows(_ plan: LiveWorkPlan) -> some View {
+        groupLabel(WorkPlanText.title(plan))
+        ForEach(plan.units) { unit in
+            Button {
+                if let id = unit.delegationId,
+                   let child = model.delegations.first(where: { $0.delegationId == id })?.childTaskId {
+                    onAction(.open(child))
+                }
+            } label: {
+                CheckpointRow(symbol: WorkPlanText.symbol(unit), text: WorkPlanText.unit(unit, in: plan),
+                              highlight: WorkPlanText.needsUser(unit) ? AeroricColor.warning : nil) { EmptyView() }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("progress.plan.unit")
+        }
+        if !plan.confirmed {
+            Button("确认计划，开始") { onAction(.confirmPlan(plan.id)) }
+                .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
+                .frame(maxWidth: .infinity)
+                .help("确认后按依赖自动开委派：同时最多 3 个，同一目录同时只有一个写文件的单元")
+                .accessibilityIdentifier("progress.plan.confirm")
         }
     }
 
@@ -481,5 +512,50 @@ public enum RoleText {
         if role.customized { parts.append("已改") }
         if !role.description.isEmpty { parts.append(role.description) }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// D5: a work plan's words.
+public enum WorkPlanText {
+    /// "计划 · 拆开做（待你确认）".
+    public static func title(_ plan: LiveWorkPlan) -> String {
+        "计划 · \(plan.title)" + (plan.confirmed ? "" : "（待你确认）")
+    }
+
+    public static func state(_ state: String) -> String {
+        switch state {
+        case "notStarted": "未开始"
+        case "waitingDeps": "等待依赖"
+        case "running": "进行中"
+        case "awaitingAcceptance": "待验收"
+        case "passed": "通过"
+        case "failed": "失败"
+        case "cancelled": "已取消"
+        default: state
+        }
+    }
+
+    /// "调研 · 进行中 · 在运行", with what it depends on.
+    public static func unit(_ unit: LiveWorkUnit, in plan: LiveWorkPlan) -> String {
+        var text = "\(unit.title) · \(state(unit.state))"
+        if !unit.reason.isEmpty { text += " · \(unit.reason)" }
+        let deps = unit.dependsOn.compactMap { id in plan.units.first { $0.id == id }?.title }
+        if !deps.isEmpty { text += "（依赖 \(deps.joined(separator: "、"))）" }
+        return text
+    }
+
+    public static func symbol(_ unit: LiveWorkUnit) -> String {
+        switch unit.state {
+        case "passed": "checkmark.circle"
+        case "failed", "cancelled": "exclamationmark.triangle"
+        case "running", "awaitingAcceptance": "circle.dotted"
+        case "waitingDeps": "hourglass"
+        default: "circle"
+        }
+    }
+
+    /// Failed, stopped, or its input went stale: the user decides.
+    public static func needsUser(_ unit: LiveWorkUnit) -> Bool {
+        unit.inputsStale || unit.state == "failed" || unit.state == "cancelled"
     }
 }

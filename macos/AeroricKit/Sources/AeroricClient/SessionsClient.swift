@@ -352,6 +352,18 @@ extension SessionsClient {
                 frame.result["delegateOf"]?.stringValue)
     }
 
+    /// D5: the task's work plans (what is due to start is started first).
+    public func workPlans(taskId: String) async throws -> [LiveWorkPlan] {
+        let frame = try await connection.request("delegation.plans", params: .object(["taskId": .string(taskId)]))
+        return (frame.result["plans"]?.arrayValue ?? []).compactMap(LiveWorkPlan.decode)
+    }
+
+    /// D5: the user confirms a plan; its units start as the rules say.
+    public func confirmWorkPlan(taskId: String, planId: String) async throws {
+        _ = try await connection.request(
+            "delegation.planConfirm", params: .object(["taskId": .string(taskId), "planId": .string(planId)]))
+    }
+
     /// B4-2: the user delegates from `taskId`.
     @discardableResult
     public func startDelegation(taskId: String, contract: LiveDelegationContract) async throws -> LiveDelegationCard? {

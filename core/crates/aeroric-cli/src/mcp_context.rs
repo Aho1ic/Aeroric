@@ -132,6 +132,22 @@ fn tools() -> Value {
             }}
         },
         {
+            "name": "plan_propose",
+            "description": "把一个大目标拆成几个有先后依赖的工作单元，提议成一个计划。只会存成草稿，用户在 Aeroric 里确认后才按依赖自动开委派：没有依赖的可以同时开始，有依赖的等前置通过验收后开始，并拿到前置的产物。最多 8 个单元，同时最多跑 3 个，同一目录同时只有一个会写文件的单元；单元之间不能有环。一两件事直接用 delegate，不要用它。",
+            "inputSchema": {"type": "object", "required": ["title", "units"], "properties": {
+                "title": {"type": "string", "description": "计划要达成的目标，一句话"},
+                "units": {"type": "array", "maxItems": 8, "items": {"type": "object", "required": ["id", "title", "brief"], "properties": {
+                    "id": {"type": "string", "description": "单元的短编号，如 u1，dependsOn 用它"},
+                    "title": {"type": "string", "description": "单元名，几个字"},
+                    "brief": {"type": "string", "description": "交给这个单元的子会话做什么、怎么算做完"},
+                    "dependsOn": {"type": "array", "items": {"type": "string"}, "description": "必须先通过验收的单元编号"},
+                    "workspace": {"type": "string", "enum": ["readOnly", "shared", "copy"], "description": "readOnly 只读（默认）；shared 在当前目录写；copy 在独立副本里写"},
+                    "role": {"type": "string", "description": "角色库里的角色 id，可省略"},
+                    "acceptance": {"type": "array", "items": {"type": "string"}, "description": "验收条款，全部通过才算这个单元完成"}
+                }}}
+            }}
+        },
+        {
             "name": "artifact_list",
             "description": "列出一个任务交付的文件（交付物）：每个有 id、路径、当前第几版、最后一次检查是否通过。默认是当前任务；readable 列出你还能读的任务（你委派或分出的、上级、同一上级下的），用 taskId 指定。委派结果里的“交付物”就是这里的 id@版本。",
             "inputSchema": {"type": "object", "properties": {
@@ -196,6 +212,7 @@ fn method_of(tool: &str) -> Option<&'static str> {
         "board_write" => Some("context.boardWrite"),
         "board_decide" => Some("context.boardDecide"),
         "todo_propose" => Some(aeroric_protocol::todo::PROPOSE_METHOD),
+        "plan_propose" => Some(aeroric_protocol::work_plan::CONTEXT_PROPOSE_METHOD),
         "memory_recall" => Some("context.memoryRecall"),
         "memory_propose" => Some("context.memoryPropose"),
         "memory_feedback" => Some("context.memoryFeedback"),
@@ -1108,6 +1125,7 @@ mod tests {
                 "board_write",
                 "board_decide",
                 "todo_propose",
+                "plan_propose",
                 "artifact_list",
                 "artifact_read"
             ]

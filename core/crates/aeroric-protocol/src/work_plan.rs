@@ -94,3 +94,6 @@ pub const PLAN_SAVE_METHOD: &str = "delegation.planSave";
 /// `delegation.planConfirm {taskId, planId}`: the user confirms; its units
 /// start as the rules say.
 pub const PLAN_CONFIRM_METHOD: &str = "delegation.planConfirm";
+/// D5: the Context MCP's `plan_propose {token, title, units}` — saved as a
+/// draft for the user to confirm; an agent never confirms one.
+pub const CONTEXT_PROPOSE_METHOD: &str = "context.planPropose";

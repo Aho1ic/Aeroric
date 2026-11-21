@@ -153,7 +153,7 @@ Status: proposed
 
 ### D5 有限的多 Agent 分工
 
-2026-11-21 第一步已实现，见 [D5 第一步笔记](../../implemented/feature/2026-11-21-d5-work-plan-rules.md)：新对象和做法第 1–6 条的判断，纯 core，不启动会话。2026-11-21 第二步已实现，见 [D5 第二步笔记](../../implemented/feature/2026-11-21-d5-plans-advance.md)：宿主按调度结果开委派、跟着委派卡推进、重启后从计划和卡片算回原状（第 7 条）。Agent 提议计划、用户确认和看板界面（第 8 条）是第三步。
+2026-11-21 第一步已实现，见 [D5 第一步笔记](../../implemented/feature/2026-11-21-d5-work-plan-rules.md)：新对象和做法第 1–6 条的判断，纯 core，不启动会话。2026-11-21 第二步已实现，见 [D5 第二步笔记](../../implemented/feature/2026-11-21-d5-plans-advance.md)：宿主按调度结果开委派、跟着委派卡推进、重启后从计划和卡片算回原状（第 7 条）。2026-11-21 第三步已实现，见 [D5 第三步笔记](../../implemented/feature/2026-11-21-d5-plan-propose-and-shown.md)：Agent 提议、用户确认，界面放在进度页的委派一节，不另做看板。D5 完成。
 
 **前置：** B1、B3、B6；A1。
 

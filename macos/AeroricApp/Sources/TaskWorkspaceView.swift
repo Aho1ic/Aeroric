@@ -755,6 +755,12 @@ struct TaskWorkspaceView: View {
                             await checkpointAction { try await $0.deleteDelegationRole(id: id) }
                             await loadDelegations(taskID)
                         }
+                    case let .confirmPlan(id):
+                        Task {
+                            await checkpointAction { try await $0.confirmWorkPlan(taskId: taskID, planId: id) }
+                            await services.refreshWorkspace()
+                            await loadDelegations(taskID)
+                        }
                     }
                 },
                 board: boardPanelTask == taskID ? boardPanel : nil,
@@ -845,9 +851,13 @@ struct TaskWorkspaceView: View {
 
     /// B4-2: the task's delegations, the role library, track records and its audit.
     private func loadDelegations(_ taskID: String) async {
-        guard let client = services.sessionsClient,
-              let read = try? await client.delegations(taskId: taskID) else { return }
+        guard let client = services.sessionsClient else { return }
+        // D5: plans first (reading one starts what is due), so units they just
+        // started are among the cards read next.
+        let plans = (try? await client.workPlans(taskId: taskID)) ?? []
+        guard let read = try? await client.delegations(taskId: taskID) else { return }
         var next = DelegationPanelModel(delegations: read.cards, delegateOf: read.delegateOf)
+        if read.delegateOf == nil { next.plans = plans }
         // R2-3b: what each copy-working child has left to bring back.
         for card in read.cards where card.contract.workspace == "copy" {
             if let child = card.childTaskId, let copy = try? await client.copyInfo(taskId: child) {

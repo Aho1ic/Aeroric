@@ -4516,4 +4516,38 @@ async fn a_work_plan_is_saved_and_listed_before_it_is_confirmed() {
         unknown["message"].as_str().unwrap().contains("no task"),
         "{unknown}"
     );
+
+    // An agent proposes one through its context tools: a draft, never confirmed.
+    let token = host
+        .structured
+        .context_tokens()
+        .issue("task-1", "project-1");
+    let proposed = host
+        .call(
+            "context.planPropose",
+            json!({"token": token, "title": "迁移", "units": [
+                {"id": "u1", "title": "调研", "brief": "看表结构"},
+                {"id": "u2", "title": "写脚本", "brief": "写迁移", "dependsOn": ["u1"], "workspace": "shared"}
+            ]}),
+        )
+        .await
+        .unwrap();
+    assert!(proposed["text"]
+        .as_str()
+        .unwrap()
+        .contains("等用户在 Aeroric 里确认"));
+    assert_eq!(proposed["plan"]["plan"]["confirmed"], false);
+    let listed = host
+        .call("delegation.plans", json!({"taskId": "task-1"}))
+        .await
+        .unwrap();
+    assert_eq!(listed["plans"].as_array().unwrap().len(), 2);
+    let bad = host
+        .call(
+            "context.planPropose",
+            json!({"token": "nope", "title": "x", "units": []}),
+        )
+        .await
+        .unwrap_err();
+    assert!(bad["message"].as_str().unwrap().contains("令牌"), "{bad}");
 }
