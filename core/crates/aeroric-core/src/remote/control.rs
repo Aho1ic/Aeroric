@@ -279,6 +279,8 @@ pub async fn revoke_device(
         let existed = auth.revoke(device_id)?;
         if existed {
             state.clients.disconnect_device(device_id);
+            // D4: its kept command results go with it.
+            state.commands.forget_device(device_id);
         }
         existed
     };

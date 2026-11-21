@@ -36,6 +36,8 @@ pub const RPC_CAPABILITIES: &[&str] = &[
     // 审批仍然只能走 `tasks.approvals`(E2EE 连接内),推送只是提醒。
     "push.registration",
     "remote.relay-diagnostics",
+    // D4: commands with a `commandId` run once; `hostEpoch` in `hello`.
+    "commands.idempotent",
 ];
 
 pub fn rpc_capabilities_value() -> Value {
@@ -185,6 +187,8 @@ async fn hello(state: &RemoteState, handle: &dyn RemoteHostHandle) -> Result<Val
         "platform": std::env::consts::OS,
         "rpcVersions": [3, 2],
         "capabilities": rpc_capabilities_value(),
+        // D4: commands carry it back; another means the host restarted.
+        "hostEpoch": state.host_epoch,
     });
     if let (Some(target), Some(identity)) = (
         value.as_object_mut(),

@@ -10,5 +10,6 @@
 
 - 手机与 Mac 之间：配对后经 relay 走端到端加密通道；宿主侧在 `aeroric-host/src/remote_headless.rs`，core 侧纯逻辑在 `aeroric-core/src/remote/`。
 - 配对设备是**完全可信的控制者**：能读写项目文件、建/取消任务、控制 Agent 与终端。部署与安全要求见 [远程访问安全指南](../remote-public-access.md)。
+- 手机的命令（会改东西的方法，见 `remote/commands.rs` 的 `COMMANDS`）可以带 `commandId` 和 `hostEpoch`：同一台设备的同一个 `commandId` 十分钟内只执行一次，重发拿到第一次的结果；`hostEpoch` 不是本次启动的（`hello` 里给出）就以 `STALE_HOST_EPOCH` 开头拒绝；撤销的设备的命令拒绝、结果清掉。不带 `commandId` 的照旧执行。见笔记 `2026-11-21-d4-command-identity`。
 - 推送：宿主经 `push_host.rs` 签名请求发送端，发送端只转发 `kind/eventSeq/collapseKey`。见 [推送平面](../../.agents/notes/implemented/architecture/2026-10-13-push-plane.md)。
 - relay RPC 金样在 `contracts/remote/rpc-golden.json`。

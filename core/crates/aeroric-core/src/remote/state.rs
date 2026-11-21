@@ -513,6 +513,11 @@ pub struct RemoteState {
     pub push_bindings: Arc<PushBindings>,
     /// 推送事件日志:重连 watermark 补发源。
     pub event_log: Arc<EventLog>,
+    /// D4: this host start's identity (a new one each start); commands
+    /// based on another are stale.
+    pub host_epoch: String,
+    /// D4: each device's recent commands, by `commandId`.
+    pub commands: Arc<crate::remote::commands::CommandLedger>,
     pub config: Mutex<RemoteConfig>,
     /// 静态 X25519 密钥对(E2EE 握手与 relay hostId 的根)。
     pub keys: crypto::StaticKeys,
@@ -577,6 +582,8 @@ impl RemoteState {
             task_requests: Arc::new(TaskRequestBroker::default()),
             push_bindings: Arc::new(PushBindings::new()),
             event_log: Arc::new(EventLog::default()),
+            host_epoch: uuid::Uuid::new_v4().simple().to_string(),
+            commands: Arc::default(),
             config: Mutex::new(config),
             keys,
             audit_enabled: true,
@@ -613,6 +620,8 @@ impl RemoteState {
             task_requests: Arc::new(TaskRequestBroker::default()),
             push_bindings: Arc::new(PushBindings::new()),
             event_log: Arc::new(EventLog::default()),
+            host_epoch: uuid::Uuid::new_v4().simple().to_string(),
+            commands: Arc::default(),
             config: Mutex::new(RemoteConfig::default()),
             keys: crypto::StaticKeys::ephemeral().expect("CSPRNG unavailable"),
             audit_enabled: false,

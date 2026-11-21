@@ -812,7 +812,7 @@ pub async fn serve_ws<S>(
                                 let reply = if session.is_orca() {
                                     orca_rpc::handle(&state, &handle.desktop_version(), &text).await
                                 } else {
-                                    handle_request(&state, handle.as_ref(), &text, authentication.rpc_version).await
+                                    handle_request(&state, handle.as_ref(), &authentication.device_id, &text, authentication.rpc_version).await
                                 };
                                 if !send_encrypted(&mut sink, &mut session, crypto::KIND_CTRL, reply.as_bytes()).await {
                                     break;
@@ -1115,6 +1115,7 @@ fn authenticate_first_message(
 async fn handle_request(
     state: &RemoteState,
     handle: &dyn RemoteHostHandle,
+    device_id: &str,
     raw: &str,
     rpc_version: RpcVersion,
 ) -> String {
@@ -1126,8 +1127,39 @@ async fn handle_request(
     if req.method == "auth" {
         return RpcResponse::failure(rpc_version, req.id, "Already authenticated").to_json();
     }
-    match crate::remote::rpc::dispatch(state, handle, &req.method, req.params).await {
+    match dispatch_once(state, handle, device_id, &req.method, req.params).await {
         Ok(result) => RpcResponse::success(rpc_version, req.id, result).to_json(),
         Err(err) => RpcResponse::failure(rpc_version, req.id, err).to_json(),
+    }
+}
+
+/// D4: a command is run once per `commandId` (a resend gets the first
+/// result), refused when based on another host start or from a revoked
+/// device; anything else is dispatched as before.
+pub(crate) async fn dispatch_once(
+    state: &RemoteState,
+    handle: &dyn RemoteHostHandle,
+    device_id: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use crate::remote::commands::{Admit, COMMANDS};
+    if COMMANDS.contains(&method) && !state.auth.lock().contains_device(device_id) {
+        return Err("这台设备的授权已经撤销".into());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    match state
+        .commands
+        .admit(device_id, method, &params, &state.host_epoch, now)
+    {
+        Admit::Run => crate::remote::rpc::dispatch(state, handle, method, params).await,
+        Admit::Refuse(why) => Err(why),
+        Admit::Once(outcome) => outcome
+            .get_or_init(|| crate::remote::rpc::dispatch(state, handle, method, params))
+            .await
+            .clone(),
     }
 }
