@@ -8,11 +8,20 @@
 //! a keyword matcher — which proves the flow and gives a baseline; a run
 //! with a real harness (a model choosing) is NOT RUN, see the note
 //! `2026-11-20-c8-tool-trigger-eval`.
+//!
+//! H8 first step (2026-11-21): a run is kept as a [`Record`] per harness —
+//! per tool the hits, false triggers, calls to tools the case did not want
+//! (无关调用) and how long until the wanted tool was first called — with a
+//! fingerprint of each tool's description. Two records of one harness give a
+//! before/after table ([`compare`]); records of several harnesses give one
+//! table of trigger rates side by side ([`by_harness`]). A description is
+//! tried before it is written into the code with [`with_descriptions`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::time::Instant;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -72,9 +81,10 @@ pub fn cases(set: &EvalSet) -> Vec<Case> {
     out
 }
 
-/// What decides, for one request, which tool (if any) to call.
+/// What decides, for one request, which tools to call, in order (empty:
+/// none). The first is the pick; any after it are counted too.
 pub trait Harness {
-    fn choose(&mut self, prompt: &str, tools: &[Value]) -> Option<String>;
+    fn calls(&mut self, prompt: &str, tools: &[Value]) -> Vec<String>;
 }
 
 /// The fake: scores each tool by how many of the request's words (Latin
@@ -113,7 +123,7 @@ fn words(text: &str) -> BTreeSet<String> {
 }
 
 impl Harness for KeywordHarness {
-    fn choose(&mut self, prompt: &str, tools: &[Value]) -> Option<String> {
+    fn calls(&mut self, prompt: &str, tools: &[Value]) -> Vec<String> {
         let asked = words(prompt);
         tools
             .iter()
@@ -132,15 +142,73 @@ impl Harness for KeywordHarness {
             .filter(|(score, _)| *score >= self.floor)
             .max_by_key(|(score, _)| *score)
             .map(|(_, name)| name)
+            .into_iter()
+            .collect()
     }
+}
+
+/// The tools as offered, with some descriptions replaced: a description is
+/// tried here before it is written into the code.
+pub fn with_descriptions(tools: &[Value], descriptions: &BTreeMap<String, String>) -> Vec<Value> {
+    tools
+        .iter()
+        .map(|tool| {
+            let mut tool = tool.clone();
+            let name = tool["name"].as_str().unwrap_or_default().to_string();
+            if let Some(text) = descriptions.get(&name) {
+                tool["description"] = json!(text);
+            }
+            tool
+        })
+        .collect()
+}
+
+/// A description's fingerprint (FNV-1a, 16 hex): whether it changed between
+/// two records, not what it said.
+pub fn fingerprint(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 /// One request's outcome.
 pub struct Outcome {
     pub case: Case,
+    /// The first call, if any.
     pub chosen: Option<String>,
-    /// The server's `structuredContent.status` for the call made, if any.
+    /// The server's `structuredContent.status` for the first call.
     pub status: Option<String>,
+    /// Every call, in order.
+    pub calls: Vec<String>,
+    /// From the request to the first call of the wanted tool (should-cases).
+    pub first_hit_ms: Option<u64>,
+}
+
+impl Outcome {
+    /// Calls of tools other than the one the case wanted.
+    pub fn stray(&self) -> usize {
+        self.calls
+            .iter()
+            .filter(|c| Some(c.as_str()) != self.case.expected.as_deref())
+            .count()
+    }
+}
+
+/// One tool's counts in a run.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Row {
+    pub hits: usize,
+    pub should: usize,
+    pub false_triggers: usize,
+    pub should_not: usize,
+    /// Calls, in this tool's cases, of tools the case did not want.
+    pub stray: usize,
+    /// Mean time to the first call of the wanted tool, over the hits.
+    pub first_hit_ms: Option<u64>,
 }
 
 /// How a run went, per tool and overall.
@@ -156,33 +224,45 @@ pub struct Report {
     /// `instead` tool, or none).
     pub exact: usize,
     pub total: usize,
-    pub per_tool: BTreeMap<String, (usize, usize, usize, usize)>,
+    pub stray: usize,
+    pub per_tool: BTreeMap<String, Row>,
 }
 
 impl Report {
     pub fn of(outcomes: &[Outcome]) -> Self {
         let mut report = Report::default();
+        let mut waits: BTreeMap<String, Vec<u64>> = BTreeMap::new();
         for o in outcomes {
             let called = o.chosen.as_deref() == Some(o.case.tool.as_str());
             let row = report.per_tool.entry(o.case.tool.clone()).or_default();
+            row.stray += o.stray();
+            report.stray += o.stray();
             if o.case.should {
                 report.should += 1;
-                row.1 += 1;
+                row.should += 1;
                 if called {
                     report.hits += 1;
-                    row.0 += 1;
+                    row.hits += 1;
+                }
+                if let Some(ms) = o.first_hit_ms {
+                    waits.entry(o.case.tool.clone()).or_default().push(ms);
                 }
             } else {
                 report.should_not += 1;
-                row.3 += 1;
+                row.should_not += 1;
                 if called {
                     report.false_triggers += 1;
-                    row.2 += 1;
+                    row.false_triggers += 1;
                 }
             }
             report.total += 1;
             if o.chosen == o.case.expected {
                 report.exact += 1;
+            }
+        }
+        for (tool, list) in waits {
+            if let Some(row) = report.per_tool.get_mut(&tool) {
+                row.first_hit_ms = Some(list.iter().sum::<u64>() / list.len() as u64);
             }
         }
         report
@@ -193,13 +273,133 @@ impl Report {
             "应触发命中 {}/{}，误触发 {}/{}，完全一致 {}/{}\n",
             self.hits, self.should, self.false_triggers, self.should_not, self.exact, self.total
         );
-        for (tool, (hit, should, wrong, not)) in &self.per_tool {
+        for (tool, row) in &self.per_tool {
             out.push_str(&format!(
-                "  {tool}: 命中 {hit}/{should}，误触发 {wrong}/{not}\n"
+                "  {tool}: 命中 {}/{}，误触发 {}/{}\n",
+                row.hits, row.should, row.false_triggers, row.should_not
             ));
         }
         out
     }
+}
+
+/// A run kept: which harness, under what label (`改描述前`), and per tool
+/// its counts and its description's fingerprint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Record {
+    pub version: u32,
+    pub harness: String,
+    pub label: String,
+    pub at_ms: u64,
+    pub rows: BTreeMap<String, Row>,
+    pub described: BTreeMap<String, String>,
+}
+
+impl Record {
+    pub fn of(harness: &str, label: &str, at_ms: u64, tools: &[Value], report: &Report) -> Self {
+        Record {
+            version: 1,
+            harness: harness.into(),
+            label: label.into(),
+            at_ms,
+            rows: report.per_tool.clone(),
+            described: tools
+                .iter()
+                .filter_map(|t| {
+                    Some((
+                        t["name"].as_str()?.to_string(),
+                        fingerprint(t["description"].as_str()?),
+                    ))
+                })
+                .collect(),
+        }
+    }
+
+    fn total(&self) -> Row {
+        let mut out = Row::default();
+        for row in self.rows.values() {
+            out.hits += row.hits;
+            out.should += row.should;
+            out.false_triggers += row.false_triggers;
+            out.should_not += row.should_not;
+            out.stray += row.stray;
+        }
+        out
+    }
+}
+
+fn ratio(a: usize, b: usize) -> String {
+    format!("{a}/{b}")
+}
+
+/// The before/after table of one harness: a row per tool whose description
+/// or counts changed, then the totals. Records of two harnesses are not
+/// compared (a change is only seen on the harness it was measured on).
+pub fn compare(before: &Record, after: &Record) -> Result<String, String> {
+    if before.harness != after.harness {
+        return Err(format!(
+            "两份记录来自不同的 Harness（{} 和 {}），不能对比",
+            before.harness, after.harness
+        ));
+    }
+    let mut out = format!(
+        "{}：{} → {}\n\n| 工具 | 描述 | 应触发命中 | 误触发 | 无关调用 |\n|---|---|---|---|---|\n",
+        after.harness, before.label, after.label
+    );
+    let tools: BTreeSet<&String> = before.rows.keys().chain(after.rows.keys()).collect();
+    let line = |name: &str, described: &str, a: &Row, b: &Row| {
+        format!(
+            "| {name} | {described} | {} → {} | {} → {} | {} → {} |\n",
+            ratio(a.hits, a.should),
+            ratio(b.hits, b.should),
+            ratio(a.false_triggers, a.should_not),
+            ratio(b.false_triggers, b.should_not),
+            a.stray,
+            b.stray
+        )
+    };
+    for tool in tools {
+        let empty = Row::default();
+        let a = before.rows.get(tool).unwrap_or(&empty);
+        let b = after.rows.get(tool).unwrap_or(&empty);
+        let rewritten = before.described.get(tool) != after.described.get(tool);
+        let moved = (a.hits, a.should, a.false_triggers, a.should_not, a.stray)
+            != (b.hits, b.should, b.false_triggers, b.should_not, b.stray);
+        if rewritten || moved {
+            out.push_str(&line(tool, if rewritten { "改了" } else { "" }, a, b));
+        }
+    }
+    out.push_str(&line("合计", "", &before.total(), &after.total()));
+    Ok(out)
+}
+
+/// The trigger rates of several harnesses side by side: per tool, each
+/// harness's hits and false triggers (`—` where it was not run).
+pub fn by_harness(records: &[Record]) -> String {
+    let mut out = String::from("| 工具 |");
+    for r in records {
+        out.push_str(&format!(" {} |", r.harness));
+    }
+    out.push_str("\n|---|");
+    out.push_str(&"---|".repeat(records.len()));
+    out.push('\n');
+    let tools: BTreeSet<&String> = records.iter().flat_map(|r| r.rows.keys()).collect();
+    for tool in tools {
+        out.push_str(&format!("| {tool} |"));
+        for r in records {
+            match r.rows.get(tool) {
+                Some(row) => out.push_str(&format!(
+                    " 命中 {} · 误触发 {} |",
+                    ratio(row.hits, row.should),
+                    ratio(row.false_triggers, row.should_not)
+                )),
+                None => out.push_str(" — |"),
+            }
+        }
+        out.push('\n');
+    }
+    out
 }
 
 /// Runs every case through `harness` and the real server: the server is
@@ -239,20 +439,27 @@ pub async fn run(harness: &mut dyn Harness, tools: &[Value], cases: Vec<Case>) -
     assert!(listed["result"]["tools"].is_array());
     let mut outcomes = Vec::new();
     for case in cases {
-        let chosen = harness.choose(&case.prompt, tools);
-        let status = match &chosen {
-            Some(name) => {
-                let reply = send(ask("tools/call", json!({"name": name, "arguments": {}}))).await;
-                reply["result"]["structuredContent"]["status"]
+        let started = Instant::now();
+        let calls = harness.calls(&case.prompt, tools);
+        let mut status = None;
+        let mut first_hit_ms = None;
+        for (i, name) in calls.iter().enumerate() {
+            let reply = send(ask("tools/call", json!({"name": name, "arguments": {}}))).await;
+            if i == 0 {
+                status = reply["result"]["structuredContent"]["status"]
                     .as_str()
-                    .map(str::to_string)
+                    .map(str::to_string);
             }
-            None => None,
-        };
+            if case.should && first_hit_ms.is_none() && *name == case.tool {
+                first_hit_ms = Some(started.elapsed().as_millis() as u64);
+            }
+        }
         outcomes.push(Outcome {
+            chosen: calls.first().cloned(),
             case,
-            chosen,
             status,
+            calls,
+            first_hit_ms,
         });
     }
     // Both halves of the agent's end gone: the server reads its end.
@@ -346,27 +553,19 @@ mod tests {
             expected: expected.map(str::to_string),
             should,
         };
+        let outcome = |case: Case, calls: &[&str], first_hit_ms: Option<u64>| Outcome {
+            case,
+            chosen: calls.first().map(|c| c.to_string()),
+            status: None,
+            calls: calls.iter().map(|c| c.to_string()).collect(),
+            first_hit_ms,
+        };
         let outcomes = vec![
-            Outcome {
-                case: case("a", true, Some("a")),
-                chosen: Some("a".into()),
-                status: None,
-            },
-            Outcome {
-                case: case("a", true, Some("a")),
-                chosen: None,
-                status: None,
-            },
-            Outcome {
-                case: case("a", false, Some("b")),
-                chosen: Some("a".into()),
-                status: None,
-            },
-            Outcome {
-                case: case("a", false, None),
-                chosen: None,
-                status: None,
-            },
+            outcome(case("a", true, Some("a")), &["b", "a"], Some(40)),
+            outcome(case("a", true, Some("a")), &[], None),
+            outcome(case("a", false, Some("b")), &["a"], None),
+            outcome(case("a", false, None), &[], None),
+            outcome(case("a", true, Some("a")), &["a"], Some(20)),
         ];
         let report = Report::of(&outcomes);
         assert_eq!(
@@ -376,12 +575,138 @@ mod tests {
                 report.false_triggers,
                 report.should_not
             ),
-            (1, 2, 1, 2)
+            (1, 3, 1, 2)
         );
         assert_eq!(report.exact, 2);
-        assert_eq!(report.per_tool["a"], (1, 2, 1, 2));
+        let row = &report.per_tool["a"];
+        assert_eq!(
+            (row.hits, row.should, row.false_triggers, row.should_not),
+            (1, 3, 1, 2)
+        );
+        // H8: the first case called `b` before `a`; the third wanted `b`.
+        assert_eq!((row.stray, report.stray), (2, 2));
+        assert_eq!(row.first_hit_ms, Some(30));
         assert!(report
             .text()
-            .starts_with("应触发命中 1/2，误触发 1/2，完全一致 2/4"));
+            .starts_with("应触发命中 1/3，误触发 1/2，完全一致 2/5"));
+    }
+
+    /// H8: a description tried before it is written into the code; the two
+    /// records of the keyword harness give the before/after table, which
+    /// names the tool rewritten and leaves out the tools that did not move.
+    #[tokio::test]
+    async fn a_description_change_gives_a_before_after_table() {
+        let set = load();
+        let tools = crate::mcp_context::all_tools();
+        let run_with = async |tools: &[Value]| {
+            let outcomes = run(&mut KeywordHarness { floor: 2 }, tools, cases(&set)).await;
+            Report::of(&outcomes)
+        };
+        let before = Record::of("keyword", "改描述前", 1, &tools, &run_with(&tools).await);
+        // The rewrite: board_write's description in its users' words.
+        let rewrite = set.tools["board_write"].should.join(" ");
+        let changed = with_descriptions(
+            &tools,
+            &BTreeMap::from([("board_write".to_string(), rewrite)]),
+        );
+        let after = Record::of(
+            "keyword",
+            "改描述后",
+            2,
+            &changed,
+            &run_with(&changed).await,
+        );
+        assert!(
+            after.rows["board_write"].hits > before.rows["board_write"].hits,
+            "{:?} → {:?}",
+            before.rows["board_write"],
+            after.rows["board_write"]
+        );
+        let kept: Record = serde_json::from_str(&serde_json::to_string(&after).unwrap()).unwrap();
+        assert_eq!(kept, after);
+
+        let table = compare(&before, &after).unwrap();
+        println!("H8 before/after (keyword harness):\n{table}");
+        assert!(table.starts_with("keyword：改描述前 → 改描述后"));
+        assert!(table.contains("\n| board_write | 改了 | "), "{table}");
+        assert!(table
+            .trim_end()
+            .lines()
+            .last()
+            .unwrap()
+            .starts_with("| 合计 |  | "));
+        let still = before
+            .rows
+            .keys()
+            .find(|t| {
+                before.rows[*t] == after.rows[*t] && before.described[*t] == after.described[*t]
+            })
+            .expect("some tool did not move");
+        assert!(!table.contains(&format!("| {still} |")), "{table}");
+    }
+
+    struct Scripted(Vec<&'static str>);
+
+    impl Harness for Scripted {
+        fn calls(&mut self, _: &str, _: &[Value]) -> Vec<String> {
+            self.0.iter().map(|c| c.to_string()).collect()
+        }
+    }
+
+    /// H8: every call is made; the wanted one is timed, the others counted
+    /// as stray; the status is the first call's.
+    #[tokio::test]
+    async fn the_run_times_the_wanted_call_and_counts_the_others() {
+        let tools = crate::mcp_context::all_tools();
+        let case = Case {
+            tool: "search_wiki".into(),
+            prompt: "Wiki 里有没有讲网关？".into(),
+            expected: Some("search_wiki".into()),
+            should: true,
+        };
+        let mut harness = Scripted(vec!["memory_recall", "search_wiki"]);
+        let outcomes = run(&mut harness, &tools, vec![case]).await;
+        let o = &outcomes[0];
+        assert_eq!(o.calls, vec!["memory_recall", "search_wiki"]);
+        assert_eq!(o.chosen.as_deref(), Some("memory_recall"));
+        assert!(o.status.is_some());
+        assert_eq!(o.stray(), 1);
+        assert!(o.first_hit_ms.is_some());
+        let report = Report::of(&outcomes);
+        assert_eq!(report.hits, 0, "the pick was another tool");
+        assert_eq!(report.per_tool["search_wiki"].stray, 1);
+    }
+
+    /// H8: a change is compared on the harness it was measured on; several
+    /// harnesses are shown side by side.
+    #[test]
+    fn harnesses_are_shown_side_by_side_not_compared() {
+        let row = |hits, false_triggers| Row {
+            hits,
+            should: 3,
+            false_triggers,
+            should_not: 3,
+            ..Row::default()
+        };
+        let record = |harness: &str, rows: Vec<(&str, Row)>| Record {
+            version: 1,
+            harness: harness.into(),
+            label: "基线".into(),
+            at_ms: 1,
+            rows: rows.into_iter().map(|(t, r)| (t.to_string(), r)).collect(),
+            described: BTreeMap::new(),
+        };
+        let keyword = record("keyword", vec![("a", row(1, 0)), ("b", row(2, 1))]);
+        let codex = record("codex", vec![("a", row(3, 0))]);
+        assert!(compare(&keyword, &codex)
+            .unwrap_err()
+            .contains("不同的 Harness"));
+        let table = by_harness(&[keyword, codex]);
+        assert!(
+            table.starts_with("| 工具 | keyword | codex |\n|---|---|---|\n"),
+            "{table}"
+        );
+        assert!(table.contains("| a | 命中 1/3 · 误触发 0/3 | 命中 3/3 · 误触发 0/3 |"));
+        assert!(table.contains("| b | 命中 2/3 · 误触发 1/3 | — |"));
     }
 }
