@@ -30,6 +30,19 @@ fn init_carries_the_session_id() {
     );
 }
 
+/// E15: a server `init` reports as failed is said, with the session start.
+#[test]
+fn init_says_which_mcp_server_failed() {
+    let mut m = ClaudeMapper::default();
+    let (updates, signal) = m.map(&json!({"type": "system", "subtype": "init",
+        "session_id": "s1", "mcp_servers": [{"name": "aeroric_context", "status": "failed"}]}));
+    assert_eq!(types(&updates), ["notice"]);
+    assert!(signal.is_some());
+    let (again, _) = m.map(&json!({"type": "system", "subtype": "init",
+        "session_id": "s1", "mcp_servers": [{"name": "aeroric_context", "status": "failed"}]}));
+    assert!(again.is_empty());
+}
+
 #[test]
 fn streamed_text_and_thinking_are_not_repeated_by_the_full_message() {
     let mut m = ClaudeMapper::default();

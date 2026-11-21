@@ -205,6 +205,7 @@ impl CodexSession {
             inbox,
             connection: None,
             warned: Default::default(),
+            mcp: Default::default(),
         };
         runtime.spawn(actor.run(command_rx, inbox_rx));
         Arc::new(Self {
@@ -414,6 +415,8 @@ struct Actor {
     connection: Option<Connection>,
     /// Advisory messages already shown in this session (N6a C2).
     warned: std::collections::HashSet<String>,
+    /// E15: each MCP server's start, timed, to say which one failed.
+    mcp: crate::sessions::live::mcp_startup::CodexStartups,
 }
 
 impl Actor {
@@ -972,6 +975,9 @@ impl Actor {
                 self.note_spawned(&params);
                 self.track_command(&method, &params);
                 let (mut updates, signal) = map_notification(&method, &params);
+                if method == "mcpServer/startupStatus/updated" {
+                    updates.extend(self.mcp.observe(&params, std::time::Instant::now()));
+                }
                 if WARNING_METHODS.contains(&method.as_str()) {
                     updates.retain(|update| match update {
                         SessionUpdateKind::Error { message, .. } => {

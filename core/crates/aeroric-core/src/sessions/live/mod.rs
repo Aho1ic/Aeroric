@@ -20,6 +20,7 @@ pub mod envelope;
 pub mod executor;
 pub mod isolated_copy;
 pub mod login;
+pub mod mcp_startup;
 pub mod omp;
 pub mod opening;
 pub mod read_only;

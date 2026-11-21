@@ -68,6 +68,8 @@ pub struct ClaudeMapper {
     /// Claude's tasks still running, by task id. Task ids belong to the
     /// session, not the turn: an interrupt does not end background ones.
     tasks: HashMap<String, Task>,
+    /// E15: MCP servers `system/init` reported as failed, said once.
+    mcp: crate::sessions::live::mcp_startup::ClaudeStartups,
 }
 
 fn s<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -283,7 +285,7 @@ impl ClaudeMapper {
                     session_id: id.to_string(),
                     model: s(message, "model").map(str::to_string),
                 });
-                (vec![], signal)
+                (self.mcp.observe(message), signal)
             }
             Some("task_started") | Some("task_progress") => (shown(task("running")), None),
             Some("task_notification") => {

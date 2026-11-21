@@ -158,6 +158,40 @@ async fn a_repeated_warning_is_shown_once_per_session() {
     assert_eq!(notices, ["Model metadata not found", "Other"]);
 }
 
+/// E15: a server Codex could not start is named in the session.
+#[tokio::test]
+async fn a_failed_mcp_start_is_said_in_the_session() {
+    let mut h = start(spec());
+    let peer = running(&mut h).await;
+    peer.notify(
+        "mcpServer/startupStatus/updated",
+        json!({"threadId": "th1", "name": "aeroric_context", "status": "starting"}),
+    );
+    peer.notify(
+        "mcpServer/startupStatus/updated",
+        json!({"threadId": "th1", "name": "aeroric_context", "status": "failed",
+            "error": "tools/list timed out"}),
+    );
+    complete(&peer, "completed");
+    let sink = Arc::clone(&h.sink);
+    until("done", move || sink.last_status() == Some(TaskStatus::Done)).await;
+    let Replay::Updates(updates) = h.log.since(0) else {
+        panic!("no gap expected")
+    };
+    let notices: Vec<(String, String)> = updates
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::Notice { level, message } => Some((level.clone(), message.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, "error");
+    assert!(
+        notices[0].1.contains("aeroric_context") && notices[0].1.contains("tools/list timed out")
+    );
+}
+
 #[tokio::test]
 async fn an_approval_waits_for_the_user_and_a_reasoned_denial_steers() {
     let mut h = start(spec());
