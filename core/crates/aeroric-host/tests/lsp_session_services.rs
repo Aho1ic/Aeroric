@@ -407,7 +407,7 @@ async fn apply_workspace_edit_writes_and_reports_counts() {
 ///
 /// 判据取**真进程的存活性**:fake server 收到 `shutdown` 会回一帧,随后收到
 /// `exit` 时自我了断。关掉最后一个文档后,宿主端必须已经把会话取出并 shutdown,
-/// 于是 `take_local_lsp_sessions_with_prefix("local:")` 为空、且那份录音的
+/// 于是表里已经没有本测试项目的会话、且那份录音的
 /// stdin 已关(进程随后退出)。这里用「快照表里已经没有该会话」作为机器可读的
 /// 主判据,「进程退出」作为辅证。
 #[tokio::test(flavor = "multi_thread")]
@@ -418,6 +418,17 @@ async fn closing_the_last_document_tears_the_session_down_on_the_host() {
 
     // 先真起一次会话(握手 + publishDiagnostics),证明 server 确实活着。
     success(call(&mut reader, &mut writer, "ide.lsp_hover", body.clone()).await);
+    // 只看本测试自己的会话:会话表是进程级的,同文件的其他测试并行地往里放
+    // `local:` 会话;按前缀整表取走既会误判,也会拿走别人的会话。键与宿主
+    // 一致:规范化后的项目根 + 语言。
+    let own = format!(
+        "local:{}:typescript",
+        project.canonicalize().unwrap().to_string_lossy()
+    );
+    assert!(
+        engine::local_lsp_session_handle(&own).is_some(),
+        "会话应已在表里:{own}"
+    );
 
     let opened = success(
         call(
@@ -450,7 +461,7 @@ async fn closing_the_last_document_tears_the_session_down_on_the_host() {
     // shutdown 是异步收尾,给它一个有界窗口。
     let mut drained = false;
     for _ in 0..40 {
-        if engine::take_local_lsp_sessions_with_prefix("local:").is_empty() {
+        if engine::local_lsp_session_handle(&own).is_none() {
             drained = true;
             break;
         }
@@ -474,7 +485,7 @@ async fn closing_the_last_document_tears_the_session_down_on_the_host() {
     // 裸标量(不是 {"closedDocuments":N})——Tauri 壳按 usize 解,包成对象在
     // External 模式会解析失败。
     assert_eq!(shutdown, json!(0), "{shutdown}");
-    assert!(engine::take_local_lsp_sessions_with_prefix("local:").is_empty());
+    assert!(engine::local_lsp_session_handle(&own).is_none());
 }
 
 /// 切片一百一十反思(独立审查 P2):`ide.lsp_inlay_hints` 的旧命令走的是
