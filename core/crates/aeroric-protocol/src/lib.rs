@@ -9,6 +9,7 @@
 
 pub mod artifacts;
 pub mod board;
+pub mod budget;
 pub mod capability;
 pub mod change_review;
 pub mod checkpoint;
