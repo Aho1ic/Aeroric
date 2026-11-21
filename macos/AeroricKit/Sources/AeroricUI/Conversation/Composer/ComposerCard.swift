@@ -5,6 +5,8 @@ public enum ComposerSendState: Equatable, Sendable {
     case ready
     case blocked(String)
     case running
+    /// E11: stop was asked; the agent has not stopped yet.
+    case stopping
 }
 
 /// Shared input card for the new-session home and the session page:
@@ -168,6 +170,13 @@ public struct ComposerCard<Footer: View>: View {
             .help("停止任务（结束当前运行）")
             .accessibilityLabel("停止任务")
             .accessibilityIdentifier("\(identifierPrefix).stop")
+        case .stopping:
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 30, height: 30)
+                .help("正在停止：等 Agent 停下这一轮")
+                .accessibilityLabel("正在停止")
+                .accessibilityIdentifier("\(identifierPrefix).stopping")
         case .ready, .blocked:
             let ready = sendState == .ready && isEditable
                 && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

@@ -179,8 +179,10 @@ public enum AttentionQueue {
         case "input_required":
             return Item(task: task, reason: .waitingOnYou, detail: check?.summary, atMs: updated)
         // A `where` binds only the pattern before it, so both share one guard.
+        // E11: a turn the person stopped is theirs, not something to handle
+        // (it falls to the checks below); one a host restart cut is.
         case "failed" where nowMs <= updated + recentWindowMs,
-             "interrupted" where nowMs <= updated + recentWindowMs:
+             "interrupted" where nowMs <= updated + recentWindowMs && task.restartCut:
             let cut = task.status == "interrupted" && task.restartCut
             return Item(task: task, reason: task.status == "failed" ? .failed : .interrupted,
                         detail: check?.summary ?? (cut ? RestartCutText.attention(outward: task.outwardBeforeCut) : nil),

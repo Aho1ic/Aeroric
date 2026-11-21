@@ -13,13 +13,14 @@ final class RestartCutTests: XCTestCase {
         return entry
     }
 
-    /// A row the restart cut says so; the user's own stop does not.
-    func testARestartCutRowSaysSoAndAStopDoesNot() {
+    /// A row the restart cut says so; the user's own stop is not listed at
+    /// all (E11: the person stopped it, there is nothing to handle).
+    func testARestartCutRowSaysSoAndAStopIsNotListed() {
         let items = AttentionQueue.items([task("cut", "interrupted", cut: true),
                                           task("stopped", "interrupted", cut: false)], nowMs: 10)
         let detail = Dictionary(uniqueKeysWithValues: items.map { ($0.task.id, $0.detail) })
         XCTAssertEqual(detail["cut"], RestartCutText.attention)
-        XCTAssertEqual(detail["stopped"], .some(nil))
+        XCTAssertFalse(items.contains { $0.task.id == "stopped" })
         XCTAssertEqual(TurnBillText.notRunReason("hostRestart"), "Aeroric 重启")
     }
 

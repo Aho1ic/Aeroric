@@ -112,6 +112,27 @@ final class LiveSessionStoreTests: XCTestCase {
         XCTAssertTrue(actions.calls.contains("prompt hi"))
     }
 
+    /// E11: after 停止 the page says 正在停止 until the turn really ends.
+    func testStopSaysStoppingUntilTheTurnEnds() async {
+        let actions = FakeLiveActions(state: state(seq: 4))
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        actions.batches = [LiveUpdatesBatch(updates: [update(5, .turnStarted(turnId: "u"))], latestSeq: 5)]
+        await store.poll()
+        XCTAssertTrue(store.turnActive)
+        XCTAssertFalse(store.stopping)
+        await store.interrupt()
+        XCTAssertTrue(actions.calls.contains("interrupt"))
+        XCTAssertTrue(store.stopping, "asked, not stopped yet")
+        await store.poll()
+        XCTAssertTrue(store.stopping, "still running")
+        actions.batches = [LiveUpdatesBatch(updates: [update(6, .turnEnded(turnId: "u", reason: .interrupted, error: nil))],
+                                            latestSeq: 6)]
+        await store.poll()
+        XCTAssertFalse(store.turnActive)
+        XCTAssertFalse(store.stopping)
+    }
+
     /// 2026-11-12 (perf): the page reads turns the store grouped once per
     /// history read, not ones it rebuilds per body.
     func testHistoryIsGroupedIntoTurnsOncePerRead() async {

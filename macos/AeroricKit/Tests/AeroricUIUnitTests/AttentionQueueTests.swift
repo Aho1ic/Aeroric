@@ -22,8 +22,9 @@ final class AttentionQueueTests: XCTestCase {
             task("wait", "input_required", updated: now - 10),
             task("archived", "input_required", updated: now, archived: true),
         ], nowMs: now)
-        XCTAssertEqual(items.map(\.task.id), ["wait", "wait-old", "intr", "fail"])
-        XCTAssertEqual(items.map(\.reason), [.waitingOnYou, .waitingOnYou, .interrupted, .failed])
+        // E11: "intr" was stopped by the person (no restart cut): not listed.
+        XCTAssertEqual(items.map(\.task.id), ["wait", "wait-old", "fail"])
+        XCTAssertEqual(items.map(\.reason), [.waitingOnYou, .waitingOnYou, .failed])
     }
 
     func testAFailedCheckJoinsTheQueueOnceAndAgesOut() {

@@ -707,6 +707,7 @@ public struct LiveSessionView: View {
 
     private var sendState: ComposerSendState {
         if store.state == nil { return .blocked("正在打开会话") }
+        if store.stopping && store.turnActive { return .stopping }
         return store.turnActive && draft.isEmpty ? .running : .ready
     }
 

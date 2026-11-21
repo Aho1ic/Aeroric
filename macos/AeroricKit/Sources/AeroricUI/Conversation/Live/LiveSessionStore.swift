@@ -411,6 +411,7 @@ public final class LiveSessionStore {
                 return false
             case let .applied(turnEnded):
                 if !wasActive && current.turnActive { baseline = LiveHistoryMerge.assistantCount(history) }
+                if stopping && !current.turnActive { stopping = false }
                 if current != model { model = current }
                 retainApprovals(pending: current.pending)
                 trimAnswering(current.questions, resolved: batch.updates.compactMap {
@@ -844,8 +845,17 @@ public final class LiveSessionStore {
         }
     }
 
+    /// E11: stop was asked and the turn has not ended yet (正在停止).
+    public private(set) var stopping = false
+
     public func interrupt() async {
-        do { try await actions.interrupt(taskID: taskID) } catch { errorText = "停止失败：\(error)" }
+        stopping = true
+        do {
+            try await actions.interrupt(taskID: taskID)
+        } catch {
+            stopping = false
+            errorText = "停止失败：\(error)"
+        }
     }
 
     public func endSession() async {
