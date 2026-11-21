@@ -24,6 +24,7 @@ pub mod omp;
 pub mod opening;
 pub mod read_only;
 pub mod recall;
+pub mod receipts;
 pub mod remote;
 pub mod review;
 pub mod rollout;

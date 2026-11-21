@@ -52,6 +52,74 @@ pub struct CliRemoteHandle {
     /// (文件改了但服务没重启),也让诊断结果依赖一个进程级共享文件——测试里就是
     /// 并发用例互相踩。调用方(serve)把启动时决定的配置传进来。
     pub relay: Option<(String, Option<String>)>,
+    /// D4: the structured sessions. A phone's answer to one of their
+    /// permission requests goes to its driver, and the phone is told what
+    /// the agent got (A2), not just that the answer was taken.
+    pub live: Option<Arc<aeroric_core::sessions::live::executor::StructuredExecutor>>,
+}
+
+/// D4: how long a phone's answer waits for the driver's settlement before
+/// the phone is told it is not confirmed yet.
+const ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// D4: answer a structured session's permission request from the phone and
+/// say what came of it: `resolved` (the agent got it), `sendFailed` (not
+/// written, still open), `ended` (gone with the connection), `answeredElsewhere`
+/// (another end is answering, or it is over), or `unconfirmed` (no word
+/// within `limit`: look on the Mac). Never retried.
+pub(crate) async fn answer_structured(
+    driver: &dyn aeroric_core::sessions::live::SessionDriver,
+    receipts: &aeroric_core::sessions::live::receipts::PermissionReceipts,
+    task_id: &str,
+    request_id: &str,
+    approve: bool,
+    limit: std::time::Duration,
+) -> Value {
+    use aeroric_core::sessions::live::receipts::PermissionOutcome;
+    use aeroric_core::sessions::live::{Decision, DriverError};
+    let reply = |accepted: bool, outcome: &str, reason: Option<String>| {
+        json!({
+            "accepted": accepted,
+            "outcome": outcome,
+            "reason": reason,
+            "taskId": task_id,
+            "eventId": request_id,
+        })
+    };
+    receipts.forget(task_id, request_id);
+    let decision = if approve {
+        Decision::AllowOnce
+    } else {
+        Decision::Deny { reason: None }
+    };
+    match driver.respond(request_id, decision) {
+        Ok(()) => {}
+        Err(DriverError::AlreadyAnswered(_)) => {
+            return reply(
+                false,
+                "answeredElsewhere",
+                Some("另一端正在回答这条审批".into()),
+            )
+        }
+        Err(DriverError::UnknownRequest(_)) => {
+            return reply(
+                false,
+                "answeredElsewhere",
+                Some("这条审批已由另一端处理，或已经结束".into()),
+            )
+        }
+        Err(e) => return reply(false, "sendFailed", Some(e.to_string())),
+    }
+    match receipts.wait(task_id, request_id, limit).await {
+        Some(PermissionOutcome::Resolved(_)) => reply(true, "resolved", None),
+        Some(PermissionOutcome::Failed(why)) => reply(false, "sendFailed", Some(why)),
+        Some(PermissionOutcome::Ended(why)) => reply(false, "ended", Some(why)),
+        None => reply(
+            false,
+            "unconfirmed",
+            Some("Mac 还没确认送到 Agent，回到 Mac 上看".into()),
+        ),
+    }
 }
 
 impl CliRemoteHandle {
@@ -233,6 +301,22 @@ impl RemoteHostHandle for CliRemoteHandle {
         if !matches!(action, "approve" | "deny") {
             return Err("Remote approval action must be approve or deny".to_string());
         }
+        // D4: a structured session's request goes to its driver (A2 receipts).
+        if let Some(live) = &self.live {
+            if let Some(driver) = live.registry().get(task_id) {
+                if driver.snapshot().pending.iter().any(|p| p.id == request_id) {
+                    return Ok(answer_structured(
+                        driver.as_ref(),
+                        live.receipts(),
+                        task_id,
+                        &request_id,
+                        action == "approve",
+                        ANSWER_WAIT,
+                    )
+                    .await);
+                }
+            }
+        }
         let outcome_val = json!({
             "kind": if action == "approve" { "approved" } else { "denied" },
             "action": action,
@@ -252,6 +336,7 @@ impl RemoteHostHandle for CliRemoteHandle {
                 guard.resolved_events.insert(request_id.clone());
                 Ok(json!({
                     "accepted": true,
+                    "outcome": "resolved",
                     "taskId": task_id,
                     "eventId": request_id,
                     "sessionHint": answer.session_hint,
@@ -1547,3 +1632,7 @@ pub fn register_remote_services(
         }),
     );
 }
+
+#[cfg(test)]
+#[path = "remote_headless_tests.rs"]
+mod tests;

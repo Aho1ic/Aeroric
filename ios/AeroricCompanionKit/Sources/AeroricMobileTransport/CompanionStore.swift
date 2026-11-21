@@ -126,6 +126,26 @@ public enum CompanionApprovalOutcome: Equatable, Sendable {
     case timedOut
     /// Another end answered first (`BUSY` / `NOT_FOUND`).
     case answeredElsewhere
+    /// D4: the Mac took the answer but did not see it reach the agent in
+    /// time; look on the Mac.
+    case unconfirmed(reason: String)
+
+    /// D4: the Mac's reply to `task.respond`. `outcome` says what the agent
+    /// got; an older Mac that only says `accepted` counts as resolved.
+    public static func fromReply(_ resultJSON: String) -> CompanionApprovalOutcome? {
+        guard let data = resultJSON.data(using: .utf8),
+              let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let reason = (reply["reason"] as? String) ?? ""
+        switch reply["outcome"] as? String {
+        case "resolved": return .resolved
+        case "sendFailed": return .sendFailed(reason: reason.isEmpty ? "Mac 没能把回答写给 Agent" : reason)
+        case "ended": return .ended(reason: reason.isEmpty ? "这次请求已经结束" : reason)
+        case "answeredElsewhere": return .answeredElsewhere
+        case "unconfirmed": return .unconfirmed(reason: reason.isEmpty ? "Mac 还没确认送到 Agent，回到 Mac 上看" : reason)
+        case nil: return (reply["accepted"] as? Bool) == true ? .resolved : nil
+        default: return nil
+        }
+    }
 }
 
 public struct CompanionApproval: Identifiable, Equatable, Sendable {
@@ -690,6 +710,17 @@ public final class CompanionStore {
         sentFramesLog.append("task.respond:\(approval.taskId):\(requestId):\(action)")
     }
 
+    /// D4: the Mac replied to this phone's answer: the command is answered,
+    /// and the card follows what the agent got.
+    public func applyApprovalReply(requestId: String, resultJSON: String) {
+        if let command = outbox.first(where: { $0.method == "task.respond" && $0.params["requestId"] == requestId }) {
+            applyCommandReply(commandId: command.commandId)
+        }
+        if let outcome = CompanionApprovalOutcome.fromReply(resultJSON) {
+            applyApprovalOutcome(requestId: requestId, outcome)
+        }
+    }
+
     /// A2: the Mac's word on an answer. Only `resolved` removes the card.
     public func applyApprovalOutcome(requestId: String, _ outcome: CompanionApprovalOutcome) {
         guard let index = pendingApprovals.firstIndex(where: { $0.requestId == requestId }) else { return }
@@ -702,6 +733,8 @@ public final class CompanionStore {
             pendingApprovals[index].state = .ended(reason: reason)
         case .timedOut:
             pendingApprovals[index].state = .unknown(reason: "没等到 Mac 的回复，不知道送到没有")
+        case let .unconfirmed(reason):
+            pendingApprovals[index].state = .unknown(reason: reason)
         case .answeredElsewhere:
             pendingApprovals[index].state = .answeredElsewhere
         }

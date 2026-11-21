@@ -200,6 +200,8 @@ pub struct StructuredExecutor {
     inner: Arc<dyn TaskExecutor>,
     routing: Arc<dyn Routing>,
     sink: Arc<dyn LiveStatusSink>,
+    /// D4: each answered permission request's settlement.
+    receipts: Arc<super::receipts::PermissionReceipts>,
     /// A05: snapshots each session's repository at turn boundaries.
     turn_changes: Arc<super::turn_changes::TurnChangeTracker>,
     /// B4′: every task's checkpoint, derived from its updates.
@@ -342,10 +344,14 @@ impl StructuredExecutor {
             sink,
             Arc::clone(&registry),
         ));
+        // D4: outermost, so it sees every settlement the drivers publish.
+        let receipts = super::receipts::PermissionReceipts::new(sink);
+        let sink: Arc<dyn LiveStatusSink> = Arc::clone(&receipts) as Arc<dyn LiveStatusSink>;
         let executor = Arc::new(Self {
             inner,
             routing,
             sink,
+            receipts,
             turn_changes,
             checkpoints,
             reviews,
@@ -844,6 +850,11 @@ impl StructuredExecutor {
 
     pub fn registry(&self) -> &Arc<DriverRegistry> {
         &self.registry
+    }
+
+    /// D4: what became of answered permission requests.
+    pub fn receipts(&self) -> &Arc<super::receipts::PermissionReceipts> {
+        &self.receipts
     }
 
     /// Suspend sessions idle for [`SESSION_IDLE_MS`] (unless the user turned

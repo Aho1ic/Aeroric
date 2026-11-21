@@ -122,7 +122,7 @@ Status: proposed
 
 ### D4 手机：先只读跟随，再做带回执的审批
 
-2026-11-21 第一步已实现，见 [D4 第一步笔记](../../implemented/feature/2026-11-21-d4-command-identity.md)：做法第 1、2、5 条的宿主一侧，`commandId` 去重、`hostEpoch` 判旧（第 2 条里 `task_id`、`generation`、修订号的判旧还没做）、撤销设备清结果。2026-11-21 第二步已实现，见 [D4 第二步笔记](../../implemented/feature/2026-11-21-d4-phone-commands.md)：手机端的命令带上这两项，序号跳变、溢出、过期拒绝都要求重新同步（第 3 条）。第二阶段的审批回执（第 4 条）和真实连接上的收发还没做。
+2026-11-21 第一步已实现，见 [D4 第一步笔记](../../implemented/feature/2026-11-21-d4-command-identity.md)：做法第 1、2、5 条的宿主一侧，`commandId` 去重、`hostEpoch` 判旧（第 2 条里 `task_id`、`generation`、修订号的判旧还没做）、撤销设备清结果。2026-11-21 第二步已实现，见 [D4 第二步笔记](../../implemented/feature/2026-11-21-d4-phone-commands.md)：手机端的命令带上这两项，序号跳变、溢出、过期拒绝都要求重新同步（第 3 条）。2026-11-21 第三步已实现，见 [D4 第三步笔记](../../implemented/feature/2026-11-21-d4-approval-receipts.md)：第二阶段的审批回执（第 4 条）。真实连接上的收发、按 `generation` 和修订号判旧还没做。
 
 **前置：** A1、A2、C8。
 
