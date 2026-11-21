@@ -250,10 +250,12 @@ public final class ChangeCostBook {
 
 struct ChangeCostPane: View {
     @Bindable var book: ChangeCostBook
+    @Environment(BudgetBook.self) private var budget: BudgetBook?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AeroricSpace.l) {
+                if let budget { BudgetSection(book: budget) }
                 QuotaCard(quota: book.quota, error: book.quotaError)
                 header
                     .padding(.top, AeroricSpace.m)

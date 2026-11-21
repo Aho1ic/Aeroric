@@ -44,6 +44,8 @@ public struct ProjectSidebar: View {
     @State private var tagFilter: String?
     /// Linked folders (2026-10-29).
     @Environment(LinkedFolderBook.self) private var linkedBook: LinkedFolderBook?
+    /// E6: 暂停所有 Agent.
+    @Environment(BudgetBook.self) private var budgetBook: BudgetBook?
     @State private var linkingProject: SidebarItem?
     @State private var draftTag: TagDraftTarget?
     @State private var managingTags = false
@@ -620,6 +622,7 @@ public struct ProjectSidebar: View {
             .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
             .help("设置（⌘,）")
             .accessibilityIdentifier("sidebar.settings")
+            if let budgetBook { PauseAllButton(book: budgetBook) }
             Spacer(minLength: AeroricSpace.xs)
             if let phase {
                 ConnectionIndicator(phase: phase, text: phaseText)

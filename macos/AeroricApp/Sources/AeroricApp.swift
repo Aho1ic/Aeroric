@@ -343,6 +343,7 @@ struct AeroricNativeApp: App {
             .environment(services.builtinSkillBook)
             .environment(services.packBook)
             .environment(services.rolloutBook)
+            .environment(services.budgetBook)
             // Tags on sidebar rows and in their menus (2026-10-29).
             .environment(services.tagBook)
             .environment(services.linkedFolderBook)

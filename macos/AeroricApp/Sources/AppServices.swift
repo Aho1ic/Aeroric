@@ -46,6 +46,8 @@ final class AppServices {
     let rolloutBook = RolloutBook()
     /// D1: Git 侧栏 → PR 审查.
     let pullReviewBook = PullReviewBook()
+    /// E6: the unattended-work budget and 暂停所有 Agent.
+    let budgetBook = BudgetBook()
     let diagnosticsStore = DiagnosticsStore()
     let debugSessionStore = DebugSessionStore()
     let breakpointStore = BreakpointStore()
@@ -1299,6 +1301,8 @@ extension AppServices: WorkspaceStateProviding {
         packBook.attach(client: PacksClient(connection: connection))
         rolloutBook.attach(client: RolloutClient(connection: connection))
         pullReviewBook.attach(client: GitHubClient(connection: connection))
+        budgetBook.attach(client: BudgetClient(connection: connection))
+        Task { @MainActor in await budgetBook.refresh() }
         builtinSkillBook.loginOnGateway = { [weak self] harness in
             self?.agentConfigStore.loginGateway[harness]?.active ?? false
         }
