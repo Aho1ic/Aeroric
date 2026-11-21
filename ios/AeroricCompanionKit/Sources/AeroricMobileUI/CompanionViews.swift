@@ -38,7 +38,8 @@ public struct CompanionRootView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            CompanionStatusBanner(state: store.connectionState, reduceTransparency: reduceTransparency)
+            CompanionStatusBanner(state: store.connectionState, reduceTransparency: reduceTransparency,
+                                  resyncing: store.resyncNeeded)
             Picker("伴随端分区", selection: $selectedSection) {
                 ForEach(CompanionSection.allCases, id: \.self) { section in
                     Text(section.title).tag(section)
@@ -90,10 +91,14 @@ public struct CompanionRootView: View {
 public struct CompanionStatusBanner: View {
     public let state: CompanionConnectionState
     public let reduceTransparency: Bool
+    /// D4: something was missed (an event gap, an overflow, a stale refusal):
+    /// what is shown may be old until the next snapshot.
+    public let resyncing: Bool
 
-    public init(state: CompanionConnectionState, reduceTransparency: Bool = false) {
+    public init(state: CompanionConnectionState, reduceTransparency: Bool = false, resyncing: Bool = false) {
         self.state = state
         self.reduceTransparency = reduceTransparency
+        self.resyncing = resyncing
     }
 
     public var statusText: String {
@@ -105,6 +110,7 @@ public struct CompanionStatusBanner: View {
         case let .relayConnectedMacOffline(relay):
             return "已连自托管 Relay (\(relay))，但 Mac 宿主离线 — 不排队操作"
         case let .macOnline(epoch, mode):
+            if resyncing { return "正在和 Mac 重新同步，之前显示的状态可能已过期" }
             return "Mac 在线 (\(mode.rawValue), \(epoch))"
         case let .revoked(reason):
             return "设备已撤销（\(reason)）— 请按 Q11 重新配对"

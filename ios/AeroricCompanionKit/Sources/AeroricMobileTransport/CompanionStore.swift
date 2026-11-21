@@ -146,6 +146,36 @@ public struct CompanionApproval: Identifiable, Equatable, Sendable {
     }
 }
 
+/// D4 (2026-11-21): a command on its way to the Mac. Its `commandId` is
+/// made once, here, and kept when it is sent again (after a reconnect to the
+/// same host start), so the Mac runs it once; `hostEpoch` is the host start
+/// it was decided on, so a restarted Mac refuses it instead of running it.
+public struct CompanionCommand: Identifiable, Equatable, Sendable {
+    public var id: String { commandId }
+    public let commandId: String
+    public let method: String
+    public let params: [String: String]
+    public let hostEpoch: String
+
+    public init(commandId: String = UUID().uuidString, method: String, params: [String: String], hostEpoch: String) {
+        self.commandId = commandId
+        self.method = method
+        self.params = params
+        self.hostEpoch = hostEpoch
+    }
+
+    /// What goes on the wire: the params with the identity.
+    public var wireParams: [String: Any] {
+        var out: [String: Any] = params
+        out["commandId"] = commandId
+        out["hostEpoch"] = hostEpoch
+        return out
+    }
+}
+
+/// D4: the prefix of the Mac's refusal of a command based on an earlier start.
+public let staleHostEpochPrefix = "STALE_HOST_EPOCH"
+
 public struct CompanionFileEntry: Identifiable, Equatable, Sendable {
     public var id: String { path }
     public var name: String
@@ -383,6 +413,13 @@ public final class CompanionStore {
     public private(set) var files: [CompanionFileEntry] = []
     public private(set) var gitChanges: [CompanionGitChange] = []
     public private(set) var sentFramesLog: [String] = []
+    /// D4: commands sent and not answered yet, oldest first. After a
+    /// reconnect to the same host start they are sent again as they are
+    /// (same `commandId`); a new host start drops them.
+    public private(set) var outbox: [CompanionCommand] = []
+    /// D4: commands dropped because the Mac restarted before answering — the
+    /// user decides again from the fresh state.
+    public private(set) var droppedCommands: [CompanionCommand] = []
 
     /// AP7: what the paired Mac's adapter actually advertises. Unknown until the
     /// host says so, and `none` is the honest default — an offline or unprobed
@@ -434,6 +471,12 @@ public final class CompanionStore {
     ) {
         let epochChanged = (currentEpoch != nil && currentEpoch != newEpoch)
         let seqGapped = latestHostSeq > lastEventSeq + 1
+        // D4: commands decided on the previous host start are not resent —
+        // the Mac would refuse them; the user sees the new state first.
+        if epochChanged {
+            droppedCommands.append(contentsOf: outbox)
+            outbox.removeAll()
+        }
         currentEpoch = newEpoch
         lastEventSeq = latestHostSeq
         connectionState = .macOnline(hostEpoch: newEpoch, transportMode: mode)
@@ -458,6 +501,8 @@ public final class CompanionStore {
         pairedDeviceID = nil
         currentEpoch = nil
         pendingApprovals.removeAll()
+        outbox.removeAll()
+        droppedCommands.removeAll()
         terminalBuffer = ""
         // A revoked device must not keep hint state from the previous epoch.
         resyncNeeded = false
@@ -575,6 +620,48 @@ public final class CompanionStore {
         return epoch
     }
 
+    // MARK: - D4: commands with an identity
+
+    /// A command for the Mac, on the current host start, into the outbox.
+    @discardableResult
+    private func issue(_ method: String, _ params: [String: String], epoch: String) -> CompanionCommand {
+        let command = CompanionCommand(method: method, params: params, hostEpoch: epoch)
+        outbox.append(command)
+        return command
+    }
+
+    /// After a reconnect to the same host start: what to send again, with the
+    /// same ids (the Mac answers a repeat with its first result).
+    public func commandsToResend() throws -> [CompanionCommand] {
+        let epoch = try requireMacOnline()
+        return outbox.filter { $0.hostEpoch == epoch }
+    }
+
+    /// The Mac answered `commandId`. A refusal for being based on an earlier
+    /// host start means our view is old: resync before deciding again.
+    public func applyCommandReply(commandId: String, failure: String? = nil) {
+        guard let index = outbox.firstIndex(where: { $0.commandId == commandId }) else { return }
+        outbox.remove(at: index)
+        if let failure, failure.hasPrefix(staleHostEpochPrefix) {
+            resyncNeeded = true
+        }
+    }
+
+    /// D4: an event from the Mac with its sequence number. A repeat is
+    /// ignored; a gap means something was missed, so nothing shown can be
+    /// trusted until the next snapshot (`resyncNeeded`).
+    public func ingestHostEvent(seq: UInt64) {
+        guard seq > lastEventSeq else { return }
+        if seq > lastEventSeq + 1 { resyncNeeded = true }
+        lastEventSeq = seq
+    }
+
+    /// D4: the Mac's event buffer overflowed past our watermark (`events.since`
+    /// answered `reset`): everything is re-fetched.
+    public func ingestEventsReset() {
+        resyncNeeded = true
+    }
+
     public func submitApproval(requestId: String, approve: Bool) throws {
         let activeEpoch = try requireMacOnline()
         guard let index = pendingApprovals.firstIndex(where: { $0.requestId == requestId }) else {
@@ -599,6 +686,7 @@ public final class CompanionStore {
         }
         pendingApprovals[index].state = .submitting(approve: approve)
         let action = approve ? "approve" : "deny"
+        issue("task.respond", ["taskId": approval.taskId, "requestId": requestId, "action": action], epoch: activeEpoch)
         sentFramesLog.append("task.respond:\(approval.taskId):\(requestId):\(action)")
     }
 
@@ -643,7 +731,7 @@ public final class CompanionStore {
     }
 
     public func createTask(projectId: String, agent: String, prompt: String, permissionMode: String = "ask") throws -> CompanionTask {
-        _ = try requireMacOnline()
+        let epoch = try requireMacOnline()
         let task = CompanionTask(
             id: "task-\(tasks.count + 1)",
             projectId: projectId,
@@ -653,6 +741,8 @@ public final class CompanionStore {
             permissionMode: permissionMode
         )
         tasks.append(task)
+        issue("task.create", ["projectId": projectId, "agent": agent, "prompt": prompt, "permissionMode": permissionMode],
+              epoch: epoch)
         sentFramesLog.append("task.create:\(projectId):\(agent):\(prompt)")
         return task
     }

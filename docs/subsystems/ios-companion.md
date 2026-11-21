@@ -14,6 +14,7 @@
 
 - 推送只是提示：`CompanionStore.ingestPushHint` 只置 `resyncNeeded`，审批只来自 E2EE 快照。见 [推送平面](../../.agents/notes/implemented/architecture/2026-10-13-push-plane.md)。
 - 审批卡等 Mac 的结果：`submitApproval` 只把卡片改为 `submitting`，`applyApprovalOutcome` 按 Mac 的结果移除（`resolved`）或改为 `failed`、`unknown`（没等到回复，不自动重发）、`answeredElsewhere`、`ended`。手机的 `task.respond` 目前走宿主的钩子审批登记表，还没接到结构化会话的驱动。
+- 命令带身份（D4）：审批和新建任务各生成一个 `CompanionCommand`，带设备生成的 `commandId` 和当时的 `hostEpoch`，发出后留在 `outbox` 直到 Mac 回答；重连到同一次启动时原样重发（同一个 id，Mac 只执行一次），Mac 换了启动就丢掉、记进 `droppedCommands`，不重发；Mac 以 `STALE_HOST_EPOCH` 拒绝、事件序号跳变或缓冲溢出时置 `resyncNeeded`，状态横幅写“正在和 Mac 重新同步”。线上收发还没接到真实连接。
 - 范围是完整任务伴随与相关高级操作，不复制桌面 IDE/DAP、数据库网格、基础设施与笔记工作区。
 
 ## 测试

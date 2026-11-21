@@ -114,6 +114,11 @@ public enum RemoteRpcCodec {
         return String(decoding: data, as: UTF8.self)
     }
 
+    /// D4: a command with its identity in the params (`commandId`, `hostEpoch`).
+    public static func encodeCommand(version: RemoteRpcVersion, id: String, command: CompanionCommand) throws -> String {
+        try encodeRequest(version: version, id: id, method: command.method, params: command.wireParams)
+    }
+
     public static func decodeEnvelope(_ jsonText: String) -> DecodedRemoteEnvelope? {
         guard let data = jsonText.data(using: .utf8),
               let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
