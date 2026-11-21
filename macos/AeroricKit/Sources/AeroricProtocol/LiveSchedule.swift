@@ -67,6 +67,9 @@ public struct LiveScheduleRule: Equatable, Sendable, Identifiable {
     /// Read only: put off by the hours to this time; a busy session holds one.
     public var hoursRetryMs: UInt64?
     public var busyPending = false
+    /// E16 (2026-11-21): the JSON structure the session's last reply must
+    /// give its result in; nil asks for none.
+    public var resultSchema: JSONValue?
 
     public init(id: String = "", name: String = "", projectId: String = "", agent: String = "",
                 model: String? = nil, prompt: String = "", repeatRule: LiveScheduleRepeat = .daily(minute: 9 * 60),
@@ -102,6 +105,7 @@ public struct LiveScheduleRule: Equatable, Sendable, Identifiable {
                 }
                 rule.hoursRetryMs = f["hoursRetryMs"]?.numberText.flatMap { UInt64($0) }
                 rule.busyPending = f["busyPending"]?.boolValue ?? false
+                rule.resultSchema = f["resultSchema"].flatMap { $0.isNull ? nil : $0 }
             }
     }
 
@@ -113,6 +117,7 @@ public struct LiveScheduleRule: Equatable, Sendable, Identifiable {
         if let model { f["model"] = .string(model) }
         if let check, !check.trimmingCharacters(in: .whitespaces).isEmpty { f["check"] = .string(check) }
         if whenBusy == "after" { f["whenBusy"] = .string("after") }
+        if let resultSchema { f["resultSchema"] = resultSchema }
         if let activeHours {
             f["activeHours"] = .object(["startMinute": .number(String(activeHours.start)),
                                         "endMinute": .number(String(activeHours.end))])
@@ -138,6 +143,11 @@ public struct LiveScheduleRun: Equatable, Sendable, Identifiable {
     public var detail: String?
     public var catchUp: Bool
     public var manual: Bool
+    /// E16: asked for a structured result; `result` when it fit,
+    /// `resultError` (the run failed) when it did not or never came.
+    public var resultExpected = false
+    public var result: JSONValue?
+    public var resultError: String?
 
     public init(id: String, ruleId: String = "", dueMs: UInt64 = 0, atMs: UInt64 = 0, outcome: String = "started",
                 taskId: String? = nil, detail: String? = nil, catchUp: Bool = false, manual: Bool = false) {
@@ -155,9 +165,13 @@ public struct LiveScheduleRun: Equatable, Sendable, Identifiable {
     public static func decode(_ value: JSONValue) -> LiveScheduleRun? {
         guard let f = value.objectValue, let id = f["id"]?.stringValue else { return nil }
         let number = { (key: String) in f[key]?.numberText.flatMap { UInt64($0) } ?? 0 }
-        return LiveScheduleRun(id: id, ruleId: f["ruleId"]?.stringValue ?? "", dueMs: number("dueMs"),
-                               atMs: number("atMs"), outcome: f["outcome"]?.stringValue ?? "failed",
-                               taskId: f["taskId"]?.stringValue, detail: f["detail"]?.stringValue,
-                               catchUp: f["catchUp"]?.boolValue ?? false, manual: f["manual"]?.boolValue ?? false)
+        var run = LiveScheduleRun(id: id, ruleId: f["ruleId"]?.stringValue ?? "", dueMs: number("dueMs"),
+                                  atMs: number("atMs"), outcome: f["outcome"]?.stringValue ?? "failed",
+                                  taskId: f["taskId"]?.stringValue, detail: f["detail"]?.stringValue,
+                                  catchUp: f["catchUp"]?.boolValue ?? false, manual: f["manual"]?.boolValue ?? false)
+        run.resultExpected = f["resultExpected"]?.boolValue ?? false
+        run.result = f["result"].flatMap { $0.isNull ? nil : $0 }
+        run.resultError = f["resultError"]?.stringValue
+        return run
     }
 }

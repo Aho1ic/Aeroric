@@ -140,7 +140,58 @@ public enum ScheduleText {
         case "quotaOut": run.manual ? "Codex 额度用完，没开会话" : "Codex 额度用完，重置后补跑"
         default: "失败"
         }
+        // E16: a session asked for a result says how it came out.
+        if run.outcome == "started", run.resultExpected {
+            text += run.resultError != nil ? " · 结果不合格" : run.result != nil ? " · 结果合格" : " · 等结果"
+        }
         if run.manual { text = "立即运行 · " + text } else if run.catchUp { text = "补跑 · " + text }
         return text
     }
+
+    /// E16: a run counts as failed when its result did not fit.
+    public static func failed(_ run: LiveScheduleRun) -> Bool {
+        run.outcome == "failed" || run.resultError != nil
+    }
+
+    /// The line after the outcome: why the result failed, the result, or
+    /// what the run noted.
+    public static func detail(_ run: LiveScheduleRun) -> String? {
+        if let error = run.resultError { return error }
+        if let result = run.result { return compact(result) }
+        return run.detail
+    }
+
+    /// E16: a structure or a result as one line of JSON, keys sorted.
+    public static func compact(_ value: JSONValue) -> String {
+        json(value, options: [.sortedKeys, .fragmentsAllowed, .withoutEscapingSlashes])
+    }
+
+    /// E16: the structure as the editor shows it.
+    public static func pretty(_ value: JSONValue) -> String {
+        json(value, options: [.sortedKeys, .prettyPrinted, .fragmentsAllowed, .withoutEscapingSlashes])
+    }
+
+    private static func json(_ value: JSONValue, options: JSONSerialization.WritingOptions) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: value.foundationObject, options: options),
+              let text = String(data: data, encoding: .utf8) else { return "" }
+        return text
+    }
+
+    /// E16: the editor's text as a structure: empty asks for none; text that
+    /// is not a JSON object is refused before the host sees it.
+    public static func schema(from text: String) -> Result<JSONValue?, ScheduleSchemaError> {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return .success(nil) }
+        guard let data = trimmed.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
+              object is [String: Any] else {
+            return .failure(ScheduleSchemaError(message: "结果结构要是一个 JSON 对象，例如 {\"type\": \"object\"}"))
+        }
+        return .success(JSONValue.from(object))
+    }
+}
+
+/// E16: why the editor's structure was refused.
+public struct ScheduleSchemaError: Error, Equatable {
+    public let message: String
 }

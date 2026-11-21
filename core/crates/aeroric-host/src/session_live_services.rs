@@ -626,6 +626,18 @@ fn context_search(live: &Live, request: &Request) -> Frame {
     ok(request, json!({"query": query, "hits": hits}))
 }
 
+/// E16 (2026-11-21): the agent's last reply in a task's transcript, whole
+/// (E12's `latest_assistant` reads the same, cut for the agent).
+fn latest_reply(live: &Live, task_id: &str) -> Option<String> {
+    let (_, record) = live.record(task_id)?;
+    let messages = context_messages(live, &record, false).ok()?;
+    messages
+        .into_iter()
+        .rev()
+        .find(|(role, _)| role != "user")
+        .map(|(_, text)| text)
+}
+
 /// `context.readSession {token, taskId?, from?, limit?, offset?}`: a
 /// session's messages in this project (the token's own task by default),
 /// each at most [`CONTEXT_PIECE`] chars; `offset` reads the first one on

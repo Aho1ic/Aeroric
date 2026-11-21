@@ -87,6 +87,10 @@ impl ScheduleEnv for Env<'_> {
     fn quota(&self, rule: &ScheduleRule, now_ms: u64) -> QuotaState {
         codex_quota(self.live, &rule.agent, now_ms)
     }
+
+    fn latest_reply(&self, task_id: &str) -> Option<String> {
+        super::latest_reply(self.live, task_id)
+    }
 }
 
 /// The subscription `agent` would spend. Only the built-in Codex spends this

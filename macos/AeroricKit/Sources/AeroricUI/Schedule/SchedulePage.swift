@@ -152,9 +152,9 @@ public struct SchedulePage: View {
                     .frame(width: 96, alignment: .leading)
                 Text(ScheduleText.outcome(run))
                     .font(.system(size: AeroricType.caption))
-                    .foregroundStyle(run.outcome == "failed" ? AeroricColor.warning : AeroricColor.textSecondary)
+                    .foregroundStyle(ScheduleText.failed(run) ? AeroricColor.warning : AeroricColor.textSecondary)
                     .lineLimit(1)
-                if let detail = run.detail {
+                if let detail = ScheduleText.detail(run) {
                     Text(detail)
                         .font(AeroricType.mono(AeroricType.caption))
                         .foregroundStyle(AeroricColor.textTertiary)
@@ -188,6 +188,8 @@ struct ScheduleEditorSheet: View {
     @State private var weekdays: Set<Int>
     @State private var hours: Int
     @State private var check: String
+    /// E16: the result structure as JSON text; empty asks for none.
+    @State private var resultSchema: String
     @State private var limitHours: Bool
     @State private var hoursStart: Date
     @State private var hoursEnd: Date
@@ -203,6 +205,7 @@ struct ScheduleEditorSheet: View {
         self.onClose = onClose
         _draft = State(initialValue: rule)
         _check = State(initialValue: rule.check ?? "")
+        _resultSchema = State(initialValue: rule.resultSchema.map(ScheduleText.pretty) ?? "")
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         func at(_ minute: Int) -> Date { today.addingTimeInterval(Double(minute * 60)) }
@@ -302,6 +305,7 @@ struct ScheduleEditorSheet: View {
                     .foregroundStyle(AeroricColor.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            resultSchemaField
             if let error = store.errorText {
                 CapsuleErrorLine(error, identifier: "schedule.edit.error") { store.errorText = nil }
             }
@@ -312,7 +316,14 @@ struct ScheduleEditorSheet: View {
                 Button("保存") {
                     Task {
                         store.errorText = nil
-                        if await store.save(built) { onClose() }
+                        switch ScheduleText.schema(from: resultSchema) {
+                        case let .failure(error):
+                            store.errorText = error.message
+                        case let .success(schema):
+                            var rule = built
+                            rule.resultSchema = schema
+                            if await store.save(rule) { onClose() }
+                        }
                     }
                 }
                 .buttonStyle(AeroricCapsuleButtonStyle(.primary))
@@ -322,6 +333,26 @@ struct ScheduleEditorSheet: View {
         }
         .padding(AeroricSpace.xl)
         .frame(width: 560)
+    }
+
+    /// E16: an optional JSON structure the result must fit.
+    private var resultSchemaField: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            Text("结果结构（可选）").font(.system(size: AeroricType.secondary)).foregroundStyle(AeroricColor.textSecondary)
+            TextEditor(text: $resultSchema)
+                .font(AeroricType.mono(AeroricType.caption))
+                .scrollIndicators(.never)
+                .scrollContentBackground(.hidden)
+                .padding(AeroricSpace.m)
+                .frame(height: 72)
+                .background(AeroricRadius.shape(AeroricRadius.m).fill(AeroricColor.layer1))
+                .accessibilityLabel("结果结构")
+                .accessibilityIdentifier("schedule.edit.result-schema")
+            Text("填一个 JSON Schema，例如 {\"type\": \"object\", \"required\": [\"status\"]}。Agent 要在最后一条回复里用 json 代码块交出符合它的结果；会话结束后检查，不合格或没给，这次运行记为失败。支持 type、properties、required、additionalProperties: false、items、enum。")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     /// 2026-11-14 常用模板: fills the draft, all of it editable.

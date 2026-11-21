@@ -105,6 +105,11 @@ pub struct ScheduleRule {
     pub when_busy: WhenBusy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<ActiveHours>,
+    /// E16 (2026-11-21): the JSON structure (a part of JSON Schema) the
+    /// session's last reply must give its result in; a run whose result
+    /// does not fit is failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_schema: Option<serde_json::Value>,
     pub enabled: bool,
     #[serde(default)]
     pub created_ms: u64,
@@ -176,6 +181,15 @@ pub struct ScheduleRun {
     /// caught up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_ms: Option<u64>,
+    /// E16: the session was asked for a structured result; it is judged
+    /// once the session ends — `result` when it fits, `result_error`
+    /// (the run failed) when it does not or never came.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub result_expected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_error: Option<String>,
 }
 
 #[cfg(test)]

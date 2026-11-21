@@ -67,6 +67,36 @@ final class ScheduleTests: XCTestCase {
         XCTAssertEqual(ScheduleText.outcome(LiveScheduleRun(id: "r", outcome: "started", manual: true)), "立即运行 · 已开会话")
     }
 
+    /// E16 (2026-11-21): the structure round-trips; a run says how its
+    /// result came out, and a result that did not fit counts as failed.
+    func testAResultStructureRoundTripsAndRunsSayHowTheResultCameOut() throws {
+        let schema = try XCTUnwrap(try? ScheduleText.schema(from: "{\"type\": \"object\", \"required\": [\"ok\"]}").get())
+        var rule = LiveScheduleRule(id: "s", name: "巡检", projectId: "p", agent: "codex", prompt: "查")
+        rule.resultSchema = schema
+        XCTAssertEqual(LiveScheduleRule.decode(rule.json)?.resultSchema, schema)
+        XCTAssertNil(LiveScheduleRule(id: "s").json.objectValue?["resultSchema"])
+        XCTAssertEqual(try ScheduleText.schema(from: "  ").get(), nil)
+        XCTAssertThrowsError(try ScheduleText.schema(from: "[1]").get())
+        XCTAssertThrowsError(try ScheduleText.schema(from: "{type: object}").get())
+        XCTAssertTrue(ScheduleText.pretty(schema).contains("\n"))
+
+        let decoded = try XCTUnwrap(LiveScheduleRun.decode(.object([
+            "id": .string("r"), "outcome": .string("started"), "resultExpected": .bool(true),
+            "result": .object(["ok": .bool(true)]),
+        ])))
+        XCTAssertEqual(ScheduleText.outcome(decoded), "已开会话 · 结果合格")
+        XCTAssertEqual(ScheduleText.detail(decoded), "{\"ok\":true}")
+        XCTAssertFalse(ScheduleText.failed(decoded))
+        var bad = decoded
+        bad.result = nil
+        bad.resultError = "结果不符合结构：$ 缺少字段 ok"
+        XCTAssertEqual(ScheduleText.outcome(bad), "已开会话 · 结果不合格")
+        XCTAssertEqual(ScheduleText.detail(bad), "结果不符合结构：$ 缺少字段 ok")
+        XCTAssertTrue(ScheduleText.failed(bad))
+        bad.resultError = nil
+        XCTAssertEqual(ScheduleText.outcome(bad), "已开会话 · 等结果")
+    }
+
     /// 第二批 (2026-11-14): when busy and the hours round-trip; a rule held
     /// by them says so; the runs say what happened.
     func testWhenBusyAndActiveHoursRoundTripAndAreShown() {

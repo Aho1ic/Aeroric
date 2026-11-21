@@ -24,6 +24,7 @@
 
 pub mod calendar;
 pub mod check;
+pub mod result;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -51,6 +52,10 @@ pub trait ScheduleEnv {
     fn quota(&self, _rule: &ScheduleRule, _now_ms: u64) -> QuotaState {
         QuotaState::Fine
     }
+    /// E16: the agent's last reply in the session, once it ended.
+    fn latest_reply(&self, _task_id: &str) -> Option<String> {
+        None
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -77,12 +82,17 @@ fn new_id(prefix: &str) -> String {
 /// What the session is told: the rule's prompt, and what a passing
 /// pre-check printed.
 pub fn prompt_for(rule: &ScheduleRule, output: Option<&str>) -> String {
-    match (rule.check.as_deref(), output.map(str::trim)) {
+    let base = match (rule.check.as_deref(), output.map(str::trim)) {
         (Some(command), Some(out)) if !out.is_empty() => format!(
             "{}\n\n前置检查 `{command}` 的输出：\n```\n{out}\n```",
             rule.prompt.trim()
         ),
         _ => rule.prompt.trim().to_string(),
+    };
+    // E16: where the result goes and what it must fit.
+    match &rule.result_schema {
+        Some(schema) => format!("{base}{}", result::instruction(schema)),
+        None => base,
     }
 }
 
@@ -97,6 +107,9 @@ pub fn validate(rule: &ScheduleRule) -> Result<(), String> {
     }
     if rule.project_id.trim().is_empty() || rule.agent.trim().is_empty() {
         return Err("选一个项目和 Agent".into());
+    }
+    if let Some(schema) = &rule.result_schema {
+        result::check_schema(schema)?;
     }
     if let Some(h) = &rule.active_hours {
         if h.start_minute >= 24 * 60 || h.end_minute >= 24 * 60 || h.start_minute == h.end_minute {
@@ -272,7 +285,7 @@ impl Schedules {
         let _guard = self.lock.lock();
         let mut doc = self.load();
         let mut made = Vec::new();
-        let mut changed = false;
+        let mut changed = judge_results(&mut doc, env);
         for i in 0..doc.rules.len() {
             let rule = doc.rules[i].clone();
             if !rule.enabled {
@@ -352,6 +365,39 @@ impl Schedules {
     }
 }
 
+/// E16: judge the structured results of sessions that have ended, once
+/// each, against their rule's structure as it is now (a rule whose
+/// structure was removed asks for none). `true` when a run changed.
+fn judge_results(doc: &mut Document, env: &dyn ScheduleEnv) -> bool {
+    let mut changed = false;
+    for run in doc.runs.iter_mut() {
+        if !run.result_expected || run.result.is_some() || run.result_error.is_some() {
+            continue;
+        }
+        let Some(task) = run.task_id.clone() else {
+            continue;
+        };
+        if env.busy(&task) {
+            continue;
+        }
+        let schema = doc
+            .rules
+            .iter()
+            .find(|r| r.id == run.rule_id)
+            .and_then(|r| r.result_schema.clone());
+        changed = true;
+        let Some(schema) = schema else {
+            run.result_expected = false;
+            continue;
+        };
+        match result::judge(&schema, env.latest_reply(&task).as_deref()) {
+            Ok(value) => run.result = Some(value),
+            Err(why) => run.result_error = Some(why),
+        }
+    }
+    changed
+}
+
 /// The session the rule opened last (or found busy).
 fn last_task(runs: &[ScheduleRun], rule_id: &str) -> Option<String> {
     runs.iter()
@@ -409,6 +455,9 @@ fn fire<Tz: TimeZone>(
         catch_up: !manual && now_ms.saturating_sub(due_ms) > CATCH_UP_AFTER_MS,
         manual,
         retry_ms: None,
+        result_expected: false,
+        result: None,
+        result_error: None,
     };
     // 立即运行 ignores the hours, as it ignores the times.
     if let Some(hours) = rule
@@ -483,6 +532,7 @@ fn fire<Tz: TimeZone>(
         Ok(task) => {
             run.outcome = RunOutcome::Started;
             run.task_id = Some(task);
+            run.result_expected = rule.result_schema.is_some();
             if let Some(ms) = fast {
                 let note = format!(
                     "Codex 额度节奏偏快：照这个速度 {} 用完",
@@ -514,6 +564,7 @@ mod tests {
         started: RefCell<Vec<String>>,
         fail: bool,
         quota: RefCell<QuotaState>,
+        reply: RefCell<Option<String>>,
     }
 
     impl ScheduleEnv for Fake {
@@ -533,6 +584,9 @@ mod tests {
         fn quota(&self, _rule: &ScheduleRule, _now_ms: u64) -> QuotaState {
             *self.quota.borrow()
         }
+        fn latest_reply(&self, _task_id: &str) -> Option<String> {
+            self.reply.borrow().clone()
+        }
     }
 
     fn fake() -> Fake {
@@ -542,6 +596,7 @@ mod tests {
             started: RefCell::new(Vec::new()),
             fail: false,
             quota: RefCell::new(QuotaState::Fine),
+            reply: RefCell::new(None),
         }
     }
 
@@ -567,6 +622,7 @@ mod tests {
             check: check.map(str::to_string),
             when_busy: WhenBusy::Skip,
             active_hours: None,
+            result_schema: None,
             enabled: true,
             created_ms: 0,
             updated_ms: 0,
@@ -582,6 +638,51 @@ mod tests {
         Schedules::open(
             &std::env::temp_dir().join(format!("aeroric-sched-{}", uuid::Uuid::new_v4())),
         )
+    }
+
+    /// E16: a rule asking for a structured result says so in the prompt;
+    /// once the session ends its last reply is judged, once: a fitting
+    /// result is kept, anything else fails the run with why.
+    #[test]
+    fn a_structured_result_is_judged_once_the_session_ends() {
+        let s = store();
+        let env = fake();
+        let now = at(18, 10, 0);
+        let mut wanted = rule(Repeat::Daily { minute: 9 * 60 }, None);
+        wanted.result_schema = Some(serde_json::json!({"type": "object", "required": ["ok"],
+            "properties": {"ok": {"type": "boolean"}}}));
+        let mut bad = wanted.clone();
+        bad.result_schema = Some(serde_json::json!({"type": "object", "minProperties": 1}));
+        assert!(s.save_rule(bad, now).unwrap_err().contains("minProperties"));
+        let id = s.save_rule(wanted, now).unwrap().id;
+
+        let run = s.run_now(&tz(), &env, &id, now).unwrap();
+        assert!(run.result_expected);
+        assert!(env.started.borrow()[0].contains("```json"));
+        env.busy.borrow_mut().insert("task-1".into());
+        *env.reply.borrow_mut() = Some("```json\n{\"ok\": true}\n```".into());
+        s.tick(&tz(), &env, now + 1000);
+        assert_eq!(s.runs(&id)[0].result, None, "still running: not judged");
+
+        env.busy.borrow_mut().clear();
+        s.tick(&tz(), &env, now + 2000);
+        assert_eq!(s.runs(&id)[0].result, Some(serde_json::json!({"ok": true})));
+        *env.reply.borrow_mut() = Some("一切正常".into());
+        s.tick(&tz(), &env, now + 3000);
+        assert_eq!(
+            s.runs(&id)[0].result,
+            Some(serde_json::json!({"ok": true})),
+            "judged once"
+        );
+
+        s.run_now(&tz(), &env, &id, now + 4000).unwrap();
+        s.tick(&tz(), &env, now + 5000);
+        let failed = &s.runs(&id)[0];
+        assert_eq!(failed.result, None);
+        assert!(failed
+            .result_error
+            .as_deref()
+            .is_some_and(|e| e.contains("没有可以读的 JSON")));
     }
 
     #[test]
