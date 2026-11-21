@@ -1,6 +1,7 @@
 //! D1 (2026-11-21): GitHub, read only — a pull request pinned as a snapshot
 //! (title, branches, head and base commits, changed files, checks, comments)
-//! to review. Nothing is written to GitHub: the client only sends GET.
+//! to review. The read client ([`client`]) only sends GET; writing is in
+//! [`publish`] alone, on the user's word.
 //!
 //! - [`target`] reads a PR link (`https://github.com/o/n/pull/12`,
 //!   `o/n#12`, a GitHub Enterprise link);
@@ -15,8 +16,12 @@
 //! (`refs/aeroric/pr/<n>/<sha>`), checks it out in a detached worktree
 //! beside the repository's others, hands a read-only reviewer the snapshot,
 //! and reads its findings back, each bound to a file and line of that head.
+//!
+//! D2: [`publish`] turns a review into a draft the user edits and publishes
+//! — the only code that writes to GitHub, and only on the user's word.
 
 pub mod client;
+pub mod publish;
 pub mod review;
 pub mod store;
 

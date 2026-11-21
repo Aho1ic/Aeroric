@@ -158,3 +158,79 @@ pub struct PullReview {
     #[serde(default)]
     pub outdated: bool,
 }
+
+/// D2 (2026-11-21): what one published item came to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WriteItemState {
+    /// Not sent yet.
+    #[default]
+    Draft,
+    /// A request is out (a restart finds it here: unknown).
+    Sending,
+    Sent,
+    /// GitHub refused it, or it never left; it may be sent again.
+    Failed,
+    /// Sent with no answer: look on GitHub before sending again.
+    Unknown,
+}
+
+/// One comment to publish: on a line of a file, or on the whole PR.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteItem {
+    pub id: String,
+    /// `None`: a comment on the whole PR (总评).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    pub body: String,
+    /// The user ticked it for publishing.
+    pub included: bool,
+    pub state: WriteItemState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WriteIntentState {
+    #[default]
+    Draft,
+    Sending,
+    /// Every included item was published.
+    Done,
+    /// Some were, some were not.
+    Partial,
+    /// None were.
+    Failed,
+    /// Some were sent with no answer and are not found on GitHub.
+    Unknown,
+    /// The PR has a new head since the review: nothing was sent.
+    TargetMoved,
+}
+
+/// What a review becomes on GitHub: the PR and commit it is for, and its
+/// items. Only the user publishes it; agents have no way to.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteIntent {
+    pub id: String,
+    pub project_id: String,
+    pub review_id: String,
+    pub repo: RepoRef,
+    pub number: u64,
+    pub head_sha: String,
+    pub items: Vec<WriteItem>,
+    pub state: WriteIntentState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub created_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_ms: Option<u64>,
+}

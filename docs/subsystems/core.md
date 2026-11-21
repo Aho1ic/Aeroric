@@ -16,7 +16,7 @@
 | `events` | 事件序号分配与发布的单一原子边界 |
 | `agent_connections`、`settings`、`providers` | Agent 连接、模型目录与配置；应用设置；网盘 OAuth（PKCE + 回环） |
 | `files`、`git`、`ide` | 文件服务、Git 全流程、IDE（LSP/DAP 进程由宿主管理） |
-| `github` | GitHub 只读：PR 链接解析、只发 GET 的客户端、按项目存的 PR 快照（D1） |
+| `github` | GitHub：PR 链接解析、只发 GET 的读客户端、按项目存的 PR 快照和审查（D1）；用户发起的评论发布，带防重复标记（D2） |
 | `connections`、`infrastructure`、`database`、`notebook`、`canvas` | SSH/SFTP 连接、Docker/端口/Conda、数据库、随手记、无限画布 |
 | `extensions`、`adapters`、`operations` | skills/MCP/hooks/DSH 插件、外部 Agent 能力适配、Agent 安装/升级操作状态 |
 | `metrics`、`maintenance` | 用量统计与索引；清理调度、周报、启动降级账 |
@@ -35,6 +35,7 @@
 | `agent-homes/<family>/` | core/host | 托管 Agent home（omp 经 `PI_CODING_AGENT_DIR` 注入） |
 | `github/<project>/<快照 id>.json` | core | PR 快照，每个 head 提交一份（D1） |
 | `github/<project>/reviews/<id>.json` | core/host | PR 审查草稿：快照、审查会话、结论（D1） |
+| `github/<project>/writes/<id>.json` | core | 发布到 GitHub 的草稿和每条评论的结果（D2） |
 
 写入规则见 [写入基线](../../.agents/notes/implemented/architecture/2026-09-22-content-fingerprint-write-cover.md) 与 [写者资格](../../.agents/notes/implemented/architecture/2026-09-22-data-dir-writer-eligibility.md)。
 
