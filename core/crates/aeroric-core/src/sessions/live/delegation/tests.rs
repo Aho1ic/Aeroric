@@ -1866,9 +1866,13 @@ fn a_confirmed_plan_starts_its_units_in_order() {
         card.contract.instruction
     );
     assert!(prompt.contains("做 b"));
+    // The child is asked for before its delegation id is written back to
+    // the plan: wait for the plan to say so too.
+    wait("b running in the plan", || {
+        status(&rig.d.plans("p")[0], "b").state == UnitState::Running
+    });
     let view = rig.d.plans("p").remove(0);
     assert_eq!(status(&view, "a").state, UnitState::Passed);
-    assert_eq!(status(&view, "b").state, UnitState::Running);
 
     // Asking again starts nothing twice.
     rig.d.advance_plans("p");
