@@ -1316,6 +1316,11 @@ fn dream_scope(
 ) -> Result<Option<wire::MemoryRun>, String> {
     let title = scope_title(live, project_id);
     let root = project_id.and_then(|id| project_dir(live, id));
+    let sessions = if free_only {
+        Vec::new()
+    } else {
+        recent_sessions(live, project_id)
+    };
     live.executor.memory().dream(
         memory::dream::DreamScope {
             project_id,
@@ -1323,10 +1328,61 @@ fn dream_scope(
             forced,
             root: root.as_deref(),
             free_only,
+            sessions: &sessions,
         },
         analysis_call(live, 1200),
         now_ms(),
     )
+}
+
+/// H7 third step: the sessions a dream checks its items against — a
+/// project's most recently ended ones (completed or archived), or, for the
+/// global scope (the profile), those of every project that uses memory.
+fn recent_sessions(live: &Live, project_id: Option<&str>) -> Vec<memory::contradict::Source> {
+    let memory = live.executor.memory();
+    let Ok(projects) =
+        aeroric_core::projects::ProjectService::new(Arc::clone(&live.context)).list()
+    else {
+        return Vec::new();
+    };
+    let mut ended: Vec<(u64, String)> = Vec::new();
+    for project in projects {
+        let Some(id) = project.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if project_id.is_some_and(|want| want != id) || !memory.project_enabled(id) {
+            continue;
+        }
+        let Ok(document) = live.service.load(id) else {
+            continue;
+        };
+        for record in document.records {
+            let Some(task) = record.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let number = |key: &str| record.get(key).and_then(Value::as_u64);
+            let Some(at) = number("archivedAt").or(number("completedAt")) else {
+                continue;
+            };
+            if live.structured(&record, &project) {
+                ended.push((at, task.to_string()));
+            }
+        }
+    }
+    ended.sort_by(|a, b| b.0.cmp(&a.0));
+    ended
+        .into_iter()
+        .filter_map(|(at, task)| {
+            let messages = source_messages(live, &task).ok().flatten()?;
+            Some(memory::contradict::Source {
+                task_id: task,
+                ended_ms: at,
+                messages,
+            })
+        })
+        .filter(|s| !s.messages.is_empty())
+        .take(memory::contradict::RECENT_SESSIONS)
+        .collect()
 }
 
 /// The automatic pass (Q-M10, Q-M15): local native sessions of projects

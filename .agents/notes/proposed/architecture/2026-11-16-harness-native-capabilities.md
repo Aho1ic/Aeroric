@@ -276,7 +276,7 @@ Aeroric 是各 Harness 的上级进程，结构化事件流本来就经过宿主
 
 #### H7 会话外的整理，跨 Harness
 
-2026-11-21 第一步已实现，见 [H7 第一步笔记](../../implemented/feature/2026-11-21-h7-native-memory-as-evidence.md)：第 1 条，原生记忆文件当证据读，`native.rs` 文件头和路线文档 §6.4 已原地更新。2026-11-21 第二步已实现，见 [H7 第二步笔记](../../implemented/feature/2026-11-21-h7-opening-placement.md)：第 2 条，事实按使用移出或移回开场白，有记录。第 3 条（对照原文纠错）是第三步。
+2026-11-21 第一步已实现，见 [H7 第一步笔记](../../implemented/feature/2026-11-21-h7-native-memory-as-evidence.md)：第 1 条，原生记忆文件当证据读，`native.rs` 文件头和路线文档 §6.4 已原地更新。2026-11-21 第二步已实现，见 [H7 第二步笔记](../../implemented/feature/2026-11-21-h7-opening-placement.md)：第 2 条，事实按使用移出或移回开场白，有记录。2026-11-21 第三步已实现，见 [H7 第三步笔记](../../implemented/feature/2026-11-21-h7-contradiction-against-transcripts.md)：第 3 条，记忆和之后的会话原文对不上时，提议一条取代它的待确认记忆，依据带原文位置。H7 完成。
 
 **用户会看到：** 在 Claude 里让它"记住"的事，换到 Codex 也能用上（先经用户确认）；长期没用上的记忆自己退出开场白；和会话原文对不上的记忆会收到一条带原文位置的改正提议。
 

@@ -25,6 +25,10 @@
 //!   items — a proposal: the only text a dream writes, and only once the
 //!   user accepts it.
 //! - A decided proposal can be taken back (`revert_dream`).
+//!
+//! H7 third step (2026-11-21): 对照原文纠错 — an item the user's later
+//! words overturn gets a replacement candidate with those words and where
+//! they are (`contradict.rs`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -39,6 +43,7 @@ use serde::Deserialize;
 
 use aeroric_protocol::memory::SEMANTIC_DREAM_ALIKE;
 
+use super::contradict::{self, Correction, Pair};
 use super::run::day_start_ms;
 use super::{normalize, profile, secrets, stale, Memory, MemoryError};
 use crate::settings::model_detect::ChatOnce;
@@ -104,7 +109,7 @@ struct RawRewrite {
     category: Option<String>,
 }
 
-fn json_object(reply: &str) -> Result<&str, String> {
+pub(super) fn json_object(reply: &str) -> Result<&str, String> {
     let start = reply.find('{').ok_or("模型没有返回 JSON")?;
     let end = reply.rfind('}').ok_or("模型没有返回 JSON")?;
     if end < start {
@@ -519,6 +524,8 @@ pub struct DreamScope<'a> {
     /// Only what needs no model (过时检测): the daily check when no dream is
     /// due; a run is recorded only if it found something.
     pub free_only: bool,
+    /// H7: the scope's recently ended sessions, to check its items against.
+    pub sessions: &'a [contradict::Source],
 }
 
 impl Memory {
@@ -606,6 +613,23 @@ impl Memory {
         } else {
             compressible(&items, &proposals)
         };
+        // H7: items set beside the user's later words (no model yet).
+        let checks: Vec<Pair> = if scope.free_only || scope.sessions.is_empty() {
+            Vec::new()
+        } else {
+            let (checked, waiting) = self
+                .with(|store| {
+                    let checked = contradict::read_checked(store.kv(contradict::CHECKED_KEY)?);
+                    let waiting: HashSet<String> = store
+                        .pending()?
+                        .into_iter()
+                        .filter_map(|i| i.supersedes)
+                        .collect();
+                    Ok((checked, waiting))
+                })
+                .map_err(|e| e.to_string())?;
+            contradict::pairs(&items, scope.sessions, &checked, &waiting)
+        };
         let stale = match (scope.project_id, scope.root) {
             (Some(project), Some(root)) => {
                 let _ = self.with(|store| store.set_kv(&stale_key(project), &now_ms.to_string()));
@@ -638,7 +662,7 @@ impl Memory {
             undone_ms: None,
             outcomes: Vec::new(),
         };
-        let needs_model = !groups.is_empty() || !profile.is_empty();
+        let needs_model = !groups.is_empty() || !profile.is_empty() || !checks.is_empty();
         if !needs_model && stale.is_empty() {
             if scope.free_only {
                 return Ok(None);
@@ -655,6 +679,7 @@ impl Memory {
         let mut failures = Vec::new();
         let mut judgements = Vec::new();
         let mut rewrite: Option<(Vec<DreamRewrite>, String)> = None;
+        let mut corrections: Vec<Correction> = Vec::new();
         if needs_model {
             let used = self.counted_since(day_start_ms(now_ms));
             let model = model.clone().unwrap_or_default();
@@ -703,6 +728,45 @@ impl Memory {
                         }
                     }
                 }
+                if !checks.is_empty() {
+                    match call(
+                        contradict::SYSTEM,
+                        &contradict::prompt(&checks, scope.sessions),
+                    ) {
+                        Err(error) => failures.push(format!("对照原文时调用分析模型失败：{error}")),
+                        Ok(reply) => {
+                            spent(&reply, &mut run);
+                            match contradict::parse(&reply.text, &checks, scope.sessions) {
+                                Ok((parsed, dropped)) => {
+                                    corrections = parsed;
+                                    if dropped > 0 {
+                                        notes.push(format!(
+                                            "丢掉 {dropped} 条在原文里找不到原话的改正"
+                                        ));
+                                    }
+                                    // Asked once: not asked again.
+                                    let asked: Vec<String> = checks
+                                        .iter()
+                                        .map(|p| {
+                                            contradict::key(
+                                                &p.item.id,
+                                                &scope.sessions[p.source].messages[p.message].1,
+                                            )
+                                        })
+                                        .collect();
+                                    let _ = self.with(|store| {
+                                        let old = store.kv(contradict::CHECKED_KEY)?;
+                                        store.set_kv(
+                                            contradict::CHECKED_KEY,
+                                            &contradict::remember_checked(old, &asked),
+                                        )
+                                    });
+                                }
+                                Err(error) => failures.push(format!("对照原文没有用上：{error}")),
+                            }
+                        }
+                    }
+                }
                 run.cost_usd = (run.input_tokens + run.output_tokens > 0).then(|| {
                     crate::metrics::analytics::estimate_cost_usd(
                         &model,
@@ -726,6 +790,7 @@ impl Memory {
             .flatten()
             .chain(&profile)
             .chain(stale.iter().map(|(item, _)| item))
+            .chain(checks.iter().map(|p| &p.item))
             .map(|i| (i.id.clone(), i.updated_ms))
             .collect();
         let mut changed = 0;
@@ -821,10 +886,50 @@ impl Memory {
             }
             Ok(())
         });
-        let produced = !run.retired.is_empty() || run.proposed > 0;
         if let Err(error) = applied {
             failures.push(format!("写入出错：{error}"));
         }
+        // H7: a replacement candidate per overturned item, still unchanged.
+        let mut corrected = 0;
+        for correction in &corrections {
+            let pair = &checks[correction.pair];
+            let item = &pair.item;
+            let still = self.item(&item.id).ok().flatten().is_some_and(|now| {
+                now.state == MemoryState::Active && snapshot.get(&item.id) == Some(&now.updated_ms)
+            });
+            if !still {
+                changed += 1;
+                continue;
+            }
+            let draft = MemoryDraft {
+                project_id: item.project_id.clone(),
+                kind: item.kind,
+                category: item.category,
+                text: correction.text.clone(),
+                supersedes: Some(item.id.clone()),
+            };
+            let proof = contradict::evidence(
+                correction,
+                &scope.sessions[pair.source],
+                run.model.as_deref(),
+                now_ms,
+            );
+            match self.propose(draft, proof, now_ms) {
+                Ok(made) if made.state == MemoryState::Pending => {
+                    corrected += 1;
+                    run.proposed += 1;
+                }
+                Ok(_) => {}
+                Err(MemoryError::Forgotten) => {}
+                Err(error) => failures.push(format!("改正没写进去：{error}")),
+            }
+        }
+        if corrected > 0 {
+            notes.push(format!(
+                "{corrected} 条记忆和之后的会话原文对不上，改正放在待确认的记忆里"
+            ));
+        }
+        let produced = !run.retired.is_empty() || run.proposed > 0;
         if scope.free_only && !produced && failures.is_empty() {
             return Ok(None);
         }
@@ -1104,6 +1209,7 @@ mod tests {
             forced,
             root: None,
             free_only: false,
+            sessions: &[],
         }
     }
 
@@ -1310,6 +1416,7 @@ mod tests {
                     forced: false,
                     root: None,
                     free_only: false,
+                    sessions: &[],
                 },
                 |_, _| {
                     Ok(ChatOnce {
@@ -1351,6 +1458,7 @@ mod tests {
             forced: false,
             root: Some(&root),
             free_only: true,
+            sessions: &[],
         };
         assert!(memory.stale_due("p1", t + 10));
         let run = memory
@@ -1382,6 +1490,7 @@ mod tests {
                         forced: false,
                         root: Some(&root),
                         free_only: true,
+                        sessions: &[],
                     },
                     |_, _| unreachable!(),
                     at,
@@ -1454,6 +1563,7 @@ mod tests {
             forced: true,
             root: None,
             free_only: false,
+            sessions: &[],
         };
         let text = r#"{"items": [{"text": "偏好甲乙", "category": "preference"}, {"text": "偏好丙丁"}], "reason": "两两合并"}"#;
         let mut systems = Vec::new();

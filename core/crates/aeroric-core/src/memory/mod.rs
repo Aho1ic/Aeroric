@@ -9,6 +9,7 @@
 
 mod barrier;
 pub mod chain;
+pub mod contradict;
 pub mod dream;
 pub mod extract;
 pub mod locate;
