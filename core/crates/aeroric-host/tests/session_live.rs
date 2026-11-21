@@ -4326,3 +4326,136 @@ async fn a_pinned_pr_is_reviewed_read_only_in_its_own_checkout() {
     assert_eq!(listed["reviews"][0]["id"], review["id"]);
     assert_eq!(listed["reviews"][0]["taskId"], review["taskId"]);
 }
+
+/// D2 second step: a finished review's publishing draft over RPC — one per
+/// review, edited, nothing ticked refused before anything is sent, a draft
+/// left sending reads as unknown; a review without findings yet has none.
+/// None of it is among the tools agents get.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reviews_publishing_draft_is_the_users_alone() {
+    use aeroric_core::github::{publish, review, snapshot_id, store};
+    use aeroric_protocol::github::{
+        PullFinding, PullReview, PullReviewState, PullSnapshot, RepoRef, WriteIntentState,
+        WriteItemState,
+    };
+    let host = Host::start(true).await;
+    let data_dir = host.context.paths.data_dir().to_path_buf();
+    let head = "a".repeat(40);
+    let snapshot = PullSnapshot {
+        id: snapshot_id(42, 7, &head),
+        project_id: "project-1".into(),
+        repo: RepoRef {
+            host: "github.com".into(),
+            owner: "acme".into(),
+            name: "widget".into(),
+            repo_id: 42,
+        },
+        number: 7,
+        head_sha: head.clone(),
+        fetched_ms: 1,
+        ..PullSnapshot::default()
+    };
+    store::save(&data_dir, &snapshot).unwrap();
+    let mut done = PullReview {
+        id: "prrev-1".into(),
+        project_id: "project-1".into(),
+        snapshot_id: snapshot.id.clone(),
+        head_sha: head.clone(),
+        task_id: "task-x".into(),
+        state: PullReviewState::Running,
+        findings: vec![PullFinding {
+            path: "a.rs".into(),
+            line: Some(2),
+            severity: "high".into(),
+            body: "b 没有测试".into(),
+            basis: String::new(),
+        }],
+        created_ms: 2,
+        ..PullReview::default()
+    };
+    review::save(&data_dir, &done).unwrap();
+    let early = host
+        .call(
+            "github.writeDraft",
+            json!({"projectId": "project-1", "reviewId": "prrev-1"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        early["message"].as_str().unwrap().contains("还没有结论"),
+        "{early}"
+    );
+
+    done.state = PullReviewState::Done;
+    review::save(&data_dir, &done).unwrap();
+    let made = host
+        .call(
+            "github.writeDraft",
+            json!({"projectId": "project-1", "reviewId": "prrev-1"}),
+        )
+        .await
+        .unwrap();
+    let id = made["write"]["id"].as_str().unwrap().to_string();
+    assert_eq!(made["write"]["items"].as_array().unwrap().len(), 2);
+    assert_eq!(made["write"]["state"], "draft");
+    let again = host
+        .call(
+            "github.writeDraft",
+            json!({"projectId": "project-1", "reviewId": "prrev-1"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(again["write"]["id"], id.as_str(), "one draft per review");
+
+    for item in ["summary", "c1"] {
+        host.call(
+            "github.writeEdit",
+            json!({"projectId": "project-1", "id": id, "itemId": item, "included": false}),
+        )
+        .await
+        .unwrap();
+    }
+    let empty = host
+        .call(
+            "github.writeEdit",
+            json!({"projectId": "project-1", "id": id, "itemId": "c1", "body": "  "}),
+        )
+        .await
+        .unwrap_err();
+    assert!(empty["message"].as_str().unwrap().contains("不能为空"));
+    let nothing = host
+        .call(
+            "github.publish",
+            json!({"projectId": "project-1", "id": id}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        nothing["message"].as_str().unwrap().contains("没有勾选"),
+        "{nothing}"
+    );
+
+    // A host that stopped mid-send left this on disk.
+    let mut cut = publish::load(&data_dir, "project-1", &id).unwrap();
+    cut.state = WriteIntentState::Sending;
+    cut.items[1].state = WriteItemState::Sending;
+    cut.items[1].included = true;
+    publish::save(&data_dir, &cut).unwrap();
+    let listed = host
+        .call("github.writes", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert_eq!(listed["writes"][0]["state"], "unknown");
+    assert_eq!(listed["writes"][0]["items"][1]["state"], "unknown");
+
+    let tools: Vec<&str> = aeroric_protocol::tools::AERORIC_TOOLS
+        .iter()
+        .map(|(n, _, _)| *n)
+        .collect();
+    assert!(
+        tools
+            .iter()
+            .all(|t| !t.contains("publish") && !t.contains("github")),
+        "{tools:?}"
+    );
+}

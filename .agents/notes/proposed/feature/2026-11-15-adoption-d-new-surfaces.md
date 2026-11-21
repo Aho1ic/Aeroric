@@ -62,7 +62,7 @@ Status: proposed
 
 ### D2 GitHub 写：草稿和带回执的发布
 
-2026-11-21 第一步已实现，见 [D2 第一步笔记](../../implemented/feature/2026-11-21-d2-publish-core.md)：做法第 2、4、5、6 条在 core 里，草稿、标记、逐条结果和重启后的“结果不明”；没有用 `OperationLedger`，每条的状态存盘加 GitHub 上的标记代替它。宿主方法（只给 App，不进 Context 工具）是第二步，界面是第三步。
+2026-11-21 第一步已实现，见 [D2 第一步笔记](../../implemented/feature/2026-11-21-d2-publish-core.md)：做法第 2、4、5、6 条在 core 里，草稿、标记、逐条结果和重启后的“结果不明”；没有用 `OperationLedger`，每条的状态存盘加 GitHub 上的标记代替它。2026-11-21 第二步已实现，见 [D2 第二步笔记](../../implemented/feature/2026-11-21-d2-publish-methods.md)：宿主方法，只给 App。界面是第三步。
 
 **前置：** D1；A1 的投递回执模式；B3。
 
