@@ -213,7 +213,7 @@ public enum AgentConfigText {
 @MainActor
 public final class AgentConfigStore {
     public typealias ACC = AgentConnectionsClient
-    public enum Tab: String, CaseIterable, Sendable { case connections, pools, routes, configs, skills, packs, upgrades, changeCost }
+    public enum Tab: String, CaseIterable, Sendable { case connections, pools, routes, configs, skills, packs, rollout, upgrades, changeCost }
 
     public var tab: Tab = .connections
     public private(set) var snapshot: ACC.Snapshot?

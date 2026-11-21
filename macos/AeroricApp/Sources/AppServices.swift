@@ -42,6 +42,8 @@ final class AppServices {
     let builtinSkillBook = BuiltinSkillBook()
     /// H6: the capability packs (Agent 配置 → 能力包).
     let packBook = PackBook()
+    /// H8: Agent 配置 → 自动行为.
+    let rolloutBook = RolloutBook()
     let diagnosticsStore = DiagnosticsStore()
     let debugSessionStore = DebugSessionStore()
     let breakpointStore = BreakpointStore()
@@ -1293,6 +1295,7 @@ extension AppServices: WorkspaceStateProviding {
         guard let connection = attachedConnection else { return }
         builtinSkillBook.actions = HostBuiltinSkillActions(client: BuiltinSkillsClient(connection: connection))
         packBook.attach(client: PacksClient(connection: connection))
+        rolloutBook.attach(client: RolloutClient(connection: connection))
         builtinSkillBook.loginOnGateway = { [weak self] harness in
             self?.agentConfigStore.loginGateway[harness]?.active ?? false
         }

@@ -294,7 +294,7 @@ Aeroric 是各 Harness 的上级进程，结构化事件流本来就经过宿主
 
 #### H8 证明它被用了，而且有用
 
-2026-11-21 第一步已实现，见 [H8 第一步笔记](../../implemented/testing/2026-11-21-h8-trigger-records-and-comparison.md)：第 1 条，触发评测按 Harness 记录，描述修改能出前后对比表。2026-11-21 第二步已实现，见 [H8 第二步笔记](../../implemented/feature/2026-11-21-h8-three-tiers-and-revert.md)：第 3 条，按消息召回和学到的技能分三档，每档切换和退回各有测试。第 2 条（收益对照）和设置里的展示是后面几步。
+2026-11-21 第一步已实现，见 [H8 第一步笔记](../../implemented/testing/2026-11-21-h8-trigger-records-and-comparison.md)：第 1 条，触发评测按 Harness 记录，描述修改能出前后对比表。2026-11-21 第二步已实现，见 [H8 第二步笔记](../../implemented/feature/2026-11-21-h8-three-tiers-and-revert.md)：第 3 条，按消息召回和学到的技能分三档，每档切换和退回各有测试。2026-11-21 第三步已实现，见 [H8 第三步笔记](../../implemented/feature/2026-11-21-h8-automatic-behaviours-page.md)：Agent 配置 → 自动行为页显示档位和“本来会触发几成”，可换档和退回。第 2 条（收益对照）要录好的任务和真实 Harness，NOT RUN；“每个 Harness 上用了几成”要等真实 Harness 的评测记录。
 
 **用户会看到：** 设置里能看到每种 Aeroric 能力在每个 Harness 上"该用的时候用了几成"；新的自动行为先以"候选"出现，能一键退回。
 

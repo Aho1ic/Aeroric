@@ -7,6 +7,7 @@ import SwiftUI
 public struct AgentConfigPage: View {
     @Environment(BuiltinSkillBook.self) private var skillBook: BuiltinSkillBook?
     @Environment(PackBook.self) private var packBook: PackBook?
+    @Environment(RolloutBook.self) private var rolloutBook: RolloutBook?
     @Bindable var store: AgentConfigStore
     @Environment(AgentUpgradeBook.self) private var upgrades: AgentUpgradeBook?
     @Environment(ChangeCostBook.self) private var changeCost: ChangeCostBook?
@@ -23,6 +24,7 @@ public struct AgentConfigPage: View {
                     .init(value: .configs, title: "Agent 预设", systemImage: "slider.horizontal.3"),
                     .init(value: .skills, title: "技能", systemImage: "sparkles"),
                     .init(value: .packs, title: "能力包", systemImage: "shippingbox"),
+                    .init(value: .rollout, title: "自动行为", systemImage: "switch.2"),
                     .init(value: .upgrades, title: "Agent 升级", systemImage: "arrow.up.circle"),
                     .init(value: .changeCost, title: "用量与成本", systemImage: "chart.bar"),
                 ])
@@ -46,6 +48,8 @@ public struct AgentConfigPage: View {
                     if let skillBook { BuiltinSkillsPane(book: skillBook) }
                 case .packs:
                     if let packBook { CapabilityPacksPane(book: packBook) }
+                case .rollout:
+                    if let rolloutBook { AutomaticBehaviorsPane(book: rolloutBook) }
                 case .upgrades: AgentUpgradePane(book: upgrades)
                 case .changeCost:
                     if let changeCost { ChangeCostPane(book: changeCost) }

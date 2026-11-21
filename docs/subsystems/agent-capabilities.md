@@ -286,7 +286,7 @@ Aeroric 的 Context 工具（记忆、Wiki、黑板、委派、交付物、参�
   - 每个学到的技能（`skill:<名字>`），默认只挂描述，也就是用户采纳后照常挂载。候选时不挂载；默认生效时照常挂载，开场白的指路里多一行“学到的技能（遇到相关问题先用）”。学到的技能最低到候选，要关掉，用技能本身的停用。
 - 每次换档都记下换之前的档位和时间（最多 20 次）。“退回”回到上一次换档之前的档位；没有记录时降一档。
 - 每条用户消息（少于 6 个字的除外）都给召回和候选档的技能各记一次判断：召回记有没有命中；技能记它的描述和消息有没有至少两个共同关键词，召回关着也照记。
-- 档位和计数存在 `<数据目录>/rollout/state.json`。接口：`rollout.list {}` 列出召回、每个学到的技能和其他动过的；`rollout.set {id, tier}` 换档，`tier` 取 `off`、`candidate`、`described`、`default`；`rollout.revert {id}` 退回。
+- 档位和计数存在 `<数据目录>/rollout/state.json`。接口：`rollout.list {}` 列出召回、每个学到的技能和其他动过的；`rollout.set {id, tier}` 换档，`tier` 取 `off`、`candidate`、`described`、`default`；`rollout.revert {id}` 退回。Agent 配置 → 自动行为页列出这些，可换档和退回（第三步）。
 
 ## 9. 具名阻塞
 
