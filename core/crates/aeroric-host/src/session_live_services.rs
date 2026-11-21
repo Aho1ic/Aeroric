@@ -40,6 +40,7 @@ pub use wire::CAPABILITY;
 
 mod artifacts;
 mod board;
+mod budget;
 mod capability;
 mod changes;
 mod delegation;
@@ -215,6 +216,8 @@ pub fn register_session_live_services(
     retry::install(set, &live);
     // 2026-11-15: 工作安排第一批（待办）.
     todo::install(set, &live);
+    // E6: the unattended-work budget and 暂停所有 Agent.
+    budget::install(set, &live);
     // C7 (2026-11-20): the skill catalog and what each launch mounted.
     skills::install(set, &live);
     // C8: the context tools with a side effect answer a repeated
@@ -1288,6 +1291,14 @@ fn prompt(live: &Live, request: &Request) -> Frame {
             "session.prompt needs text",
         );
     }
+    // E6: 暂停所有 Agent refuses new messages, before they are queued.
+    if budget::paused(live) {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            budget::PAUSED,
+        );
+    }
     let Some((_, record)) = live.record(&p.task_id) else {
         return failure(
             request.id.clone(),
@@ -1331,6 +1342,10 @@ fn prompt(live: &Live, request: &Request) -> Frame {
 /// R1-2b: what `session.prompt` did on the spot, now done when the queue
 /// sends the user's message. `Ok(true)`: the driver answers with a receipt.
 fn send_user(live: &Live, task_id: &str, id: &str, text: &str) -> Result<bool, String> {
+    // E6: 暂停所有 Agent refuses new messages.
+    if budget::paused(live) {
+        return Err(budget::PAUSED.into());
+    }
     // A source move that could not carry the session over (2026-10-29) left a
     // handoff: the next message starts a fresh run with it in front.
     if live.driver(task_id).is_none() {

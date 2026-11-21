@@ -755,6 +755,14 @@ fn context_delegate(live: &Live, request: &Request) -> Frame {
             "上下文令牌无效或会话已结束",
         );
     };
+    // E6: an agent's delegation is unattended work.
+    if let Some(why) = super::budget::hold(live, Some(&parent)) {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            &format!("委派没有开始：{why}"),
+        );
+    }
     let contract = args.contract();
     match live
         .executor

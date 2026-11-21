@@ -66,6 +66,10 @@ impl ScheduleEnv for Env<'_> {
     }
 
     fn start(&self, rule: &ScheduleRule, prompt: &str) -> Result<String, String> {
+        // E6: a reached cap or 暂停所有 Agent: this run does not start (one line).
+        if let Some(why) = super::budget::hold(self.live, None) {
+            return Err(format!("没有开始：{why}"));
+        }
         open_session(
             self.live,
             &rule.project_id,

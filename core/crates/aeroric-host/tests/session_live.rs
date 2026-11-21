@@ -4551,3 +4551,65 @@ async fn a_work_plan_is_saved_and_listed_before_it_is_confirmed() {
         .unwrap_err();
     assert!(bad["message"].as_str().unwrap().contains("令牌"), "{bad}");
 }
+
+/// E6: the budget over RPC — no caps go; a cap is saved and a bad one
+/// refused; 暂停所有 Agent refuses a message before it is queued, says so in
+/// the status, and lets messages through again once switched off.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pausing_every_agent_refuses_messages_until_resumed() {
+    let host = Host::start(true).await;
+    let status = host.call("budget.status", json!({})).await.unwrap();
+    assert_eq!(status["gate"]["kind"], "go");
+    assert_eq!(status["today"]["tokens"], 0);
+
+    let bad = host
+        .call(
+            "budget.set",
+            json!({"settings": {"caps": [{"period": "day", "tokens": 0}]}}),
+        )
+        .await
+        .unwrap_err();
+    assert!(bad["message"].as_str().unwrap().contains("大于 0"), "{bad}");
+    let capped = host
+        .call(
+            "budget.set",
+            json!({"settings": {"caps": [{"period": "month", "costUsd": 20.0}, {"period": "day"}]}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(capped["settings"]["caps"].as_array().unwrap().len(), 1);
+    assert_eq!(capped["gate"]["kind"], "go", "nothing unattended spent yet");
+
+    host.start_task("修复超时");
+    let paused = host
+        .call(
+            "budget.set",
+            json!({"settings": {"caps": [], "paused": true}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(paused["gate"]["kind"], "paused");
+    let refused = host
+        .call(
+            "session.prompt",
+            json!({"taskId": "task-1", "text": "继续"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("已暂停所有 Agent"),
+        "{refused}"
+    );
+
+    host.call(
+        "budget.set",
+        json!({"settings": {"caps": [], "paused": false}}),
+    )
+    .await
+    .unwrap();
+    let again = host.call("budget.status", json!({})).await.unwrap();
+    assert_eq!(again["gate"]["kind"], "go");
+}

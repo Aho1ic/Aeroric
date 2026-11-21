@@ -111,6 +111,10 @@ fn look(live: &Live, watch: &mut Watch, task_id: &str, now: u64) {
     if !super::restart::unattended(live, task_id, &record) {
         return;
     }
+    // E6: no automatic retry past a reached cap or while paused.
+    if super::budget::hold(live, Some(task_id)).is_some() {
+        return;
+    }
     let turns = super::rerun::turns(live, &record);
     let Some(last) = turns.last() else {
         return;

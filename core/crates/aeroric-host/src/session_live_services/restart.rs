@@ -231,6 +231,16 @@ fn resume_settled(live: &Live, settled: &[String]) {
             }
             continue;
         }
+        // E6: no automatic continue past a reached cap or while paused.
+        if let Some(why) = super::budget::hold(live, Some(task_id)) {
+            if scheduled {
+                book.note_task(
+                    task_id,
+                    &format!("被 Aeroric 重启打断；没有自动继续：{why}，等你点继续"),
+                );
+            }
+            continue;
+        }
         // E5: continues before this one that came to nothing stop it.
         if let Err(why) = guard_before(live, task_id, &record) {
             if scheduled {

@@ -142,6 +142,10 @@ impl ReviewHost for HostReviews {
 
     fn start_reviewer(&self, parent: &str, prompt: String) -> Result<Reviewer, String> {
         let live = self.live.upgrade().ok_or("宿主已关闭")?;
+        // E6: a reviewer is unattended work.
+        if let Some(why) = super::budget::hold(&live, Some(parent)) {
+            return Err(format!("审查没有开始：{why}"));
+        }
         let (project, record) = live.record(parent).ok_or("会话不存在")?;
         let settings = settings_of(&record).ok_or("这个会话不能被审查")?;
         let (pick, config, model, same_family) =
