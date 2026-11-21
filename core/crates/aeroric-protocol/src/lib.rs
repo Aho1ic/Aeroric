@@ -36,6 +36,7 @@ pub mod todo;
 pub mod tools;
 pub mod turn_ledger;
 pub mod wiki;
+pub mod work_plan;
 
 pub use capability::{AgentCapabilities, Capability, HostCapabilities};
 pub use envelope::{

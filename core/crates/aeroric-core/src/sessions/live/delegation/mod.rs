@@ -12,6 +12,7 @@
 //! session runs off the caller's thread.
 
 pub mod audit;
+pub mod plan;
 pub mod prompt;
 pub mod roles;
 
