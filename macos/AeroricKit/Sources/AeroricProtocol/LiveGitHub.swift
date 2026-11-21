@@ -157,3 +157,64 @@ public struct LivePullReview: Equatable, Sendable, Identifiable {
             outdated: f["outdated"]?.boolValue ?? false)
     }
 }
+
+/// D2 (2026-11-21): one comment of a publishing draft.
+public struct LiveWriteItem: Equatable, Sendable, Identifiable {
+    public var id: String
+    /// nil: the comment on the whole PR (总评).
+    public var path: String?
+    public var line: Int?
+    public var body: String
+    public var included: Bool
+    /// `draft`, `sending`, `sent`, `failed`, `unknown`.
+    public var state: String
+    public var url: String?
+    public var reason: String?
+
+    public init(id: String, path: String? = nil, line: Int? = nil, body: String, included: Bool = true,
+                state: String = "draft", url: String? = nil, reason: String? = nil) {
+        self.id = id; self.path = path; self.line = line; self.body = body; self.included = included
+        self.state = state; self.url = url; self.reason = reason
+    }
+
+    /// Still the user's to change (not out, not sent).
+    public var editable: Bool { state == "draft" || state == "failed" }
+}
+
+/// D2: a review's publishing draft and what came of it.
+public struct LiveWriteIntent: Equatable, Sendable, Identifiable {
+    public var id: String
+    public var reviewId: String
+    public var owner: String
+    public var repo: String
+    public var number: Int
+    public var headSha: String
+    public var items: [LiveWriteItem]
+    /// `draft`, `sending`, `done`, `partial`, `failed`, `unknown`, `targetMoved`.
+    public var state: String
+    public var reason: String?
+
+    public init(id: String, reviewId: String, owner: String = "", repo: String = "", number: Int = 0,
+                headSha: String = "", items: [LiveWriteItem] = [], state: String = "draft", reason: String? = nil) {
+        self.id = id; self.reviewId = reviewId; self.owner = owner; self.repo = repo; self.number = number
+        self.headSha = headSha; self.items = items; self.state = state; self.reason = reason
+    }
+
+    public static func decode(_ value: JSONValue) -> LiveWriteIntent? {
+        let f = value.fields
+        guard let id = f["id"]?.stringValue, let review = f["reviewId"]?.stringValue else { return nil }
+        let repo = f["repo"]?.fields ?? [:]
+        return LiveWriteIntent(
+            id: id, reviewId: review, owner: repo["owner"]?.stringValue ?? "", repo: repo["name"]?.stringValue ?? "",
+            number: int(f["number"]), headSha: f["headSha"]?.stringValue ?? "",
+            items: (f["items"]?.arrayValue ?? []).compactMap { v in
+                guard let id = v["id"]?.stringValue else { return nil }
+                return LiveWriteItem(id: id, path: v["path"]?.stringValue,
+                                     line: v["line"]?.numberText.flatMap { Int($0) },
+                                     body: v["body"]?.stringValue ?? "", included: v["included"]?.boolValue ?? false,
+                                     state: v["state"]?.stringValue ?? "draft", url: v["url"]?.stringValue,
+                                     reason: v["reason"]?.stringValue)
+            },
+            state: f["state"]?.stringValue ?? "draft", reason: f["reason"]?.stringValue)
+    }
+}

@@ -3,7 +3,8 @@ import SwiftUI
 
 /// Git 侧栏 → PR 审查 (D1 step 3, 2026-11-21): paste a link to pin a PR;
 /// each snapshot opens a sheet with its files, checks, comments and
-/// read-only reviews. Nothing here writes to GitHub.
+/// read-only reviews. Only the publishing draft's 发布 writes to GitHub
+/// (D2), after the user confirms what goes out.
 public struct PullRequestsSection: View {
     let book: PullReviewBook
     let onOpenFinding: (String) -> Void
@@ -217,6 +218,18 @@ struct PullSnapshotSheet: View {
                     }
                     .font(.system(size: AeroricType.caption))
                 }
+                if review.state == "done" {
+                    if let write = book.write(for: review) {
+                        PublishDraftView(book: book, write: write)
+                    } else {
+                        Button("准备发布到 GitHub") { Task { await book.prepare(review) } }
+                            .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                            .fixedSize()
+                            .disabled(book.working != nil)
+                            .help("先变成草稿：可以逐条改、勾选，确认后才发")
+                            .accessibilityIdentifier("git.pr.prepare")
+                    }
+                }
             }
             .padding(AeroricSpace.m)
             .background(AeroricColor.layer1, in: AeroricRadius.shape(AeroricRadius.m))
@@ -231,5 +244,102 @@ struct PullSnapshotSheet: View {
                 .foregroundStyle(AeroricColor.textSecondary)
                 .textSelection(.enabled)
         }
+    }
+}
+
+/// D2 (2026-11-21): a review's publishing draft — each comment ticked and
+/// edited, published after a confirmation listing what goes out, each
+/// comment's outcome shown.
+struct PublishDraftView: View {
+    let book: PullReviewBook
+    let write: LiveWriteIntent
+    @State private var texts: [String: String] = [:]
+    /// The confirmation open; its value: resend the unknown ones.
+    @State private var confirming: Bool?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+            HairlineDivider()
+            Text(PublishText.state(write))
+                .font(.system(size: AeroricType.caption, weight: .medium))
+                .foregroundStyle(tone)
+            ForEach(write.items) { item in row(item) }
+            HStack(spacing: AeroricSpace.s) {
+                Button("发布到 GitHub") { confirming = false }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.tinted, compact: true))
+                    .fixedSize()
+                    .disabled(PublishText.due(write).isEmpty || book.working != nil || write.state == "targetMoved")
+                    .accessibilityIdentifier("git.pr.publish")
+                if write.state == "unknown" {
+                    Button("核对后再发") { Task { await book.publish(write) } }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                        .fixedSize()
+                        .disabled(book.working != nil)
+                        .help("先在 GitHub 上找这些评论，找到的记为已发布；找不到的仍是结果不明，不会重发")
+                    Button("仍然重发结果不明的") { confirming = true }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                        .fixedSize()
+                        .disabled(book.working != nil)
+                        .help("核对过、GitHub 上确实没有时才用")
+                }
+            }
+        }
+        .confirmationDialog(PublishText.question(write, resendUnknown: confirming ?? false),
+                            isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
+                            presenting: confirming) { resend in
+            Button("发布") { Task { await book.publish(write, resendUnknown: resend) } }
+            Button("取消", role: .cancel) {}
+        } message: { resend in
+            Text(PublishText.detail(write, resendUnknown: resend))
+        }
+    }
+
+    private var tone: Color {
+        switch write.state {
+        case "done": AeroricColor.success
+        case "partial", "unknown", "targetMoved": AeroricColor.warning
+        case "failed": AeroricColor.danger
+        default: AeroricColor.textSecondary
+        }
+    }
+
+    private func row(_ item: LiveWriteItem) -> some View {
+        let text = texts[item.id] ?? item.body
+        return HStack(alignment: .top, spacing: AeroricSpace.s) {
+            Toggle("", isOn: Binding(get: { item.included },
+                                     set: { on in Task { await book.edit(write, item: item.id, included: on) } }))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .disabled(!item.editable || book.working != nil)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(PublishText.place(item)).foregroundStyle(AeroricColor.textTertiary)
+                if item.editable {
+                    TextField("评论", text: Binding(get: { text }, set: { texts[item.id] = $0 }), axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(1...6)
+                    if text != item.body {
+                        Button("保存") {
+                            Task {
+                                if await book.edit(write, item: item.id, body: text) { texts[item.id] = nil }
+                            }
+                        }
+                        .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                        .fixedSize()
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || book.working != nil)
+                    }
+                } else {
+                    Text(item.body).fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: AeroricSpace.xs) {
+                    Text(PublishText.item(item))
+                        .foregroundStyle(item.state == "sent" ? AeroricColor.success
+                                         : item.state == "draft" ? AeroricColor.textTertiary : AeroricColor.warning)
+                    if let link = item.url.flatMap(URL.init(string:)) {
+                        Link("在 GitHub 上看", destination: link)
+                    }
+                }
+            }
+        }
+        .font(.system(size: AeroricType.caption))
     }
 }

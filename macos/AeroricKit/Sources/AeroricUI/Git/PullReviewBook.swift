@@ -4,7 +4,8 @@ import Foundation
 import Observation
 
 /// Git 侧栏 → PR 审查 (D1 step 3, 2026-11-21): a project's pinned PR
-/// snapshots and their read-only reviews. Nothing here writes to GitHub.
+/// snapshots and their read-only reviews. D2: a review's publishing draft,
+/// edited and published by the user — the only write to GitHub.
 @MainActor @Observable
 public final class PullReviewBook {
     public struct Calls: Sendable {
@@ -12,18 +13,32 @@ public final class PullReviewBook {
         public var snapshots: @Sendable (String) async throws -> [LivePullSnapshot]
         public var reviewStart: @Sendable (String, String, String) async throws -> Void
         public var reviews: @Sendable (String) async throws -> [LivePullReview]
+        /// D2: (project, review).
+        public var writeDraft: @Sendable (String, String) async throws -> Void
+        public var writes: @Sendable (String) async throws -> [LiveWriteIntent]
+        /// (project, draft, item, body, included).
+        public var writeEdit: @Sendable (String, String, String, String?, Bool?) async throws -> Void
+        /// (project, draft, resend unknown).
+        public var publish: @Sendable (String, String, Bool) async throws -> Void
 
         public init(pull: @escaping @Sendable (String, String) async throws -> LivePullSnapshot?,
                     snapshots: @escaping @Sendable (String) async throws -> [LivePullSnapshot],
                     reviewStart: @escaping @Sendable (String, String, String) async throws -> Void,
-                    reviews: @escaping @Sendable (String) async throws -> [LivePullReview]) {
+                    reviews: @escaping @Sendable (String) async throws -> [LivePullReview],
+                    writeDraft: @escaping @Sendable (String, String) async throws -> Void = { _, _ in },
+                    writes: @escaping @Sendable (String) async throws -> [LiveWriteIntent] = { _ in [] },
+                    writeEdit: @escaping @Sendable (String, String, String, String?, Bool?) async throws -> Void
+                        = { _, _, _, _, _ in },
+                    publish: @escaping @Sendable (String, String, Bool) async throws -> Void = { _, _, _ in }) {
             self.pull = pull; self.snapshots = snapshots; self.reviewStart = reviewStart; self.reviews = reviews
+            self.writeDraft = writeDraft; self.writes = writes; self.writeEdit = writeEdit; self.publish = publish
         }
     }
 
     public private(set) var projectID: String?
     public private(set) var snapshots: [LivePullSnapshot] = []
     public private(set) var reviews: [LivePullReview] = []
+    public private(set) var writes: [LiveWriteIntent] = []
     /// What is being done now ("正在取 PR…"), for the spinner.
     public private(set) var working: String?
     public var errorText: String?
@@ -39,13 +54,18 @@ public final class PullReviewBook {
         attach(Calls(pull: { try await client.pullSnapshot(projectId: $0, url: $1) },
                      snapshots: { try await client.snapshots(projectId: $0) },
                      reviewStart: { try await client.reviewStart(projectId: $0, snapshotId: $1, agent: $2) },
-                     reviews: { try await client.reviews(projectId: $0) }))
+                     reviews: { try await client.reviews(projectId: $0) },
+                     writeDraft: { try await client.writeDraft(projectId: $0, reviewId: $1) },
+                     writes: { try await client.writes(projectId: $0) },
+                     writeEdit: { try await client.writeEdit(projectId: $0, id: $1, itemId: $2, body: $3, included: $4) },
+                     publish: { try await client.publish(projectId: $0, id: $1, resendUnknown: $2) }))
     }
 
     public func attach(_ calls: Calls?) {
         self.calls = calls
         snapshots = []
         reviews = []
+        writes = []
         errorText = nil
     }
 
@@ -55,6 +75,7 @@ public final class PullReviewBook {
             self.projectID = projectID
             snapshots = []
             reviews = []
+            writes = []
             errorText = nil
         }
         await refresh()
@@ -65,6 +86,7 @@ public final class PullReviewBook {
         do {
             snapshots = try await calls.snapshots(projectID)
             reviews = try await calls.reviews(projectID)
+            writes = try await calls.writes(projectID)
         } catch {
             errorText = "读取 PR 失败：\(error)"
         }
@@ -98,6 +120,32 @@ public final class PullReviewBook {
         await run("正在开审查…", "开始审查") { calls, project in
             try await calls.reviewStart(project, snapshot.id, agent)
         }
+    }
+
+    /// D2: the review's publishing draft, made once.
+    @discardableResult
+    public func prepare(_ review: LivePullReview) async -> Bool {
+        await run("正在准备…", "准备发布") { calls, project in try await calls.writeDraft(project, review.id) }
+    }
+
+    @discardableResult
+    public func edit(_ write: LiveWriteIntent, item: String, body: String? = nil, included: Bool? = nil) async -> Bool {
+        await run("正在保存…", "保存") { calls, project in
+            try await calls.writeEdit(project, write.id, item, body, included)
+        }
+    }
+
+    /// The user confirmed: publish what is ticked (and, when asked, what went
+    /// out with no answer and is not found on GitHub).
+    @discardableResult
+    public func publish(_ write: LiveWriteIntent, resendUnknown: Bool = false) async -> Bool {
+        await run("正在发布到 GitHub…", "发布") { calls, project in
+            try await calls.publish(project, write.id, resendUnknown)
+        }
+    }
+
+    public func write(for review: LivePullReview) -> LiveWriteIntent? {
+        writes.first { $0.reviewId == review.id }
     }
 
     public func reviews(of snapshot: LivePullSnapshot) -> [LivePullReview] {
@@ -196,5 +244,59 @@ public enum PullText {
     /// The finding's file in the review's checkout, relative to the project.
     public static func checkoutPath(_ f: LivePullFinding, snapshotID: String) -> String {
         ".aeroric/pr-reviews/\(snapshotID)/\(f.path)"
+    }
+}
+
+/// D2: the publishing draft's words.
+public enum PublishText {
+    public static func item(_ i: LiveWriteItem) -> String {
+        switch i.state {
+        case "sent": "已发布"
+        case "sending": "发送中"
+        case "failed": "失败：\(i.reason ?? "原因不明")"
+        case "unknown": "结果不明：\(i.reason ?? "发出后没有收到回答")，去 GitHub 核对"
+        default: i.included ? "待发布" : "不发布"
+        }
+    }
+
+    /// "总评" or "src/a.rs:12".
+    public static func place(_ i: LiveWriteItem) -> String {
+        guard let path = i.path else { return "总评" }
+        return i.line.map { "\(path):\($0)" } ?? path
+    }
+
+    public static func state(_ w: LiveWriteIntent) -> String {
+        let unknown = w.items.filter { $0.included && $0.state == "unknown" }.count
+        switch w.state {
+        case "done": return "已全部发布"
+        case "partial": return "部分发布：失败的可以再发"
+        case "failed": return "没有发出去"
+        case "unknown": return "\(unknown) 条结果不明：先去 GitHub 核对"
+        case "targetMoved": return w.reason ?? "PR 有了新提交，没有发布"
+        case "sending": return "发布中…"
+        default: return "草稿：改好、勾选后发布"
+        }
+    }
+
+    /// What a publish now would send (ticked, not sent; unknown only when resending).
+    public static func due(_ w: LiveWriteIntent, resendUnknown: Bool = false) -> [LiveWriteItem] {
+        w.items.filter { i in
+            i.included && (i.state == "draft" || i.state == "failed" || (resendUnknown && i.state == "unknown"))
+        }
+    }
+
+    public static func question(_ w: LiveWriteIntent, resendUnknown: Bool = false) -> String {
+        "发布 \(due(w, resendUnknown: resendUnknown).count) 条评论到 \(w.owner)/\(w.repo)#\(w.number)？"
+    }
+
+    /// The confirmation's detail: the commit and every comment going out.
+    public static func detail(_ w: LiveWriteIntent, resendUnknown: Bool = false) -> String {
+        let lines = due(w, resendUnknown: resendUnknown).map { i in
+            let flat = i.body.split(whereSeparator: \.isNewline).joined(separator: " ")
+            return "· \(place(i))：\(flat.prefix(60))"
+        }
+        var head = "针对提交 \(String(w.headSha.prefix(7)))。发布前会再确认 PR 没有新提交；已经在 GitHub 上的不会重复发。"
+        if resendUnknown { head += "结果不明的这几条在 GitHub 上没有找到，会再发一次。" }
+        return ([head] + lines).joined(separator: "\n")
     }
 }
