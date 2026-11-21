@@ -167,6 +167,22 @@ pub fn attach_because(context: &str, prompt: &str, why: &str) -> String {
     format!("{}\n{ATTACHED_END}\n\n{prompt}", opened.trim_end())
 }
 
+/// E12 (2026-11-21): why the tasks the person referenced with `@` are in
+/// front of their message.
+pub const REFERENCES_WHY: &str = "你这一轮用 @ 引用的任务";
+
+/// E12: the block naming the referenced tasks, `(task id, title)` each,
+/// and how to read them.
+pub fn references_block(tasks: &[(String, String)]) -> String {
+    let mut out = String::from(
+        "用户在这一轮用 @ 明确引用了下面的任务，要你参考它们。用 read_session 读（参数 taskId）；只要它的结论时加 mode: latest_assistant，拿 Agent 最后一条回复的原文。\n",
+    );
+    for (id, title) in tasks {
+        out.push_str(&format!("- {title}（taskId: {id}）\n"));
+    }
+    out.trim_end().to_string()
+}
+
 /// The envelope's body and the message after it, for a message that
 /// starts with one.
 pub fn split_attached(text: &str) -> Option<(&str, &str)> {

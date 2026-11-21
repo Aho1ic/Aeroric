@@ -1347,6 +1347,16 @@ fn prompt(live: &Live, request: &Request) -> Frame {
             "no task with that id in any known project",
         );
     };
+    // E12: the tasks picked with `@`, named in front of the message.
+    let sent = match references(live, &p) {
+        Ok(None) => p.text.clone(),
+        Ok(Some(block)) => aeroric_core::sessions::live::opening::attach_because(
+            &block,
+            &p.text,
+            aeroric_core::sessions::live::opening::REFERENCES_WHY,
+        ),
+        Err(why) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &why),
+    };
     let driver = live.driver(&p.task_id);
     // R1-2b: the message goes through the delivery queue; Q8 — a pending
     // handoff travels in the same delivery.
@@ -1356,7 +1366,7 @@ fn prompt(live: &Live, request: &Request) -> Frame {
         DeliveryKind::User,
         p.mode.unwrap_or(DeliveryMode::Now),
         &delivery::label("你的消息", &p.text),
-        &p.text,
+        &sent,
         handoff.then_some("handoff"),
     ) {
         Ok(item) => item,
@@ -1380,6 +1390,55 @@ fn prompt(live: &Live, request: &Request) -> Frame {
     )
 }
 
+/// E12 (2026-11-21): the block naming the tasks a message references, or
+/// `None` without any. Each must be another task of the same project; a
+/// wrong one refuses the message rather than sending it without.
+fn references(live: &Live, p: &PromptParams) -> Result<Option<String>, String> {
+    if p.references.is_empty() {
+        return Ok(None);
+    }
+    if p.references.len() > aeroric_protocol::session_live::MAX_REFERENCES {
+        return Err(format!(
+            "一条消息最多引用 {} 个任务",
+            aeroric_protocol::session_live::MAX_REFERENCES
+        ));
+    }
+    let project = |id: &str| {
+        find_project_of_task(&live.context, id).and_then(|project| {
+            project
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+    };
+    let own = project(&p.task_id);
+    let mut named = Vec::new();
+    for id in &p.references {
+        if id == &p.task_id {
+            return Err("不能引用这个任务自己".into());
+        }
+        let Some((_, record)) = live.record(id) else {
+            return Err(format!("找不到引用的任务 {id}"));
+        };
+        if own.is_none() || project(id) != own {
+            return Err(format!("引用的任务 {id} 不在这个项目里"));
+        }
+        if named.iter().any(|(seen, _): &(String, String)| seen == id) {
+            continue;
+        }
+        let title = record
+            .get("title")
+            .and_then(Value::as_str)
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or("（无标题）")
+            .to_string();
+        named.push((id.clone(), title));
+    }
+    Ok(Some(
+        aeroric_core::sessions::live::opening::references_block(&named),
+    ))
+}
+
 /// R1-2b: what `session.prompt` did on the spot, now done when the queue
 /// sends the user's message. `Ok(true)`: the driver answers with a receipt.
 fn send_user(live: &Live, task_id: &str, id: &str, text: &str) -> Result<bool, String> {
@@ -1398,6 +1457,14 @@ fn send_user(live: &Live, task_id: &str, id: &str, text: &str) -> Result<bool, S
         Some(driver) => driver,
         None => live.reopen_quiet(task_id)?,
     };
+    // E12: the tasks referenced with `@` came in front of the message, in
+    // the envelope, when it was queued; they share one envelope with what
+    // recall finds below, and the reminder stays with the person's words.
+    use aeroric_core::sessions::live::opening;
+    let (referenced, text) = match opening::split_attached(text) {
+        Some((body, typed)) => (Some(body.to_string()), typed),
+        None => (None, text),
+    };
     let checkpoints = live.executor.checkpoints();
     checkpoints.note_prompt(task_id, text);
     // B4′: same session, new model or compacted — remind it of what is open.
@@ -1414,13 +1481,16 @@ fn send_user(live: &Live, task_id: &str, id: &str, text: &str) -> Result<bool, S
         None => text.to_string(),
     };
     // H4: what was found for this message, in front of it, when recall is on.
-    let text = match recalled {
-        Some(block) => aeroric_core::sessions::live::opening::attach_because(
-            &block,
+    let recall_why = aeroric_core::sessions::live::recall::WHY;
+    let text = match (referenced, recalled) {
+        (None, None) => text,
+        (Some(refs), None) => opening::attach_because(&refs, &text, opening::REFERENCES_WHY),
+        (None, Some(block)) => opening::attach_because(&block, &text, recall_why),
+        (Some(refs), Some(block)) => opening::attach_because(
+            &format!("{refs}\n\n{block}"),
             &text,
-            aeroric_core::sessions::live::recall::WHY,
+            &format!("{}；{recall_why}", opening::REFERENCES_WHY),
         ),
-        None => text,
     };
     let receipts = driver.receipts();
     driver

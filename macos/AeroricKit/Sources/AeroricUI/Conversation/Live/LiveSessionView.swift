@@ -11,6 +11,8 @@ public struct LiveSessionView: View {
     /// Scroll to this approval card when it changes (a clicked notification).
     let focusApproval: String?
     @State private var draft = ""
+    /// E12: tasks picked with "@" for the next message.
+    @State private var references: [TaskMention.Option] = []
     @Environment(AgentUpgradeBook.self) private var upgrades: AgentUpgradeBook?
     /// Q-R4: PDF excerpts handed over while the preview covered this page.
     @Environment(ComposerInbox.self) private var inbox: ComposerInbox?
@@ -687,11 +689,70 @@ public struct LiveSessionView: View {
         .accessibilityIdentifier("session.live.delegate")
     }
 
+    /// E12: "@…" offers the project's other tasks.
+    private var mentionSuggestions: [TaskMention.Option] {
+        TaskMention.suggestions(draft, options: facts.referableTasks, picked: references)
+    }
+
+    private var mentionList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(mentionSuggestions) { option in
+                HoverCapsuleRow(selected: false, height: 26, action: {
+                    references.append(option)
+                    draft = TaskMention.removingQuery(draft)
+                }) {
+                    HStack(spacing: AeroricSpace.s) {
+                        Image(systemName: "at").foregroundStyle(AeroricColor.textTertiary)
+                        Text(option.title).lineLimit(1).truncationMode(.tail)
+                        Spacer()
+                    }
+                    .font(.system(size: AeroricType.secondary))
+                }
+                .accessibilityIdentifier("session.live.mention.\(option.id)")
+            }
+        }
+        .padding(AeroricSpace.s)
+        .glassSurface(.popover, in: AeroricRadius.shape(AeroricRadius.m))
+        .accessibilityIdentifier("session.live.mention")
+    }
+
+    /// E12: the picked tasks above the composer; × takes one out.
+    private var referenceChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: AeroricSpace.s) {
+                ForEach(references) { option in
+                    HStack(spacing: AeroricSpace.xs) {
+                        Image(systemName: "at")
+                        Text(option.title).lineLimit(1).frame(maxWidth: 180, alignment: .leading)
+                        Button {
+                            references.removeAll { $0.id == option.id }
+                        } label: {
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("不再引用\(option.title)")
+                        .accessibilityIdentifier("session.live.unreference.\(option.id)")
+                    }
+                    .font(.system(size: AeroricType.secondary))
+                    .foregroundStyle(AeroricColor.textSecondary)
+                    .padding(.horizontal, AeroricSpace.m)
+                    .frame(height: 24)
+                    .background(AeroricColor.layer2, in: Capsule(style: .continuous))
+                }
+            }
+        }
+        .scrollIndicators(.hidden)
+        .help("这条消息引用的任务：Agent 这一轮会读它们")
+        .accessibilityIdentifier("session.live.references")
+    }
+
     @ViewBuilder private var composer: some View {
         if !suggestions.isEmpty { suggestionList }
         if !hashSuggestions.isEmpty { hashList }
+        if !mentionSuggestions.isEmpty { mentionList }
+        if !references.isEmpty { referenceChips }
         ComposerCard(
-            text: $draft, placeholder: store.turnActive ? "补充说明会发给正在进行的这一轮…" : "继续对话，或输入 / 使用命令",
+            text: $draft, placeholder: store.turnActive ? "补充说明会发给正在进行的这一轮…" : "继续对话，输入 / 使用命令，@ 引用任务",
             isEditable: store.state != nil, sendState: sendState, identifierPrefix: "session.live",
             onSend: { send() }, onStop: { Task { await store.interrupt() } },
             onSendAfterTurn: store.turnActive ? { send(afterTurn: true) } : nil,
@@ -834,16 +895,19 @@ public struct LiveSessionView: View {
             store.errorText = "\(harness.title) 需要先升级，升级完成后会自动发送这条消息"
             return
         }
+        let picked = references
         draft = ""
+        references = []
         Task { @MainActor in
             do {
-                switch try await store.send(text, afterTurn: afterTurn) {
+                switch try await store.send(text, afterTurn: afterTurn, references: picked.map(\.id)) {
                 case .sent, .ranCommand, .clearedToNewSession: break
                 case .openModelPicker: modelPickerRequest += 1
                 case .openPermissionPicker: permissionPickerRequest += 1
                 }
             } catch {
                 draft = text
+                references = picked
                 store.errorText = "发送失败：\(error)"
             }
         }

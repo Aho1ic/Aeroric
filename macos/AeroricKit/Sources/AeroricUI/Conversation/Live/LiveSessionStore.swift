@@ -15,8 +15,9 @@ public protocol LiveSessionActions {
     /// A6: up to `pages` host pages of history, whether older ones are left,
     /// and what of the transcript did not read.
     func history(taskID: String, pages: Int) async throws -> LiveHistory
-    /// R1-2b: queued; `afterTurn` waits for the running turn to end.
-    func prompt(taskID: String, text: String, afterTurn: Bool) async throws -> LivePromptReceipt
+    /// R1-2b: queued; `afterTurn` waits for the running turn to end. E12:
+    /// `references` are tasks of the project picked with "@".
+    func prompt(taskID: String, text: String, afterTurn: Bool, references: [String]) async throws -> LivePromptReceipt
     func interrupt(taskID: String) async throws
     func respond(taskID: String, requestID: String, decision: LiveDecision, reason: String?) async throws
     /// Answer a question card: exactly one of `value`, `confirmed`, `cancelled`.
@@ -689,7 +690,7 @@ public final class LiveSessionStore {
     // MARK: - User actions
 
     /// Sends the composer text, or runs it when it is one of the five commands.
-    public func send(_ text: String, afterTurn: Bool = false) async throws -> LiveSendResult {
+    public func send(_ text: String, afterTurn: Bool = false, references: [String] = []) async throws -> LiveSendResult {
         if let command = SlashCommand.parse(text) {
             switch command {
             case .compact:
@@ -725,7 +726,7 @@ public final class LiveSessionStore {
         }
         let waits = afterTurn && turnActive
         if !turnActive { baseline = LiveHistoryMerge.assistantCount(history) }
-        let receipt = try await actions.prompt(taskID: taskID, text: text, afterTurn: waits)
+        let receipt = try await actions.prompt(taskID: taskID, text: text, afterTurn: waits, references: references)
         model?.echo(text, afterTurn: waits, delivery: receipt.deliveryId)
         sharedWriters = receipt.sharedWriters
         return .sent
@@ -739,7 +740,8 @@ public final class LiveSessionStore {
     /// R1-2b: 修改 — out of the queue; the caller puts the text back in the
     /// composer. Nil when it could not be taken back.
     public func takeBack(_ deliveryID: String) async -> String? {
-        guard let text = model?.deliveries[deliveryID]?.text else { return nil }
+        // E12: the person's words, without the referenced tasks in front.
+        guard let text = model?.deliveries[deliveryID].map({ AttachedContext.typed($0.text) }) else { return nil }
         do {
             try await actions.deliveryAction(DeliveryText.method(.discard), id: deliveryID)
         } catch {

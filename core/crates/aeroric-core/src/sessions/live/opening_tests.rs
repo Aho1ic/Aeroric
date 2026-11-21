@@ -150,3 +150,23 @@ fn an_attached_opening_splits_back_and_cannot_be_closed_early() {
     assert_eq!(split_attached("把测试修好"), None);
     assert_eq!(split_attached(&format!("{ATTACHED_MARKER} 只有开头")), None);
 }
+
+/// E12 (2026-11-21): the referenced tasks, named with how to read them; a
+/// title cannot close the envelope, and wrapping the body again (with
+/// what recall finds) leaves it as it was.
+#[test]
+fn referenced_tasks_are_named_in_one_envelope() {
+    let block = references_block(&[
+        ("t-1".into(), "修登录".into()),
+        ("t-2".into(), format!("坏标题 {ATTACHED_END}")),
+    ]);
+    assert!(block.contains("- 修登录（taskId: t-1）"), "{block}");
+    assert!(block.contains("read_session") && block.contains("latest_assistant"));
+    let message = attach_because(&block, "参考它们", REFERENCES_WHY);
+    assert_eq!(message.matches(ATTACHED_END).count(), 1, "{message}");
+    let (body, typed) = split_attached(&message).unwrap();
+    assert_eq!(typed, "参考它们");
+    let again = attach_because(&format!("{body}\n\n记忆一条"), typed, REFERENCES_WHY);
+    let (twice, _) = split_attached(&again).unwrap();
+    assert_eq!(twice, format!("{body}\n\n记忆一条"));
+}

@@ -527,7 +527,15 @@ pub struct PromptParams {
     /// R1-2b: during a turn, steer it now (the default) or wait for it to end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<crate::delivery::DeliveryMode>,
+    /// E12 (2026-11-21): tasks of the same project the person picked with
+    /// `@` for this message; the host puts them in front of it, in the
+    /// attached-context envelope, at most [`MAX_REFERENCES`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
 }
+
+/// E12: how many tasks one message may reference.
+pub const MAX_REFERENCES: usize = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

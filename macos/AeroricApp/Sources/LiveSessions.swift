@@ -47,8 +47,8 @@ struct HostLiveSessionActions: LiveSessionActions {
                            hasEarlier: page.hasMore && page.nextCursor != nil, unreadable: page.unreadable)
     }
 
-    func prompt(taskID: String, text: String, afterTurn: Bool) async throws -> LivePromptReceipt {
-        try await client().prompt(taskId: taskID, text: text, afterTurn: afterTurn)
+    func prompt(taskID: String, text: String, afterTurn: Bool, references: [String]) async throws -> LivePromptReceipt {
+        try await client().prompt(taskId: taskID, text: text, afterTurn: afterTurn, references: references)
     }
     func interrupt(taskID: String) async throws { try await client().interrupt(taskId: taskID) }
 
@@ -323,6 +323,8 @@ extension AppServices {
         facts.loginOnGateway = task.agentConfigID == "via-\(task.agent ?? "")-login"
         facts.lastTurnFailed = task.status == "failed"
         facts.copyPath = task.isCopy ? task.worktreePath : nil
+        // E12: the project's other tasks, for "@" in the composer.
+        facts.referableTasks = TaskMention.options(taskStore.tasks, for: task)
         if let allThirdParty, pinned?.id != allThirdParty.id {
             facts.modelSources.append(LiveModelSource(
                 configID: String(allThirdParty.id.dropFirst(AgentConfigCatalog.prefix.count)),

@@ -152,10 +152,12 @@ extension SessionsClient {
     public static let liveCapability = LiveSessionContract.capability
 
     @discardableResult
-    public func prompt(taskId: String, text: String, afterTurn: Bool = false) async throws -> LivePromptReceipt {
+    public func prompt(taskId: String, text: String, afterTurn: Bool = false,
+                       references: [String] = []) async throws -> LivePromptReceipt {
         let frame = try await connection.request(
             LiveSessionContract.promptMethod,
-            params: LiveSessionRequest.prompt(taskId: taskId, text: text, afterTurn: afterTurn))
+            params: LiveSessionRequest.prompt(taskId: taskId, text: text, afterTurn: afterTurn,
+                                              references: references))
         return LivePromptReceipt(deliveryId: frame.result["deliveryId"]?.stringValue,
                                  sharedWriters: LiveSharedWriter.decodeList(frame.result["sharedWriters"]))
     }

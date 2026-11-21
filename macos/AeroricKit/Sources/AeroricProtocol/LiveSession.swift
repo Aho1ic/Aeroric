@@ -518,8 +518,13 @@ public enum LiveSessionRequest {
     }
 
     /// R1-2b: `afterTurn` waits for the running turn to end instead of steering it.
-    public static func prompt(taskId: String, text: String, afterTurn: Bool = false) -> JSONValue {
-        task(taskId, afterTurn ? ["text": .string(text), "mode": .string("afterTurn")] : ["text": .string(text)])
+    /// E12: `references` are tasks of the same project picked with `@`.
+    public static func prompt(taskId: String, text: String, afterTurn: Bool = false,
+                              references: [String] = []) -> JSONValue {
+        var extra: [String: JSONValue] = ["text": .string(text)]
+        if afterTurn { extra["mode"] = .string("afterTurn") }
+        if !references.isEmpty { extra["references"] = .array(references.map(JSONValue.string)) }
+        return task(taskId, extra)
     }
     public static func interrupt(taskId: String) -> JSONValue { task(taskId) }
     public static func close(taskId: String) -> JSONValue { task(taskId) }

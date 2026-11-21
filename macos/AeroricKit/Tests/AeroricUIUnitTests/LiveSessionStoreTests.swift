@@ -31,8 +31,9 @@ private class FakeLiveActions: LiveSessionActions {
         return paged(pages)
     }
     var writers: [LiveSharedWriter] = []
-    func prompt(taskID: String, text: String, afterTurn: Bool) async throws -> LivePromptReceipt {
-        calls.append(afterTurn ? "prompt after \(text)" : "prompt \(text)")
+    func prompt(taskID: String, text: String, afterTurn: Bool, references: [String]) async throws -> LivePromptReceipt {
+        let refs = references.isEmpty ? "" : " @" + references.joined(separator: ",")
+        calls.append((afterTurn ? "prompt after \(text)" : "prompt \(text)") + refs)
         return LivePromptReceipt(deliveryId: "dv-\(calls.count)", sharedWriters: writers)
     }
     func interrupt(taskID: String) async throws { calls.append("interrupt") }
@@ -210,6 +211,16 @@ final class LiveSessionStoreTests: XCTestCase {
         await store.retryHistory()
         XCTAssertEqual(actions.calls.filter { $0.hasPrefix("history pages") },
                        ["history pages 24", "history pages 48", "history pages 48"])
+    }
+
+    /// E12: the tasks picked with "@" go with the message.
+    func testReferencedTasksGoWithTheMessage() async {
+        let actions = FakeLiveActions(state: state(seq: 1))
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        let sent = try? await store.send("参考它们", references: ["t-2", "t-3"])
+        XCTAssertEqual(sent, .sent)
+        XCTAssertTrue(actions.calls.contains("prompt 参考它们 @t-2,t-3"), "\(actions.calls)")
     }
 
     /// B4-2: "#角色 …" delegates instead of prompting; an unknown name is a message.

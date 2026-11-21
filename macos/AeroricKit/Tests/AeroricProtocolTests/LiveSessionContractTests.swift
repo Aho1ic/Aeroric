@@ -141,6 +141,10 @@ final class LiveSessionContractTests: XCTestCase {
     func testRequestParamsMatchTheRustFixture() throws {
         let requests = try fixture()["requests"] ?? .null
         XCTAssertEqual(LiveSessionRequest.prompt(taskId: "task-1", text: "继续"), requests[LiveSessionContract.promptMethod])
+        // E12: references only when there are any.
+        XCTAssertEqual(LiveSessionRequest.prompt(taskId: "t", text: "x", references: ["t-2"])["references"],
+                       .array([.string("t-2")]))
+        XCTAssertNil(LiveSessionRequest.prompt(taskId: "t", text: "x")["references"])
         XCTAssertEqual(LiveSessionRequest.interrupt(taskId: "task-1"), requests[LiveSessionContract.interruptMethod])
         XCTAssertEqual(LiveSessionRequest.respond(taskId: "task-1", requestId: "7", decision: .deny, reason: "别删"),
                        requests[LiveSessionContract.respondMethod])

@@ -120,7 +120,7 @@ struct MessageBubble: View {
         let split = isUser ? AttachedContext.split(content) : nil
         VStack(alignment: .trailing, spacing: AeroricSpace.xs) {
             if let split {
-                AttachedContextRow(text: split.context)
+                AttachedContextRow(text: split.context, reason: AttachedContext.reason(content))
                     .frame(maxWidth: columnWidth * Self.userWidthRatio, alignment: .trailing)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
@@ -186,6 +186,26 @@ public enum AttachedContext {
         return (context, rest)
     }
 
+    /// E12: why the envelope is there, from its opening line
+    /// (`来自：Aeroric · <why> · <authority>`): the opening, what recall found,
+    /// the tasks referenced with "@".
+    public static func reason(text: String) -> String? {
+        guard text.hasPrefix(marker), split(text: text) != nil,
+              let line = text.split(separator: "\n", maxSplits: 1).first else { return nil }
+        let parts = line.components(separatedBy: " · ")
+        guard parts.count >= 3 else { return nil }
+        let why = parts[1].trimmingCharacters(in: .whitespaces)
+        return why.isEmpty ? nil : why
+    }
+
+    public static func reason(_ content: [SessionContent]) -> String? {
+        for block in content { if case let .text(text) = block { return reason(text: text) } }
+        return nil
+    }
+
+    /// E12: the person's own words of a message that may carry the envelope.
+    public static func typed(_ text: String) -> String { split(text: text)?.rest ?? text }
+
     /// For a message whose first text block starts with the envelope: the
     /// envelope's body, and the content with that block cut to the person's words.
     public static func split(_ content: [SessionContent]) -> (context: String, rest: [SessionContent])? {
@@ -205,11 +225,13 @@ public enum AttachedContext {
 /// H3: the attached opening, folded under one line.
 struct AttachedContextRow: View {
     let text: String
+    /// E12: the envelope's own reason; nil reads as the opening (H3).
+    var reason: String?
     @State private var expanded = false
 
     var body: some View {
         FlatDisclosureRow(symbol: "paperclip", title: "Aeroric 附加的上下文",
-                          summary: "\(text.count) 字 · 这个 Agent 没有系统层，开场内容随第一条消息发出",
+                          summary: "\(text.count) 字 · \(reason ?? "这个 Agent 没有系统层，开场内容随第一条消息发出")",
                           expanded: $expanded, identifier: "session.attached-context") {
             Text(text)
                 .font(.system(size: AeroricType.caption))
@@ -217,6 +239,6 @@ struct AttachedContextRow: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .help("Aeroric 在会话开始时附上的说明和你确认过的偏好；不是你这一轮说的话")
+        .help("Aeroric 附在这条消息前面的内容，不是你这一轮说的话")
     }
 }

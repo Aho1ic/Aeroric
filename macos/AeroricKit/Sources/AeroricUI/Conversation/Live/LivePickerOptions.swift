@@ -38,6 +38,8 @@ public struct LiveSessionFacts: Equatable, Sendable {
     public var rerunTargets: [RerunTarget] = []
     /// R2-3b: the isolated copy the session runs in; nil in the original directory.
     public var copyPath: String?
+    /// E12: the project's other tasks "@" in the composer can reference.
+    public var referableTasks: [TaskMention.Option] = []
 
     public init(agent: String?, configurationTitle: String? = nil, presetTitle: String? = nil,
                 workingDirectory: String? = nil,

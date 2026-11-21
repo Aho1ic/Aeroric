@@ -392,7 +392,7 @@ public struct LiveSessionModel: Equatable, Sendable {
         where delivery.kind == "user" && Self.waitsForUser(delivery) && !held.contains(delivery.id) {
             echoCount += 1
             let id = "local-\(echoCount)"
-            items.append(.userEcho(id: id, text: delivery.text, steer: .none))
+            items.append(.userEcho(id: id, text: AttachedContext.typed(delivery.text), steer: .none))
             echoDeliveries[id] = delivery.id
         }
         for (echo, delivery) in echoDeliveries where deliveries[delivery]?.state == "withdrawn" {

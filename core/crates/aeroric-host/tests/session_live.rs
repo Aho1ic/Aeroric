@@ -991,6 +991,75 @@ async fn a_closed_claude_session_reopens_with_its_recorded_session() {
     peer.claude_turn("cs-1", "again").await;
 }
 
+/// E12 (2026-11-21): tasks picked with `@` reach the agent in front of the
+/// message, in the attached-context envelope; a wrong reference refuses
+/// the message instead of sending it without.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn referenced_tasks_go_in_front_of_the_message() {
+    let mut host = Host::start(true).await;
+    host.start_agent_task("claude", "hi");
+    let (_, mut peer) = tokio::time::timeout(WAIT, host.claude_peers.recv())
+        .await
+        .expect("claude started")
+        .expect("launcher");
+    peer.claude_turn("cs-1", "hi").await;
+    host.until_state("idle", |s| s["turnActive"] == false).await;
+    host.service
+        .create(
+            &host.project,
+            NewTask {
+                id: "task-2".into(),
+                project_id: "project-1".into(),
+                prompt: "写文档".into(),
+                agent: "codex".into(),
+                permission_mode: "ask".into(),
+                immediate: false,
+                selected_model: None,
+                reasoning_effort: None,
+                speed: None,
+                dsh_agent_preset: None,
+                agent_config_id: None,
+                images: vec![],
+                texts: vec![],
+            },
+        )
+        .expect("create");
+
+    for (references, says) in [
+        (json!(["task-1"]), "自己"),
+        (json!(["nope"]), "找不到"),
+        (json!(["a", "b", "c", "d", "e", "f"]), "最多"),
+    ] {
+        let refused = host
+            .call(
+                "session.prompt",
+                json!({"taskId": "task-1", "text": "看看", "references": references}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused["code"], "INVALID_ARGUMENT");
+        assert!(
+            refused["message"].as_str().unwrap().contains(says),
+            "{refused}"
+        );
+    }
+
+    host.call(
+        "session.prompt",
+        json!({"taskId": "task-1", "text": "参考它接着做",
+            "references": ["task-2", "task-2"]}),
+    )
+    .await
+    .unwrap();
+    let user = peer.next().await;
+    let content = user["message"]["content"].as_str().unwrap_or_default();
+    assert!(content.starts_with("[Aeroric 附加的上下文]"), "{user}");
+    assert!(content.contains("你这一轮用 @ 引用的任务"), "{content}");
+    assert_eq!(content.matches("taskId: task-2").count(), 1, "{content}");
+    assert!(content.contains("latest_assistant"), "{content}");
+    assert!(content.ends_with("参考它接着做"), "{content}");
+}
+
 /// A previous host process died with native sessions open: their rows still
 /// say `running` / `input_required`, and no driver in this process will ever
 /// settle them. The new host settles them when it assembles the session
