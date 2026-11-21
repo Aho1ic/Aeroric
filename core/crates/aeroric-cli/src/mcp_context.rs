@@ -61,7 +61,8 @@ fn tools() -> Value {
                 "taskId": {"type": "string"},
                 "from": {"type": "integer", "minimum": 0, "description": "从第几条消息开始"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 200},
-                "offset": {"type": "integer", "minimum": 0, "description": "第 from 条从第几个字开始（续读被截断的消息）"}
+                "offset": {"type": "integer", "minimum": 0, "description": "第 from 条从第几个字开始（续读被截断的消息）"},
+                "mode": {"type": "string", "enum": ["latest_assistant"], "description": "latest_assistant：只要这个会话里 Agent 最后一条回复的原文（最多 2 万字），不分页、不带工具行；只想引用另一个任务的结论时用"}
             }}
         },
         {

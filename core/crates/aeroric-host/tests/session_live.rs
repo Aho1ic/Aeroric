@@ -1602,6 +1602,28 @@ async fn read_session_reads_on_shows_tools_and_says_why_it_cannot() {
         long,
         "两段拼回原文"
     );
+    // E12: only the agent's last reply, whole, without paging or tool lines.
+    let latest = host
+        .call(
+            "context.readSession",
+            json!({"token": token, "mode": "latest_assistant"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(latest["reply"], long.as_str());
+    assert_eq!(latest["truncated"], false);
+    assert!(latest.get("messages").is_none(), "{latest}");
+    let wrong = host
+        .call(
+            "context.readSession",
+            json!({"token": token, "mode": "everything"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(wrong["message"]
+        .as_str()
+        .unwrap()
+        .contains("latest_assistant"));
 
     std::fs::OpenOptions::new()
         .write(true)

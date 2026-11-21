@@ -323,6 +323,8 @@ owner 在 `~/Downloads/同步空间/LYX/New-addition-1118/` 整理了四个项�
 
 #### E12 `@任务` 引用，以及只读最新回复（2–3 天）
 
+2026-11-21 第一步已实现，见 [E12 第一步笔记](../../implemented/feature/2026-11-21-e12-latest-reply.md)：`read_session` 的 `mode: latest_assistant`。输入框里的 `@任务` 是第二步。
+
 - **用户会看到**：在输入框输入 `@`，选一个或几个本项目的任务，Agent 这一轮就能读它们；只想要另一个任务最后一条回复的原文时，Agent 能直接拿到，不会混进分页信息。
 - **来源**：LinkSense 跨任务引用和 #59。
 - **做法**：

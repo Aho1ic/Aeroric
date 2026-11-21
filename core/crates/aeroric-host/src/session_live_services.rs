@@ -397,7 +397,13 @@ struct ContextParams {
     from: Option<usize>,
     #[serde(default)]
     offset: Option<usize>,
+    /// E12: `latest_assistant` — only the agent's last reply, whole.
+    #[serde(default)]
+    mode: Option<String>,
 }
+
+/// E12: the most of one reply `latest_assistant` returns.
+const LATEST_REPLY_CHARS: usize = 20_000;
 
 /// `(task_id, project_id)` the token was issued for.
 fn context_scope(
@@ -644,6 +650,41 @@ fn context_read(live: &Live, request: &Request) -> Frame {
             "本项目没有这个会话",
         );
     };
+    // E12: only the agent's last reply, as it was written, without paging.
+    match p.mode.as_deref() {
+        None => {}
+        Some("latest_assistant") => {
+            let messages = match context_messages(live, record, false) {
+                Ok(messages) => messages,
+                Err(reason) => return failure(request.id.clone(), ErrorCode::IoError, &reason),
+            };
+            let last = messages.iter().rev().find(|(role, _)| role != "user");
+            let reply = last.map(|(_, text)| {
+                let chars = text.chars().count();
+                (
+                    text.chars().take(LATEST_REPLY_CHARS).collect::<String>(),
+                    chars > LATEST_REPLY_CHARS,
+                )
+            });
+            return ok(
+                request,
+                json!({
+                    "taskId": wanted,
+                    "title": context_title(record),
+                    "reply": reply.as_ref().map(|(text, _)| text),
+                    "truncated": reply.as_ref().is_some_and(|(_, cut)| *cut),
+                    "note": reply.is_none().then_some("这个会话还没有 Agent 的回复"),
+                }),
+            );
+        }
+        Some(other) => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::InvalidArgument,
+                &format!("read_session 的 mode 只认 latest_assistant，不认 {other}"),
+            )
+        }
+    }
     let messages = match context_messages(live, record, true) {
         Ok(messages) => messages,
         Err(reason) => return failure(request.id.clone(), ErrorCode::IoError, &reason),
