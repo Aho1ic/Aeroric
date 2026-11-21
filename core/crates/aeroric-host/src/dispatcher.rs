@@ -459,6 +459,8 @@ impl HostServices {
         );
         // H6: capability packs (能力包).
         crate::packs_services::register_pack_services(&mut set, Arc::clone(&context));
+        // D1: GitHub pull requests pinned as snapshots (read only).
+        crate::github_services::register_github_services(&mut set, Arc::clone(&context));
         // Registered unconditionally above, so advertised unconditionally: the
         // native client gates its cleanup screen on this, never on a method probe.
         capabilities.push(aeroric_protocol::capability::Capability {

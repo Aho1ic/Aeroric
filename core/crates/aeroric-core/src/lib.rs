@@ -17,6 +17,7 @@ pub mod events;
 pub mod extensions;
 pub mod files;
 pub mod git;
+pub mod github;
 pub mod ide;
 pub mod infrastructure;
 pub mod knowledge;

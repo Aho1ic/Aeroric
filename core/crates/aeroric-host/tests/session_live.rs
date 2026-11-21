@@ -4139,3 +4139,42 @@ async fn rollout_tiers_move_and_go_back_over_rpc() {
     let no_id = host.call("rollout.revert", json!({})).await.unwrap_err();
     assert!(no_id["message"].as_str().unwrap().contains("id"), "{no_id}");
 }
+
+/// D1: a PR link that is not one is refused before anything is fetched;
+/// a project with no snapshots lists none; an unknown snapshot is not found.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn github_snapshots_check_their_arguments() {
+    let host = Host::start(true).await;
+    let bad = host
+        .call(
+            "github.pullSnapshot",
+            json!({"projectId": "project-1", "url": "https://github.com/acme/widget/issues/7"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(bad["message"].as_str().unwrap().contains("看不懂"), "{bad}");
+    let no_project = host
+        .call("github.pullSnapshot", json!({"url": "acme/widget#7"}))
+        .await
+        .unwrap_err();
+    assert!(no_project["message"]
+        .as_str()
+        .unwrap()
+        .contains("projectId"));
+    let listed = host
+        .call("github.snapshots", json!({"projectId": "project-1"}))
+        .await
+        .unwrap();
+    assert_eq!(listed["snapshots"], json!([]));
+    let missing = host
+        .call(
+            "github.snapshot",
+            json!({"projectId": "project-1", "id": "42-7-aaaa"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(missing["message"]
+        .as_str()
+        .unwrap()
+        .contains("没有这份快照"));
+}

@@ -19,6 +19,7 @@ pub mod families;
 pub mod file_access;
 pub mod file_services2;
 pub mod gateway;
+pub mod github_services;
 pub mod ide_services;
 pub mod imports_services;
 pub mod infrastructure_services;
