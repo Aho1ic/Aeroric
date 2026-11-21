@@ -450,7 +450,7 @@ impl StructuredExecutor {
                     .into_iter()
                     .map(|r| r.name)
                     .collect();
-                opening::pointers(&wiki, &roles)
+                opening::pointers_with(&wiki, &roles, &self.default_skills(task_id))
             })
             .flatten();
         opening::compose(
@@ -579,16 +579,58 @@ impl StructuredExecutor {
         &self.recall
     }
 
+    /// H8: a learned skill at 候选 is not offered; whether this message
+    /// would have called for it (its description shares enough of the
+    /// message's keywords) is counted.
+    fn note_candidate_skills(&self, message: &str) {
+        use super::rollout::{self, Tier};
+        let Some(data_dir) = self.recall.rollout().data_dir() else {
+            return;
+        };
+        let asked: std::collections::HashSet<String> =
+            super::recall::keywords(message).into_iter().collect();
+        for (name, description) in crate::extensions::builtin_skills::learned_described(&data_dir) {
+            let id = rollout::skill_id(&name);
+            if rollout::tier_in(&data_dir, &id) != Tier::Candidate {
+                continue;
+            }
+            let shared = super::recall::keywords(&description)
+                .into_iter()
+                .filter(|k| asked.contains(k))
+                .count();
+            self.recall
+                .rollout()
+                .note(&id, shared >= super::recall::MIN_SHARED);
+        }
+    }
+
+    /// H8: the learned skills at 默认生效 a session in `cwd` is offered.
+    fn default_skills(&self, task_id: &str) -> Vec<String> {
+        use super::rollout::{self, Tier};
+        let Some(data_dir) = self.recall.rollout().data_dir() else {
+            return Vec::new();
+        };
+        let cwd = self.task_cwd(task_id);
+        crate::extensions::builtin_skills::learned_offers(&data_dir, cwd.as_deref())
+            .into_iter()
+            .filter(|o| rollout::tier_in(&data_dir, &rollout::skill_id(&o.id)) == Tier::Default)
+            .map(|o| o.id)
+            .collect()
+    }
+
     /// H4 (2026-11-21): what to put in front of the user's `message` in
     /// `project_id`, if anything; every decision is recorded, whatever the
     /// mode but off. Local only: full-text memory and Wiki titles.
     pub fn recall_for(&self, task_id: &str, project_id: &str, message: &str) -> Option<String> {
         use super::recall::{self, RecallDecision, RecallMode};
+        let skipped = recall::skip(message);
+        if skipped.is_none() {
+            self.note_candidate_skills(message);
+        }
         let mode = self.recall.mode();
         if mode == RecallMode::Off {
             return None;
         }
-        let skipped = recall::skip(message);
         let hits = if skipped.is_some() {
             Vec::new()
         } else {
@@ -609,8 +651,16 @@ impl StructuredExecutor {
             };
             recall::hits(message, &memories, &pages)
         };
-        let attached = mode == RecallMode::On && !hits.is_empty();
-        let block = attached.then(|| recall::block(&hits));
+        if skipped.is_none() {
+            self.recall
+                .rollout()
+                .note(super::rollout::RECALL, !hits.is_empty());
+        }
+        let attached = matches!(mode, RecallMode::On | RecallMode::Described) && !hits.is_empty();
+        let block = attached.then(|| match mode {
+            RecallMode::Described => recall::pointer_block(&hits),
+            _ => recall::block(&hits),
+        });
         self.recall.note(
             task_id,
             &RecallDecision {

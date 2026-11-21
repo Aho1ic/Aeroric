@@ -68,7 +68,19 @@ pub fn purpose(with_tools: bool, offered: Offered) -> String {
 /// Where to look: the Wiki's page titles and the role library's names,
 /// titles only; `None` when there is nothing to point at.
 pub fn pointers(wiki_titles: &[String], roles: &[String]) -> Option<String> {
+    pointers_with(wiki_titles, roles, &[])
+}
+
+/// [`pointers`], plus (H8) the learned skills at 默认生效.
+pub fn pointers_with(
+    wiki_titles: &[String],
+    roles: &[String],
+    skills: &[String],
+) -> Option<String> {
     let mut lines = Vec::new();
+    if !skills.is_empty() {
+        lines.push(("学到的技能（遇到相关问题先用）：", skills));
+    }
     if !wiki_titles.is_empty() {
         lines.push(("项目 Wiki 页（read_wiki 按标题读）：", wiki_titles));
     }

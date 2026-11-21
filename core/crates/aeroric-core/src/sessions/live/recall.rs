@@ -141,7 +141,33 @@ pub enum RecallMode {
     /// Decide and record, attach nothing.
     #[default]
     Candidate,
+    /// H8: attach where to look (memory ids, page titles), not what they say.
+    Described,
     On,
+}
+
+impl From<super::rollout::Tier> for RecallMode {
+    fn from(tier: super::rollout::Tier) -> Self {
+        use super::rollout::Tier;
+        match tier {
+            Tier::Off => RecallMode::Off,
+            Tier::Candidate => RecallMode::Candidate,
+            Tier::Described => RecallMode::Described,
+            Tier::Default => RecallMode::On,
+        }
+    }
+}
+
+impl From<RecallMode> for super::rollout::Tier {
+    fn from(mode: RecallMode) -> Self {
+        use super::rollout::Tier;
+        match mode {
+            RecallMode::Off => Tier::Off,
+            RecallMode::Candidate => Tier::Candidate,
+            RecallMode::Described => Tier::Described,
+            RecallMode::On => Tier::Default,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,19 +261,52 @@ pub fn block(hits: &[RecallHit]) -> String {
     out
 }
 
+/// H8 只挂描述: where to look, not what it says — a memory's first words
+/// and its id, a page's title.
+pub fn pointer_block(hits: &[RecallHit]) -> String {
+    let mut out = String::from(
+        "# 可能相关的记忆和 Wiki（只列出处）\n\nAeroric 按这条消息在本地找到这些，没附内容；用得上再用 memory_recall 或 read_wiki 取，用不上就忽略。\n",
+    );
+    for hit in hits {
+        out.push_str(&match hit.kind.as_str() {
+            "wiki" => format!("- Wiki 页「{}」（{}）\n", hit.text, hit.id),
+            _ => {
+                let head: String = hit.text.chars().take(POINTER_CHARS).collect();
+                let more = if hit.text.chars().count() > POINTER_CHARS {
+                    "…"
+                } else {
+                    ""
+                };
+                format!("- 记忆 {}：{head}{more}\n", hit.id)
+            }
+        });
+    }
+    out
+}
+
+/// What of a memory 只挂描述 shows.
+const POINTER_CHARS: usize = 16;
+
 /// Why the envelope is there, as it says on it.
 pub const WHY: &str = "Aeroric 按这条消息自动找到的相关记忆和 Wiki";
 
-/// The mode (`<data>/recall/mode.json`) and each task's decisions
-/// (`<data>/recall/<task>.jsonl`).
+/// The mode (H8: the `recall` tier in `<data>/rollout/state.json`) and
+/// each task's decisions (`<data>/recall/<task>.jsonl`).
 #[derive(Default)]
 pub struct RecallLog {
     dir: Mutex<Option<PathBuf>>,
+    rollout: super::rollout::Rollout,
 }
 
 impl RecallLog {
     pub fn set_dir(&self, data_dir: PathBuf) {
         *self.dir.lock() = Some(data_dir.join("recall"));
+        self.rollout.set_dir(data_dir);
+    }
+
+    /// H8: the tiers of every automatic behaviour, kept beside recall's.
+    pub fn rollout(&self) -> &super::rollout::Rollout {
+        &self.rollout
     }
 
     fn dir(&self) -> Option<PathBuf> {
@@ -255,17 +314,17 @@ impl RecallLog {
     }
 
     pub fn mode(&self) -> RecallMode {
-        self.dir()
-            .and_then(|dir| std::fs::read_to_string(dir.join("mode.json")).ok())
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+        self.rollout.tier(super::rollout::RECALL).into()
     }
 
     pub fn set_mode(&self, mode: RecallMode) -> Result<(), String> {
-        let dir = self.dir().ok_or("没有数据目录")?;
-        crate::settings::ensure_private_dir(&dir)?;
-        let text = serde_json::to_string(&mode).map_err(|e| e.to_string())?;
-        crate::settings::atomic_write_private(&dir.join("mode.json"), &text)
+        self.rollout
+            .set(
+                super::rollout::RECALL,
+                mode.into(),
+                crate::clock::now_ms_u64(),
+            )
+            .map(|_| ())
     }
 
     pub fn note(&self, task_id: &str, decision: &RecallDecision) {

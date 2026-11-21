@@ -1298,3 +1298,79 @@ async fn per_message_recall_follows_its_mode() {
     );
     std::fs::remove_dir_all(&data).ok();
 }
+
+/// H8: recall at 只挂描述 attaches where to look, not what it says; a
+/// learned skill at 候选 is counted on every message (recall off or not),
+/// at 默认生效 it is named in the opening.
+#[tokio::test]
+async fn recall_and_learned_skills_follow_their_tiers() {
+    use crate::sessions::live::recall::RecallMode;
+    use crate::sessions::live::rollout::{self, Tier};
+    use aeroric_protocol::memory::{MemoryDraft, MemoryKind};
+    let s = setup();
+    let data = std::env::temp_dir().join(format!("aeroric-exec-tiers-{}", uuid::Uuid::new_v4()));
+    s.executor.memory().set_dir(data.join("memory")).unwrap();
+    s.executor.recall().set_dir(data.clone());
+    let item = s
+        .executor
+        .memory()
+        .remember(
+            MemoryDraft {
+                project_id: Some("p".into()),
+                kind: MemoryKind::Fact,
+                category: None,
+                text: "core 依赖仓库外的 dbx，版本钉在 dbx-ref.txt".into(),
+                supersedes: None,
+            },
+            crate::memory::evidence(Some("t"), Some("codex"), None, "x", 1),
+            1,
+        )
+        .unwrap();
+    let message = "dbx 的版本钉在哪里？";
+    let tiers = s.executor.recall().rollout();
+
+    tiers.set(rollout::RECALL, Tier::Described, 1).unwrap();
+    let pointer = s.executor.recall_for("t1", "p", message).unwrap();
+    assert!(
+        pointer.contains(&item.id) && pointer.contains("只列出处"),
+        "{pointer}"
+    );
+    assert!(
+        !pointer.contains("dbx-ref.txt"),
+        "not what it says: {pointer}"
+    );
+    let kept = s.executor.recall().decisions("t1");
+    assert_eq!(
+        (kept[0].mode, kept[0].attached),
+        (RecallMode::Described, true)
+    );
+
+    tiers.set(rollout::RECALL, Tier::Default, 2).unwrap();
+    let full = s.executor.recall_for("t1", "p", message).unwrap();
+    assert!(full.contains("dbx-ref.txt"), "{full}");
+    let counted = tiers.feature(rollout::RECALL);
+    assert_eq!((counted.checked, counted.would), (2, 2));
+
+    // A learned skill at 候选: not offered, counted.
+    crate::sessions::live::rollout::tests::learned(
+        &data,
+        "dbx-pin",
+        "dbx 版本钉在 dbx-ref.txt 时怎么升级",
+    );
+    let skill = rollout::skill_id("dbx-pin");
+    tiers.set(&skill, Tier::Candidate, 3).unwrap();
+    tiers.set(rollout::RECALL, Tier::Off, 4).unwrap();
+    assert_eq!(s.executor.recall_for("t1", "p", message), None);
+    s.executor
+        .recall_for("t1", "p", "帮我把 README 的标题改短一点");
+    let would = tiers.feature(&skill);
+    assert_eq!((would.checked, would.would), (2, 1));
+    assert!(s.executor.default_skills("t1").is_empty());
+
+    // At 默认生效 it is named in the opening's pointers.
+    tiers.set(&skill, Tier::Default, 5).unwrap();
+    assert_eq!(s.executor.default_skills("t1"), ["dbx-pin"]);
+    tiers.revert(&skill).unwrap();
+    assert!(s.executor.default_skills("t1").is_empty(), "退回 to 候选");
+    std::fs::remove_dir_all(&data).ok();
+}

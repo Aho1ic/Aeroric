@@ -145,13 +145,42 @@ pub fn write_learned_index(data_dir: &Path, index: &LearnedIndex) -> Result<(), 
         .map_err(|e| e.to_string())
 }
 
-/// The accepted learned skills for a session in `cwd`.
-pub fn learned_offers(data_dir: &Path, cwd: Option<&Path>) -> Vec<Offer> {
-    let index: LearnedIndex = std::fs::read(learned_dir(data_dir).join("index.json"))
+fn learned_index(data_dir: &Path) -> LearnedIndex {
+    std::fs::read(learned_dir(data_dir).join("index.json"))
         .ok()
         .and_then(|raw| serde_json::from_slice(&raw).ok())
-        .unwrap_or_default();
-    index
+        .unwrap_or_default()
+}
+
+/// H8: every accepted learned skill's name and the description its
+/// SKILL.md gives (what 候选 compares a message with).
+pub fn learned_described(data_dir: &Path) -> Vec<(String, String)> {
+    learned_index(data_dir)
+        .skills
+        .into_iter()
+        .filter_map(|entry| {
+            let text = std::fs::read_to_string(entry.dir.join("SKILL.md")).ok()?;
+            let description = text
+                .strip_prefix("---")
+                .and_then(|rest| rest.split("\n---").next())
+                .and_then(|front| {
+                    front.lines().find_map(|line| {
+                        line.trim()
+                            .strip_prefix("description:")
+                            .map(|v| v.trim().trim_matches('"').trim_matches('\'').to_string())
+                    })
+                })
+                .unwrap_or_default();
+            Some((entry.name, description))
+        })
+        .collect()
+}
+
+/// The accepted learned skills for a session in `cwd`. H8: one at 候选 is
+/// not offered (only counted).
+pub fn learned_offers(data_dir: &Path, cwd: Option<&Path>) -> Vec<Offer> {
+    use crate::sessions::live::rollout::{self, Tier};
+    learned_index(data_dir)
         .skills
         .into_iter()
         .filter(|entry| {
@@ -159,6 +188,9 @@ pub fn learned_offers(data_dir: &Path, cwd: Option<&Path>) -> Vec<Offer> {
                 || matches!((&entry.project_path, cwd), (Some(project), Some(cwd)) if cwd.starts_with(project))
         })
         .filter(|entry| entry.dir.join("SKILL.md").is_file())
+        .filter(|entry| {
+            rollout::tier_in(data_dir, &rollout::skill_id(&entry.name)) != Tier::Candidate
+        })
         .map(|entry| Offer {
             version: format!("learned-v{}", entry.version),
             id: entry.name,

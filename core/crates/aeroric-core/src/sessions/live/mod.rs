@@ -26,6 +26,7 @@ pub mod read_only;
 pub mod recall;
 pub mod remote;
 pub mod review;
+pub mod rollout;
 pub mod staleness;
 pub mod surfaces;
 pub mod tool_catalog;

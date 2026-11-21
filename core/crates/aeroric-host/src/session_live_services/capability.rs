@@ -33,6 +33,10 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
         .set_dir(live.context.paths.data_dir().to_path_buf());
     set.register(RECALL_MODE_METHOD, blocking(live, recall_mode));
     set.register(RECALL_DECISIONS_METHOD, blocking(live, recall_decisions));
+    // H8: the tiers of the automatic behaviours, and 退回.
+    set.register(ROLLOUT_LIST_METHOD, blocking(live, rollout_list));
+    set.register(ROLLOUT_SET_METHOD, blocking(live, rollout_set));
+    set.register(ROLLOUT_REVERT_METHOD, blocking(live, rollout_revert));
     // H6: each launch on this Mac is given the capability packs' servers.
     live.executor
         .set_packs_dir(live.context.paths.data_dir().to_path_buf());
@@ -162,8 +166,8 @@ fn login_key(live: &Live, task_id: &str) -> Option<LoginKey> {
     })
 }
 
-/// H4: `recall.mode {mode?}` reads (or sets: `off`, `candidate`, `on`)
-/// per-message recall's mode.
+/// H4: `recall.mode {mode?}` reads (or sets: `off`, `candidate`,
+/// `described`, `on`) per-message recall's mode — H8: its tier.
 pub const RECALL_MODE_METHOD: &str = "recall.mode";
 /// H4: `recall.decisions {taskId}`: what recall decided for each message.
 pub const RECALL_DECISIONS_METHOD: &str = "recall.decisions";
@@ -176,7 +180,7 @@ fn recall_mode(live: &Live, request: &Request) -> Frame {
             return crate::dispatcher::failure(
                 request.id.clone(),
                 aeroric_protocol::error::ErrorCode::InvalidArgument,
-                "recall.mode takes off, candidate or on",
+                "recall.mode takes off, candidate, described or on",
             );
         };
         if let Err(why) = log.set_mode(mode) {
@@ -206,4 +210,95 @@ fn recall_decisions(live: &Live, request: &Request) -> Frame {
         request,
         serde_json::json!({ "decisions": live.executor.recall().decisions(task) }),
     )
+}
+
+/// H8: `rollout.list {}` — every automatic behaviour with a tier: recall,
+/// each accepted learned skill, and any other moved or counted.
+pub const ROLLOUT_LIST_METHOD: &str = "rollout.list";
+/// H8: `rollout.set {id, tier}` (`off`, `candidate`, `described`,
+/// `default`); the tier left is kept for 退回.
+pub const ROLLOUT_SET_METHOD: &str = "rollout.set";
+/// H8: `rollout.revert {id}`: back to the tier before the last move, or one
+/// tier down.
+pub const ROLLOUT_REVERT_METHOD: &str = "rollout.revert";
+
+fn rollout_list(live: &Live, request: &Request) -> Frame {
+    use aeroric_core::sessions::live::rollout;
+    let tiers = live.executor.recall().rollout();
+    let data_dir = live.context.paths.data_dir();
+    let mut ids = vec![rollout::RECALL.to_string()];
+    ids.extend(
+        aeroric_core::extensions::builtin_skills::learned_described(data_dir)
+            .into_iter()
+            .map(|(name, _)| rollout::skill_id(&name)),
+    );
+    ids.extend(tiers.features().into_iter().map(|f| f.id));
+    let mut seen = std::collections::HashSet::new();
+    let features: Vec<_> = ids
+        .into_iter()
+        .filter(|id| seen.insert(id.clone()))
+        .map(|id| tiers.feature(&id))
+        .collect();
+    ok(request, serde_json::json!({ "features": features }))
+}
+
+fn rollout_id(request: &Request) -> Result<String, Box<Frame>> {
+    request
+        .params
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            Box::new(crate::dispatcher::failure(
+                request.id.clone(),
+                aeroric_protocol::error::ErrorCode::InvalidArgument,
+                "需要 id",
+            ))
+        })
+}
+
+fn rollout_answer(request: &Request, result: Result<impl serde::Serialize, String>) -> Frame {
+    match result {
+        Ok(feature) => ok(request, serde_json::json!({ "feature": feature })),
+        Err(why) => crate::dispatcher::failure(
+            request.id.clone(),
+            aeroric_protocol::error::ErrorCode::InvalidArgument,
+            &why,
+        ),
+    }
+}
+
+fn rollout_set(live: &Live, request: &Request) -> Frame {
+    use aeroric_core::sessions::live::rollout::Tier;
+    let id = match rollout_id(request) {
+        Ok(id) => id,
+        Err(frame) => return *frame,
+    };
+    let Some(tier) = request
+        .params
+        .get("tier")
+        .and_then(|v| serde_json::from_value::<Tier>(v.clone()).ok())
+    else {
+        return crate::dispatcher::failure(
+            request.id.clone(),
+            aeroric_protocol::error::ErrorCode::InvalidArgument,
+            "tier 取 off、candidate、described 或 default",
+        );
+    };
+    rollout_answer(
+        request,
+        live.executor
+            .recall()
+            .rollout()
+            .set(&id, tier, super::now_ms()),
+    )
+}
+
+fn rollout_revert(live: &Live, request: &Request) -> Frame {
+    let id = match rollout_id(request) {
+        Ok(id) => id,
+        Err(frame) => return *frame,
+    };
+    rollout_answer(request, live.executor.recall().rollout().revert(&id))
 }

@@ -38,6 +38,13 @@ fn the_purpose_says_what_the_tools_are_for_within_its_budget() {
 #[test]
 fn the_pointers_name_titles_only_and_count_what_does_not_fit() {
     assert_eq!(pointers(&[], &[]), None);
+    // H8: the learned skills at 默认生效 come first.
+    let with_skill = pointers_with(&["登录流程".into()], &[], &["dbx-pin".into()]).unwrap();
+    assert!(
+        with_skill.contains("学到的技能（遇到相关问题先用）：dbx-pin"),
+        "{with_skill}"
+    );
+    assert_eq!(pointers_with(&[], &[], &[]), None);
     let few = pointers(&["登录流程".into(), "存储层".into()], &["审查者".into()]).unwrap();
     assert!(few.starts_with(POINTERS_HEADER));
     assert!(

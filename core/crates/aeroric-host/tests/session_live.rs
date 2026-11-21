@@ -4091,3 +4091,51 @@ async fn a_repeated_key_gets_the_first_result() {
         std::fs::read_to_string(host.context.paths.data_dir().join("context-once.json")).unwrap();
     assert!(kept.contains("k-1") && kept.contains("k-2"));
 }
+
+/// H8: the automatic behaviours' tiers over RPC — recall listed at 候选,
+/// moved up, 退回, and `recall.mode` reading the same tier; a bad tier and a
+/// learned skill turned off here are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rollout_tiers_move_and_go_back_over_rpc() {
+    let host = Host::start(true).await;
+    let listed = host.call("rollout.list", json!({})).await.unwrap();
+    let recall = &listed["features"][0];
+    assert_eq!(recall["id"], "recall");
+    assert_eq!(recall["tier"], "candidate");
+
+    let up = host
+        .call("rollout.set", json!({"id": "recall", "tier": "described"}))
+        .await
+        .unwrap();
+    assert_eq!(up["feature"]["tier"], "described");
+    assert_eq!(up["feature"]["history"][0]["tier"], "candidate");
+    let mode = host.call("recall.mode", json!({})).await.unwrap();
+    assert_eq!(mode["mode"], "described");
+
+    let back = host
+        .call("rollout.revert", json!({"id": "recall"}))
+        .await
+        .unwrap();
+    assert_eq!(back["feature"]["tier"], "candidate");
+    host.call("recall.mode", json!({"mode": "on"}))
+        .await
+        .unwrap();
+    let listed = host.call("rollout.list", json!({})).await.unwrap();
+    assert_eq!(listed["features"][0]["tier"], "default");
+
+    let bad = host
+        .call("rollout.set", json!({"id": "recall", "tier": "loud"}))
+        .await
+        .unwrap_err();
+    assert!(bad["message"].as_str().unwrap().contains("tier"), "{bad}");
+    let skill_off = host
+        .call("rollout.set", json!({"id": "skill:x", "tier": "off"}))
+        .await
+        .unwrap_err();
+    assert!(
+        skill_off["message"].as_str().unwrap().contains("停用"),
+        "{skill_off}"
+    );
+    let no_id = host.call("rollout.revert", json!({})).await.unwrap_err();
+    assert!(no_id["message"].as_str().unwrap().contains("id"), "{no_id}");
+}
