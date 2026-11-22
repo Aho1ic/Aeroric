@@ -43,4 +43,25 @@ final class GatewayRequestsTests: XCTestCase {
         XCTAssertEqual(GatewayText.attempt(first.attempts[1]), "第 2 次 · C · 熔断中，跳过")
         XCTAssertEqual(GatewayText.request(usage.requests[1]), "gpt-y · 成功 · 用量未知")
     }
+
+    /// E7 (2026-11-22): the gateway's usage by purpose; failed tries are
+    /// said apart, and rows from before E7 read 未记录用途.
+    func testUsageByPurposeDecodesAndSaysFailedTriesApart() {
+        let usage = LiveGatewayUsage.decode(.object([
+            "summary": .object([:]), "requests": .array([]),
+            "purposes": .array([
+                .object(["purpose": .string("review"), "requests": .number("12"), "inputTokens": .number("30000"),
+                         "outputTokens": .number("4000"), "failedAttempts": .number("3"),
+                         "failedAttemptInputTokens": .number("9000"), "failedAttemptOutputTokens": .number("0")]),
+                .object(["purpose": .string(""), "requests": .number("2")]),
+            ]),
+        ]))
+        XCTAssertEqual(usage.purposes.map(\.purpose), ["review", ""])
+        let review = GatewayText.purpose(usage.purposes[0])
+        XCTAssertTrue(review.hasPrefix("审查 · 12 次 · 输入 "), review)
+        XCTAssertTrue(review.contains("失败的尝试 3 次（输入 "), review)
+        XCTAssertTrue(GatewayText.purpose(usage.purposes[1]).hasPrefix("未记录用途 · 2 次"))
+        XCTAssertEqual(GatewayText.purposeName("unattributed"), "不属于任何会话")
+        XCTAssertEqual(LiveGatewayUsage.decode(.object([:])).purposes, [])
+    }
 }

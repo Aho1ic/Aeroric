@@ -5,6 +5,25 @@ import Foundation
 public struct LiveGatewayUsage: Equatable, Sendable {
     public var summary: Summary
     public var requests: [Request]
+    /// E7 (2026-11-22): the last 30 days by purpose, the most requested first.
+    public var purposes: [Purpose] = []
+
+    public struct Purpose: Equatable, Sendable, Identifiable {
+        public var id: String { purpose }
+        /// `answer` `review` `delegation` `discussion` `rerun` `schedule`
+        /// `unattributed`, or `""` for rows from before E7.
+        public var purpose: String
+        public var requests: UInt64 = 0
+        public var failedRequests: UInt64 = 0
+        public var inputTokens: UInt64 = 0
+        public var outputTokens: UInt64 = 0
+        public var unknownUsageRequests: UInt64 = 0
+        public var failedAttempts: UInt64 = 0
+        public var failedAttemptInputTokens: UInt64 = 0
+        public var failedAttemptOutputTokens: UInt64 = 0
+
+        public init(purpose: String) { self.purpose = purpose }
+    }
 
     public init(summary: Summary = Summary(), requests: [Request] = []) {
         self.summary = summary
@@ -131,6 +150,20 @@ public struct LiveGatewayUsage: Equatable, Sendable {
                 cacheReadTokens: n(r, "cacheReadTokens"), usageSource: r["usageSource"]?.stringValue ?? "reported",
                 errorSummary: r["errorSummary"]?.stringValue, attempts: attempts)
         }
-        return LiveGatewayUsage(summary: summary, requests: requests)
+        var usage = LiveGatewayUsage(summary: summary, requests: requests)
+        usage.purposes = (f["purposes"]?.arrayValue ?? []).map { value in
+            let p = value.fields
+            var row = Purpose(purpose: p["purpose"]?.stringValue ?? "")
+            row.requests = n(p, "requests")
+            row.failedRequests = n(p, "failedRequests")
+            row.inputTokens = n(p, "inputTokens")
+            row.outputTokens = n(p, "outputTokens")
+            row.unknownUsageRequests = n(p, "unknownUsageRequests")
+            row.failedAttempts = n(p, "failedAttempts")
+            row.failedAttemptInputTokens = n(p, "failedAttemptInputTokens")
+            row.failedAttemptOutputTokens = n(p, "failedAttemptOutputTokens")
+            return row
+        }
+        return usage
     }
 }

@@ -140,6 +140,34 @@ public enum GatewayText {
         return parts.joined(separator: " · ")
     }
 
+    /// E7: a purpose's name.
+    public static func purposeName(_ purpose: String) -> String {
+        switch purpose {
+        case "answer": "回答"
+        case "review": "审查"
+        case "delegation": "委派"
+        case "discussion": "讨论"
+        case "rerun": "重跑"
+        case "schedule": "定时任务"
+        case "unattributed": "不属于任何会话"
+        default: "未记录用途"
+        }
+    }
+
+    /// E7: `审查 · 12 次 · 输入 30K · 输出 4K · 失败的尝试 3 次（输入 9K · 输出 0）`;
+    /// the failed tries say what they cost apart from the answering ones.
+    public static func purpose(_ p: Usage.Purpose) -> String {
+        var parts = [purposeName(p.purpose), "\(p.requests) 次"]
+        if p.failedRequests > 0 { parts.append("失败 \(p.failedRequests)") }
+        parts.append("输入 \(SessionStatsText.compact(p.inputTokens)) · 输出 \(SessionStatsText.compact(p.outputTokens))")
+        if p.unknownUsageRequests > 0 { parts.append("\(p.unknownUsageRequests) 次用量未知") }
+        if p.failedAttempts > 0 {
+            parts.append("失败的尝试 \(p.failedAttempts) 次（输入 \(SessionStatsText.compact(p.failedAttemptInputTokens))"
+                + " · 输出 \(SessionStatsText.compact(p.failedAttemptOutputTokens))）")
+        }
+        return parts.joined(separator: " · ")
+    }
+
     /// `12.3K 入 · 2K 出`, or `用量未知`.
     public static func usage(source: String, input: UInt64, output: UInt64) -> String {
         switch source {
@@ -456,6 +484,7 @@ struct GatewayRequestsSection: View {
                     .foregroundStyle(usage.summary.unknownUsageRequests > 0 ? AeroricColor.warning : AeroricColor.textSecondary)
                     .monospacedDigit()
                     .accessibilityIdentifier("agent-config.gateway.summary")
+                if !usage.purposes.isEmpty { purposes(usage.purposes) }
                 if usage.requests.isEmpty {
                     Text("还没有经过网关的请求。用 Agent 配置启动的会话会出现在这里。")
                         .font(.system(size: AeroricType.caption))
@@ -465,6 +494,23 @@ struct GatewayRequestsSection: View {
             }
         }
         .accessibilityIdentifier("agent-config.gateway")
+    }
+
+    /// E7: the last 30 days by purpose; a purpose with failed tries is in
+    /// the warning colour, so what failed is not hidden by what answered.
+    private func purposes(_ rows: [LiveGatewayUsage.Purpose]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("近 30 天按用途").font(.system(size: AeroricType.caption, weight: .semibold))
+                .foregroundStyle(AeroricColor.textSecondary)
+            ForEach(rows) { row in
+                Text(GatewayText.purpose(row))
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(row.failedAttempts > 0 ? AeroricColor.warning : AeroricColor.textSecondary)
+                    .monospacedDigit()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityIdentifier("agent-config.gateway.purposes")
     }
 
     @ViewBuilder private func row(_ request: LiveGatewayUsage.Request) -> some View {

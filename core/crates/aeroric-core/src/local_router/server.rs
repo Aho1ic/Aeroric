@@ -124,7 +124,8 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
     }
     // Read before the credentials are stripped: a task token pinned to an agent
     // configuration routes through `agent-connections.json` (4b), not the legacy list.
-    let config_grant = request_task_grant(&parts.headers).filter(|g| g.agent_config_id.is_some());
+    let task_grant = request_task_grant(&parts.headers);
+    let config_grant = task_grant.clone().filter(|g| g.agent_config_id.is_some());
     strip_router_credentials(&mut parts.headers, &runtime_config.access_token);
     let mut completion = RequestCompletion::new(
         route.agent,
@@ -134,6 +135,8 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
         context.usage_store.clone(),
         context.metrics.clone(),
     );
+    // E7: which task the request is for, so its usage says what it was for.
+    completion.set_task(task_grant.map(|g| g.task_id));
 
     let body_bytes = match to_bytes(body, MAX_REQUEST_BODY_BYTES).await {
         Ok(body) => body,
@@ -2163,6 +2166,8 @@ struct CompletionContext {
     attempts: Vec<RouterAttempt>,
     /// C4: when the answering try began, and its place among the tries.
     answering: Option<(Instant, u32)>,
+    /// E7: the task whose token the request carried.
+    task_id: Option<String>,
 }
 
 struct RequestCompletion {
@@ -2198,7 +2203,15 @@ impl RequestCompletion {
                 metrics,
                 attempts: Vec::new(),
                 answering: None,
+                task_id: None,
             }),
+        }
+    }
+
+    /// E7: the task the request is for.
+    fn set_task(&mut self, task_id: Option<String>) {
+        if let Some(context) = self.context.as_mut() {
+            context.task_id = task_id;
         }
     }
 
@@ -2406,6 +2419,8 @@ async fn finalize_request(
         cache_write_5m_tokens: usage.cache_write_5m,
         cache_write_1h_tokens: usage.cache_write_1h,
         attempts,
+        purpose: usage::purpose_of(context.task_id.as_deref()),
+        task_id: context.task_id,
     };
     if let Err(error) = context.usage_store.insert(record).await {
         context.metrics.set_error(

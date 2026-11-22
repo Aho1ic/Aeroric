@@ -79,20 +79,37 @@ pub fn ensure_running(data_dir: &std::path::Path) -> Result<String, String> {
     Ok(info.base_url)
 }
 
+/// E7: how far back the by-purpose split reaches.
+const PURPOSE_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
 /// C4 (2026-11-19): the totals and the last `limit` requests, each with its
 /// tries. Read from the file, so it answers before the gateway first starts.
+/// E7 (2026-11-22): also the requests of the last 30 days by purpose.
 pub fn requests(
     data_dir: &std::path::Path,
     limit: usize,
-) -> Result<(RouterUsageSummary, Vec<RouterRequestRecord>), String> {
+) -> Result<
+    (
+        RouterUsageSummary,
+        Vec<RouterRequestRecord>,
+        Vec<aeroric_core::local_router::PurposeUsage>,
+    ),
+    String,
+> {
     let gateway = gateway(data_dir);
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+        - PURPOSE_WINDOW_MS;
     std::thread::scope(|scope| {
         scope
             .spawn(|| {
                 runtime().block_on(async {
                     let summary = gateway.state.usage_summary().await?;
                     let requests = gateway.state.recent_requests(limit).await?;
-                    Ok::<_, aeroric_core::local_router::RouterError>((summary, requests))
+                    let purposes = gateway.state.usage_by_purpose(since).await?;
+                    Ok::<_, aeroric_core::local_router::RouterError>((summary, requests, purposes))
                 })
             })
             .join()

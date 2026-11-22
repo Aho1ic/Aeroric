@@ -31,7 +31,10 @@ use url::{Host, Url};
 pub use circuit_breaker::{
     CircuitBreakerConfig, CircuitBreakerRegistry, CircuitBreakerStats, CircuitState,
 };
-pub use usage::{RouterAttempt, RouterRequestRecord, RouterUsageSummary, UsageSource};
+pub use usage::{
+    purpose, purpose_of, set_purpose_resolver, PurposeUsage, RouterAttempt, RouterRequestRecord,
+    RouterUsageSummary, UsageSource,
+};
 
 pub const DEFAULT_CLAUDE_UPSTREAM: &str = "https://api.anthropic.com";
 pub const DEFAULT_CODEX_UPSTREAM: &str = "https://api.openai.com/v1";
@@ -1007,6 +1010,11 @@ impl LocalRouterState {
 
     pub async fn usage_summary(&self) -> Result<RouterUsageSummary, RouterError> {
         self.usage_store.summary().await
+    }
+
+    /// E7: requests by purpose since `since_ms`, failed tries apart.
+    pub async fn usage_by_purpose(&self, since_ms: i64) -> Result<Vec<PurposeUsage>, RouterError> {
+        self.usage_store.purposes(since_ms).await
     }
 
     pub async fn recent_requests(

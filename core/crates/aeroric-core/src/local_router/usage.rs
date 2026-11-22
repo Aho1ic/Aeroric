@@ -15,6 +15,57 @@ use zstd::stream::Decoder as ZstdDecoder;
 const MAX_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ERROR_CHARS: usize = 512;
 
+/// E7 (2026-11-22): what a request was for, from the task its token names.
+/// The host says how a task maps to one ([`set_purpose_resolver`]); a
+/// request without a task token (a client using the access token) is
+/// [`purpose::UNATTRIBUTED`]; rows from before E7 have none (`""`).
+pub mod purpose {
+    pub const ANSWER: &str = "answer";
+    pub const REVIEW: &str = "review";
+    pub const DELEGATION: &str = "delegation";
+    pub const DISCUSSION: &str = "discussion";
+    pub const RERUN: &str = "rerun";
+    pub const SCHEDULE: &str = "schedule";
+    pub const UNATTRIBUTED: &str = "unattributed";
+}
+
+type PurposeResolver = Arc<dyn Fn(&str) -> String + Send + Sync>;
+
+static RESOLVER: parking_lot::RwLock<Option<PurposeResolver>> = parking_lot::RwLock::new(None);
+
+/// E7: how the host maps a task id to its purpose.
+pub fn set_purpose_resolver(resolver: PurposeResolver) {
+    *RESOLVER.write() = Some(resolver);
+}
+
+/// E7: the purpose of a request for `task_id` (none: unattributed; no
+/// resolver: the answer itself).
+pub fn purpose_of(task_id: Option<&str>) -> String {
+    let Some(task) = task_id else {
+        return purpose::UNATTRIBUTED.to_string();
+    };
+    match RESOLVER.read().clone() {
+        Some(resolve) => resolve(task),
+        None => purpose::ANSWER.to_string(),
+    }
+}
+
+/// E7: one purpose's requests, and the tries that failed or were replaced
+/// (counted apart, so the one that answered does not hide them).
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurposeUsage {
+    pub purpose: String,
+    pub requests: u64,
+    pub failed_requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub unknown_usage_requests: u64,
+    pub failed_attempts: u64,
+    pub failed_attempt_input_tokens: u64,
+    pub failed_attempt_output_tokens: u64,
+}
+
 /// C4 (2026-11-19): where a request's usage came from. `Unknown`: the
 /// upstream reported none (a stream cut short, a provider that leaves it
 /// out); its token columns hold 0 but say nothing, and totals leave it out.
@@ -119,6 +170,10 @@ pub struct RouterRequestRecord {
     pub cache_write_1h_tokens: Option<u64>,
     /// C4: each try, oldest first; empty on rows from before C4.
     pub attempts: Vec<RouterAttempt>,
+    /// E7: the task whose token the request carried.
+    pub task_id: Option<String>,
+    /// E7: what it was for ([`purpose`]); `""` on rows from before E7.
+    pub purpose: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -197,12 +252,14 @@ impl UsageStore {
                         ttft_ms,
                         usage_source,
                         cache_write_5m_tokens,
-                        cache_write_1h_tokens
+                        cache_write_1h_tokens,
+                        task_id,
+                        purpose
                     ) VALUES (
                         ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
                         ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                         ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-                        ?23, ?24, ?25
+                        ?23, ?24, ?25, ?26, ?27
                     )
                     ON CONFLICT(request_id) DO NOTHING
                     ",
@@ -232,6 +289,8 @@ impl UsageStore {
                         request.usage_source.as_str(),
                         request.cache_write_5m_tokens.map(as_sql_integer),
                         request.cache_write_1h_tokens.map(as_sql_integer),
+                        request.task_id,
+                        request.purpose,
                     ],
                 )
                 .map_err(|error| RouterError::storage(error.to_string()))?;
@@ -333,6 +392,62 @@ impl UsageStore {
         .map_err(|error| RouterError::storage(format!("router database task failed: {error}")))?
     }
 
+    /// E7: requests by purpose since `since_ms`, with the tries that failed
+    /// or were replaced counted apart; the most requested first.
+    pub(crate) async fn purposes(&self, since_ms: i64) -> Result<Vec<PurposeUsage>, RouterError> {
+        let path = self.database_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let connection = open_database(path.as_ref())?;
+            let mut statement = connection
+                .prepare(
+                    "
+                    SELECT
+                        r.purpose,
+                        COUNT(*),
+                        COALESCE(SUM(CASE WHEN r.success = 0 THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN r.usage_source = 'unknown' THEN 0 ELSE r.input_tokens END), 0),
+                        COALESCE(SUM(CASE WHEN r.usage_source = 'unknown' THEN 0 ELSE r.output_tokens END), 0),
+                        COALESCE(SUM(CASE WHEN r.usage_source = 'unknown' THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(f.tries), 0),
+                        COALESCE(SUM(f.input), 0),
+                        COALESCE(SUM(f.output), 0)
+                    FROM router_requests r
+                    LEFT JOIN (
+                        SELECT request_id, COUNT(*) AS tries,
+                               SUM(input_tokens) AS input, SUM(output_tokens) AS output
+                        FROM router_attempts
+                        WHERE skipped = 0
+                          AND (status_code IS NULL OR status_code >= 400 OR error_summary IS NOT NULL)
+                        GROUP BY request_id
+                    ) f ON f.request_id = r.request_id
+                    WHERE r.completed_at >= ?1
+                    GROUP BY r.purpose
+                    ORDER BY COUNT(*) DESC, r.purpose
+                    ",
+                )
+                .map_err(|error| RouterError::storage(error.to_string()))?;
+            let rows = statement
+                .query_map(params![since_ms], |row| {
+                    Ok(PurposeUsage {
+                        purpose: row.get(0)?,
+                        requests: nonnegative(row.get(1)?),
+                        failed_requests: nonnegative(row.get(2)?),
+                        input_tokens: nonnegative(row.get(3)?),
+                        output_tokens: nonnegative(row.get(4)?),
+                        unknown_usage_requests: nonnegative(row.get(5)?),
+                        failed_attempts: nonnegative(row.get(6)?),
+                        failed_attempt_input_tokens: nonnegative(row.get(7)?),
+                        failed_attempt_output_tokens: nonnegative(row.get(8)?),
+                    })
+                })
+                .map_err(|error| RouterError::storage(error.to_string()))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|error| RouterError::storage(error.to_string()))
+        })
+        .await
+        .map_err(|error| RouterError::storage(format!("router database task failed: {error}")))?
+    }
+
     pub(crate) async fn recent_requests(
         &self,
         limit: usize,
@@ -369,7 +484,9 @@ impl UsageStore {
                         ttft_ms,
                         usage_source,
                         cache_write_5m_tokens,
-                        cache_write_1h_tokens
+                        cache_write_1h_tokens,
+                        task_id,
+                        purpose
                     FROM router_requests
                     ORDER BY completed_at DESC, rowid DESC
                     LIMIT ?1
@@ -409,6 +526,8 @@ impl UsageStore {
                         cache_write_5m_tokens: row.get::<_, Option<i64>>(23)?.map(nonnegative),
                         cache_write_1h_tokens: row.get::<_, Option<i64>>(24)?.map(nonnegative),
                         attempts: Vec::new(),
+                        task_id: row.get(25)?,
+                        purpose: row.get::<_, Option<String>>(26)?.unwrap_or_default(),
                     })
                 })
                 .map_err(|error| RouterError::storage(error.to_string()))?;
@@ -492,6 +611,9 @@ fn open_database(path: &PathBuf) -> Result<Connection, RouterError> {
     )?;
     ensure_column(&connection, "cache_write_5m_tokens", "INTEGER")?;
     ensure_column(&connection, "cache_write_1h_tokens", "INTEGER")?;
+    // E7 (2026-11-22).
+    ensure_column(&connection, "task_id", "TEXT")?;
+    ensure_column(&connection, "purpose", "TEXT NOT NULL DEFAULT ''")?;
     connection
         .execute_batch(
             "
@@ -1094,7 +1216,52 @@ mod tests {
                     ..RouterAttempt::default()
                 },
             ],
+            task_id: None,
+            purpose: String::new(),
         }
+    }
+
+    /// E7: requests grouped by purpose; the try that failed before the
+    /// answering one is counted apart, with its tokens.
+    #[tokio::test]
+    async fn usage_is_grouped_by_purpose_with_failed_tries_apart() {
+        let dir = std::env::temp_dir().join(format!("aeroric-purpose-{}", uuid::Uuid::new_v4()));
+        let store = UsageStore::new(dir.join("router.db"));
+        store.initialize().await.unwrap();
+        for (id, purpose, task) in [
+            ("r1", purpose::ANSWER, Some("t1")),
+            ("r2", purpose::ANSWER, Some("t1")),
+            ("r3", purpose::REVIEW, Some("t2")),
+            ("r4", purpose::UNATTRIBUTED, None),
+        ] {
+            let mut row = record(id, 1_000, UsageSource::Reported, 10);
+            row.purpose = purpose.to_string();
+            row.task_id = task.map(str::to_string);
+            row.attempts[0].input_tokens = 7;
+            store.insert(row).await.unwrap();
+        }
+        let purposes = store.purposes(0).await.unwrap();
+        let answer = &purposes[0];
+        assert_eq!(answer.purpose, purpose::ANSWER);
+        assert_eq!((answer.requests, answer.input_tokens), (2, 20));
+        assert_eq!(
+            (answer.failed_attempts, answer.failed_attempt_input_tokens),
+            (2, 14),
+            "the 429 try before each answer"
+        );
+        assert_eq!(purposes.len(), 3);
+        assert!(store.purposes(2_000).await.unwrap().is_empty());
+        let back = store.recent_requests(10).await.unwrap();
+        let review = back.iter().find(|r| r.request_id == "r3").unwrap();
+        assert_eq!(
+            (review.purpose.as_str(), review.task_id.as_deref()),
+            (purpose::REVIEW, Some("t2"))
+        );
+    }
+
+    #[test]
+    fn a_request_without_a_task_is_unattributed() {
+        assert_eq!(purpose_of(None), purpose::UNATTRIBUTED);
     }
 
     /// C4: each try is stored with its request and read back in order; the
@@ -1178,6 +1345,8 @@ mod tests {
                 cache_write_5m_tokens: None,
                 cache_write_1h_tokens: None,
                 attempts: Vec::new(),
+                task_id: None,
+                purpose: String::new(),
             })
             .await
             .unwrap();
@@ -1288,6 +1457,8 @@ mod tests {
             cache_write_5m_tokens: None,
             cache_write_1h_tokens: None,
             attempts: Vec::new(),
+            task_id: None,
+            purpose: String::new(),
         }
     }
 
