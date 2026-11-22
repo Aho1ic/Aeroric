@@ -13,6 +13,7 @@ pub mod checkpoint;
 pub mod claude;
 pub mod codex;
 pub mod context_server;
+pub mod context_stages;
 pub mod delegation;
 pub mod delivery;
 pub mod discussion;

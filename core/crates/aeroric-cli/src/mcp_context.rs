@@ -848,12 +848,94 @@ fn salvage_id(text: &[u8]) -> Option<Value> {
 
 /// The server over any pair of streams (stdio in use, a pipe in tests):
 /// every request with an id gets an answer, whatever its line held.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// E15 step 2 (2026-11-22): this process's steps, written for the host
+/// (`context_stages`): started, `initialize` came and was answered,
+/// `tools/list` answered, the first `tools/call`. Each first time only.
+struct StageLog {
+    path: std::path::PathBuf,
+    stages: aeroric_core::sessions::live::context_stages::Stages,
+}
+
+impl StageLog {
+    fn start(data_dir: &Path, token: &str) -> Self {
+        use aeroric_core::sessions::live::context_stages as cs;
+        let now = now_ms();
+        cs::prune(data_dir, now);
+        let log = StageLog {
+            path: cs::path(data_dir, token),
+            stages: cs::Stages {
+                started_ms: now,
+                pid: std::process::id(),
+                ..Default::default()
+            },
+        };
+        log.save();
+        log
+    }
+
+    fn save(&self) {
+        aeroric_core::sessions::live::context_stages::write(&self.path, &self.stages);
+    }
+
+    fn method(message: &Value) -> &str {
+        message
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    }
+
+    fn before(&mut self, message: &Value) {
+        if Self::method(message) == "initialize" && self.stages.initialize_ms.is_none() {
+            self.stages.initialize_ms = Some(now_ms());
+            self.stages.client = message
+                .pointer("/params/clientInfo/name")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            self.save();
+        }
+    }
+
+    fn after(&mut self, message: &Value) {
+        let s = &mut self.stages;
+        let changed = match Self::method(message) {
+            "initialize" if s.initialized_ms.is_none() => {
+                s.initialized_ms = Some(now_ms());
+                true
+            }
+            "tools/list" if s.tools_list_ms.is_none() => {
+                s.tools_list_ms = Some(now_ms());
+                true
+            }
+            "tools/call" if s.first_call_ms.is_none() => {
+                s.first_call_ms = Some(now_ms());
+                s.first_call = message
+                    .pointer("/params/name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.save();
+        }
+    }
+}
+
 pub(crate) async fn serve_with<R, W>(data_dir: &Path, token: &str, mut reader: R, mut out: W)
 where
     R: AsyncBufRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
     let mut client: Option<HostClient> = None;
+    let mut stages = StageLog::start(data_dir, token);
     loop {
         let line = match read_line(&mut reader, MAX_LINE_BYTES).await {
             Ok(Some(line)) => line,
@@ -872,7 +954,12 @@ where
                 }
             },
             Line::Text(bytes) => match serde_json::from_slice::<Value>(&bytes) {
-                Ok(message) => answer(&mut client, data_dir, token, &message).await,
+                Ok(message) => {
+                    stages.before(&message);
+                    let response = answer(&mut client, data_dir, token, &message).await;
+                    stages.after(&message);
+                    response
+                }
                 Err(error) => match salvage_id(&bytes) {
                     Some(id) => Some(json!({"jsonrpc": "2.0", "id": id, "error": {
                         "code": -32700,
@@ -938,6 +1025,39 @@ mod tests {
         assert_eq!(answers[1]["error"]["code"], -32700);
         assert_eq!(answers[2]["id"], 9);
         assert_eq!(answers[2]["result"], json!({}));
+    }
+
+    /// E15 step 2: the server writes its steps where the host looks for
+    /// them (named from the token), each first time only.
+    #[tokio::test]
+    async fn the_server_writes_its_steps_for_the_host() {
+        use aeroric_core::sessions::live::context_stages as cs;
+        let dir = std::env::temp_dir().join(format!("aeroric-steps-{}", uuid::Uuid::new_v4()));
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"clientInfo\":{\"name\":\"codex-mcp-client\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}\n",
+        );
+        let mut out = Vec::new();
+        super::serve_with(
+            &dir,
+            "token-1",
+            tokio::io::BufReader::new(input.as_bytes()),
+            &mut out,
+        )
+        .await;
+        let stages = cs::read(&cs::path(&dir, "token-1")).expect("the steps");
+        assert_eq!(stages.pid, std::process::id());
+        assert_eq!(stages.client.as_deref(), Some("codex-mcp-client"));
+        let (init, done, listed) = (
+            stages.initialize_ms.unwrap(),
+            stages.initialized_ms.unwrap(),
+            stages.tools_list_ms.unwrap(),
+        );
+        assert!(stages.started_ms <= init && init <= done && done <= listed);
+        assert_eq!(stages.first_call_ms, None);
+        assert_eq!(cs::verdict(Some(&stages), stages.started_ms, listed), None);
     }
 
     #[test]

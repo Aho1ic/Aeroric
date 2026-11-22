@@ -69,15 +69,20 @@ pub struct ContextTokens {
 #[derive(Default)]
 struct Tokens {
     by_token: HashMap<String, (String, String)>,
-    by_task: HashMap<String, String>,
+    /// The task's live token and when it was issued (E15 step 2).
+    by_task: HashMap<String, (String, u64)>,
 }
 
 impl ContextTokens {
     /// A fresh token for `task_id` in `project_id`; the task's old one stops working.
     pub fn issue(&self, task_id: &str, project_id: &str) -> String {
         let token = uuid::Uuid::new_v4().simple().to_string();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         let mut t = self.inner.lock();
-        if let Some(old) = t.by_task.insert(task_id.to_string(), token.clone()) {
+        if let Some((old, _)) = t.by_task.insert(task_id.to_string(), (token.clone(), now)) {
             t.by_token.remove(&old);
         }
         t.by_token
@@ -92,9 +97,14 @@ impl ContextTokens {
 
     pub fn revoke(&self, task_id: &str) {
         let mut t = self.inner.lock();
-        if let Some(old) = t.by_task.remove(task_id) {
+        if let Some((old, _)) = t.by_task.remove(task_id) {
             t.by_token.remove(&old);
         }
+    }
+
+    /// E15 step 2: the task's live token and when it was issued.
+    pub fn issued(&self, task_id: &str) -> Option<(String, u64)> {
+        self.inner.lock().by_task.get(task_id).cloned()
     }
 }
 

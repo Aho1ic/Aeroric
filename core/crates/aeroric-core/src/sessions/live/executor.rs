@@ -231,7 +231,7 @@ pub struct StructuredExecutor {
     surface_log: Arc<super::surfaces::SurfaceLog>,
     /// B4′: how to start the context server (`program`, `data_dir`); unset
     /// gives sessions none (tests, and hosts that opt out).
-    context_program: Mutex<Option<(String, String)>>,
+    context_program: Arc<Mutex<Option<(String, String)>>>,
     /// H6: the data folder whose `packs/` each launch is given from.
     packs_dir: Mutex<Option<std::path::PathBuf>>,
     /// H4: per-message recall's mode and decisions.
@@ -344,6 +344,16 @@ impl StructuredExecutor {
             sink,
             Arc::clone(&registry),
         ));
+        // E15 step 2: at a turn's end, how far Aeroric's own Context
+        // server got, when its tools never came up.
+        let context_tokens: Arc<super::context_server::ContextTokens> = Arc::default();
+        let context_program: Arc<Mutex<Option<(String, String)>>> = Arc::default();
+        let sink: Arc<dyn LiveStatusSink> = super::context_stages::ContextStageWatch::new(
+            sink,
+            Arc::clone(&context_tokens),
+            Arc::clone(&registry),
+            Arc::clone(&context_program),
+        );
         // D4: outermost, so it sees every settlement the drivers publish.
         let receipts = super::receipts::PermissionReceipts::new(sink);
         let sink: Arc<dyn LiveStatusSink> = Arc::clone(&receipts) as Arc<dyn LiveStatusSink>;
@@ -367,10 +377,10 @@ impl StructuredExecutor {
             skill_mounts: Arc::default(),
             tool_log: Arc::default(),
             surface_log: Arc::default(),
-            context_program: Mutex::new(None),
+            context_program,
             packs_dir: Mutex::new(None),
             recall: Arc::default(),
-            context_tokens: Arc::default(),
+            context_tokens,
             runtime: runtime.clone(),
             registry,
             owners: Mutex::default(),

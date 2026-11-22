@@ -347,7 +347,7 @@ owner 在 `~/Downloads/同步空间/LYX/New-addition-1118/` 整理了四个项�
 
 #### E15 MCP 启动失败归因（1–2 天）
 
-2026-11-21 第一步已实现，见 [E15 笔记](../../implemented/feature/2026-11-21-e15-mcp-startup.md)：Codex 和 Claude 报告的 MCP 启动失败在会话里写明服务、原因和用时。Context 服务器自己记录各步耗时是下一步。
+2026-11-21 第一步已实现，见 [E15 笔记](../../implemented/feature/2026-11-21-e15-mcp-startup.md)：Codex 和 Claude 报告的 MCP 启动失败在会话里写明服务、原因和用时。第二步 2026-11-22 已实现，见 [E15 第二步笔记](../../implemented/feature/2026-11-22-e15-context-server-stages.md)：Context 服务器把各步时间写进数据目录，回合结束时没接上就在会话里写明停在哪一步，四家都覆盖。
 
 - **用户会看到**：Context 工具或用户自己的 MCP 没起来时，提示写明是哪个服务、卡在哪一步（启动、`initialize`、`tools/list`、调用）、各用了多久。
 - **来源**：OMB #3142；CU 2026-11-13 记录过 DSH 等 `tools/list` 卡住整个回合。
