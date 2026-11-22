@@ -231,6 +231,7 @@ public struct MemoryPage: View {
                 .accessibilityIdentifier("memory.dream.note")
         }
         if let note = store.withdrawalNote { withdrawalBanner(note) }
+        if let load = store.load { MemoryLoadLine(load: load) }
         let dreams = store.pendingDreams(store.tab)
         if !dreams.isEmpty {
             sectionLabel("整理建议 · \(dreams.count)", tint: AeroricColor.warning)

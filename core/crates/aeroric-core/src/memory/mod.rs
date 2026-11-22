@@ -145,6 +145,19 @@ pub struct Memory {
     cancels: Mutex<std::collections::HashSet<String>>,
 }
 
+/// E8: [`Memory::profile_load`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProfileLoad {
+    pub text: Option<String>,
+    pub used_chars: usize,
+    /// How many items it carries.
+    pub carried: usize,
+    /// Left out by the budget (`PROFILE_BUDGET_CHARS`).
+    pub left_out: Vec<MemoryItem>,
+    /// Facts H7 moved out of the opening.
+    pub demoted: Vec<MemoryItem>,
+}
+
 impl Memory {
     /// Open (or create) the store under `dir`.
     pub fn set_dir(&self, dir: PathBuf) -> Result<(), MemoryError> {
@@ -549,6 +562,54 @@ impl Memory {
         let (text, ids) = self.render_profile(project_id)?;
         let _ = self.with(|store| store.bump(&ids, "injected", task_id));
         Some(text)
+    }
+
+    /// E8 (2026-11-22): what a session started now would be handed, and
+    /// what it would not: the items the budget left out, and the facts H7
+    /// moved out of the opening (found by recall only).
+    pub fn profile_load(&self, project_id: Option<&str>) -> ProfileLoad {
+        self.with(|store| {
+            let demoted = store.demoted()?;
+            let global = store.active(None)?;
+            let project = match project_id {
+                Some(id) if store.enabled(id)? => store.active(Some(id))?,
+                _ => Vec::new(),
+            };
+            let (kept_global, moved_global): (Vec<_>, Vec<_>) = global
+                .into_iter()
+                .partition(|i| !demoted.contains_key(&i.id));
+            let (kept_project, moved_project): (Vec<_>, Vec<_>) = project
+                .into_iter()
+                .partition(|i| !demoted.contains_key(&i.id));
+            let load = profile::measure(&kept_global, &kept_project);
+            let by_id = |id: &String| {
+                kept_project
+                    .iter()
+                    .chain(&kept_global)
+                    .find(|i| &i.id == id)
+                    .cloned()
+            };
+            let left_out = load.left_out.iter().filter_map(by_id).collect();
+            let demoted = moved_project
+                .into_iter()
+                .chain(moved_global)
+                .filter(|i| {
+                    matches!(
+                        i.kind,
+                        aeroric_protocol::memory::MemoryKind::Profile
+                            | aeroric_protocol::memory::MemoryKind::Fact
+                    )
+                })
+                .collect();
+            Ok(ProfileLoad {
+                text: load.text,
+                used_chars: load.used_chars,
+                carried: load.carried.len(),
+                left_out,
+                demoted,
+            })
+        })
+        .unwrap_or_default()
     }
 
     fn render_profile(&self, project_id: Option<&str>) -> Option<(String, Vec<String>)> {

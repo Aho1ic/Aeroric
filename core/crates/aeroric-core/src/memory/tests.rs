@@ -209,6 +209,47 @@ fn the_profile_puts_pins_first_and_keeps_to_its_budget() {
     assert!(!memory.profile(Some("p1")).unwrap().contains("项目约定"));
 }
 
+/// E8 (2026-11-22): what a new session would carry is measured — the
+/// characters against the budget, how many items, and which were left out
+/// (the same as the text's "未列出" count).
+#[test]
+fn the_profile_load_says_what_was_carried_and_left_out() {
+    let (memory, _dir) = rig();
+    assert_eq!(memory.profile_load(Some("p1")).used_chars, 0);
+    memory
+        .remember(
+            draft(None, MemoryKind::Profile, "回复一律用简体中文"),
+            said("a"),
+            1,
+        )
+        .unwrap();
+    for i in 0..60 {
+        memory
+            .remember(
+                draft(
+                    Some("p1"),
+                    MemoryKind::Fact,
+                    &format!("第 {i} 条项目约定：一些足够长的说明文字"),
+                ),
+                said("b"),
+                2 + i,
+            )
+            .unwrap();
+    }
+    let load = memory.profile_load(Some("p1"));
+    let text = load.text.clone().unwrap();
+    assert_eq!(load.used_chars, text.chars().count());
+    assert!(load.used_chars <= PROFILE_BUDGET_CHARS + 40);
+    assert_eq!(load.carried + load.left_out.len(), 61);
+    assert!(!load.left_out.is_empty());
+    assert!(text.contains(&format!("还有 {} 条未列出", load.left_out.len())));
+    assert!(load.left_out.iter().all(|i| !text.contains(&i.text)));
+    assert!(load.demoted.is_empty());
+    // A project that does not use memory carries only the profile.
+    let other = memory.profile_load(Some("p2"));
+    assert_eq!((other.carried, other.left_out.len()), (1, 0));
+}
+
 #[test]
 fn recall_finds_chinese_words_in_scope_and_says_nothing_when_nothing_matches() {
     let (memory, _dir) = rig();

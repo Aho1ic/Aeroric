@@ -607,9 +607,28 @@ fn memory_profile(live: &Live, request: &Request) -> Frame {
         Ok(p) => p,
         Err(frame) => return *frame,
     };
+    // E8 (2026-11-22): also what it uses of the budget and what it leaves
+    // out, so the memory page can say so.
+    let load = live.executor.memory().profile_load(p.project_id.as_deref());
+    let row = |item: &aeroric_protocol::memory::MemoryItem, why: &str| {
+        json!({"id": item.id, "kind": item.kind, "text": item.text,
+            "projectId": item.project_id, "why": why})
+    };
+    let left: Vec<Value> = load
+        .left_out
+        .iter()
+        .map(|i| row(i, "budget"))
+        .chain(load.demoted.iter().map(|i| row(i, "demoted")))
+        .collect();
     ok(
         request,
-        json!({ "text": live.executor.memory().profile(p.project_id.as_deref()) }),
+        json!({
+            "text": load.text,
+            "usedChars": load.used_chars,
+            "budgetChars": aeroric_protocol::memory::PROFILE_BUDGET_CHARS,
+            "carried": load.carried,
+            "leftOut": left,
+        }),
     )
 }
 

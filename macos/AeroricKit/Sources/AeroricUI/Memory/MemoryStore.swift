@@ -63,6 +63,8 @@ public protocol MemoryService {
 }
 
 extension MemoryService {
+    /// E8: nil when the host cannot say (older hosts, previews).
+    public func load(projectID: String?) async throws -> LiveMemoryLoad? { nil }
     public func confirmMany(ids: [String], accept: Bool) async throws -> Int {
         for id in ids { try await confirm(id: id, accept: accept) }
         return ids.count
@@ -141,6 +143,8 @@ public final class MemoryStore {
     public private(set) var items: [LiveMemoryItem] = [] { didSet { regroup() } }
     /// Whether the scoped project uses memory (nil for global).
     public private(set) var enabled: Bool?
+    /// E8: what a session started now in this scope would be handed.
+    public private(set) var load: LiveMemoryLoad?
     public private(set) var native: [LiveNativeMemory] = []
     /// Proposals in every scope (the sidebar badge, 需要我处理).
     public private(set) var pending: [LiveMemoryItem] = []
@@ -228,6 +232,7 @@ public final class MemoryStore {
             let page = try await service.list(projectID: scope, query: trimmed.isEmpty ? nil : trimmed)
             items = page.items
             enabled = page.enabled
+            load = try? await service.load(projectID: scope)
             if tab == .about { native = (try? await service.native(projectID: scope)) ?? [] }
             if tab == .log { runsPage = try await service.runs() }
             proposals = (try? await service.proposals()) ?? proposals

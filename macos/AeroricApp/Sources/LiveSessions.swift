@@ -597,6 +597,10 @@ struct HostMemoryService: MemoryService {
         return client
     }
 
+    func load(projectID: String?) async throws -> LiveMemoryLoad? {
+        try await client().memoryLoad(projectId: projectID)
+    }
+
     func list(projectID: String?, query: String?) async throws -> (items: [LiveMemoryItem], enabled: Bool?) {
         try await client().memoryList(projectId: projectID, query: query)
     }

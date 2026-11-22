@@ -29,12 +29,29 @@ pub(super) fn overflows(global: &[MemoryItem], project: &[MemoryItem]) -> bool {
     shown < all
 }
 
+/// E8 (2026-11-22): what a starting session is handed, measured — the
+/// characters it uses against [`PROFILE_BUDGET_CHARS`], the ids carried and
+/// the ids the budget left out.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Load {
+    pub text: Option<String>,
+    pub used_chars: usize,
+    pub carried: Vec<String>,
+    pub left_out: Vec<String>,
+}
+
 /// `global` and `project` are active items, pinned first then newest.
 /// The text and the ids it carries (B5-3a counts them as injected).
 pub(super) fn render(
     global: &[MemoryItem],
     project: &[MemoryItem],
 ) -> Option<(String, Vec<String>)> {
+    let load = measure(global, project);
+    load.text.map(|text| (text, load.carried))
+}
+
+/// [`render`], with what it left out and the characters it used.
+pub(super) fn measure(global: &[MemoryItem], project: &[MemoryItem]) -> Load {
     let mut about: Vec<&MemoryItem> = project
         .iter()
         .chain(global)
@@ -56,12 +73,12 @@ pub(super) fn render(
         )
     });
     if about.is_empty() && facts.is_empty() {
-        return None;
+        return Load::default();
     }
     let mut out = HEADER.to_string();
     let mut ids = Vec::new();
     let mut used = out.chars().count();
-    let mut left = 0usize;
+    let mut left_ids = Vec::new();
     for (title, items) in [("## 关于用户", &about), ("## 事实与约定", &facts)] {
         if items.is_empty() {
             continue;
@@ -76,7 +93,7 @@ pub(super) fn render(
                     title.chars().count() + 1
                 };
             if used + cost > PROFILE_BUDGET_CHARS {
-                left += 1;
+                left_ids.push(item.id.clone());
                 continue;
             }
             if !wrote_title {
@@ -89,10 +106,16 @@ pub(super) fn render(
             used += cost;
         }
     }
-    if left > 0 {
+    if !left_ids.is_empty() {
         out.push_str(&format!(
-            "\n（还有 {left} 条未列出，可用 memory_recall 检索）"
+            "\n（还有 {} 条未列出，可用 memory_recall 检索）",
+            left_ids.len()
         ));
     }
-    Some((out, ids))
+    Load {
+        used_chars: out.chars().count(),
+        text: Some(out),
+        carried: ids,
+        left_out: left_ids,
+    }
 }

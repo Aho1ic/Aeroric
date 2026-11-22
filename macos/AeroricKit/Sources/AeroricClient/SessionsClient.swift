@@ -741,6 +741,14 @@ extension SessionsClient {
                 frame.result["enabled"]?.boolValue)
     }
 
+    /// E8: what a session started now in this scope would be handed.
+    public func memoryLoad(projectId: String?) async throws -> LiveMemoryLoad? {
+        var params: [String: JSONValue] = [:]
+        if let projectId { params["projectId"] = .string(projectId) }
+        let frame = try await connection.request("memory.profile", params: .object(params))
+        return LiveMemoryLoad.decode(frame.result)
+    }
+
     /// The user keeps something (`/记住`, the memory page; `supersedes` = an edit).
     public func remember(projectId: String?, kind: String, category: String? = nil, text: String,
                          supersedes: String? = nil, taskId: String? = nil, source: String? = nil)
