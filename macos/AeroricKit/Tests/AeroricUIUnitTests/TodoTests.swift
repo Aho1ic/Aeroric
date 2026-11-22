@@ -163,6 +163,12 @@ final class TodoSecondBatchTests: XCTestCase {
         todo.assignments[0].fixes = 2
         XCTAssertEqual(TodoText.checkStatus(todo), "检查没过")
         XCTAssertEqual(TodoText.fixes(todo), "已让 Agent 接着修 2/2 次")
+        // 2026-11-22 (目检): a cut output, head or tail kept, is said on the capsule.
+        todo.assignments[0].check = LiveTodoCheck(state: "failed", output: "退出码 1：…（前面已截断）\nx\nx")
+        XCTAssertEqual(TodoText.checkStatus(todo), "检查没过（结果可能不完整）")
+        todo.assignments[0].check = LiveTodoCheck(state: "passed", output: "ok\n…（已截断）")
+        XCTAssertEqual(TodoText.checkStatus(todo), "检查通过（结果可能不完整）")
+        todo.assignments[0].check = LiveTodoCheck(state: "failed", output: " 1 failed ")
         XCTAssertNil(TodoText.checkStatus(LiveTodo(state: "assigned")), "no check")
         XCTAssertEqual(TodoText.status(LiveTodo(state: "proposed")), "Agent 提议")
 

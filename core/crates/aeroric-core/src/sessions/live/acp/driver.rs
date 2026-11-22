@@ -888,8 +888,13 @@ impl Actor {
             .cloned()
             .unwrap_or(Value::Null);
         let cwd = start.cwd.clone();
-        let mut servers: Vec<Value> = context.iter().map(mcp_entry).collect();
+        let own: Vec<Value> = context.iter().map(mcp_entry).collect();
+        let mut servers = own.clone();
         servers.extend(packs.iter().map(pack_entry));
+        // 2026-11-22 (目检): an agent may refuse the whole session over one
+        // pack server it cannot start (DSH: "Internal error (-32603)"). Then
+        // it is asked once more without the packs' servers, and told.
+        let mut without_packs: Option<String> = None;
         let since = Instant::now();
         let at = |step: &'static str, since: Instant, error: String| {
             stopped(&handshake, label, &task, watch.as_ref(), step, since, error)
@@ -909,22 +914,30 @@ impl Actor {
                         ),
                     ));
                 }
-                let asked = client.request(
-                    "session/resume",
-                    json!({"sessionId": id, "cwd": cwd, "mcpServers": servers}),
-                );
-                let result = match step(&stop, asked).await {
-                    Step::Done(result) => result.map_err(|error| {
-                        at(
-                            "session/resume",
-                            since,
-                            format!("{label} 恢复会话失败：{error}"),
-                        )
-                    })?,
-                    Step::TimedOut => {
-                        return Err(at("session/resume", since, waited("session/resume")))
+                let mut offered = servers.clone();
+                let result = loop {
+                    let asked = client.request(
+                        "session/resume",
+                        json!({"sessionId": id, "cwd": cwd, "mcpServers": offered}),
+                    );
+                    match step(&stop, asked).await {
+                        Step::Done(Ok(result)) => break result,
+                        Step::Done(Err(error)) if without_packs.is_none() && !packs.is_empty() => {
+                            without_packs = Some(error.to_string());
+                            offered = own.clone();
+                        }
+                        Step::Done(Err(error)) => {
+                            return Err(at(
+                                "session/resume",
+                                since,
+                                format!("{label} 恢复会话失败：{error}"),
+                            ))
+                        }
+                        Step::TimedOut => {
+                            return Err(at("session/resume", since, waited("session/resume")))
+                        }
+                        Step::Stopped => return Err(at("session/resume", since, cut.clone())),
                     }
-                    Step::Stopped => return Err(at("session/resume", since, cut.clone())),
                 };
                 if let Some(other) = s(&result, "sessionId").filter(|other| other != id) {
                     return Err(at(
@@ -936,18 +949,28 @@ impl Actor {
                 result
             }
             None => {
-                let asked =
-                    client.request("session/new", json!({"cwd": cwd, "mcpServers": servers}));
-                let result = match step(&stop, asked).await {
-                    Step::Done(result) => result.map_err(|error| {
-                        at(
-                            "session/new",
-                            since,
-                            format!("{label} 新建会话失败：{error}"),
-                        )
-                    })?,
-                    Step::TimedOut => return Err(at("session/new", since, waited("session/new"))),
-                    Step::Stopped => return Err(at("session/new", since, cut.clone())),
+                let mut offered = servers.clone();
+                let result = loop {
+                    let asked =
+                        client.request("session/new", json!({"cwd": cwd, "mcpServers": offered}));
+                    match step(&stop, asked).await {
+                        Step::Done(Ok(result)) => break result,
+                        Step::Done(Err(error)) if without_packs.is_none() && !packs.is_empty() => {
+                            without_packs = Some(error.to_string());
+                            offered = own.clone();
+                        }
+                        Step::Done(Err(error)) => {
+                            return Err(at(
+                                "session/new",
+                                since,
+                                format!("{label} 新建会话失败：{error}"),
+                            ))
+                        }
+                        Step::TimedOut => {
+                            return Err(at("session/new", since, waited("session/new")))
+                        }
+                        Step::Stopped => return Err(at("session/new", since, cut.clone())),
+                    }
                 };
                 if s(&result, "sessionId").is_none_or(|id| id.trim().is_empty()) {
                     return Err(at(
@@ -1042,6 +1065,17 @@ impl Actor {
                 &session_id,
                 None,
             );
+        }
+        if let Some(error) = without_packs {
+            let names: Vec<&str> = packs.iter().map(|p| p.name.as_str()).collect();
+            self.push(SessionUpdateKind::Notice {
+                level: "error".into(),
+                message: format!(
+                    "{label} 带着能力包的 MCP 服务器 {} 时{}失败（{error}），这次没带它们，会话照常打开；请到“Agent 配置 → 能力包”检查这些服务器的命令",
+                    names.join("、"),
+                    if resume.is_some() { "恢复会话" } else { "新建会话" },
+                ),
+            });
         }
         let (model, effort) = {
             let state = self.state.lock();

@@ -775,3 +775,72 @@ async fn stop_cuts_a_hanging_handshake_short() {
     assert!(asked.elapsed() < Duration::from_secs(2));
     drop(peer);
 }
+
+/// 2026-11-22 (目检): DSH refused `session/new` outright ("Internal error
+/// (-32603)") while a capability pack held an MCP server it could not start.
+/// The session is asked for once more without the packs' servers, opens,
+/// and the transcript names the servers left out and the agent's error.
+#[tokio::test]
+async fn a_session_refused_over_pack_servers_opens_without_them() {
+    let mut h = start_with("ask", None, None);
+    assert!(h
+        .session
+        .set_pack_servers(vec![aeroric_protocol::packs::PackServer {
+            name: "cu-broken-mcp".into(),
+            description: String::new(),
+            command: "/usr/bin/aeroric-no-such-command".into(),
+            args: vec!["--stdio".into()],
+            env: Default::default(),
+            enabled: true,
+        }]));
+    h.session.deliver("d1".into(), "hi".into()).unwrap();
+    let mut peer = launched(&mut h).await;
+    peer.initialize(json!({"sessionCapabilities": {"close": {}, "resume": {}}}))
+        .await;
+    let first = peer.expect("session/new").await;
+    assert_eq!(first["params"]["mcpServers"][0]["name"], "cu-broken-mcp");
+    peer.send(json!({"jsonrpc": "2.0", "id": first["id"],
+        "error": {"code": -32603, "message": "Internal error"}}));
+    let second = peer.expect("session/new").await;
+    assert_eq!(second["params"]["mcpServers"], json!([]), "{second}");
+    peer.reply(
+        &second,
+        json!({"sessionId": "s1", "configOptions": dsh_options("[\"deepseek-official\",\"deepseek-flash\"]", "high")}),
+    );
+    peer.prompt("hi").await;
+    let notices: Vec<String> = h
+        .sink
+        .updates
+        .lock()
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::Notice { level, message } if level == "error" => {
+                Some(message.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        notices[0].contains("cu-broken-mcp")
+            && notices[0].contains("新建会话失败")
+            && notices[0].contains("Internal error")
+            && notices[0].contains("这次没带它们"),
+        "{}",
+        notices[0]
+    );
+}
+
+/// Without pack servers a refused session stays a failed connection.
+#[tokio::test]
+async fn a_refused_session_without_pack_servers_is_not_asked_again() {
+    let mut h = start_with("ask", None, None);
+    h.session.deliver("d1".into(), "hi".into()).unwrap();
+    let mut peer = launched(&mut h).await;
+    peer.initialize(json!({"sessionCapabilities": {"close": {}, "resume": {}}}))
+        .await;
+    let first = peer.expect("session/new").await;
+    peer.send(json!({"jsonrpc": "2.0", "id": first["id"],
+        "error": {"code": -32603, "message": "Internal error"}}));
+    wait_status(&h.sink, TaskStatus::Failed).await;
+}

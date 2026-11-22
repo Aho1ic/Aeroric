@@ -219,11 +219,19 @@ public enum TodoText {
         guard !todo.check.isEmpty, todo.state == "assigned" || todo.state == "done", let run = todo.lastCheck else {
             return nil
         }
+        // 2026-11-22 (目检): a cut output says the verdict may rest on part of it.
+        let incomplete = checkIncomplete(run) ? "（结果可能不完整）" : ""
         switch run.state {
         case "running": return "检查中…"
-        case "passed": return "检查通过"
-        default: return "检查没过"
+        case "passed": return "检查通过" + incomplete
+        default: return "检查没过" + incomplete
         }
+    }
+
+    /// The check's output was cut (the host keeps its head or its tail and
+    /// says so in the text, as the session's check rows do with a flag).
+    public static func checkIncomplete(_ run: LiveTodoCheck) -> Bool {
+        run.output.contains("…（前面已截断）") || run.output.contains("…（已截断）")
     }
 
     /// "已让 Agent 接着修 1/2 次".
