@@ -259,4 +259,16 @@ fn doctor_and_client_refusals_remain_data_only_without_a_home() {
     assert_eq!(report["dataDir"], json!(fixture.data));
     assert!(fs::read_dir(&fixture.home).unwrap().next().is_none());
     assert!(!fixture.root.join("wrong-global-data").exists());
+    // E17: the read-only scan rides on the same report.
+    let output = fixture
+        .cli()
+        .env_remove("HOME")
+        .env_remove("USERPROFILE")
+        .args(["doctor", "--scan", "--days", "3", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["scan"]["groups"], json!([]), "{report}");
+    assert_eq!(report["scan"]["scanned"]["tasks"], 0);
 }

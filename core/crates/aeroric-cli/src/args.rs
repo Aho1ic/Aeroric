@@ -34,6 +34,13 @@ pub enum Command {
     Doctor {
         #[arg(long)]
         json: bool,
+        /// E17：只读健康扫描——失败的任务、卡住的投递、失败的定时运行，按特征归组；
+        /// 不调模型，不改数据。
+        #[arg(long)]
+        scan: bool,
+        /// 扫描最近多少天（配合 --scan）。
+        #[arg(long, default_value_t = 7, requires = "scan")]
+        days: u32,
     },
     /// 启动无头 host（lock → compat → runtime → listener → ready）。
     Serve {

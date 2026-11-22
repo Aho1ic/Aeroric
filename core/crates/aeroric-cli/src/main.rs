@@ -93,7 +93,9 @@ async fn askpass(ticket: &str, prompt: &str) -> u8 {
 
 async fn dispatch(cli: Cli) -> i32 {
     match cli.command {
-        Command::Doctor { json } => doctor(&cli.data_dir, json).await,
+        Command::Doctor { json, scan, days } => {
+            doctor(&cli.data_dir, json, scan.then_some(days)).await
+        }
         Command::Serve { ready_fd } => serve(&cli.data_dir, ready_fd).await,
         // ③/④/⑤ 片的落地面。未接线前每命令显式失败，数字用 CONNECT：
         // 能力在计划里，不在树里。
@@ -126,7 +128,7 @@ async fn dispatch(cli: Cli) -> i32 {
 
 /// 数据目录体检：卷答案、写租约可否、runtime 状态、socket 活死。
 /// 退出码：0＝体检完成且可写（或 host 正常持有中）；3＝目录不可用/卷拒写。
-async fn doctor(data_dir: &Path, json: bool) -> i32 {
+async fn doctor(data_dir: &Path, json: bool, scan_days: Option<u32>) -> i32 {
     use aeroric_core::location::StorageLocationProbe as _;
     use aeroric_core::location_probe::RawPlatformProbe;
     use serde_json::json;
@@ -174,8 +176,18 @@ async fn doctor(data_dir: &Path, json: bool) -> i32 {
         "absent"
     };
 
+    // E17: the read-only health scan, when asked.
+    let scanned = scan_days.map(|days| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let since = now.saturating_sub(u64::from(days) * 24 * 60 * 60 * 1000);
+        aeroric_core::health::scan(&reader_context, since, now)
+    });
+
     if json {
-        let report = json!({
+        let mut report = json!({
             "dataDir": data_dir.display().to_string(),
             "volume": volume,
             "writerEligible": writer_eligible,
@@ -183,6 +195,9 @@ async fn doctor(data_dir: &Path, json: bool) -> i32 {
             "runtime": runtime,
             "socket": {"path": socket_path.display().to_string(), "state": socket},
         });
+        if let Some(scanned) = &scanned {
+            report["scan"] = serde_json::to_value(scanned).unwrap_or_default();
+        }
         println!("{report}");
     } else {
         println!("data-dir      : {}", data_dir.display());
@@ -190,6 +205,10 @@ async fn doctor(data_dir: &Path, json: bool) -> i32 {
         println!("lease         : {lease}");
         println!("socket        : {} [{socket}]", socket_path.display());
         println!("runtime       : {runtime}");
+        if let Some(scanned) = &scanned {
+            println!();
+            print!("{}", aeroric_core::health::text(scanned));
+        }
     }
     if writer_eligible {
         exit::OK
@@ -1052,6 +1071,8 @@ mod tests {
         // 12 组逐条过解析器（不启动任何进程）。
         let cases: &[&[&str]] = &[
             &["doctor", "--json"],
+            &["doctor", "--scan"],
+            &["doctor", "--scan", "--days", "30", "--json"],
             &["serve"],
             &["serve", "--ready-fd", "7"],
             &["project", "list"],
@@ -1090,6 +1111,21 @@ mod tests {
                 argv.join(" ")
             );
         }
+    }
+
+    /// E17: `--days` only goes with `--scan`.
+    #[test]
+    fn days_without_scan_is_a_usage_error() {
+        let err = Cli::try_parse_from([
+            "aeroric-cli",
+            "--data-dir",
+            "/tmp/x",
+            "doctor",
+            "--days",
+            "3",
+        ])
+        .unwrap_err();
+        assert_eq!(err.exit_code(), crate::args::exit::USAGE);
     }
 
     #[test]

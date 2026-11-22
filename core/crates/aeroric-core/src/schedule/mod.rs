@@ -246,6 +246,12 @@ impl Schedules {
         runs
     }
 
+    /// E17: every rule's runs, for the read-only health scan.
+    pub fn all_runs(&self) -> Vec<ScheduleRun> {
+        let _guard = self.lock.lock();
+        self.load().runs
+    }
+
     /// A rule opened this session.
     pub fn knows_task(&self, task_id: &str) -> bool {
         let _guard = self.lock.lock();
