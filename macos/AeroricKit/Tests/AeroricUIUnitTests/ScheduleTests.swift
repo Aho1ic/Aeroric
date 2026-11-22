@@ -177,4 +177,20 @@ final class ScheduleTests: XCTestCase {
         XCTAssertFalse(refused)
         XCTAssertTrue(store.errorText?.contains("给定时任务起个名字") == true, store.errorText ?? "")
     }
+
+    /// 2026-11-22: a rule may run an Agent configuration with one of its
+    /// models; it round-trips and the row names it.
+    func testARuleRunsAnAgentConfiguration() {
+        var rule = LiveScheduleRule(id: "s1", name: "早报", projectId: "p1", agent: "claude", model: "42/deepseek-flash")
+        rule.configurationId = "agent-config:magpie"
+        XCTAssertEqual(rule.json.fields["configurationId"]?.stringValue, "agent-config:magpie")
+        XCTAssertEqual(LiveScheduleRule.decode(rule.json)?.configurationId, "agent-config:magpie")
+        let targets = [RerunTarget(id: "agent-config:magpie", title: "Magpie", agent: "claude",
+                                   models: ["42/deepseek-flash"])]
+        XCTAssertEqual(ScheduleText.runner(rule, targets: targets, agentName: "Claude Code"), "Magpie · 42/deepseek-flash")
+        XCTAssertEqual(ScheduleText.runner(rule, targets: [], agentName: "Claude Code"), "配置 magpie · 现在不能用")
+        rule.configurationId = nil
+        XCTAssertEqual(ScheduleText.runner(rule, targets: targets, agentName: "Claude Code"), "Claude Code")
+        XCTAssertNil(LiveScheduleRule.decode(rule.json)?.configurationId)
+    }
 }

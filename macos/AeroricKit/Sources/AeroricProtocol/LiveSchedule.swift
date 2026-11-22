@@ -52,6 +52,9 @@ public struct LiveScheduleRule: Equatable, Sendable, Identifiable {
     public var projectId: String
     public var agent: String
     public var model: String?
+    /// 2026-11-22: an Agent configuration of the project's catalog
+    /// (`agent-config:<id>`); nil runs the Agent's own login.
+    public var configurationId: String?
     public var prompt: String
     public var repeatRule: LiveScheduleRepeat
     /// §3.8: a shell command run in the project first; exit 0 wakes the model.
@@ -97,6 +100,7 @@ public struct LiveScheduleRule: Equatable, Sendable, Identifiable {
                                 nextMs: f["nextMs"]?.numberText.flatMap { UInt64($0) },
                                 quotaRetryMs: f["quotaRetryMs"]?.numberText.flatMap { UInt64($0) })
             .with { rule in
+                rule.configurationId = f["configurationId"]?.stringValue
                 rule.whenBusy = f["whenBusy"]?.stringValue ?? "skip"
                 if let h = f["activeHours"]?.objectValue,
                    let start = h["startMinute"]?.numberText.flatMap({ Int($0) }),
@@ -115,6 +119,7 @@ public struct LiveScheduleRule: Equatable, Sendable, Identifiable {
             "prompt": .string(prompt), "repeat": repeatRule.json, "enabled": .bool(enabled),
         ]
         if let model { f["model"] = .string(model) }
+        if let configurationId { f["configurationId"] = .string(configurationId) }
         if let check, !check.trimmingCharacters(in: .whitespaces).isEmpty { f["check"] = .string(check) }
         if whenBusy == "after" { f["whenBusy"] = .string("after") }
         if let resultSchema { f["resultSchema"] = resultSchema }

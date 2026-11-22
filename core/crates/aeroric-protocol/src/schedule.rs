@@ -96,6 +96,11 @@ pub struct ScheduleRule {
     pub agent: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 2026-11-22: a configuration of the project's session catalog (an
+    /// Agent configuration is `agent-config:<id>`), checked as 交办 checks
+    /// one; `agent` is its Agent. `None` runs the Agent's own source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_id: Option<String>,
     pub prompt: String,
     pub repeat: Repeat,
     /// §3.8: a shell command run in the project first; exit 0 wakes the model.

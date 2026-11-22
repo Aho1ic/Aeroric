@@ -6,6 +6,8 @@ public struct ReviewPanelModel: Equatable, Sendable {
     /// nil for a task that is never reviewed (a reviewer, a side branch).
     public var settings: LiveReviewSettings?
     public var candidates: [LiveReviewerCandidate]
+    /// 2026-11-22: the project's Agent configurations that could review.
+    public var configurations: [LiveReviewerConfiguration] = []
     /// Whom `auto` picks now; nil when no harness can review.
     public var auto: LiveReviewerCandidate?
     public var card: LiveReviewCard?
@@ -29,10 +31,32 @@ public struct ReviewPanelModel: Equatable, Sendable {
         case .auto:
             guard let auto else { return "自动 · 本机没有可用的审查者" }
             return "自动 · \(auto.label)\(auto.sameFamily ? "（同族）" : "")"
-        case let .named(agent, _, model):
+        case let .named(agent, configID?, model):
+            guard let config = configurations.first(where: { $0.agentConfigId == configID && $0.agent == agent }) else {
+                return "配置 \(configID) · 现在不能用"
+            }
+            return model.map { "\(config.title) · \($0)" } ?? config.title
+        case let .named(agent, nil, model):
             let label = candidates.first { $0.agent == agent }?.label ?? agent
             return model.map { "\(label) · \($0)" } ?? label
         }
+    }
+
+    /// 2026-11-22: a configuration's entry in the picker.
+    public static func configurationTitle(_ config: LiveReviewerConfiguration) -> String {
+        config.sameFamily ? "\(config.title)（同族）" : config.title
+    }
+
+    /// 2026-11-22: picking a configuration (and one of its models; its
+    /// first when none is named).
+    public static func choice(_ config: LiveReviewerConfiguration, model: String? = nil) -> LiveReviewerChoice {
+        .named(agent: config.agent, configID: config.agentConfigId, model: model ?? config.models.first)
+    }
+
+    /// The picked configuration is gone or blocked: the next review fails.
+    public var reviewerUnavailable: Bool {
+        guard case let .named(agent, configID?, _) = settings?.reviewer ?? .auto else { return false }
+        return !configurations.contains { $0.agentConfigId == configID && $0.agent == agent }
     }
 
     /// E4: "审查规则 · 内置 9 条 · 项目 2 条（关了 1 条内置）".
@@ -69,6 +93,9 @@ public struct ReviewPanelModel: Equatable, Sendable {
 
     /// One line under the picker.
     public var reviewerHint: String {
+        if reviewerUnavailable {
+            return "这个配置不在本项目能用的配置里，下一次审查会失败；换一个"
+        }
         if case .auto = settings?.reviewer ?? .auto, auto?.sameFamily == true {
             return "本机只有同族可用；只读、只看 diff"
         }
@@ -131,6 +158,25 @@ struct ReviewPanelSection: View {
                                 onAction(.pick(.named(agent: candidate.agent)))
                             }
                         }
+                        // 2026-11-22: an Agent configuration, and its model.
+                        if !model.configurations.isEmpty {
+                            Divider()
+                            Section("Agent 配置") {
+                                ForEach(model.configurations, id: \.agentConfigId) { config in
+                                    if config.models.count > 1 {
+                                        Menu(ReviewPanelModel.configurationTitle(config)) {
+                                            ForEach(config.models, id: \.self) { name in
+                                                Button(name) { onAction(.pick(ReviewPanelModel.choice(config, model: name))) }
+                                            }
+                                        }
+                                    } else {
+                                        Button(ReviewPanelModel.configurationTitle(config)) {
+                                            onAction(.pick(ReviewPanelModel.choice(config)))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     .accessibilityIdentifier("progress.review.reviewer")
                     Spacer(minLength: 0)
@@ -143,7 +189,7 @@ struct ReviewPanelSection: View {
                 }
                 Text(model.reviewerHint)
                     .font(.system(size: AeroricType.caption))
-                    .foregroundStyle(AeroricColor.textTertiary)
+                    .foregroundStyle(model.reviewerUnavailable ? AeroricColor.warning : AeroricColor.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 if let title = model.rulesTitle, let rules = model.rules {

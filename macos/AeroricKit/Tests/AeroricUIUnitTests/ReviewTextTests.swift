@@ -47,6 +47,30 @@ final class ReviewTextTests: XCTestCase {
         XCTAssertEqual(model.reviewerTitle, "自动 · 本机没有可用的审查者")
     }
 
+    /// 2026-11-22 (目检 C1 没测成): an Agent configuration can review.
+    func testAnAgentConfigurationCanBeTheReviewer() {
+        let magpie = LiveReviewerConfiguration.decode(.object([
+            "agentConfigId": .string("magpie"), "title": .string("Magpie"), "agent": .string("claude"),
+            "models": .array([.string("42/deepseek-flash"), .string("42/deepseek-pro")]), "sameFamily": .bool(true),
+        ]))!
+        XCTAssertEqual(magpie.models, ["42/deepseek-flash", "42/deepseek-pro"])
+        XCTAssertEqual(ReviewPanelModel.configurationTitle(magpie), "Magpie（同族）")
+        let choice = ReviewPanelModel.choice(magpie)
+        XCTAssertEqual(choice, .named(agent: "claude", configID: "magpie", model: "42/deepseek-flash"))
+        XCTAssertEqual(choice.json, .object(["agent": .string("claude"), "agentConfigId": .string("magpie"),
+                                             "model": .string("42/deepseek-flash")]))
+
+        var model = ReviewPanelModel(settings: LiveReviewSettings(enabled: true, reviewer: choice))
+        model.configurations = [magpie]
+        XCTAssertEqual(model.reviewerTitle, "Magpie · 42/deepseek-flash")
+        XCTAssertFalse(model.reviewerUnavailable)
+        // The configuration is gone (or blocked): the picker and the hint say so.
+        model.configurations = []
+        XCTAssertEqual(model.reviewerTitle, "配置 magpie · 现在不能用")
+        XCTAssertTrue(model.reviewerUnavailable)
+        XCTAssertTrue(model.reviewerHint.contains("下一次审查会失败"))
+    }
+
     func testSettingsAndCardsDecodeFromTheWire() {
         let settings = LiveReviewSettings.decode(.object(["enabled": .bool(true),
                                                           "reviewer": .object(["agent": .string("codex")]),

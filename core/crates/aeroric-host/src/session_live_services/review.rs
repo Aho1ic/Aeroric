@@ -6,6 +6,7 @@
 
 use std::sync::{Arc, Weak};
 
+use aeroric_core::agent_connections::launch::{catalog_id, config_id_from_catalog};
 use aeroric_core::sessions::live::review::{ReviewError, ReviewHost, Reviewer};
 use aeroric_core::storage::Record;
 use aeroric_core::tasks::launch_plan::working_directory;
@@ -16,6 +17,7 @@ use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
 use aeroric_protocol::review::{self as wire, ReviewSettings, ReviewerChoice};
 use aeroric_protocol::session_live::TaskParams;
+use aeroric_protocol::submission::AgentConfiguration;
 use serde_json::{json, Value};
 
 use super::{blocking, failure, now_ms, ok, params, Live, BRANCH_OF_FIELD};
@@ -63,6 +65,65 @@ struct Candidate {
     label: &'static str,
 }
 
+/// The reviewer [`HostReviews::pick`] settled on.
+struct Pick {
+    candidate: Candidate,
+    /// The Agent configuration's id (no catalog prefix).
+    config: Option<String>,
+    model: Option<String>,
+    same_family: bool,
+    /// "Codex", "Claude Code · sonnet", or "配置 名字 · 模型".
+    label: String,
+}
+
+/// The project's session catalog (its Agent configurations among them).
+fn project_catalog(live: &Live, project: &Record) -> Result<Vec<AgentConfiguration>, String> {
+    let id = project
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("会话的项目没有 id")?;
+    aeroric_core::settings::session_catalog::for_project(&live.context, id)
+        .map(|(_, catalog)| catalog.configurations)
+}
+
+/// 2026-11-22: the project's Agent configurations that can review — they
+/// run a reviewing harness available here and nothing blocks them. Built-in
+/// entries are the candidates themselves and are not repeated.
+fn config_reviewers(
+    catalog: &[AgentConfiguration],
+    candidates: &[Candidate],
+    writer: ProtocolFamily,
+) -> Vec<Value> {
+    catalog
+        .iter()
+        .filter(|c| c.blocked_reasons.is_empty())
+        .filter_map(|c| {
+            let id = config_id_from_catalog(&c.id)?;
+            let candidate = candidates.iter().find(|k| k.agent == c.agent)?;
+            Some(json!({
+                "agentConfigId": id,
+                "title": c.display_name,
+                "agent": c.agent,
+                "models": c.models,
+                "sameFamily": candidate.family == writer,
+            }))
+        })
+        .collect()
+}
+
+/// A named reviewer's Agent configuration checked against the catalog;
+/// its label ("配置名 · 模型"), or why it cannot review.
+fn config_label(
+    catalog: &[AgentConfiguration],
+    agent: &str,
+    config_id: &str,
+    model: Option<&str>,
+) -> Result<String, String> {
+    let picked =
+        super::todo::pick_configuration(catalog, agent, model, Some(&catalog_id(config_id)))?;
+    Ok(picked.label.unwrap_or_else(|| config_id.to_string()))
+}
+
 fn settings_of(record: &Record) -> Option<ReviewSettings> {
     if record.get(REVIEW_OF_FIELD).is_some() || record.get(BRANCH_OF_FIELD).is_some() {
         return None;
@@ -103,7 +164,7 @@ impl HostReviews {
         project: &Record,
         record: &Record,
         choice: &ReviewerChoice,
-    ) -> Result<(Candidate, Option<String>, Option<String>, bool), String> {
+    ) -> Result<Pick, String> {
         let writer = launch_family_of(record, live.families.as_ref());
         let candidates = self.candidates(live, project, record);
         match choice {
@@ -114,7 +175,13 @@ impl HostReviews {
                     .cloned()
                     .ok_or("本机没有可以当审查者的 Claude Code 或 Codex")?;
                 let same = pick.family == writer;
-                Ok((pick, None, None, same))
+                Ok(Pick {
+                    label: pick.label.to_string(),
+                    candidate: pick,
+                    config: None,
+                    model: None,
+                    same_family: same,
+                })
             }
             ReviewerChoice::Named {
                 agent,
@@ -127,7 +194,27 @@ impl HostReviews {
                     .cloned()
                     .ok_or_else(|| format!("审查者 {agent} 在本机不可用"))?;
                 let same = pick.family == writer;
-                Ok((pick, agent_config_id.clone(), model.clone(), same))
+                let mut label = pick.label.to_string();
+                // 2026-11-22: an Agent configuration is checked as 交办 checks
+                // one — it exists, nothing blocks it, it is this Agent's and
+                // offers the model — and names the reviewer.
+                if let Some(id) = agent_config_id {
+                    label = config_label(
+                        &project_catalog(live, project)?,
+                        agent,
+                        id,
+                        model.as_deref(),
+                    )?;
+                } else if let Some(model) = model {
+                    label = format!("{label} · {model}");
+                }
+                Ok(Pick {
+                    candidate: pick,
+                    config: agent_config_id.clone(),
+                    model: model.clone(),
+                    same_family: same,
+                    label,
+                })
             }
         }
     }
@@ -148,8 +235,13 @@ impl ReviewHost for HostReviews {
         }
         let (project, record) = live.record(parent).ok_or("会话不存在")?;
         let settings = settings_of(&record).ok_or("这个会话不能被审查")?;
-        let (pick, config, model, same_family) =
-            self.pick(&live, &project, &record, &settings.reviewer)?;
+        let Pick {
+            candidate: pick,
+            config,
+            model,
+            same_family,
+            label,
+        } = self.pick(&live, &project, &record, &settings.reviewer)?;
         let project_id = project
             .get("id")
             .and_then(Value::as_str)
@@ -236,10 +328,6 @@ impl ReviewHost for HostReviews {
                 Default::default(),
             )
             .map_err(|e| e.to_string())?;
-        let label = match &model {
-            Some(model) => format!("{} · {model}", pick.label),
-            None => pick.label.to_string(),
-        };
         Ok(Reviewer {
             task_id: id,
             label,
@@ -416,16 +504,25 @@ fn review_reviewers(live: &Live, request: &Request) -> Frame {
         probe_installed: live.probe_installed(),
     };
     let writer = launch_family_of(&record, live.families.as_ref());
-    let candidates: Vec<Value> = host
-        .candidates(live, &project, &record)
-        .into_iter()
+    let found = host.candidates(live, &project, &record);
+    let candidates: Vec<Value> = found
+        .iter()
         .map(|c| json!({"agent": c.agent, "label": c.label, "sameFamily": c.family == writer}))
         .collect();
+    // An unreadable catalog leaves the harnesses; it does not fail the list.
+    let configurations = project_catalog(live, &project)
+        .map(|catalog| config_reviewers(&catalog, &found, writer))
+        .unwrap_or_default();
     let auto = host
         .pick(live, &project, &record, &ReviewerChoice::Auto)
         .ok()
-        .map(|(c, _, _, same)| json!({"agent": c.agent, "label": c.label, "sameFamily": same}));
-    ok(request, json!({ "candidates": candidates, "auto": auto }))
+        .map(
+            |p| json!({"agent": p.candidate.agent, "label": p.label, "sameFamily": p.same_family}),
+        );
+    ok(
+        request,
+        json!({ "candidates": candidates, "configurations": configurations, "auto": auto }),
+    )
 }
 
 /// `review.rules {taskId}` (E4): the review rules in force for the task's
@@ -478,4 +575,92 @@ fn review_attention(live: &Live, request: &Request) -> Frame {
         .map(|(task, card)| json!({"taskId": task, "card": card}))
         .collect();
     ok(request, json!({ "items": items }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(id: &str, agent: &str, models: &[&str], blocked: &[&str]) -> AgentConfiguration {
+        AgentConfiguration {
+            id: id.into(),
+            version: "v1".into(),
+            display_name: format!("配置 {id}"),
+            agent: agent.into(),
+            harness: agent.into(),
+            models: models.iter().map(|m| m.to_string()).collect(),
+            efforts: Vec::new(),
+            permission_modes: Vec::new(),
+            blocked_reasons: blocked.iter().map(|b| b.to_string()).collect(),
+            model_details: Vec::new(),
+        }
+    }
+
+    fn catalog() -> Vec<AgentConfiguration> {
+        vec![
+            config("codex", "codex", &["gpt-6.1-sol"], &[]),
+            config(
+                "agent-config:magpie",
+                "claude",
+                &["42/deepseek-flash", "42/deepseek-pro"],
+                &[],
+            ),
+            config("agent-config:sol", "codex", &["gpt-6.2-sol"], &[]),
+            config("agent-config:off", "claude", &[], &["连接没有可用的模型"]),
+            config("agent-config:omp", "omp", &[], &[]),
+        ]
+    }
+
+    fn candidates() -> Vec<Candidate> {
+        REVIEWERS
+            .iter()
+            .map(|(agent, family, label)| Candidate {
+                agent,
+                family: *family,
+                label,
+            })
+            .collect()
+    }
+
+    /// 2026-11-22 (目检 C1 没测成): the progress page can pick an Agent
+    /// configuration as the reviewer — the project's own, of a reviewing
+    /// harness, not blocked; built-ins are the harness rows already.
+    #[test]
+    fn agent_configurations_of_reviewing_harnesses_are_offered() {
+        let offered = config_reviewers(&catalog(), &candidates(), ProtocolFamily::Codex);
+        assert_eq!(offered.len(), 2, "{offered:?}");
+        assert_eq!(offered[0]["agentConfigId"], "magpie");
+        assert_eq!(offered[0]["title"], "配置 agent-config:magpie");
+        assert_eq!(offered[0]["agent"], "claude");
+        assert_eq!(offered[0]["models"][0], "42/deepseek-flash");
+        assert_eq!(offered[0]["sameFamily"], false);
+        assert_eq!(offered[1]["agentConfigId"], "sol");
+        assert_eq!(offered[1]["sameFamily"], true);
+
+        // A harness that is not available here offers none of its configurations.
+        let codex_only: Vec<Candidate> = candidates()
+            .into_iter()
+            .filter(|c| c.agent == "codex")
+            .collect();
+        let offered = config_reviewers(&catalog(), &codex_only, ProtocolFamily::Claude);
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0]["agentConfigId"], "sol");
+    }
+
+    #[test]
+    fn a_picked_configuration_is_checked_and_names_the_reviewer() {
+        let label = config_label(&catalog(), "claude", "magpie", Some("42/deepseek-flash"));
+        assert_eq!(
+            label.unwrap(),
+            "配置 agent-config:magpie · 42/deepseek-flash"
+        );
+        let gone = config_label(&catalog(), "claude", "gone", None).unwrap_err();
+        assert!(gone.contains("配置不存在"), "{gone}");
+        let blocked = config_label(&catalog(), "claude", "off", None).unwrap_err();
+        assert!(blocked.contains("现在不能用"), "{blocked}");
+        let model = config_label(&catalog(), "claude", "magpie", Some("gpt-4")).unwrap_err();
+        assert!(model.contains("不支持模型 gpt-4"), "{model}");
+        let other = config_label(&catalog(), "codex", "magpie", None).unwrap_err();
+        assert!(other.contains("不是 codex"), "{other}");
+    }
 }

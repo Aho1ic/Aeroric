@@ -225,12 +225,12 @@ struct AssignParams {
 
 /// What a hand-out runs with, once its configuration is checked.
 #[derive(Debug, PartialEq, Eq)]
-struct Picked {
-    agent: String,
-    model: Option<String>,
-    configuration_id: Option<String>,
-    agent_config_id: Option<String>,
-    label: Option<String>,
+pub(super) struct Picked {
+    pub agent: String,
+    pub model: Option<String>,
+    pub configuration_id: Option<String>,
+    pub agent_config_id: Option<String>,
+    pub label: Option<String>,
 }
 
 /// 2026-11-17 交办选配置: check `configuration` against the project's
@@ -239,7 +239,7 @@ struct Picked {
 /// B1-10: still one the project's catalog offers. A configuration's
 /// `blockedReasons` speak for that configuration's submission, not for
 /// starting the Agent by name (`task.run`), so they do not refuse it.
-fn pick_configuration(
+pub(super) fn pick_configuration(
     catalog: &[AgentConfiguration],
     agent: &str,
     model: Option<&str>,

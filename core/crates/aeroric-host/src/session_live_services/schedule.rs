@@ -70,13 +70,19 @@ impl ScheduleEnv for Env<'_> {
         if let Some(why) = super::budget::hold(self.live, None) {
             return Err(format!("没有开始：{why}"));
         }
+        // 2026-11-22: the configuration is checked again at each run — it
+        // may have gone or been blocked since the rule was saved.
+        let picked = match rule.configuration_id.as_deref() {
+            Some(id) => Some(picked_configuration(self.live, rule, id)?),
+            None => None,
+        };
         open_session(
             self.live,
             &rule.project_id,
             &Runner {
-                agent: &rule.agent,
+                agent: picked.as_ref().map_or(&rule.agent, |p| &p.agent),
                 model: rule.model.as_deref(),
-                agent_config_id: None,
+                agent_config_id: picked.as_ref().and_then(|p| p.agent_config_id.as_deref()),
             },
             prompt,
             &format!("{}（定时）", rule.name),
@@ -226,9 +232,26 @@ struct SaveParams {
     rule: ScheduleRule,
 }
 
+/// 2026-11-22: `rule`'s configuration checked against its project's
+/// catalog (it exists, nothing blocks it, it offers the rule's model).
+fn picked_configuration(
+    live: &Live,
+    rule: &ScheduleRule,
+    configuration: &str,
+) -> Result<super::todo::Picked, String> {
+    let (_, catalog) =
+        aeroric_core::settings::session_catalog::for_project(&live.context, &rule.project_id)?;
+    super::todo::pick_configuration(
+        &catalog.configurations,
+        "",
+        rule.model.as_deref(),
+        Some(configuration),
+    )
+}
+
 /// `schedule.save {rule}` → `{rule}`: a new rule (empty id) or a change.
 fn schedule_save(live: &Live, request: &Request) -> Frame {
-    let p: SaveParams = match params(request) {
+    let mut p: SaveParams = match params(request) {
         Ok(p) => p,
         Err(frame) => return *frame,
     };
@@ -238,6 +261,18 @@ fn schedule_save(live: &Live, request: &Request) -> Frame {
             ErrorCode::InvalidArgument,
             "没有这个项目",
         );
+    }
+    p.rule.configuration_id = p
+        .rule
+        .configuration_id
+        .take()
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty());
+    if let Some(id) = p.rule.configuration_id.clone() {
+        match picked_configuration(live, &p.rule, &id) {
+            Ok(picked) => p.rule.agent = picked.agent,
+            Err(reason) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &reason),
+        }
     }
     match schedules(live).save_rule(p.rule, now_ms()) {
         Ok(rule) => ok(request, json!({ "rule": rule })),

@@ -623,6 +623,7 @@ mod tests {
             project_id: "p1".into(),
             agent: "codex".into(),
             model: None,
+            configuration_id: None,
             prompt: "看看昨晚的新提交".into(),
             repeat,
             check: check.map(str::to_string),

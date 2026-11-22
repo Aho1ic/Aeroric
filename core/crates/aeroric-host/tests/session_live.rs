@@ -1909,6 +1909,8 @@ async fn a_changed_turn_is_reviewed_by_another_family_and_answered() {
         .await
         .unwrap();
     assert_eq!(reviewers["auto"]["agent"], "claude", "{reviewers}");
+    // 2026-11-22: the project's Agent configurations that could review (none here).
+    assert!(reviewers["configurations"].is_array(), "{reviewers}");
     // E4: the rules in force, built-ins and the project's own.
     std::fs::create_dir_all(workspace.join(".aeroric")).unwrap();
     std::fs::write(
@@ -2677,6 +2679,22 @@ async fn a_schedule_with_a_failing_check_opens_no_session() {
         .await
         .unwrap();
     assert_eq!(saved_once["rule"]["repeat"]["atMs"], 4_000_000_000_000u64);
+    // 2026-11-22: a rule may run a configuration of the project's catalog;
+    // it is checked as 交办 checks one before the rule is kept.
+    for (configuration, words) in [("agent-config:gone", "配置不存在"), ("omp", "现在不能用")]
+    {
+        let mut bad = rule.clone();
+        bad["configurationId"] = json!(configuration);
+        let refused = host
+            .call("schedule.save", json!({ "rule": bad }))
+            .await
+            .unwrap_err();
+        assert_eq!(refused["code"], "INVALID_ARGUMENT", "{refused}");
+        assert!(
+            refused["message"].as_str().unwrap().contains(words),
+            "{refused}"
+        );
+    }
     for extra in [&saved_every, &saved_once] {
         host.call("schedule.delete", json!({ "id": extra["rule"]["id"] }))
             .await

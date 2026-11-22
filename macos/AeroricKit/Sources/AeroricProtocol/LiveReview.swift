@@ -203,6 +203,34 @@ public struct LiveReviewerCandidate: Equatable, Sendable {
     }
 }
 
+/// 2026-11-22: an Agent configuration of the task's project that could
+/// review it (`review.reviewers`' `configurations`): it runs a reviewing
+/// harness available here, and nothing blocks it.
+public struct LiveReviewerConfiguration: Equatable, Sendable {
+    /// The configuration's id, without the catalog's `agent-config:`.
+    public var agentConfigId: String
+    public var title: String
+    public var agent: String
+    public var models: [String]
+    public var sameFamily: Bool
+
+    public init(agentConfigId: String, title: String, agent: String, models: [String] = [], sameFamily: Bool = false) {
+        self.agentConfigId = agentConfigId
+        self.title = title
+        self.agent = agent
+        self.models = models
+        self.sameFamily = sameFamily
+    }
+
+    public static func decode(_ value: JSONValue?) -> LiveReviewerConfiguration? {
+        guard let f = value?.objectValue, let id = f["agentConfigId"]?.stringValue,
+              let agent = f["agent"]?.stringValue else { return nil }
+        return LiveReviewerConfiguration(agentConfigId: id, title: f["title"]?.stringValue ?? id, agent: agent,
+                                         models: (f["models"]?.arrayValue ?? []).compactMap(\.stringValue),
+                                         sameFamily: f["sameFamily"]?.boolValue ?? false)
+    }
+}
+
 extension LiveReviewCard {
     public static func decode(_ value: JSONValue) -> LiveReviewCard? {
         let f = value.fields

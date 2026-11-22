@@ -95,6 +95,25 @@ public final class ScheduleStore {
 public enum ScheduleText {
     static let weekdayNames = ["一", "二", "三", "四", "五", "六", "日"]
 
+    /// 2026-11-22: who runs a rule, in its row and the editor's picker —
+    /// the Agent, or its configuration and model ("Magpie · 42/deepseek-flash");
+    /// a configuration the project no longer offers says so.
+    public static func runner(_ rule: LiveScheduleRule, targets: [RerunTarget], agentName: String) -> String {
+        guard let id = rule.configurationId else { return agentName }
+        let title = configuration(id, targets: targets)
+        guard targets.contains(where: { $0.id == id }) else { return title }
+        return rule.model.map { "\(title) · \($0)" } ?? title
+    }
+
+    /// A configuration's name, or that the project no longer offers it.
+    public static func configuration(_ id: String, targets: [RerunTarget]) -> String {
+        guard let target = targets.first(where: { $0.id == id }) else {
+            let name = id.hasPrefix("agent-config:") ? String(id.dropFirst("agent-config:".count)) : id
+            return "配置 \(name) · 现在不能用"
+        }
+        return RerunText.title(target, among: targets)
+    }
+
     public static func clock(_ minute: Int) -> String {
         String(format: "%02d:%02d", minute / 60, minute % 60)
     }

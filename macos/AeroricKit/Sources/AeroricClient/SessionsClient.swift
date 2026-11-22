@@ -338,9 +338,11 @@ extension SessionsClient {
 
     /// B4-1: who could review the task, and whom `auto` picks.
     public func reviewers(taskId: String) async throws
-        -> (candidates: [LiveReviewerCandidate], auto: LiveReviewerCandidate?) {
+        -> (candidates: [LiveReviewerCandidate], configurations: [LiveReviewerConfiguration],
+            auto: LiveReviewerCandidate?) {
         let frame = try await connection.request("review.reviewers", params: .object(["taskId": .string(taskId)]))
         return ((frame.result["candidates"]?.arrayValue ?? []).compactMap { LiveReviewerCandidate.decode($0) },
+                (frame.result["configurations"]?.arrayValue ?? []).compactMap { LiveReviewerConfiguration.decode($0) },
                 LiveReviewerCandidate.decode(frame.result["auto"]))
     }
 

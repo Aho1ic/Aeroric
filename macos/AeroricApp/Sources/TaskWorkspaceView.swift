@@ -825,10 +825,12 @@ struct TaskWorkspaceView: View {
         var next = ReviewPanelModel(settings: review.settings, card: review.card, reviewOf: review.reviewOf)
         if let known = reviewPanel, reviewPanelTask == taskID {
             next.candidates = known.candidates
+            next.configurations = known.configurations
             next.auto = known.auto
             next.rules = known.rules
         } else if review.settings != nil, let who = try? await client.reviewers(taskId: taskID) {
             next.candidates = who.candidates
+            next.configurations = who.configurations
             next.auto = who.auto
             next.rules = try? await client.reviewRules(taskId: taskID)
         }
@@ -990,6 +992,14 @@ struct TaskWorkspaceView: View {
                 SchedulePage(store: services.scheduleStore,
                              projects: services.taskStore.projects.map { (id: $0.id, name: $0.name) },
                              agents: services.agentChoices(projectID: ""),
+                             // 2026-11-22: a rule may run an Agent configuration (built-ins are the Agents).
+                             targets: { projectID in
+                                 services.sessionConfigurations(projectID: projectID)
+                                     .filter { $0.blockedReasons.isEmpty && AgentConfigCatalog.isCatalogID($0.id) }
+                                     .map { RerunTarget(id: $0.id, title: $0.title, agent: $0.agent,
+                                                        models: $0.options.models, harness: $0.harness) }
+                             },
+                             loadTargets: { await services.loadSessionConfigurations(projectID: $0) },
                              onOpenTask: { selection = SessionNavigation.task($0) })
                     .opacity(previewActive ? 0 : 1)
                     .allowsHitTesting(!previewActive)

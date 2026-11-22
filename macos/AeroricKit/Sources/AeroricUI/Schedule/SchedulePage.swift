@@ -7,16 +7,23 @@ public struct SchedulePage: View {
     @Bindable var store: ScheduleStore
     let projects: [(id: String, name: String)]
     let agents: [AgentChoice]
+    /// 2026-11-22: a project's Agent configurations that can start.
+    let targets: (String) -> [RerunTarget]
+    let loadTargets: (String) async -> Void
     let onOpenTask: (String) -> Void
     @State private var editing: LiveScheduleRule?
     @State private var expanded: Set<String> = []
     @State private var deleting: LiveScheduleRule?
 
     public init(store: ScheduleStore, projects: [(id: String, name: String)], agents: [AgentChoice],
+                targets: @escaping (String) -> [RerunTarget] = { _ in [] },
+                loadTargets: @escaping (String) async -> Void = { _ in },
                 onOpenTask: @escaping (String) -> Void) {
         self.store = store
         self.projects = projects
         self.agents = agents
+        self.targets = targets
+        self.loadTargets = loadTargets
         self.onOpenTask = onOpenTask
     }
 
@@ -61,7 +68,8 @@ public struct SchedulePage: View {
                                  systemImage: "clock.arrow.circlepath"))
         .task { await store.reload() }
         .sheet(item: $editing) { rule in
-            ScheduleEditorSheet(store: store, rule: rule, projects: projects, agents: agents) { editing = nil }
+            ScheduleEditorSheet(store: store, rule: rule, projects: projects, agents: agents, targets: targets,
+                                loadTargets: loadTargets) { editing = nil }
         }
         .confirmationDialog("删除这个定时任务？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                             presenting: deleting) { rule in
@@ -87,7 +95,8 @@ public struct SchedulePage: View {
                     .accessibilityIdentifier("schedule.enabled.\(rule.id)")
                 VStack(alignment: .leading, spacing: 2) {
                     Text(rule.name).font(.system(size: AeroricType.body, weight: .medium)).lineLimit(1)
-                    Text([ScheduleText.repeatText(rule.repeatRule), projectName(rule.projectId), agentName(rule.agent),
+                    Text([ScheduleText.repeatText(rule.repeatRule), projectName(rule.projectId),
+                          ScheduleText.runner(rule, targets: targets(rule.projectId), agentName: agentName(rule.agent)),
                           rule.check == nil ? nil : "先检查", rule.activeHours.map { "仅 " + ScheduleText.hours($0) },
                           rule.whenBusy == "after" ? "忙时补跑" : nil].compactMap { $0 }.joined(separator: " · "))
                         .font(.system(size: AeroricType.caption))
@@ -180,6 +189,8 @@ struct ScheduleEditorSheet: View {
     let store: ScheduleStore
     let projects: [(id: String, name: String)]
     let agents: [AgentChoice]
+    let targets: (String) -> [RerunTarget]
+    let loadTargets: (String) async -> Void
     let onClose: () -> Void
     @State private var draft: LiveScheduleRule
     @State private var kind: Kind
@@ -198,10 +209,14 @@ struct ScheduleEditorSheet: View {
     static let intervals = [1, 2, 4, 6, 12, 24]
 
     init(store: ScheduleStore, rule: LiveScheduleRule, projects: [(id: String, name: String)], agents: [AgentChoice],
+         targets: @escaping (String) -> [RerunTarget] = { _ in [] },
+         loadTargets: @escaping (String) async -> Void = { _ in },
          onClose: @escaping () -> Void) {
         self.store = store
         self.projects = projects
         self.agents = agents
+        self.targets = targets
+        self.loadTargets = loadTargets
         self.onClose = onClose
         _draft = State(initialValue: rule)
         _check = State(initialValue: rule.check ?? "")
@@ -258,10 +273,18 @@ struct ScheduleEditorSheet: View {
             row("Agent") {
                 CapsulePicker(title: agents.first { $0.id == draft.agent }?.title ?? "选一个 Agent", systemImage: "cpu") {
                     ForEach(agents) { agent in
-                        Button(agent.title) { draft.agent = agent.id }
+                        Button(agent.title) {
+                            // Another Agent: a configuration of the last one goes.
+                            if agent.id != draft.agent, draft.configurationId != nil {
+                                draft.configurationId = nil
+                                draft.model = nil
+                            }
+                            draft.agent = agent.id
+                        }
                     }
                 }
             }
+            configurationRows
             row("重复") {
                 CapsuleSlider(selection: $kind, groupTitle: "重复方式", mode: .titleOnly, segments: [
                     .init(value: .once, title: "一次"), .init(value: .daily, title: "每天"),
@@ -333,6 +356,45 @@ struct ScheduleEditorSheet: View {
         }
         .padding(AeroricSpace.xl)
         .frame(width: 560)
+        .task(id: draft.projectId) { await loadTargets(draft.projectId) }
+    }
+
+    /// 2026-11-22: the project's Agent configurations; picking one names
+    /// the Agent, and its models are offered.
+    @ViewBuilder private var configurationRows: some View {
+        let configurations = targets(draft.projectId)
+        let picked = configurations.first { $0.id == draft.configurationId }
+        if !configurations.isEmpty || draft.configurationId != nil {
+            row("配置") {
+                CapsulePicker(title: draft.configurationId.map { ScheduleText.configuration($0, targets: configurations) }
+                                  ?? "不用配置（Agent 自己的登录）",
+                              systemImage: "slider.horizontal.3") {
+                    Button("不用配置（Agent 自己的登录）") {
+                        draft.configurationId = nil
+                        draft.model = nil
+                    }
+                    if !configurations.isEmpty { Divider() }
+                    ForEach(configurations) { target in
+                        Button(RerunText.title(target, among: configurations)) {
+                            draft.configurationId = target.id
+                            draft.agent = target.agent
+                            draft.model = target.models.first
+                        }
+                    }
+                }
+                .accessibilityIdentifier("schedule.edit.configuration")
+            }
+            if let picked, !picked.models.isEmpty {
+                row("模型") {
+                    CapsulePicker(title: draft.model ?? "默认模型", systemImage: "sparkles") {
+                        ForEach(picked.models, id: \.self) { name in
+                            Button(name) { draft.model = name }
+                        }
+                    }
+                    .accessibilityIdentifier("schedule.edit.model")
+                }
+            }
+        }
     }
 
     /// E16: an optional JSON structure the result must fit.
