@@ -82,6 +82,15 @@ pub fn ensure_running(data_dir: &std::path::Path) -> Result<String, String> {
 /// E7: how far back the by-purpose split reaches.
 const PURPOSE_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
+/// E7: the start of the by-purpose window, now.
+pub fn purpose_since_ms() -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    now.saturating_sub(PURPOSE_WINDOW_MS).max(0) as u64
+}
+
 /// C4 (2026-11-19): the totals and the last `limit` requests, each with its
 /// tries. Read from the file, so it answers before the gateway first starts.
 /// E7 (2026-11-22): also the requests of the last 30 days by purpose.

@@ -64,4 +64,16 @@ final class GatewayRequestsTests: XCTestCase {
         XCTAssertEqual(GatewayText.purposeName("unattributed"), "不属于任何会话")
         XCTAssertEqual(LiveGatewayUsage.decode(.object([:])).purposes, [])
     }
+
+    /// E7 step 2: Aeroric's own direct calls say they did not go through
+    /// the gateway.
+    func testDirectCallsSayTheyWentStraightToTheAnalysisModel() {
+        let usage = LiveGatewayUsage.decode(.object([
+            "purposes": .array([.object(["purpose": .string("memory"), "requests": .number("4"),
+                                         "direct": .bool(true)])]),
+        ]))
+        XCTAssertEqual(usage.purposes.first?.direct, true)
+        XCTAssertTrue(GatewayText.purpose(usage.purposes[0]).hasPrefix("记忆整理（直连分析模型） · 4 次"))
+        XCTAssertEqual(GatewayText.purposeName("wiki"), "Wiki 模块说明")
+    }
 }

@@ -21,6 +21,9 @@ public struct LiveGatewayUsage: Equatable, Sendable {
         public var failedAttempts: UInt64 = 0
         public var failedAttemptInputTokens: UInt64 = 0
         public var failedAttemptOutputTokens: UInt64 = 0
+        /// E7 step 2: Aeroric called the analysis model directly (memory,
+        /// Wiki), not through the gateway.
+        public var direct = false
 
         public init(purpose: String) { self.purpose = purpose }
     }
@@ -162,6 +165,7 @@ public struct LiveGatewayUsage: Equatable, Sendable {
             row.failedAttempts = n(p, "failedAttempts")
             row.failedAttemptInputTokens = n(p, "failedAttemptInputTokens")
             row.failedAttemptOutputTokens = n(p, "failedAttemptOutputTokens")
+            row.direct = p["direct"]?.boolValue ?? false
             return row
         }
         return usage

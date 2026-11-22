@@ -150,6 +150,8 @@ public enum GatewayText {
         case "rerun": "重跑"
         case "schedule": "定时任务"
         case "unattributed": "不属于任何会话"
+        case "memory": "记忆整理"
+        case "wiki": "Wiki 模块说明"
         default: "未记录用途"
         }
     }
@@ -157,7 +159,7 @@ public enum GatewayText {
     /// E7: `审查 · 12 次 · 输入 30K · 输出 4K · 失败的尝试 3 次（输入 9K · 输出 0）`;
     /// the failed tries say what they cost apart from the answering ones.
     public static func purpose(_ p: Usage.Purpose) -> String {
-        var parts = [purposeName(p.purpose), "\(p.requests) 次"]
+        var parts = [purposeName(p.purpose) + (p.direct ? "（直连分析模型）" : ""), "\(p.requests) 次"]
         if p.failedRequests > 0 { parts.append("失败 \(p.failedRequests)") }
         parts.append("输入 \(SessionStatsText.compact(p.inputTokens)) · 输出 \(SessionStatsText.compact(p.outputTokens))")
         if p.unknownUsageRequests > 0 { parts.append("\(p.unknownUsageRequests) 次用量未知") }

@@ -27,6 +27,10 @@ pub mod purpose {
     pub const RERUN: &str = "rerun";
     pub const SCHEDULE: &str = "schedule";
     pub const UNATTRIBUTED: &str = "unattributed";
+    /// E7 step 2: Aeroric's own calls to the analysis model, not through
+    /// the gateway — memory consolidation and the Wiki's module notes.
+    pub const MEMORY: &str = "memory";
+    pub const WIKI: &str = "wiki";
 }
 
 type PurposeResolver = Arc<dyn Fn(&str) -> String + Send + Sync>;
@@ -64,6 +68,10 @@ pub struct PurposeUsage {
     pub failed_attempts: u64,
     pub failed_attempt_input_tokens: u64,
     pub failed_attempt_output_tokens: u64,
+    /// E7 step 2: Aeroric called the model directly (not through the
+    /// gateway); read from its own logs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub direct: bool,
 }
 
 /// C4 (2026-11-19): where a request's usage came from. `Unknown`: the
@@ -438,6 +446,7 @@ impl UsageStore {
                         failed_attempts: nonnegative(row.get(6)?),
                         failed_attempt_input_tokens: nonnegative(row.get(7)?),
                         failed_attempt_output_tokens: nonnegative(row.get(8)?),
+                        direct: false,
                     })
                 })
                 .map_err(|error| RouterError::storage(error.to_string()))?;
