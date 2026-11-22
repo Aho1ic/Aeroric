@@ -363,6 +363,20 @@ public enum ToolText {
         return order.map { "\(names[$0]!.joined(separator: "、"))：\($0)" }
     }
 
+    /// H6 (review 2026-11-22): a pack item's line:
+    /// "MCP 服务器 cu-broken-mcp · 已写进本次会话的 config.mcp_servers".
+    public static func pack(_ item: LiveToolLaunch.PackItem) -> String {
+        let kind = switch item.kind {
+        case "mcpServer": "MCP 服务器"
+        case "skill": "技能"
+        case "role": "角色"
+        case "command": "命令"
+        case "hook": "Hook"
+        default: item.kind
+        }
+        return "\(kind) \(item.name) · " + (item.ready ? item.basis : "没有：\(item.basis)")
+    }
+
     /// One offered tool's line: "delegate · 会写".
     public static func line(_ tool: LiveEffectiveTool) -> String {
         "\(tool.name) · \(scope(tool.scope))"
@@ -387,7 +401,7 @@ struct SessionToolsSection: View {
                             .foregroundStyle(launch??.injected == false ? AeroricColor.warning : AeroricColor.text)
                             .lineLimit(2)
                         Spacer(minLength: 0)
-                        if launch??.tools.isEmpty == false {
+                        if launch??.tools.isEmpty == false || launch??.packs.isEmpty == false {
                             Image(systemName: open ? "chevron.up" : "chevron.down")
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(AeroricColor.textTertiary)
@@ -408,6 +422,14 @@ struct SessionToolsSection: View {
                     }
                     ForEach(ToolText.missing(launch), id: \.self) { line in
                         Text("没有 " + line).foregroundStyle(AeroricColor.textTertiary)
+                    }
+                    if !launch.packs.isEmpty {
+                        Text("能力包").foregroundStyle(AeroricColor.textTertiary)
+                        ForEach(Array(launch.packs.enumerated()), id: \.offset) { _, item in
+                            Text(ToolText.pack(item))
+                                .foregroundStyle(item.ready ? AeroricColor.textSecondary : AeroricColor.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     let own = launch.tools.filter { $0.owner == "harness" }
                     if !own.isEmpty {

@@ -149,6 +149,7 @@ pub fn register_session_live_services(
     set.register(MOVE_SOURCE_METHOD, blocking(&live, move_source));
     set.register(PLAN_SWITCH_METHOD, blocking(&live, plan_switch));
     set.register(AUTO_CHECK_GET_METHOD, blocking(&live, auto_check_get));
+    set.register(AUTO_CHECK_LAST_METHOD, blocking(&live, auto_check_last));
     set.register(AUTO_CHECK_SET_METHOD, blocking(&live, auto_check_set));
     set.register(
         AUTO_CHECK_FAILURES_METHOD,
@@ -1007,6 +1008,9 @@ pub const AUTO_CHECK_GET_METHOD: &str = "session.autoCheck.get";
 pub const AUTO_CHECK_SET_METHOD: &str = "session.autoCheck.set";
 /// Tasks whose latest check run failed, for the "需要我处理" queue.
 pub const AUTO_CHECK_FAILURES_METHOD: &str = "session.autoCheck.failures";
+/// Review 2026-11-22: the task's latest check as published (`{update}`, or
+/// `null`), for a page opened after it ran.
+pub const AUTO_CHECK_LAST_METHOD: &str = "session.autoCheck.last";
 
 /// Read on every turn end, so a toggle applies from the next turn on.
 struct SettingsAutoChecks(Arc<CoreContext>);
@@ -1047,6 +1051,17 @@ fn project_of(live: &Live, request: &Request, task_id: &str) -> Result<String, B
 
 fn selection_json(selection: AutoCheckSelection) -> Value {
     json!({"tests": selection.tests, "diagnostics": selection.diagnostics})
+}
+
+fn auto_check_last(live: &Live, request: &Request) -> Frame {
+    let p: TaskParams = match params(request) {
+        Ok(p) => p,
+        Err(frame) => return *frame,
+    };
+    ok(
+        request,
+        json!({"update": live.executor.last_auto_check(&p.task_id)}),
+    )
 }
 
 fn auto_check_get(live: &Live, request: &Request) -> Frame {
@@ -1438,13 +1453,10 @@ fn references(live: &Live, p: &PromptParams) -> Result<Option<String>, String> {
         if named.iter().any(|(seen, _): &(String, String)| seen == id) {
             continue;
         }
-        let title = record
-            .get("title")
-            .and_then(Value::as_str)
-            .filter(|t| !t.trim().is_empty())
-            .unwrap_or("（无标题）")
-            .to_string();
-        named.push((id.clone(), title));
+        // Review 2026-11-22: a task's title is its `name` (or its prompt),
+        // as `read_session` says it; `title` is not a field and every
+        // reference read "（无标题）".
+        named.push((id.clone(), context_title(&record)));
     }
     Ok(Some(
         aeroric_core::sessions::live::opening::references_block(&named),

@@ -192,6 +192,57 @@ async fn a_failed_mcp_start_is_said_in_the_session() {
     );
 }
 
+/// E15 (review 2026-11-22): Codex starts the servers during `thread/start`,
+/// so their status names the thread before its id is known here; it was
+/// taken for a subagent's and dropped. A subagent thread's own server is
+/// still not the session's.
+#[tokio::test]
+async fn an_mcp_status_during_thread_start_is_the_sessions() {
+    let mut h = start(spec());
+    h.session.prompt("hi".into()).unwrap();
+    let mut peer = launched(&mut h.peers).await;
+    peer.handshake().await;
+    let start = peer.expect("thread/start").await;
+    peer.notify(
+        "mcpServer/startupStatus/updated",
+        json!({"threadId": "th1", "name": "cu-broken-mcp", "status": "starting"}),
+    );
+    peer.notify(
+        "mcpServer/startupStatus/updated",
+        json!({"threadId": "th1", "name": "cu-broken-mcp", "status": "failed",
+            "error": "No such file or directory"}),
+    );
+    peer.reply(
+        &start,
+        json!({"thread": {"id": "th1", "path": "/s/th1.jsonl"}}),
+    );
+    let turn = peer.expect("turn/start").await;
+    peer.reply(&turn, json!({"turn": {"id": "u1"}}));
+    peer.notify(
+        "turn/started",
+        json!({"threadId": "th1", "turn": {"id": "u1"}}),
+    );
+    peer.notify(
+        "mcpServer/startupStatus/updated",
+        json!({"threadId": "th-child", "name": "child-only", "status": "failed"}),
+    );
+    complete(&peer, "completed");
+    let sink = Arc::clone(&h.sink);
+    until("done", move || sink.last_status() == Some(TaskStatus::Done)).await;
+    let Replay::Updates(updates) = h.log.since(0) else {
+        panic!("no gap expected")
+    };
+    let notices: Vec<String> = updates
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::Notice { message, .. } => Some(message.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].contains("cu-broken-mcp") && notices[0].contains("No such file"));
+}
+
 #[tokio::test]
 async fn an_approval_waits_for_the_user_and_a_reasoned_denial_steers() {
     let mut h = start(spec());

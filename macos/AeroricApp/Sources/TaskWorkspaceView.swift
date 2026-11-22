@@ -377,6 +377,13 @@ struct TaskWorkspaceView: View {
             // Returning only restores reading. Never implicitly take control.
         }
         .onChange(of: services.configurationEpoch) { _, _ in resourceBook.invalidateSnapshots() }
+        // Review 2026-11-22: an undo (or any change to the turns) changes
+        // which version is current; the deliverables are read again at once
+        // instead of when the task is next selected.
+        .onChange(of: selectedTaskID.flatMap { services.liveStores[$0]?.turnRecords }) { _, _ in
+            guard let id = selectedTaskID, artifactStore?.taskID == id else { return }
+            Task { await loadArtifacts(id) }
+        }
         .task(id: resourceLoadKey) { await loadCurrentResources() }
     }
 

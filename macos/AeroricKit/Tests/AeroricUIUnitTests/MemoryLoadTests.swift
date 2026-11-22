@@ -21,4 +21,28 @@ final class MemoryLoadTests: XCTestCase {
         XCTAssertNil(LiveMemoryLoad.decode(.object(["text": .null])), "an older host")
         XCTAssertEqual(MemoryLoadText.line(LiveMemoryLoad(budgetChars: 1200)), "新会话不会带入记忆")
     }
+
+    /// Review 2026-11-22: an archived experience can be restored like any
+    /// other archived item.
+    func testEveryArchivedItemCanBeRestored() {
+        XCTAssertTrue(MemoryText.restorable(LiveMemoryItem(id: "e", kind: "experience", text: "x", state: "archived")))
+        XCTAssertTrue(MemoryText.restorable(LiveMemoryItem(id: "f", kind: "fact", text: "x", state: "archived")))
+        XCTAssertFalse(MemoryText.restorable(LiveMemoryItem(id: "a", kind: "experience", text: "x")))
+    }
+
+    /// Review 2026-11-22: a launch's capability pack items are read and
+    /// said in 会话信息's 工具.
+    func testPackItemsOfALaunchAreRead() throws {
+        let launch = try XCTUnwrap(LiveToolLaunch.decode(.object([
+            "harness": .string("codex"), "injected": .bool(true), "tools": .array([]),
+            "packs": .array([
+                .object(["pack": .string("p"), "kind": .string("mcpServer"), "name": .string("cu-broken-mcp"),
+                         "ready": .bool(true), "basis": .string("已写进本次会话的 config.mcp_servers")]),
+                .object(["pack": .string("p"), "kind": .string("skill"), "name": .string("s"),
+                         "ready": .bool(false), "basis": .string("远端会话不投影")]),
+            ]),
+        ])))
+        XCTAssertEqual(ToolText.pack(launch.packs[0]), "MCP 服务器 cu-broken-mcp · 已写进本次会话的 config.mcp_servers")
+        XCTAssertEqual(ToolText.pack(launch.packs[1]), "技能 s · 没有：远端会话不投影")
+    }
 }

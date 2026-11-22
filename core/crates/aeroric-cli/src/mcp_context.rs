@@ -165,7 +165,7 @@ fn tools() -> Value {
         },
         {
             "name": "plan_propose",
-            "description": "把一个大目标拆成几个有先后依赖的工作单元，提议成一个计划。只会存成草稿，用户在 Aeroric 里确认后才按依赖自动开委派：没有依赖的可以同时开始，有依赖的等前置通过验收后开始，并拿到前置的产物。最多 8 个单元，同时最多跑 3 个，同一目录同时只有一个会写文件的单元；单元之间不能有环。一两件事直接用 delegate，不要用它。",
+            "description": "把一个大目标拆成几个有先后依赖的工作单元，提议成一个计划。只会存成草稿，用户在 Aeroric 里确认后才按依赖自动开委派：没有依赖的可以同时开始，有依赖的等前置通过验收后开始，并拿到前置的产物。最多 8 个单元，同时最多跑 3 个，同一目录同时只有一个会写文件的单元；单元之间不能有环。每个单元默认只读：要建文件、改文件的单元必须写 workspace（shared 或 copy），否则它什么也写不了。一两件事直接用 delegate，不要用它。",
             "inputSchema": {"type": "object", "required": ["title", "units"], "properties": {
                 "title": {"type": "string", "description": "计划要达成的目标，一句话"},
                 "units": {"type": "array", "maxItems": 8, "items": {"type": "object", "required": ["id", "title", "brief"], "properties": {
@@ -173,7 +173,7 @@ fn tools() -> Value {
                     "title": {"type": "string", "description": "单元名，几个字"},
                     "brief": {"type": "string", "description": "交给这个单元的子会话做什么、怎么算做完"},
                     "dependsOn": {"type": "array", "items": {"type": "string"}, "description": "必须先通过验收的单元编号"},
-                    "workspace": {"type": "string", "enum": ["readOnly", "shared", "copy"], "description": "readOnly 只读（默认）；shared 在当前目录写；copy 在独立副本里写"},
+                    "workspace": {"type": "string", "enum": ["readOnly", "shared", "copy"], "description": "readOnly 只读（默认，不能建或改任何文件）；shared 在当前目录写；copy 在独立副本里写。要写文件的单元必须填 shared 或 copy"},
                     "role": {"type": "string", "description": "角色库里的角色 id，可省略"},
                     "acceptance": {"type": "array", "items": {"type": "string"}, "description": "验收条款，全部通过才算这个单元完成"}
                 }}}

@@ -968,6 +968,20 @@ impl Actor {
                 let id = params.get("requestId").map(request_key).unwrap_or_default();
                 self.drop_pending(|p| p.view.id == id, "resolved", None);
             }
+            // E15 (review 2026-11-22): Codex starts the session's MCP servers
+            // during `thread/start`, so their status names the new thread
+            // before its id is recorded here; routed as a subagent's traffic
+            // it was dropped. A known subagent thread's own servers stay out.
+            Inbound::Notification { method, params } if method == MCP_STARTUP => {
+                let own = self.state.lock().thread_id.clone();
+                let thread = params.get("threadId").and_then(Value::as_str);
+                if own.is_none() || thread.is_none() || thread == own.as_deref() {
+                    if let Some(update) = self.mcp.observe(&params, std::time::Instant::now()) {
+                        self.remember(&update);
+                        self.push(update);
+                    }
+                }
+            }
             Inbound::Notification { method, params } => {
                 if let Some(child) = self.child_of(&params) {
                     return self.child_notification(child, &method, &params);
@@ -975,9 +989,6 @@ impl Actor {
                 self.note_spawned(&params);
                 self.track_command(&method, &params);
                 let (mut updates, signal) = map_notification(&method, &params);
-                if method == "mcpServer/startupStatus/updated" {
-                    updates.extend(self.mcp.observe(&params, std::time::Instant::now()));
-                }
                 if WARNING_METHODS.contains(&method.as_str()) {
                     updates.retain(|update| match update {
                         SessionUpdateKind::Error { message, .. } => {
@@ -1357,6 +1368,9 @@ fn with_writable_roots(mut policy: Value, extra_dirs: &[String]) -> Value {
     }
     policy
 }
+
+/// E15: Codex's per-server MCP start status.
+const MCP_STARTUP: &str = "mcpServer/startupStatus/updated";
 
 /// Put one server in the session `config`'s `mcp_servers`, keeping the others.
 fn add_mcp_server(config: &mut Option<Value>, name: &str, entry: Value) {

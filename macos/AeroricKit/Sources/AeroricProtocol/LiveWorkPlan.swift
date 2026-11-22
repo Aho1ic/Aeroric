@@ -11,6 +11,10 @@ public struct LiveWorkUnit: Equatable, Sendable, Identifiable {
     public var reason: String
     public var inputsStale: Bool
     public var delegationId: String?
+    /// Review 2026-11-22: `readOnly` (the default), `shared` or `copy` —
+    /// shown before the plan is confirmed, so a writing unit left read-only
+    /// is seen.
+    public var workspace = "readOnly"
 
     public init(id: String, title: String, dependsOn: [String] = [], state: String = "notStarted",
                 reason: String = "", inputsStale: Bool = false, delegationId: String? = nil) {
@@ -40,11 +44,13 @@ public struct LiveWorkPlan: Equatable, Sendable, Identifiable {
         let units: [LiveWorkUnit] = (plan["units"]?.arrayValue ?? []).compactMap { u in
             guard let unit = u["id"]?.stringValue else { return nil }
             let s = statuses[unit] ?? [:]
-            return LiveWorkUnit(id: unit, title: u["title"]?.stringValue ?? unit,
-                                dependsOn: (u["dependsOn"]?.arrayValue ?? []).compactMap(\.stringValue),
-                                state: s["state"]?.stringValue ?? "notStarted", reason: s["reason"]?.stringValue ?? "",
-                                inputsStale: s["inputsStale"]?.boolValue ?? false,
-                                delegationId: u["delegationId"]?.stringValue)
+            var row = LiveWorkUnit(id: unit, title: u["title"]?.stringValue ?? unit,
+                                   dependsOn: (u["dependsOn"]?.arrayValue ?? []).compactMap(\.stringValue),
+                                   state: s["state"]?.stringValue ?? "notStarted", reason: s["reason"]?.stringValue ?? "",
+                                   inputsStale: s["inputsStale"]?.boolValue ?? false,
+                                   delegationId: u["delegationId"]?.stringValue)
+            row.workspace = u["workspace"]?.stringValue ?? "readOnly"
+            return row
         }
         return LiveWorkPlan(id: id, title: plan["title"]?.stringValue ?? "", confirmed: plan["confirmed"]?.boolValue ?? false,
                             units: units)

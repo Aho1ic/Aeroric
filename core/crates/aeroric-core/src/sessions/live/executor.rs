@@ -719,6 +719,11 @@ impl StructuredExecutor {
         Injection::Injected
     }
 
+    /// Review 2026-11-22: a task's latest auto-check as published.
+    pub fn last_auto_check(&self, task_id: &str) -> Option<super::update::SessionUpdate> {
+        self.turn_changes.checks.latest(task_id)
+    }
+
     /// B4′: the tasks' checkpoints (the host sets where they are kept).
     pub fn checkpoints(&self) -> &Arc<super::checkpoint::CheckpointSink> {
         &self.checkpoints

@@ -8,7 +8,7 @@ private let listed: JSONValue = .object([
         "units": .array([
             .object(["id": .string("a"), "title": .string("调研"), "dependsOn": .array([])]),
             .object(["id": .string("b"), "title": .string("实现"), "dependsOn": .array([.string("a")]),
-                     "delegationId": .string("del-b")]),
+                     "delegationId": .string("del-b"), "workspace": .string("shared")]),
         ]),
     ]),
     "statuses": .array([
@@ -24,8 +24,8 @@ final class WorkPlanTests: XCTestCase {
         let plan = try XCTUnwrap(LiveWorkPlan.decode(listed))
         XCTAssertEqual(WorkPlanText.title(plan), "计划 · 拆开做（待你确认）")
         XCTAssertEqual(plan.units.map(\.state), ["notStarted", "running"])
-        XCTAssertEqual(WorkPlanText.unit(plan.units[0], in: plan), "调研 · 未开始 · 计划还没确认")
-        XCTAssertEqual(WorkPlanText.unit(plan.units[1], in: plan), "实现 · 进行中 · 在运行（依赖 调研）")
+        XCTAssertEqual(WorkPlanText.unit(plan.units[0], in: plan), "调研 · 只读 · 未开始 · 计划还没确认")
+        XCTAssertEqual(WorkPlanText.unit(plan.units[1], in: plan), "实现 · 在当前目录写 · 进行中 · 在运行（依赖 调研）")
         XCTAssertEqual(plan.units[1].delegationId, "del-b")
         XCTAssertFalse(WorkPlanText.needsUser(plan.units[0]))
         XCTAssertTrue(WorkPlanText.needsUser(plan.units[1]), "its input went stale")

@@ -38,6 +38,26 @@ public struct LiveToolLaunch: Equatable, Sendable {
     public var injected: Bool
     public var reason: String?
     public var tools: [LiveEffectiveTool]
+    /// H6 (review 2026-11-22): each capability pack item at this launch —
+    /// given to the harness, or why not.
+    public var packs: [PackItem] = []
+
+    public struct PackItem: Equatable, Sendable {
+        public var pack: String
+        /// `skill` `mcpServer` `role` `command` `hook`.
+        public var kind: String
+        public var name: String
+        public var ready: Bool
+        public var basis: String
+
+        public init(pack: String, kind: String, name: String, ready: Bool, basis: String) {
+            self.pack = pack
+            self.kind = kind
+            self.name = name
+            self.ready = ready
+            self.basis = basis
+        }
+    }
 
     public init(atMs: UInt64 = 0, harness: String, injected: Bool, reason: String? = nil, tools: [LiveEffectiveTool]) {
         self.atMs = atMs
@@ -49,8 +69,15 @@ public struct LiveToolLaunch: Equatable, Sendable {
 
     public static func decode(_ value: JSONValue?) -> LiveToolLaunch? {
         guard let f = value?.objectValue, let harness = f["harness"]?.stringValue else { return nil }
-        return LiveToolLaunch(atMs: f["atMs"]?.numberText.flatMap { UInt64($0) } ?? 0, harness: harness,
-                              injected: f["injected"]?.boolValue ?? false, reason: f["reason"]?.stringValue,
-                              tools: (f["tools"]?.arrayValue ?? []).compactMap(LiveEffectiveTool.decode))
+        var launch = LiveToolLaunch(atMs: f["atMs"]?.numberText.flatMap { UInt64($0) } ?? 0, harness: harness,
+                                    injected: f["injected"]?.boolValue ?? false, reason: f["reason"]?.stringValue,
+                                    tools: (f["tools"]?.arrayValue ?? []).compactMap(LiveEffectiveTool.decode))
+        launch.packs = (f["packs"]?.arrayValue ?? []).compactMap { value in
+            let p = value.fields
+            guard let name = p["name"]?.stringValue else { return nil }
+            return PackItem(pack: p["pack"]?.stringValue ?? "", kind: p["kind"]?.stringValue ?? "",
+                            name: name, ready: p["ready"]?.boolValue ?? false, basis: p["basis"]?.stringValue ?? "")
+        }
+        return launch
     }
 }

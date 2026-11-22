@@ -1056,6 +1056,8 @@ async fn referenced_tasks_go_in_front_of_the_message() {
     assert!(content.starts_with("[Aeroric 附加的上下文]"), "{user}");
     assert!(content.contains("你这一轮用 @ 引用的任务"), "{content}");
     assert_eq!(content.matches("taskId: task-2").count(), 1, "{content}");
+    // Review 2026-11-22: named by the task's own title (its prompt here).
+    assert!(content.contains("- 写文档（taskId: task-2）"), "{content}");
     assert!(content.contains("latest_assistant"), "{content}");
     assert!(content.ends_with("参考它接着做"), "{content}");
 }
@@ -1346,6 +1348,13 @@ async fn auto_checks_are_toggled_per_project_through_a_task() {
             .await
             .unwrap(),
         json!({"failures": []})
+    );
+    // Review 2026-11-22: and no latest check to restore.
+    assert_eq!(
+        host.call("session.autoCheck.last", json!({"taskId": "task-1"}))
+            .await
+            .unwrap(),
+        json!({"update": null})
     );
 }
 
@@ -3366,6 +3375,18 @@ async fn a_projects_notes_become_its_wiki() {
         .await
         .unwrap();
     assert_eq!(page["page"]["status"], "implemented");
+    // Review 2026-11-22: the revision list carries no page bodies (with
+    // them a long page's list went past the 1 MB frame limit).
+    let revisions = host
+        .call(
+            "wiki.revisions",
+            json!({"projectId": "project-1", "slug": "decision-wiki"}),
+        )
+        .await
+        .unwrap();
+    let first = &revisions["revisions"][0];
+    assert!(first["n"].as_u64().is_some(), "{revisions}");
+    assert!(first.get("markdown").is_none(), "{revisions}");
     let token = host
         .structured
         .context_tokens()

@@ -293,11 +293,20 @@ fn wiki_revisions(live: &Live, request: &Request) -> Frame {
     let Some(slug) = p.slug else {
         return missing(request, "slug");
     };
-    answer(
-        request,
-        live.executor.wikis().revisions(&p.project_id, &slug),
-        "revisions",
-    )
+    // Review 2026-11-22: each revision held the whole page, so a page with
+    // many revisions (the index of a 291-page Wiki) answered 3.7 MB, over
+    // the 1 MB frame limit, and the Wiki would not open. The list is what
+    // the page shows — number, reason, time; a revert is done by number.
+    match live.executor.wikis().revisions(&p.project_id, &slug) {
+        Ok(revisions) => {
+            let rows: Vec<Value> = revisions
+                .iter()
+                .map(|r| json!({"slug": r.slug, "n": r.n, "reason": r.reason, "atMs": r.at_ms}))
+                .collect();
+            ok(request, json!({ "revisions": rows }))
+        }
+        Err(error) => wiki_failure(request, error),
+    }
 }
 
 /// `wiki.revert {projectId, slug, n}`.

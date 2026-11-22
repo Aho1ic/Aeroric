@@ -36,6 +36,8 @@ public protocol LiveSessionActions {
     func startNewSession(like taskID: String)
     /// A05: the task's project's auto-check choice; nil when the host has none.
     func autoCheck(taskID: String) async throws -> LiveAutoCheckSelection?
+    /// Review 2026-11-22: the task's latest check, for a page opened after it ran.
+    func lastAutoCheck(taskID: String) async throws -> LiveSessionUpdate?
     func setAutoCheck(taskID: String, _ selection: LiveAutoCheckSelection) async throws
     /// B4′: the task's checkpoint; nil when the host keeps none.
     func checkpoint(taskID: String) async throws -> LiveCheckpoint?
@@ -131,6 +133,7 @@ extension LiveSessionActions {
         throw LiveSessionError.unsupported("这个宿主不支持撤销授权")
     }
     public func autoCheck(taskID: String) async throws -> LiveAutoCheckSelection? { nil }
+    public func lastAutoCheck(taskID: String) async throws -> LiveSessionUpdate? { nil }
     public func setAutoCheck(taskID: String, _ selection: LiveAutoCheckSelection) async throws {
         throw LiveSessionError.unsupported("这个宿主不支持自动检查")
     }
@@ -373,6 +376,11 @@ public final class LiveSessionStore {
             retainApprovals(pending: state.pending)
             await reloadHistory()
             baseline = LiveHistoryMerge.assistantCount(history)
+            // Review 2026-11-22: a check that ran before the page opened (a
+            // commands-only one has no turn record to show it otherwise).
+            if let update = try? await actions.lastAutoCheck(taskID: taskID) {
+                model?.restoreAutoCheck(update)
+            }
             await restoreDelegations()
             await restoreDeliveries()
         } catch {
@@ -454,6 +462,11 @@ public final class LiveSessionStore {
             retainApprovals(pending: state.pending)
             await reloadHistory()
             baseline = LiveHistoryMerge.assistantCount(history)
+            // Review 2026-11-22: a check that ran before the page opened (a
+            // commands-only one has no turn record to show it otherwise).
+            if let update = try? await actions.lastAutoCheck(taskID: taskID) {
+                model?.restoreAutoCheck(update)
+            }
             await restoreDelegations()
             await restoreDeliveries()
         } catch {

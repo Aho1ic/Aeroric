@@ -239,6 +239,14 @@ extension SessionsClient {
                                          params: LiveSessionRequest.close(taskId: taskId))
     }
 
+    /// Review 2026-11-22: the task's latest check as published, or nil.
+    public func lastAutoCheck(taskId: String) async throws -> LiveSessionUpdate? {
+        let frame = try await connection.request("session.autoCheck.last",
+                                                 params: .object(["taskId": .string(taskId)]))
+        guard let update = frame.result["update"], !update.isNull else { return nil }
+        return try LiveSessionUpdate.decode(update)
+    }
+
     /// A05: the task's project's auto-check choice (`session.autoCheck.get`).
     public func autoCheck(taskId: String) async throws -> (tests: Bool, diagnostics: Bool) {
         let frame = try await connection.request("session.autoCheck.get", params: .object(["taskId": .string(taskId)]))

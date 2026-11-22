@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-use super::update::{AutoCheckItem, SessionUpdateKind};
+use super::update::{AutoCheckItem, SessionUpdate, SessionUpdateKind};
 use super::{now_ms, DriverRegistry, LiveStatusSink};
 use crate::ide::{diagnostics_face, tests_face};
 
@@ -494,6 +494,10 @@ pub struct AutoChecker {
     /// R5-1: where each finished run is kept with its turn, so a turn's
     /// grade outlives the session's in-memory log.
     ledger: Mutex<Option<Arc<super::turn_ledger::TurnLedger>>>,
+    /// Review 2026-11-22: each task's latest check as published, so a page
+    /// opened after it ran still shows it — a commands-only check (B2) has
+    /// no turn record to be read back from.
+    latest: Mutex<HashMap<String, SessionUpdate>>,
 }
 
 /// B4′: a task's own checks, run after the project's (or alone when the
@@ -532,6 +536,7 @@ impl AutoChecker {
             failures: Mutex::default(),
             extra: Mutex::new(None),
             ledger: Mutex::new(None),
+            latest: Mutex::default(),
         })
     }
 
@@ -564,9 +569,21 @@ impl AutoChecker {
             }
         }
         if let Some(log) = self.registry.log(task_id) {
+            // Held across the push, so whoever reads the log after this
+            // update finds it kept as the latest too.
+            let mut latest = self.latest.lock();
             let update = log.push(kind, now);
+            if matches!(update.kind, SessionUpdateKind::AutoCheck { .. }) {
+                latest.insert(task_id.to_string(), update.clone());
+            }
+            drop(latest);
             self.inner.update(&update);
         }
+    }
+
+    /// Review 2026-11-22: the task's latest check, as it was published.
+    pub fn latest(&self, task_id: &str) -> Option<SessionUpdate> {
+        self.latest.lock().get(task_id).cloned()
     }
 
     /// A new turn began: stop what is running for `task_id`.

@@ -994,7 +994,10 @@ public struct MemoryPage: View {
                     Button("只用于当前项目", systemImage: "folder") { Task { await store.move(item, to: scope) } }
                 }
                 Button("归档", systemImage: "archivebox") { Task { await store.archive(item, true) } }
-            } else if item.state == "archived" {
+            }
+            // Review 2026-11-22: an archived experience or session fact had
+            // no 恢复 (only the other kinds' branch offered it).
+            if MemoryText.restorable(item) {
                 Button("恢复", systemImage: "arrow.uturn.backward") { Task { await store.archive(item, false) } }
             }
             Divider()

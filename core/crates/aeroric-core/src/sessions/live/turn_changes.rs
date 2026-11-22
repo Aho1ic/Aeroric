@@ -691,6 +691,12 @@ mod tests {
                         None
                     )
                 );
+                // Review 2026-11-22: kept for a page opened afterwards.
+                let kept = tracker.checks.latest("t").expect("the latest check");
+                assert!(matches!(
+                    kept.kind,
+                    SessionUpdateKind::AutoCheck { note: Some(ref n), .. } if n == note
+                ));
             }
             std::fs::remove_dir_all(&dir).ok();
         }

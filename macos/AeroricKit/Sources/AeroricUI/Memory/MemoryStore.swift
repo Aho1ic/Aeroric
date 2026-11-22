@@ -592,6 +592,12 @@ public final class MemoryStore {
 
 /// B5-1: the words and helpers shared by the memory page and `/记住`.
 public enum MemoryText {
+    /// Review 2026-11-22: any archived item can be brought back, whatever
+    /// its kind (an archived experience once had no way back).
+    public static func restorable(_ item: LiveMemoryItem) -> Bool {
+        item.state == "archived"
+    }
+
     public static let categories = ["language", "interaction", "preference", "constraint"]
 
     public static func category(_ category: String?) -> String? {

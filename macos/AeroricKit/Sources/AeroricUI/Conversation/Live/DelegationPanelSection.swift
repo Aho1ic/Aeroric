@@ -536,8 +536,18 @@ public enum WorkPlanText {
     }
 
     /// "调研 · 进行中 · 在运行", with what it depends on.
+    /// Review 2026-11-22: where a unit may write; a plan's units default to
+    /// read-only, and one that has to write files cannot when left so.
+    public static func workspace(_ workspace: String) -> String {
+        switch workspace {
+        case "shared": "在当前目录写"
+        case "copy": "在副本里写"
+        default: "只读"
+        }
+    }
+
     public static func unit(_ unit: LiveWorkUnit, in plan: LiveWorkPlan) -> String {
-        var text = "\(unit.title) · \(state(unit.state))"
+        var text = "\(unit.title) · \(workspace(unit.workspace)) · \(state(unit.state))"
         if !unit.reason.isEmpty { text += " · \(unit.reason)" }
         let deps = unit.dependsOn.compactMap { id in plan.units.first { $0.id == id }?.title }
         if !deps.isEmpty { text += "（依赖 \(deps.joined(separator: "、"))）" }

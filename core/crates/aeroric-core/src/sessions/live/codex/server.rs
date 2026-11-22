@@ -52,6 +52,10 @@ pub struct CodexServer {
     launcher: Launcher,
     running: tokio::sync::Mutex<Option<Running>>,
     routes: Mutex<HashMap<String, Route>>,
+    /// E15 (review 2026-11-22): MCP start statuses Codex sent for a thread
+    /// during its `thread/start`, before the session registered it; handed
+    /// over when it does. `(epoch, message)` per thread, a few at most.
+    early: Mutex<HashMap<String, Vec<(u64, Inbound)>>>,
     crashes: Mutex<VecDeque<u64>>,
     epoch: AtomicU64,
     unused_since: Mutex<Option<u64>>,
@@ -63,6 +67,7 @@ impl CodexServer {
             launcher,
             running: tokio::sync::Mutex::new(None),
             routes: Mutex::default(),
+            early: Mutex::default(),
             crashes: Mutex::default(),
             epoch: AtomicU64::new(0),
             unused_since: Mutex::new(None),
@@ -97,6 +102,13 @@ impl CodexServer {
 
     /// Route a thread's traffic from the server generation `epoch` to `inbox`.
     pub fn register(&self, thread_id: &str, epoch: u64, inbox: mpsc::UnboundedSender<Inbound>) {
+        if let Some(held) = self.early.lock().remove(thread_id) {
+            for (at, message) in held {
+                if at == epoch {
+                    let _ = inbox.send(message);
+                }
+            }
+        }
         self.routes.lock().insert(
             thread_id.to_string(),
             Route {
@@ -257,6 +269,32 @@ impl CodexServer {
         }
     }
 
+    /// E15: keep an MCP start status for a thread nobody routes yet (it is
+    /// being started); other unrouted traffic is not kept. Bounded: a few
+    /// messages per thread, a few threads.
+    fn hold_early(&self, message: &Inbound, epoch: u64) -> bool {
+        const PER_THREAD: usize = 32;
+        const THREADS: usize = 16;
+        let Inbound::Notification { method, params } = message else {
+            return false;
+        };
+        if method != "mcpServer/startupStatus/updated" {
+            return false;
+        }
+        let Some(thread) = params.get("threadId").and_then(Value::as_str) else {
+            return false;
+        };
+        let mut early = self.early.lock();
+        if !early.contains_key(thread) && early.len() >= THREADS {
+            return false;
+        }
+        let held = early.entry(thread.to_string()).or_default();
+        if held.len() < PER_THREAD {
+            held.push((epoch, message.clone()));
+        }
+        true
+    }
+
     fn inbox_for(&self, message: &Inbound, epoch: u64) -> Option<mpsc::UnboundedSender<Inbound>> {
         let params = match message {
             Inbound::Notification { params, .. } | Inbound::Request { params, .. } => params,
@@ -288,6 +326,8 @@ async fn route(
             Some(inbox) => {
                 let _ = inbox.send(message);
             }
+            // E15: a status for a thread being started is kept for it.
+            None if server.hold_early(&message, epoch) => {}
             // A request nobody owns would leave Codex waiting forever.
             None => {
                 if let Inbound::Request { id, .. } = &message {

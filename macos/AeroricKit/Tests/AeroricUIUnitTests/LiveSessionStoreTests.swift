@@ -9,8 +9,12 @@ private class FakeLiveActions: LiveSessionActions {
     var historyValue: [AeroricUI.SessionMessage] = []
     var calls: [String] = []
     var failRespond = false
+    /// Review 2026-11-22: the host's latest check for the task.
+    var lastCheck: LiveSessionUpdate?
 
     init(state: LiveSessionState) { stateValue = state }
+
+    func lastAutoCheck(taskID: String) async throws -> LiveSessionUpdate? { lastCheck }
 
     func state(taskID: String) async throws -> LiveSessionState { calls.append("state"); return stateValue }
     func updates(taskID: String, after: UInt64) async throws -> LiveUpdatesBatch {
@@ -221,6 +225,18 @@ final class LiveSessionStoreTests: XCTestCase {
         let sent = try? await store.send("参考它们", references: ["t-2", "t-3"])
         XCTAssertEqual(sent, .sent)
         XCTAssertTrue(actions.calls.contains("prompt 参考它们 @t-2,t-3"), "\(actions.calls)")
+    }
+
+    /// Review 2026-11-22: a page opened after a commands-only check still
+    /// shows it, with its note.
+    func testACheckThatRanBeforeThePageOpenedIsShown() async {
+        let actions = FakeLiveActions(state: state(seq: 1))
+        actions.lastCheck = LiveSessionUpdate(taskId: "t", seq: 1, atMs: 0, kind: .autoCheck(
+            turnId: "u1", state: "passed", items: [], note: "这一轮没有文件变化，只跑了验收里的命令检查"))
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        XCTAssertEqual(store.model?.lastAutoCheck?.note, "这一轮没有文件变化，只跑了验收里的命令检查")
+        XCTAssertEqual(store.model?.lastAutoCheck?.turnId, "u1")
     }
 
     /// B4-2: "#角色 …" delegates instead of prompting; an unknown name is a message.

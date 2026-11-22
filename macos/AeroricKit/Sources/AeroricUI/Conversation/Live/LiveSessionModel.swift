@@ -587,6 +587,13 @@ public struct LiveSessionModel: Equatable, Sendable {
         return false
     }
 
+    /// Review 2026-11-22: the latest check as the host kept it, when no live
+    /// update has shown one yet.
+    mutating func restoreAutoCheck(_ update: LiveSessionUpdate) {
+        guard lastAutoCheck == nil, case let .autoCheck(turnId, state, items, note) = update.kind else { return }
+        lastAutoCheck = LiveAutoCheck(turnId: turnId, state: state, items: items, note: note, seq: update.seq)
+    }
+
     /// R1-2: the host's list; a newer live update of an item wins.
     mutating func restoreDeliveries(_ list: [LiveDelivery]) {
         for item in list where (deliveries[item.id]?.updatedMs ?? 0) <= item.updatedMs {
