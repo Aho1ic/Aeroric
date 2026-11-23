@@ -135,6 +135,22 @@ impl LiveStatusSink for TaskServiceSink {
     /// A3: a turn the agent ended on a state Aeroric does not know is kept on
     /// the task's record, so its history grades it as not run.
     fn update(&self, update: &SessionUpdate) {
+        // D4 step 8: what a phone shows changed (an approval asked for or
+        // settled, a turn started or ended); the phone event bridge pushes it.
+        let change = match &update.kind {
+            SessionUpdateKind::PermissionRequest { .. } => Some("permissionRequest"),
+            SessionUpdateKind::PermissionResolved { .. } => Some("permissionResolved"),
+            SessionUpdateKind::PermissionSendFailed { .. } => Some("permissionSendFailed"),
+            SessionUpdateKind::TurnStarted { .. } => Some("turnStarted"),
+            SessionUpdateKind::TurnEnded { .. } => Some("turnEnded"),
+            _ => None,
+        };
+        if let Some(change) = change {
+            self.log.append(
+                "task-changed",
+                serde_json::json!({ "taskId": update.task_id, "change": change }),
+            );
+        }
         let SessionUpdateKind::TurnEnded {
             raw_status: Some(status),
             error,

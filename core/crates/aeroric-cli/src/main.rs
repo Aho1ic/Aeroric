@@ -408,6 +408,9 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 ),
                 None => Arc::new(aeroric_core::events::EventLog::default()),
             };
+            // D4 step 8: kept to hang the phone event bridge on once the
+            // remote plane exists.
+            let bridge_log = Arc::clone(&log);
             let executor = aeroric_host::executor::CliPtyExecutor::new(
                 Arc::clone(&started.context),
                 Arc::clone(&registry),
@@ -479,6 +482,16 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             if remote_config.enabled {
                 let remote_state =
                     Arc::new(aeroric_core::remote::state::RemoteState::new_at(data_dir));
+                // D4 step 8: task events go on to connected phones; the push
+                // dispatcher (if any) still sees every event.
+                bridge_log.set_observer(Some(Arc::new(
+                    aeroric_core::remote::bridge::PhoneEventBridge::new(
+                        Arc::clone(&remote_state),
+                        push.as_ref().map(|(dispatcher, _)| {
+                            Arc::clone(dispatcher) as Arc<dyn aeroric_core::events::EventObserver>
+                        }),
+                    ),
+                )));
                 // 诊断用的 relay 配置取自 state(即服务真正会用的那份),而不是再读一遍文件。
                 let relay_for_diagnostics = {
                     let cfg = remote_state.config.lock();

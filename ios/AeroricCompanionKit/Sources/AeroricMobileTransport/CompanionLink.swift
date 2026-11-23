@@ -61,6 +61,10 @@ public final class CompanionLink {
     private var heldPushes: [UInt64] = []
     /// D4 step 6: a re-read is running (one at a time).
     private var resyncing = false
+    /// D4 step 8: the Mac pushed that a task changed; read again.
+    private var refreshWanted = false
+    /// D4 step 8: the pushes that mean "read again".
+    public static let refreshEvents: Set<String> = ["task-status", "task-changed"]
 
     public init(store: CompanionStore) {
         self.store = store
@@ -233,6 +237,8 @@ public final class CompanionLink {
 
         // Same host start: what was not answered goes again, same ids.
         try await flush()
+        // D4 step 8: something changed while the snapshot was read.
+        resyncIfNeeded()
     }
 
     /// Send every command in the store's outbox this connection has not sent
@@ -279,6 +285,16 @@ public final class CompanionLink {
                 if let approval = record["approval"] as? [String: Any],
                    let requestId = approval["requestId"] as? String {
                     let summary = (approval["toolName"] as? String) ?? (approval["kind"] as? String) ?? "待审批"
+                    approvals.append(CompanionApproval(requestId: requestId, taskId: taskId,
+                                                       summary: summary, hostEpoch: epoch))
+                }
+                // D4 step 8: a live session's open requests (its driver takes the answer).
+                for request in record["pendingApprovals"] as? [[String: Any]] ?? [] {
+                    guard let requestId = request["requestId"] as? String,
+                          !approvals.contains(where: { $0.requestId == requestId }) else { continue }
+                    var summary = (request["summary"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                        ?? (request["kind"] as? String) ?? "待审批"
+                    if let subagent = request["subagent"] as? String { summary = "\(subagent) · \(summary)" }
                     approvals.append(CompanionApproval(requestId: requestId, taskId: taskId,
                                                        summary: summary, hostEpoch: epoch))
                 }
@@ -373,13 +389,19 @@ public final class CompanionLink {
     /// D4 step 6: the store no longer trusts what it shows (a stale refusal,
     /// a gap, an overflow): read the Mac's state again on this connection.
     private func resyncIfNeeded() {
-        guard store.resyncNeeded, isConnected, !syncing, !resyncing,
+        guard store.resyncNeeded || refreshWanted, isConnected, !syncing, !resyncing,
               let epoch = store.currentEpoch, case let .macOnline(_, mode) = store.connectionState else { return }
         resyncing = true
+        refreshWanted = false
         let current = generation
         Task { [weak self] in
             guard let self else { return }
-            defer { self.resyncing = false }
+            var succeeded = false
+            defer {
+                self.resyncing = false
+                // D4 step 8: a push that came while reading asks for one more.
+                if succeeded { self.resyncIfNeeded() }
+            }
             do {
                 self.syncing = true
                 let since = Self.object(try await self.read("events.since", ["after": self.store.lastEventSeq]))
@@ -392,6 +414,7 @@ public final class CompanionLink {
                 self.syncing = false
                 for seq in self.heldPushes.sorted() { self.store.ingestHostEvent(seq: seq) }
                 self.heldPushes = []
+                succeeded = true
             } catch {
                 // Left for the next frame or the next connection.
                 if self.generation == current { self.syncing = false }
@@ -423,9 +446,12 @@ public final class CompanionLink {
             case nil:
                 break
             }
-        case let .push(_, seq?, _):
-            if syncing { heldPushes.append(seq) } else { store.ingestHostEvent(seq: seq) }
-        case .push, nil:
+        case let .push(event, seq, _):
+            if let seq {
+                if syncing { heldPushes.append(seq) } else { store.ingestHostEvent(seq: seq) }
+            }
+            if Self.refreshEvents.contains(event) { refreshWanted = true }
+        case nil:
             break
         }
     }

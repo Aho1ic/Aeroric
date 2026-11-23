@@ -116,9 +116,10 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
 
     // MARK: The Mac's side
 
-    func push(seq: UInt64) {
+    /// A push; `progress` is one the phone does not read again for.
+    func push(seq: UInt64, event: String = "progress") {
         lock.lock()
-        let frame = encrypted(["v": 3, "type": "push", "event": "task-status", "seq": seq, "data": [:]])
+        let frame = encrypted(["v": 3, "type": "push", "event": event, "seq": seq, "data": [:]])
         lock.unlock()
         deliver(frame)
     }
@@ -194,7 +195,7 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
             return [ok(["events": [], "latestSeq": config.latestSeq, "reset": false])]
         case "projects.list":
             let pushes = config.pushDuringSnapshot.map {
-                encrypted(["v": 3, "type": "push", "event": "task-status", "seq": $0, "data": [:]])
+                encrypted(["v": 3, "type": "push", "event": "progress", "seq": $0, "data": [:]])
             }
             return pushes + [ok(config.projects)]
         case "tasks.list":

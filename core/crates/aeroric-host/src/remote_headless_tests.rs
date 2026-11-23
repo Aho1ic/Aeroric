@@ -154,3 +154,94 @@ async fn the_phone_is_told_what_the_agent_got() {
     assert_eq!(reply["outcome"], "unconfirmed");
     assert_eq!(sent.len(), 1, "never sent again");
 }
+
+/// D4 step 8 (2026-11-23): a task with a live session lists its open
+/// requests for the phone; one without a session, or with none open, is
+/// left as it was.
+#[test]
+fn a_live_sessions_open_requests_ride_on_its_task_record() {
+    use aeroric_protocol::session_live::PendingPermission;
+    use serde_json::json;
+    let pending = |id: &str, subagent: Option<&str>| PendingPermission {
+        id: id.into(),
+        kind: "command".into(),
+        summary: format!("run {id}"),
+        tool_call_id: None,
+        options: vec!["allowOnce".into(), "deny".into()],
+        subagent: subagent.map(str::to_string),
+    };
+    let mut records = json!([
+        {"id": "t1", "name": "a", "approval": {"requestId": "hook-1", "kind": "exec"}},
+        {"id": "t2", "name": "b"},
+        {"id": "t3", "name": "c"},
+    ]);
+    super::attach_live_pending(&mut records, |task| match task {
+        "t1" => Some(vec![pending("r1", None), pending("r2", Some("reviewer"))]),
+        "t2" => Some(vec![]),
+        _ => None,
+    });
+    assert_eq!(
+        records[0]["pendingApprovals"],
+        json!([
+            {"requestId": "r1", "kind": "command", "summary": "run r1"},
+            {"requestId": "r2", "kind": "command", "summary": "run r2", "subagent": "reviewer"},
+        ])
+    );
+    assert_eq!(
+        records[0]["approval"]["requestId"], "hook-1",
+        "the hook approval stays"
+    );
+    assert!(records[1].get("pendingApprovals").is_none());
+    assert!(records[2].get("pendingApprovals").is_none());
+}
+
+/// D4 step 8: a live session asking for an approval, or ending a turn, is
+/// written as `task-changed` (the phone event bridge pushes it); a message
+/// chunk is not.
+#[test]
+fn approvals_and_turns_are_written_for_the_phone() {
+    use aeroric_core::events::{EventLog, EventObserver, LoggedEvent};
+    #[derive(Default)]
+    struct Seen(Mutex<Vec<(String, String)>>);
+    impl EventObserver for Seen {
+        fn observed(&self, event: &LoggedEvent) {
+            self.0.lock().push((
+                event.event.clone(),
+                event.data["change"].as_str().unwrap_or("").to_string(),
+            ));
+        }
+    }
+    let seen = Arc::new(Seen::default());
+    let log = Arc::new(EventLog::default().with_observer(seen.clone()));
+    let sink = crate::live::TaskServiceSink::new(Arc::clone(&log));
+    let update = |kind: SessionUpdateKind| SessionUpdate {
+        task_id: "t1".into(),
+        seq: 1,
+        at_ms: 1,
+        kind,
+    };
+    sink.update(&update(SessionUpdateKind::PermissionRequest {
+        id: "r1".into(),
+        tool_call_id: None,
+        kind: "command".into(),
+        summary: "ls".into(),
+        options: vec![],
+        subagent: None,
+    }));
+    sink.update(&update(SessionUpdateKind::MessageChunk {
+        message_id: "m".into(),
+        role: "assistant".into(),
+        text: "hi".into(),
+    }));
+    sink.update(&update(SessionUpdateKind::PermissionResolved {
+        id: "r1".into(),
+        decision: "allowOnce".into(),
+    }));
+    assert_eq!(
+        *seen.0.lock(),
+        [
+            ("task-changed".to_string(), "permissionRequest".to_string()),
+            ("task-changed".to_string(), "permissionResolved".to_string()),
+        ]
+    );
+}

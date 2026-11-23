@@ -277,7 +277,17 @@ impl RemoteHostHandle for CliRemoteHandle {
 
     async fn load_project_tasks(&self, project_id: &str) -> Result<Value, String> {
         let stamped = self.service.load(project_id).map_err(|e| e.to_string())?;
-        serde_json::to_value(stamped.records).map_err(|e| e.to_string())
+        let mut records = serde_json::to_value(stamped.records).map_err(|e| e.to_string())?;
+        // D4 step 8: a structured session's open requests, so the phone can
+        // show and answer them (the answer goes to its driver, A2).
+        if let Some(live) = &self.live {
+            attach_live_pending(&mut records, |task_id| {
+                live.registry()
+                    .get(task_id)
+                    .map(|driver| driver.snapshot().pending)
+            });
+        }
+        Ok(records)
     }
 
     async fn task_input(&self, task_id: &str, text: &str) -> Result<Value, String> {
@@ -1374,6 +1384,40 @@ impl RemoteTerminalStreams for HeadlessTerminalStreams {
         for (_, entry) in self.streams.drain() {
             entry.forwarder.abort();
         }
+    }
+}
+
+/// D4 step 8 (2026-11-23): each task record with a live session gets
+/// `pendingApprovals` — `{requestId, kind, summary, subagent?}` per open
+/// request — next to the hook registry's single `approval`.
+pub fn attach_live_pending(
+    records: &mut Value,
+    pending_of: impl Fn(&str) -> Option<Vec<aeroric_protocol::session_live::PendingPermission>>,
+) {
+    let Some(items) = records.as_array_mut() else {
+        return;
+    };
+    for item in items {
+        let Some(task_id) = item.get("id").and_then(Value::as_str).map(str::to_string) else {
+            continue;
+        };
+        let Some(pending) = pending_of(&task_id) else {
+            continue;
+        };
+        if pending.is_empty() {
+            continue;
+        }
+        let list: Vec<Value> = pending
+            .iter()
+            .map(|p| {
+                let mut entry = json!({ "requestId": p.id, "kind": p.kind, "summary": p.summary });
+                if let Some(subagent) = &p.subagent {
+                    entry["subagent"] = json!(subagent);
+                }
+                entry
+            })
+            .collect();
+        item["pendingApprovals"] = Value::Array(list);
     }
 }
 

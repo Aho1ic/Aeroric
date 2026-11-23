@@ -228,4 +228,35 @@ final class CompanionLinkTests: XCTestCase {
         XCTAssertFalse(store.resyncNeeded)
         XCTAssertEqual(store.lastEventSeq, 3)
     }
+
+    /// D4 step 8 (2026-11-23): a live session's open requests come in the
+    /// snapshot, and a `task-changed` push makes the phone read again.
+    @MainActor
+    func testALiveSessionsRequestsShowAndATaskPushReadsAgain() async throws {
+        let store = try pairedStore()
+        var config = FakeMac.Config()
+        config.tasks = ["p1": [["id": "t1", "projectId": "p1", "name": "x", "agent": "codex", "status": "running"]]]
+        let socket = FakeMac(responder: mac, config: config)
+        let link = CompanionLink(store: store)
+        try await link.connect(socket: socket, deviceToken: "token-1", mode: .directLAN)
+        XCTAssertTrue(store.pendingApprovals.isEmpty)
+
+        // The agent asks; the Mac pushes `task-changed`.
+        socket.setTasks(["p1": [["id": "t1", "projectId": "p1", "name": "x", "agent": "codex",
+                                 "status": "input_required",
+                                 "pendingApprovals": [
+                                     ["requestId": "r1", "kind": "command", "summary": "cargo test"],
+                                     ["requestId": "r2", "kind": "fileChange", "summary": "",
+                                      "subagent": "reviewer"],
+                                 ]]]])
+        socket.push(seq: 1, event: "task-changed")
+        await eventually("read again") { store.pendingApprovals.count == 2 }
+        XCTAssertEqual(store.pendingApprovals.map(\.summary), ["cargo test", "reviewer · fileChange"])
+        XCTAssertEqual(store.tasks.first?.status, "input_required")
+
+        // Answered on the Mac: the next push takes the card away.
+        socket.setTasks(["p1": [["id": "t1", "projectId": "p1", "name": "x", "agent": "codex", "status": "running"]]])
+        socket.push(seq: 2, event: "task-status")
+        await eventually("gone") { store.pendingApprovals.isEmpty }
+    }
 }

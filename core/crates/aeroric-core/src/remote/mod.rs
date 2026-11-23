@@ -13,6 +13,7 @@
 
 pub mod agent_keymap;
 pub mod auth;
+pub mod bridge;
 pub mod commands;
 pub mod config;
 pub mod control;
