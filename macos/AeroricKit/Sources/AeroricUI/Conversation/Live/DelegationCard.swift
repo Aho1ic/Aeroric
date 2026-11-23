@@ -187,6 +187,9 @@ struct DelegationCard: View {
         .padding(AeroricSpace.l)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AeroricColor.layer1))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(AeroricColor.separator2, lineWidth: 0.5))
+        // Review 2026-11-23 (1123c): a container, or the card's id replaces
+        // every id inside it (the 通过 button read as `delegation.card`).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("delegation.card")
     }
 }

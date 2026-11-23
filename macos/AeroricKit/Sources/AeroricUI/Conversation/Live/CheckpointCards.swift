@@ -236,7 +236,9 @@ struct CheckpointFacts: View {
             }
             if !checkpoint.obligations.isEmpty {
                 let done = checkpoint.obligations.filter { $0.state == "passed" }.count
-                CheckpointSectionLabel(title: "未完成义务 \(done)/\(checkpoint.obligations.count)")
+                // Review 2026-11-23 (1123c): the count is how many passed, so the
+                // title says so rather than "未完成" over a finished list.
+                CheckpointSectionLabel(title: "义务 · 已通过 \(done)/\(checkpoint.obligations.count)")
                 ForEach(checkpoint.obligations, id: \.id) { obligation in
                     let (symbol, label, tint) = CheckpointText.obligation(obligation.state)
                     CheckpointRow(symbol: symbol, text: obligation.text) {
