@@ -51,6 +51,27 @@ final class DelegationTextTests: XCTestCase {
         XCTAssertEqual(DelegationText.suggestions("#调研员 x", roles: roles), [])
     }
 
+    /// 2026-11-23: a delegation can go to an Agent configuration and one of
+    /// its models, as reviewers can; the picker says which, or that it is gone.
+    func testTheFormCanSendADelegationToAnAgentConfiguration() {
+        var model = DelegationPanelModel()
+        let magpie = LiveReviewerConfiguration(agentConfigId: "magpie", title: "Magpie", agent: "codex",
+                                               models: ["gpt-6.2-sol", "gpt-6.2-mini"], sameFamily: true)
+        model.configurations = [magpie]
+
+        let first = DelegationPanelModel.pick(magpie)
+        XCTAssertEqual(first, .named(agent: "codex", agentConfigId: "magpie", model: "gpt-6.2-sol"))
+        XCTAssertEqual(first.json, .object(["agent": .string("codex"), "agentConfigId": .string("magpie"),
+                                            "model": .string("gpt-6.2-sol")]))
+        XCTAssertEqual(model.agentTitle(DelegationPanelModel.pick(magpie, model: "gpt-6.2-mini"), hasRole: false),
+                       "Magpie · gpt-6.2-mini")
+        XCTAssertEqual(model.agentTitle(.named(agent: "claude", agentConfigId: "gone", model: nil), hasRole: false),
+                       "配置 gone（现在不能用）")
+        XCTAssertEqual(model.agentTitle(.named(agent: "codex"), hasRole: false), DelegationText.agentLabel("codex"))
+        XCTAssertEqual(model.agentTitle(nil, hasRole: true), "按角色")
+        XCTAssertEqual(model.agentTitle(nil, hasRole: false), "同族")
+    }
+
     func testACardSaysWhoWhereAndHowItEnded() {
         var card = LiveDelegationCard(
             delegationId: "dg-1", childTaskId: "task-4", origin: "session", roleName: "调研员",

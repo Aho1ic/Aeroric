@@ -877,6 +877,12 @@ struct TaskWorkspaceView: View {
             next.roles = (try? await client.delegationRoles()) ?? []
             next.stats = (try? await client.delegationStats()) ?? []
             next.audit = (try? await client.delegationAudit(taskId: taskID)) ?? []
+            // 2026-11-23: the configurations a delegation can go to, read once per task.
+            if let known = delegationPanel, delegationPanelTask == taskID, !known.configurations.isEmpty {
+                next.configurations = known.configurations
+            } else {
+                next.configurations = (try? await client.reviewers(taskId: taskID))?.configurations ?? []
+            }
         }
         delegationPanel = next
         delegationPanelTask = taskID

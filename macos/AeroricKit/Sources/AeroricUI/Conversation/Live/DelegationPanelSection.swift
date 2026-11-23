@@ -16,6 +16,10 @@ public struct DelegationPanelModel: Equatable, Sendable {
     public var native: [LiveSubagent] = []
     /// D5: the session's work plans.
     public var plans: [LiveWorkPlan] = []
+    /// 2026-11-23: the project's Agent configurations a delegation can go
+    /// to — the reviewers' list (`review.reviewers`), since the same
+    /// harnesses take reviews and delegations.
+    public var configurations: [LiveReviewerConfiguration] = []
 
     public init(delegations: [LiveDelegationCard] = [], delegateOf: String? = nil, roles: [LiveDelegationRole] = [],
                 stats: [LiveReputationRow] = [], audit: [LiveDelegationAudit] = []) {
@@ -32,6 +36,27 @@ public struct DelegationPanelModel: Equatable, Sendable {
         var next = self
         next.native = subagents.filter { !$0.isBackgroundCommand }
         return next
+    }
+
+    /// 2026-11-23: the agent picker's title; a configuration reads
+    /// "配置名 · 模型", or says it is gone.
+    public func agentTitle(_ agent: LiveDelegateAgent?, hasRole: Bool) -> String {
+        switch agent {
+        case nil: return hasRole ? "按角色" : "同族"
+        case .same?: return "同族"
+        case .other?: return "另一族"
+        case let .named(name, configID?, model)?:
+            let title = configurations.first { $0.agentConfigId == configID && $0.agent == name }?.title
+                ?? "配置 \(configID)（现在不能用）"
+            return model.map { "\(title) · \($0)" } ?? title
+        case let .named(name, nil, _)?: return DelegationText.agentLabel(name)
+        }
+    }
+
+    /// 2026-11-23: picking a configuration (and one of its models; its
+    /// first when none is named).
+    public static func pick(_ config: LiveReviewerConfiguration, model: String? = nil) -> LiveDelegateAgent {
+        .named(agent: config.agent, agentConfigId: config.agentConfigId, model: model ?? config.models.first)
     }
 
     /// Track records that match what the form has picked (shown, never used to pick).
@@ -242,14 +267,7 @@ struct DelegationPanelSection: View {
         return model.roles.first { $0.id == id }?.name ?? id
     }
 
-    private var agentTitle: String {
-        switch draft.agent {
-        case nil: return draft.role == nil ? "同族" : "按角色"
-        case .same?: return "同族"
-        case .other?: return "另一族"
-        case let .named(agent, _, _)?: return DelegationText.agentLabel(agent)
-        }
-    }
+    private var agentTitle: String { model.agentTitle(draft.agent, hasRole: draft.role != nil) }
 
     private var pickedAgent: String? {
         if case let .named(agent, _, _)? = draft.agent { return agent }
@@ -280,6 +298,25 @@ struct DelegationPanelSection: View {
                 Divider()
                 Button("Claude Code") { draft.agent = .named(agent: "claude") }
                 Button("Codex") { draft.agent = .named(agent: "codex") }
+                // 2026-11-23: an Agent configuration, and its model.
+                if !model.configurations.isEmpty {
+                    Divider()
+                    Section("Agent 配置") {
+                        ForEach(model.configurations, id: \.agentConfigId) { config in
+                            if config.models.count > 1 {
+                                Menu(ReviewPanelModel.configurationTitle(config)) {
+                                    ForEach(config.models, id: \.self) { name in
+                                        Button(name) { draft.agent = DelegationPanelModel.pick(config, model: name) }
+                                    }
+                                }
+                            } else {
+                                Button(ReviewPanelModel.configurationTitle(config)) {
+                                    draft.agent = DelegationPanelModel.pick(config)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Spacer(minLength: 0)
         }
