@@ -14,7 +14,8 @@
 
 - 推送只是提示：`CompanionStore.ingestPushHint` 只置 `resyncNeeded`，审批只来自 E2EE 快照。见 [推送平面](../../.agents/notes/implemented/architecture/2026-10-13-push-plane.md)。
 - 审批卡等 Mac 的结果：`submitApproval` 只把卡片改为 `submitting`，`applyApprovalOutcome` 按 Mac 的结果移除（`resolved`）或改为 `failed`、`unknown`（没等到回复，不自动重发）、`answeredElsewhere`、`ended`。手机的 `task.respond` 对结构化会话的待审批交给它的驱动，宿主等驱动结算（A2）再回复：`resolved`（Agent 收到了）、`sendFailed`、`ended`、`answeredElsewhere`、`unconfirmed`（10 秒内没结算，回 Mac 上看）；`CompanionApprovalOutcome.fromReply` 把它变成卡片状态，只有 `resolved` 移除卡片。其余（钩子审批）仍走钩子审批登记表。
-- 命令带身份（D4）：审批和新建任务各生成一个 `CompanionCommand`，带设备生成的 `commandId` 和当时的 `hostEpoch`，发出后留在 `outbox` 直到 Mac 回答；重连到同一次启动时原样重发（同一个 id，Mac 只执行一次），Mac 换了启动就丢掉、记进 `droppedCommands`，不重发；Mac 以 `STALE_HOST_EPOCH` 拒绝、事件序号跳变或缓冲溢出时置 `resyncNeeded`，状态横幅写“正在和 Mac 重新同步”。线上收发还没接到真实连接。
+- 命令带身份（D4）：审批和新建任务各生成一个 `CompanionCommand`，带设备生成的 `commandId` 和当时的 `hostEpoch`，发出后留在 `outbox` 直到 Mac 回答；重连到同一次启动时原样重发（同一个 id，Mac 只执行一次），Mac 换了启动就丢掉、记进 `droppedCommands`，不重发；Mac 以 `STALE_HOST_EPOCH` 拒绝、事件序号跳变或缓冲溢出时置 `resyncNeeded`，状态横幅写“正在和 Mac 重新同步”。
+- 连接循环（D4 第四步）：`CompanionLink` 照 `core/.../remote/server.rs` 说话：明文 `hello` 握手（钉配对时的公钥）、v2 `auth`、之后 v3；连上读 `hello`（`hostEpoch`）、`events.since`（水位线）、`projects.list` 和各项目的 `tasks.list` 组成快照交给 `handleReconnect`，读的时候到的推送攒到之后再按序号交；`flush()` 发出 `outbox` 里这条连接没发过的命令，回答按请求 id 交给 `applyCommandReply` / `applyApprovalReply`；断开时等回答的审批记为不确定，命令留着等同一次启动重发；令牌不认识按设备撤销处理。网络藏在 `CompanionSocket` 后面，真机用 `URLSessionCompanionSocket`。邀请配对、令牌存钥匙串、App 里建立连接和自动重连还没做。
 - 范围是完整任务伴随与相关高级操作，不复制桌面 IDE/DAP、数据库网格、基础设施与笔记工作区。
 
 ## 测试

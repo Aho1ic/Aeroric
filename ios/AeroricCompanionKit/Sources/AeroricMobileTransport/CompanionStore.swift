@@ -515,6 +515,15 @@ public final class CompanionStore {
         lastPushKind = nil
     }
 
+    /// D4 step 4: the project list from the Mac's snapshot (`projects.list`).
+    /// A selected project the Mac no longer has is cleared.
+    public func applySnapshotProjects(_ snapshot: [CompanionProject]) {
+        projects = snapshot
+        if let selected = selectedProjectId, !snapshot.contains(where: { $0.id == selected }) {
+            selectedProjectId = nil
+        }
+    }
+
     public func handleDeviceRevoked(reason: String = "Device access revoked by Mac host") {
         connectionState = .revoked(reason: reason)
         pairedStaticPubB64 = nil
