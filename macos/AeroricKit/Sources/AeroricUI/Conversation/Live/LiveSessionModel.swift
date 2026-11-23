@@ -361,6 +361,16 @@ public struct LiveSessionModel: Equatable, Sendable {
         if !held { items.append(.delegation(id: card.delegationId, card)) }
     }
 
+    /// Replace a shown delegation card with a fresher one (1123b); a card
+    /// not shown stays out.
+    public mutating func updateDelegation(_ card: LiveDelegationCard) {
+        let same = items.firstIndex {
+            if case let .delegation(id, _) = $0 { return id == card.delegationId }
+            return false
+        }
+        if let same { items[same] = .delegation(id: card.delegationId, card) }
+    }
+
     /// The message the user just sent, until history has it. R1-2b: bound to
     /// its delivery; a delivery the live updates already showed is not
     /// echoed twice.

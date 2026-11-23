@@ -61,6 +61,8 @@ public protocol LiveSessionActions {
     func delegationRoles() async throws -> [LiveDelegationRole]
     /// B4-3: the user saw a delegation's probes.
     func ackDelegationProbes(taskID: String, delegationID: String) async throws
+    /// B4′: settle one of the task's criteria by hand (`passed` / `failed`).
+    func setObligation(taskID: String, id: String, state: String) async throws
     /// CU F2: this task's delegations, to put back cards still waiting on the user.
     func delegationCards(taskID: String) async throws -> [LiveDelegationCard]
     /// R1-2: this session's delivery queue, and acting on one item
@@ -184,6 +186,9 @@ extension LiveSessionActions {
     public func deliveryAction(_ method: String, id: String) async throws {}
     public func ackDelegationProbes(taskID: String, delegationID: String) async throws {
         throw LiveSessionError.unsupported("这个宿主不支持委派")
+    }
+    public func setObligation(taskID: String, id: String, state: String) async throws {
+        throw LiveSessionError.unsupported("这个宿主不支持检查点")
     }
     public func remember(taskID: String, text: String, kind: String) async throws -> LiveMemoryItem {
         throw LiveSessionError.unsupported("这个宿主不支持记忆")
@@ -814,6 +819,24 @@ public final class LiveSessionStore {
             try await actions.ackDelegationProbes(taskID: taskID, delegationID: id)
         } catch {
             errorText = "确认探针失败：\(error)"
+        }
+    }
+
+    /// Review 2026-11-23 (1123b): settle a delegation's criterion from its
+    /// card. The criterion lives on the child's checkpoint; reading the
+    /// delegations again has the host recompute the card (and drop the
+    /// "还没有自动核对" probe once all pass), and the fresh card replaces
+    /// the shown one at once.
+    public func settleDelegationAcceptance(_ card: LiveDelegationCard, id: String, state: String) async {
+        guard let child = card.childTaskId else { return }
+        do {
+            try await actions.setObligation(taskID: child, id: id, state: state)
+            let cards = try await actions.delegationCards(taskID: taskID)
+            if let fresh = cards.first(where: { $0.delegationId == card.delegationId }) {
+                model?.updateDelegation(fresh)
+            }
+        } catch {
+            errorText = "标记验收失败：\(error)"
         }
     }
 

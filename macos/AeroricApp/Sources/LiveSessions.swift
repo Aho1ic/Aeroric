@@ -219,6 +219,10 @@ struct HostLiveSessionActions: LiveSessionActions {
         try await client().delegationAction("delegation.ackProbes", taskId: taskID, delegationId: delegationID)
     }
 
+    func setObligation(taskID: String, id: String, state: String) async throws {
+        try await client().setObligation(taskId: taskID, id: id, state: state)
+    }
+
     func delegationCards(taskID: String) async throws -> [LiveDelegationCard] {
         try await client().delegations(taskId: taskID).cards
     }

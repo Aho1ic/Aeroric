@@ -59,6 +59,9 @@ private class FakeLiveActions: LiveSessionActions {
     func delegationRoles() async throws -> [LiveDelegationRole] { roles }
     var cards: [LiveDelegationCard] = []
     func delegationCards(taskID: String) async throws -> [LiveDelegationCard] { cards }
+    func setObligation(taskID: String, id: String, state: String) async throws {
+        calls.append("obligation \(taskID) \(id) \(state)")
+    }
     func remember(taskID: String, text: String, kind: String) async throws -> LiveMemoryItem {
         calls.append("remember \(kind) \(text)")
         return LiveMemoryItem(id: "m1", projectId: "p", kind: kind, text: text)
@@ -273,6 +276,30 @@ final class LiveSessionStoreTests: XCTestCase {
         model.echo("下一轮")
         model.clearItems()
         XCTAssertEqual(model.items.map(\.id), ["delegation:dg-unsent"])
+    }
+
+    /// Review 2026-11-23 (1123b): a criterion settled from the delegation
+    /// card goes to the child's checkpoint, and the re-read card replaces
+    /// the shown one at once.
+    func testSettlingACriterionFromTheCardMarksTheChildAndRefreshesTheCard() async {
+        func card(_ state: String) -> LiveDelegationCard {
+            LiveDelegationCard(delegationId: "dg-1", parentTaskId: "t", childTaskId: "child", origin: "user",
+                               harnessLabel: "Codex", agent: "codex", contract: LiveDelegationContract(instruction: "建"),
+                               state: "reported", createdMs: 0,
+                               acceptance: [LiveDelegationAcceptance(id: "a1", text: "test -f g.md", state: state)])
+        }
+        let actions = FakeLiveActions(state: state(seq: 1))
+        actions.cards = [card("open")]
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        actions.cards = [card("passed")]
+        await store.settleDelegationAcceptance(card("open"), id: "a1", state: "passed")
+        XCTAssertTrue(actions.calls.contains("obligation child a1 passed"))
+        let shown = store.model?.items.compactMap { item -> String? in
+            if case let .delegation(_, card) = item { return card.acceptance.first?.state } else { return nil }
+        }
+        XCTAssertEqual(shown, ["passed"])
+        XCTAssertNil(store.errorText)
     }
 
     /// B5-1: `/记住` is kept by Aeroric and never reaches the agent.

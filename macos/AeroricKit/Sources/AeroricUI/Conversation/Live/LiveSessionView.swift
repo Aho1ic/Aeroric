@@ -500,7 +500,8 @@ public struct LiveSessionView: View {
                            onSend: { Task { await store.sendDelegation(card.delegationId) } },
                            onStop: { Task { await store.stopDelegation(card.delegationId) } },
                            onRedo: { note in Task { await store.redoDelegation(card.delegationId, note: note) } },
-                           onAck: { Task { await store.ackDelegationProbes(card.delegationId) } })
+                           onAck: { Task { await store.ackDelegationProbes(card.delegationId) } },
+                           onSettle: { id, state in Task { await store.settleDelegationAcceptance(card, id: id, state: state) } })
         case let .unknown(_, kind):
             LiveNoticeRow(message: "未识别的内容：\(kind)", recoverable: true)
         }

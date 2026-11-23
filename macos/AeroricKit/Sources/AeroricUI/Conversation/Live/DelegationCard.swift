@@ -11,6 +11,9 @@ struct DelegationCard: View {
     let onStop: () -> Void
     let onRedo: (String) -> Void
     var onAck: () -> Void = {}
+    /// Review 2026-11-23 (1123b): settle a criterion by hand from the card
+    /// (`id`, `"passed"` or `"failed"`), without opening the child.
+    var onSettle: (_ id: String, _ state: String) -> Void = { _, _ in }
     @State private var expanded = false
     @State private var redoing = false
     @State private var note = ""
@@ -88,6 +91,18 @@ struct DelegationCard: View {
                             .fixedSize()
                             .help(DelegationText.basisDetail(item))
                             .accessibilityIdentifier("delegation.acceptance.basis.\(item.id)")
+                    }
+                    if DelegationText.canSettle(card, item) {
+                        Button("通过") { onSettle(item.id, "passed") }
+                            .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                            .fixedSize()
+                            .help("你核对过了，把这条验收标成通过")
+                            .accessibilityIdentifier("delegation.acceptance.pass.\(item.id)")
+                        Button("未通过") { onSettle(item.id, "failed") }
+                            .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                            .fixedSize()
+                            .help("把这条验收标成未通过")
+                            .accessibilityIdentifier("delegation.acceptance.fail.\(item.id)")
                     }
                 }
                 .padding(.horizontal, AeroricSpace.l)
@@ -296,6 +311,14 @@ public enum DelegationText {
     public static func acceptance(_ item: LiveDelegationAcceptance) -> (String, Color) {
         if item.stale { return ("需要重新确认", AeroricColor.warning) }
         return acceptance(item.state)
+    }
+
+    /// Review 2026-11-23 (1123b): the card offers 通过 / 未通过 once the
+    /// child has reported, for a criterion not passed or whose pass went
+    /// stale — the same ones the child's 手动核销 lists.
+    public static func canSettle(_ card: LiveDelegationCard, _ item: LiveDelegationAcceptance) -> Bool {
+        guard card.childTaskId != nil, !card.isOpen else { return false }
+        return item.state != "passed" || item.stale
     }
 
     /// B3: one short line on what the verdict rests on; nil while unchecked.

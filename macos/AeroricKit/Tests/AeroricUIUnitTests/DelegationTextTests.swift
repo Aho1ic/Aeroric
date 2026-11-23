@@ -78,6 +78,26 @@ final class DelegationTextTests: XCTestCase {
         XCTAssertEqual(DelegationText.workspace("shared", permission: "auto_edit"), "共享可写 · 自动编辑")
     }
 
+    /// Review 2026-11-23 (1123b): 通过 / 未通过 on the card once the child
+    /// reported, for a criterion not passed or whose pass went stale.
+    func testTheCardOffersToSettleOpenCriteriaAfterTheReport() {
+        var item = LiveDelegationAcceptance(id: "a1", text: "test -f g.md", state: "open")
+        var card = LiveDelegationCard(delegationId: "dg-1", childTaskId: "child", origin: "user",
+                                      harnessLabel: "Codex", state: "reported", acceptance: [item])
+        XCTAssertTrue(DelegationText.canSettle(card, item))
+        item.state = "failed"
+        XCTAssertTrue(DelegationText.canSettle(card, item), "a failed check can be overruled, as in 手动核销")
+        item.state = "passed"
+        XCTAssertFalse(DelegationText.canSettle(card, item))
+        item.stale = true
+        XCTAssertTrue(DelegationText.canSettle(card, item), "a stale pass asks to be confirmed again")
+        card.state = "running"
+        XCTAssertFalse(DelegationText.canSettle(card, item), "not while the child still works")
+        card.state = "reported"
+        card.childTaskId = nil
+        XCTAssertFalse(DelegationText.canSettle(card, item), "nothing to mark without the child")
+    }
+
     /// A1: the badge follows the delivery; only a delivered one says 已送达.
     func testAResultCardSaysWhereItsResultStands() {
         var card = LiveDelegationCard(delegationId: "dg-1", origin: "user", harnessLabel: "Codex", state: "reported",
