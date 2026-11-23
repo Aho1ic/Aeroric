@@ -111,6 +111,8 @@ pub async fn launched(peers: &mut mpsc::UnboundedReceiver<Peer>) -> Peer {
 pub struct Sink {
     pub statuses: Mutex<Vec<(TaskStatus, Option<String>, u64)>>,
     pub sessions: Mutex<Vec<(String, Option<String>)>>,
+    /// How many updates had arrived when each of `sessions` was reported.
+    pub sessions_after: Mutex<Vec<usize>>,
     pub updates: Mutex<Vec<SessionUpdate>>,
 }
 
@@ -162,6 +164,7 @@ impl LiveStatusSink for Sink {
         id: &str,
         path: Option<&str>,
     ) {
+        self.sessions_after.lock().push(self.updates.lock().len());
         self.sessions
             .lock()
             .push((id.to_string(), path.map(str::to_string)));

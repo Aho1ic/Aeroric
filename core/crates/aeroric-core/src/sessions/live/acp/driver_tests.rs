@@ -298,6 +298,13 @@ async fn a_turn_streams_asks_and_ends() {
             Some("/h/sessions/s1/session.v4.jsonl".to_string())
         ))
     );
+    // Review 2026-11-22 (1122c A2): before the turn's end, which is when the
+    // App reads history again.
+    let recorded_after = *h.sink.sessions_after.lock().last().unwrap();
+    assert!(
+        recorded_after <= ended,
+        "the transcript was recorded after {recorded_after} updates, the turn ended at {ended}"
+    );
     assert!(h.log.latest_seq() > 0);
 }
 

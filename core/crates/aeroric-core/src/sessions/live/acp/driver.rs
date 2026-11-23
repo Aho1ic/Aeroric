@@ -1472,6 +1472,10 @@ impl Actor {
             }
             _ => self.receipt(&delivering, ReceiptOutcome::Delivered, None),
         }
+        // Review 2026-11-22 (1122c A2): the App reads history as soon as it
+        // sees the turn end; the first turn's transcript must be on the task
+        // by then, or that read finds none and the live rows stay.
+        self.record_transcript();
         let turn = {
             let mut state = self.state.lock();
             state.idle_since = now_ms();
@@ -1485,7 +1489,6 @@ impl Actor {
                 raw_status,
             });
         }
-        self.record_transcript();
         match reason {
             TurnEndReason::Completed => self.status(TaskStatus::Done, None),
             TurnEndReason::Interrupted => self.status(TaskStatus::Interrupted, None),
