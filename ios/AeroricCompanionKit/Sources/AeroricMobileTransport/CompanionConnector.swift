@@ -54,6 +54,7 @@ public final class CompanionConnector {
         link.onClose = { [weak self] _ in self?.connectionEnded() }
         store.onCommandIssued = { [weak self] in self?.sendWaiting() }
         store.onTranscriptWanted = { [weak self] in self?.readTranscript() }
+        store.onRead = { [weak self] read in self?.perform(read) }
         store.pushRegistrationUpload = { [weak self] token, deviceId, platform in
             guard let self else { throw CompanionLinkError.closed("没有连接") }
             return try await self.registerPush(token: token, deviceId: deviceId, platform: platform)
@@ -278,6 +279,23 @@ public final class CompanionConnector {
             if self.transcriptAgain {
                 self.transcriptAgain = false
                 if let taskId = self.store.transcript.taskId { self.store.openTask(taskId) }
+            }
+        }
+    }
+
+    /// D4 (2026-11-23): one read for the 文件与 Git page. Not connected: the
+    /// next snapshot asks again for what the page shows.
+    private func perform(_ read: CompanionRead) {
+        guard link.isConnected else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let answer = try await self.link.call(read.method, read.params)
+                self.store.applyRead(read, answer: answer)
+            } catch let error as CompanionLinkError {
+                self.store.readFailed(read, message: Self.describe(error))
+            } catch {
+                self.store.readFailed(read, message: String(describing: error))
             }
         }
     }

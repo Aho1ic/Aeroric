@@ -468,6 +468,8 @@ public struct CompanionTerminalPane: View {
     }
 }
 
+/// D4 (2026-11-23): a project's Git changes and files, read from the Mac
+/// and read again whenever the Mac's state changes. Read only.
 public struct CompanionFilesAndGitPane: View {
     @Bindable var store: CompanionStore
 
@@ -475,24 +477,174 @@ public struct CompanionFilesAndGitPane: View {
         self.store = store
     }
 
+    private var projectId: String? {
+        store.browse?.projectId ?? store.selectedProjectId ?? store.projects.first?.id
+    }
+
     public var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("项目文件").font(.headline)
-            List(store.files) { entry in
-                HStack {
-                    Image(systemName: entry.isDirectory ? "folder" : "doc.text")
-                    Text(entry.name)
+        List {
+            if store.projects.isEmpty {
+                Text(store.connectionState.isMacOnline ? "Mac 上还没有项目" : "连上 Mac 后在这里看项目的文件和改动")
+                    .foregroundStyle(.secondary)
+            } else {
+                Section {
+                    Picker("项目", selection: Binding(
+                        get: { projectId ?? "" },
+                        set: { id in
+                            store.selectedProjectId = id
+                            store.openBrowse(projectId: id)
+                        })) {
+                        ForEach(store.projects) { project in
+                            Text(project.name).tag(project.id)
+                        }
+                    }
+                    .accessibilityIdentifier("companion.browse.project")
                 }
-            }
-            Text("Git 变更").font(.headline)
-            List(store.gitChanges) { change in
-                HStack {
-                    Text(change.status).font(.caption).bold()
-                    Text(change.path)
+                if let browse = store.browse {
+                    Section("Git 改动") { changesSection(browse.changes) }
+                    Section(folderTitle(browse)) { filesSection(browse) }
                 }
             }
         }
-        .padding(12)
+        .accessibilityIdentifier("companion.browse")
+        .onAppear { if let projectId { store.openBrowse(projectId: projectId) } }
+        .onDisappear { store.closeBrowse() }
+        .onChange(of: store.projects.first?.id) { _, _ in
+            if store.browse == nil, let projectId { store.openBrowse(projectId: projectId) }
+        }
+        .sheet(isPresented: Binding(
+            get: { store.browse?.document != nil },
+            set: { if !$0 { store.closeDocument() } })) {
+            if let document = store.browse?.document {
+                CompanionDocumentView(document: document) { store.closeDocument() }
+            }
+        }
+    }
+
+    private func folderTitle(_ browse: CompanionBrowse) -> String {
+        guard let directory = browse.directory else { return "文件" }
+        return "文件 · \((directory as NSString).lastPathComponent)"
+    }
+
+    @ViewBuilder
+    private func changesSection(_ load: CompanionLoad<[CompanionGitChange]>) -> some View {
+        switch load {
+        case .loading:
+            ProgressView()
+        case let .loaded(changes) where changes.isEmpty:
+            Text("没有未提交的改动").foregroundStyle(.secondary)
+        case let .loaded(changes):
+            ForEach(changes) { change in
+                Button { store.openDiff(change) } label: {
+                    HStack {
+                        Text(change.status)
+                            .font(.system(.caption, design: .monospaced))
+                            .bold()
+                            .frame(minWidth: 24, alignment: .leading)
+                        Text(change.path).lineLimit(2)
+                        Spacer()
+                        if change.staged { Text("已暂存").font(.caption2).foregroundStyle(.secondary) }
+                    }
+                }
+                .accessibilityIdentifier("companion.change.\(change.id)")
+            }
+        case let .unavailable(reason):
+            Text(reason).foregroundStyle(.secondary)
+        case let .failed(message):
+            Text("没读到：\(message)").foregroundStyle(.red)
+        }
+    }
+
+    @ViewBuilder
+    private func filesSection(_ browse: CompanionBrowse) -> some View {
+        if !browse.folders.isEmpty {
+            Button { store.leaveFolder() } label: {
+                Label("上一级", systemImage: "chevron.left")
+            }
+            .accessibilityIdentifier("companion.browse.up")
+        }
+        switch browse.entries {
+        case .loading:
+            ProgressView()
+        case let .loaded(entries) where entries.isEmpty:
+            Text("这个文件夹是空的").foregroundStyle(.secondary)
+        case let .loaded(entries):
+            ForEach(entries) { entry in
+                Button { store.openFile(entry) } label: {
+                    HStack {
+                        Image(systemName: entry.isDirectory ? "folder" : "doc.text")
+                        Text(entry.name)
+                    }
+                }
+            }
+        case let .unavailable(reason):
+            Text(reason).foregroundStyle(.secondary)
+        case let .failed(message):
+            Text("没读到：\(message)").foregroundStyle(.red)
+        }
+    }
+}
+
+/// A file or a diff, as text; a diff's added and removed lines in color.
+struct CompanionDocumentView: View {
+    let document: CompanionDocument
+    let close: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                switch document.content {
+                case .loading:
+                    ProgressView("正在从 Mac 读…")
+                case let .loaded(text):
+                    ScrollView([.vertical, .horizontal]) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            if text.truncated {
+                                Text("文件太大，只显示了前面一部分")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.bottom, 6)
+                            }
+                            if text.text.isEmpty {
+                                Text(isDiff ? "没有差异" : "空文件").foregroundStyle(.secondary)
+                            }
+                            ForEach(Array(text.text.split(separator: "\n", omittingEmptySubsequences: false)
+                                .enumerated()), id: \.offset) { _, line in
+                                Text(String(line).isEmpty ? " " : String(line))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(color(String(line)))
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
+                        }
+                        .padding(12)
+                        .textSelection(.enabled)
+                    }
+                case let .unavailable(reason):
+                    Text(reason).foregroundStyle(.secondary).padding()
+                case let .failed(message):
+                    Text("没读到：\(message)").foregroundStyle(.red).padding()
+                }
+            }
+            .navigationTitle((document.path as NSString).lastPathComponent)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("关闭", action: close) }
+            }
+        }
+        .accessibilityIdentifier("companion.document")
+    }
+
+    private var isDiff: Bool {
+        if case .diff = document.kind { return true }
+        return false
+    }
+
+    private func color(_ line: String) -> Color {
+        guard isDiff else { return .primary }
+        if line.hasPrefix("+++") || line.hasPrefix("---") { return .secondary }
+        if line.hasPrefix("+") { return .green }
+        if line.hasPrefix("-") { return .red }
+        if line.hasPrefix("@@") { return .blue }
+        return .primary
     }
 }
 

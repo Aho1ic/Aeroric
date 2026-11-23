@@ -204,32 +204,6 @@ public let staleHostEpochPrefix = "STALE_HOST_EPOCH"
 /// earlier run of its task.
 public let staleTaskGenerationPrefix = "STALE_TASK_GENERATION"
 
-public struct CompanionFileEntry: Identifiable, Equatable, Sendable {
-    public var id: String { path }
-    public var name: String
-    public var path: String
-    public var isDirectory: Bool
-
-    public init(name: String, path: String, isDirectory: Bool) {
-        self.name = name
-        self.path = path
-        self.isDirectory = isDirectory
-    }
-}
-
-public struct CompanionGitChange: Identifiable, Equatable, Sendable {
-    public var id: String { "\(path):\(staged)" }
-    public var path: String
-    public var status: String
-    public var staged: Bool
-
-    public init(path: String, status: String, staged: Bool) {
-        self.path = path
-        self.status = status
-        self.staged = staged
-    }
-}
-
 /// Phase 9 session/task control operations exposed on iOS companion per Q8.
 ///
 /// Literals match the host's `session.*` capability names 1:1 (see
@@ -442,8 +416,11 @@ public final class CompanionStore {
     public var onTranscriptWanted: (@MainActor () -> Void)?
     public private(set) var pendingApprovals: [CompanionApproval] = []
     public private(set) var terminalBuffer: String = ""
-    public private(set) var files: [CompanionFileEntry] = []
-    public private(set) var gitChanges: [CompanionGitChange] = []
+    /// D4 (2026-11-23): the 文件与 Git page's project, when it is open.
+    public private(set) var browse: CompanionBrowse?
+    /// Told what the 文件与 Git page needs read; the connector sends it and
+    /// answers with `applyRead` / `readFailed`.
+    public var onRead: (@MainActor (CompanionRead) -> Void)?
     public private(set) var sentFramesLog: [String] = []
     /// D4: commands sent and not answered yet, oldest first. After a
     /// reconnect to the same host start they are sent again as they are
@@ -552,6 +529,7 @@ public final class CompanionStore {
         resyncNeeded = false
         lastPushKind = nil
         refreshTranscriptAfterSnapshot()
+        refreshBrowse()
     }
 
     // MARK: - The open task's session (D4, 2026-11-23)
@@ -631,8 +609,7 @@ public final class CompanionStore {
         selectedProjectId = nil
         selectedTaskId = nil
         transcript = .closed
-        files = []
-        gitChanges = []
+        browse = nil
         adapterCapabilities = .none
         controlOutcomes = []
     }
@@ -925,8 +902,114 @@ public final class CompanionStore {
         try triggerSessionControl(CompanionControlRequest(control: control, taskID: taskId))
     }
 
-    public func updateFilesAndGit(files: [CompanionFileEntry], changes: [CompanionGitChange]) {
-        self.files = files
-        self.gitChanges = changes
+    // MARK: - 文件与 Git (D4, 2026-11-23; read only)
+
+    /// The page opened, or the user picked another project.
+    public func openBrowse(projectId: String) {
+        if browse?.projectId == projectId { return refreshBrowse() }
+        browse = CompanionBrowse(projectId: projectId)
+        refreshBrowse()
+    }
+
+    /// The user left the page.
+    public func closeBrowse() {
+        browse = nil
+    }
+
+    public func openFolder(_ path: String) {
+        guard var current = browse else { return }
+        current.folders.append(path)
+        current.entries = .loading
+        browse = current
+        onRead?(.files(projectId: current.projectId, directory: path))
+    }
+
+    public func leaveFolder() {
+        guard var current = browse, !current.folders.isEmpty else { return }
+        current.folders.removeLast()
+        current.entries = .loading
+        browse = current
+        onRead?(.files(projectId: current.projectId, directory: current.directory))
+    }
+
+    public func openDiff(_ change: CompanionGitChange) {
+        open(CompanionDocument(kind: .diff(staged: change.staged), path: change.path))
+    }
+
+    public func openFile(_ entry: CompanionFileEntry) {
+        guard !entry.isDirectory else { return openFolder(entry.path) }
+        open(CompanionDocument(kind: .file, path: entry.path))
+    }
+
+    private func open(_ document: CompanionDocument) {
+        guard var current = browse else { return }
+        current.document = document
+        browse = current
+        if let read = current.reads.last { onRead?(read) }
+    }
+
+    public func closeDocument() {
+        browse?.document = nil
+    }
+
+    /// What the Mac answered for `read`; ignored unless the page still shows
+    /// what it was read for.
+    public func applyRead(_ read: CompanionRead, answer: String) {
+        guard var current = browse else { return }
+        switch read {
+        case let .changes(projectId) where projectId == current.projectId:
+            current.changes = CompanionBrowse.changes(answer)
+        case let .files(projectId, directory) where projectId == current.projectId && directory == current.directory:
+            current.entries = CompanionBrowse.entries(answer)
+        case let .diff(projectId, path, staged)
+            where projectId == current.projectId && current.document?.path == path
+            && current.document?.kind == .diff(staged: staged):
+            current.document?.content = CompanionBrowse.text(answer, key: "diff")
+        case let .file(projectId, path)
+            where projectId == current.projectId && current.document?.path == path && current.document?.kind == .file:
+            current.document?.content = CompanionBrowse.text(answer, key: "content")
+        default:
+            return
+        }
+        browse = current
+    }
+
+    /// A read got no answer. What the page already shows stays.
+    public func readFailed(_ read: CompanionRead, message: String) {
+        guard var current = browse, current.projectId == projectOf(read) else { return }
+        switch read {
+        case .changes:
+            if current.changes.value == nil { current.changes = .failed(message) }
+        case let .files(_, directory) where directory == current.directory:
+            if current.entries.value == nil { current.entries = .failed(message) }
+        case let .diff(_, path, _), let .file(_, path):
+            guard current.document?.path == path, current.document?.content.value == nil else { return }
+            current.document?.content = .failed(message)
+        default:
+            return
+        }
+        browse = current
+    }
+
+    private func projectOf(_ read: CompanionRead) -> String {
+        switch read {
+        case let .files(projectId, _), let .changes(projectId), let .diff(projectId, _, _), let .file(projectId, _):
+            projectId
+        }
+    }
+
+    /// Read again what the page shows (after a snapshot: the Mac's state
+    /// changed); a project the Mac no longer has says so.
+    private func refreshBrowse() {
+        guard var current = browse else { return }
+        guard projects.isEmpty || projects.contains(where: { $0.id == current.projectId }) else {
+            let gone = "这个项目在 Mac 上已经没有了"
+            current.entries = .unavailable(gone)
+            current.changes = .unavailable(gone)
+            current.document = nil
+            browse = current
+            return
+        }
+        for read in current.reads { onRead?(read) }
     }
 }

@@ -23,6 +23,9 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
         var issuedToken = "token-1"
         /// D4 (2026-11-23): what `session.messages` answers, by task id.
         var transcripts: [String: [String: Any]] = [:]
+        /// D4 (2026-11-23): what the 文件与 Git reads answer, by
+        /// `method` + " " + the path asked (empty for none).
+        var reads: [String: [String: Any]] = [:]
     }
 
     enum Confirmation { case confirm, refuse, silent, legacy }
@@ -54,6 +57,18 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
     /// D4 (2026-11-23): the Mac's transcript of a task changes.
     func setTranscript(_ taskId: String, _ answer: [String: Any]) {
         lock.lock(); config.transcripts[taskId] = answer; lock.unlock()
+    }
+
+    /// D4 (2026-11-23): what a 文件与 Git read answers from now on.
+    func setRead(_ key: String, _ answer: [String: Any]) {
+        lock.lock(); config.reads[key] = answer; lock.unlock()
+    }
+
+    /// The 文件与 Git reads received, as `method path`.
+    private(set) var reads: [String] = []
+    var receivedReads: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return reads
     }
 
     /// The `session.messages` requests received: task id and limit.
@@ -218,6 +233,12 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
             let taskId = params["taskId"] as? String ?? ""
             transcriptReads.append((taskId, params["limit"] as? Int))
             return [ok(config.transcripts[taskId] ?? ["available": false, "reason": "no_session", "messages": []])]
+        case "project.files", "git.changes", "git.diff", "project.readFile":
+            let key = "\(method) \(params["path"] as? String ?? "")"
+            reads.append(key)
+            if let answer = config.reads[key] { return [ok(answer)] }
+            return [encrypted(["v": 3, "type": "response", "id": id, "ok": false,
+                               "error": ["code": "remote_error", "message": "Path outside project or not found"]])]
         case "task.respond", "task.create":
             let commandId = params["commandId"] as? String ?? ""
             commands.append((method, commandId))

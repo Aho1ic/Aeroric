@@ -208,7 +208,7 @@ final class CompanionIntegrationTests: XCTestCase {
         XCTAssertEqual(store.connectionState, .revoked(reason: "Device access revoked by Mac host"))
         // B4-4: nothing the revoked device was shown stays behind.
         XCTAssertTrue(store.projects.isEmpty && store.tasks.isEmpty && store.transcript == .closed)
-        XCTAssertTrue(store.files.isEmpty && store.gitChanges.isEmpty && store.controlOutcomes.isEmpty)
+        XCTAssertTrue(store.browse == nil && store.controlOutcomes.isEmpty)
         XCTAssertNil(store.selectedProjectId)
         XCTAssertNil(store.selectedTaskId)
         XCTAssertEqual(store.adapterCapabilities, .none)
@@ -274,10 +274,7 @@ final class CompanionIntegrationTests: XCTestCase {
     @MainActor
     func testAdaptiveIPhoneAndIPadCompanionViewsAndLiquidGlass() {
         let store = CompanionStore()
-        store.updateFilesAndGit(
-            files: [CompanionFileEntry(name: "main.swift", path: "/repo/main.swift", isDirectory: false)],
-            changes: [CompanionGitChange(path: "main.swift", status: "M", staged: false)]
-        )
+        store.openBrowse(projectId: "p1")
         let iphoneView = CompanionRootView(store: store, isIPadLayout: false, reduceTransparency: false)
         let ipadView = CompanionRootView(store: store, isIPadLayout: true, reduceTransparency: true)
         XCTAssertNotNil(iphoneView.body)
