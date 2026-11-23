@@ -39,6 +39,43 @@ public enum CompanionActionError: Error, Equatable, Sendable {
     /// word), or is over; it cannot be answered again from here.
     case approvalNotAnswerable(requestId: String)
     case duplicateOrOutOfOrderEvent(seq: UInt64, lastSeq: UInt64)
+    /// D4 (2026-11-23): a message with nothing in it, or a task this phone
+    /// does not know.
+    case emptyMessage
+    case unknownTask(String)
+}
+
+/// D4 (2026-11-23): what became of the last message or 停止 a task page sent.
+public struct CompanionTaskAction: Equatable, Sendable {
+    public enum Kind: Equatable, Sendable { case message, stop }
+    public enum State: Equatable, Sendable {
+        case sending
+        /// The Mac took it: a message is in the session's delivery queue (the
+        /// conversation shows when the agent gets it); a 停止 was passed on.
+        case done
+        case failed(String)
+
+        public var isFailure: Bool {
+            if case .failed = self { return true }
+            return false
+        }
+    }
+
+    public var taskId: String
+    public var commandId: String
+    public var kind: Kind
+    public var state: State
+
+    public var note: String {
+        switch (kind, state) {
+        case (.message, .sending): "正在发给 Mac…"
+        case (.message, .done): "Mac 收下了这条消息"
+        case (.stop, .sending): "正在请 Mac 停止…"
+        case (.stop, .done): "Mac 已停止这一轮"
+        case let (.message, .failed(why)): "消息没送出：\(why)"
+        case let (.stop, .failed(why)): "没能停止：\(why)"
+        }
+    }
 }
 
 public struct CompanionProject: Identifiable, Equatable, Sendable {
@@ -421,6 +458,8 @@ public final class CompanionStore {
     /// Told what the 文件与 Git page needs read; the connector sends it and
     /// answers with `applyRead` / `readFailed`.
     public var onRead: (@MainActor (CompanionRead) -> Void)?
+    /// D4 (2026-11-23): the last message or 停止 sent from each task page.
+    public private(set) var taskActions: [String: CompanionTaskAction] = [:]
     /// D4 (2026-11-23): the open task's 改动.
     public private(set) var taskChanges: CompanionTaskChanges?
     public private(set) var sentFramesLog: [String] = []
@@ -512,6 +551,10 @@ public final class CompanionStore {
         // the Mac would refuse them; the user sees the new state first.
         if epochChanged {
             droppedCommands.append(contentsOf: outbox)
+            for command in outbox {
+                settleTaskAction(command.commandId,
+                                 .failed("Mac 重启了，没有送出；看过最新状态再发"))
+            }
             outbox.removeAll()
         }
         currentEpoch = newEpoch
@@ -633,6 +676,7 @@ public final class CompanionStore {
         transcript = .closed
         browse = nil
         taskChanges = nil
+        taskActions = [:]
         adapterCapabilities = .none
         controlOutcomes = []
     }
@@ -759,6 +803,7 @@ public final class CompanionStore {
     public func applyCommandReply(commandId: String, failure: String? = nil) {
         guard let index = outbox.firstIndex(where: { $0.commandId == commandId }) else { return }
         outbox.remove(at: index)
+        settleTaskAction(commandId, failure.map { .failed($0) } ?? .done)
         if let failure, failure.hasPrefix(staleHostEpochPrefix) || failure.hasPrefix(staleTaskGenerationPrefix) {
             resyncNeeded = true
         }
@@ -881,6 +926,33 @@ public final class CompanionStore {
               epoch: epoch)
         sentFramesLog.append("task.create:\(projectId):\(agent):\(prompt)")
         return task
+    }
+
+    /// D4 (2026-11-23): send a message to a task. A structured session takes
+    /// it the way the app's input box does (delivery queue, receipts); a
+    /// terminal gets it typed.
+    public func sendMessage(taskId: String, text: String) throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw CompanionActionError.emptyMessage }
+        let epoch = try requireMacOnline()
+        guard let task = tasks.first(where: { $0.id == taskId }) else { throw CompanionActionError.unknownTask(taskId) }
+        let command = issue("task.input", ["projectId": task.projectId, "taskId": taskId, "text": trimmed], epoch: epoch)
+        taskActions[taskId] = CompanionTaskAction(taskId: taskId, commandId: command.commandId, kind: .message,
+                                                  state: .sending)
+    }
+
+    /// D4 (2026-11-23): stop the task's current turn (the task stays).
+    public func stopTask(taskId: String) throws {
+        let epoch = try requireMacOnline()
+        guard let task = tasks.first(where: { $0.id == taskId }) else { throw CompanionActionError.unknownTask(taskId) }
+        let command = issue("task.interrupt", ["projectId": task.projectId, "taskId": taskId], epoch: epoch)
+        taskActions[taskId] = CompanionTaskAction(taskId: taskId, commandId: command.commandId, kind: .stop,
+                                                  state: .sending)
+    }
+
+    private func settleTaskAction(_ commandId: String, _ state: CompanionTaskAction.State) {
+        guard let entry = taskActions.first(where: { $0.value.commandId == commandId }) else { return }
+        taskActions[entry.key]?.state = state
     }
 
     /// AP7: record the probe result the host reported. Only what came back is

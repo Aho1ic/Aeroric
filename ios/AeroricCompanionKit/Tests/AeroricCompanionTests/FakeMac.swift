@@ -21,6 +21,8 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
         var invite = "invite-1"
         var confirmation: Confirmation = .confirm
         var issuedToken = "token-1"
+        /// D4 (2026-11-23): `task.interrupt` refused with this message.
+        var refuseInterrupt: String?
         /// D4 (2026-11-23): what `session.messages` answers, by task id.
         var transcripts: [String: [String: Any]] = [:]
         /// D4 (2026-11-23): what the 文件与 Git reads answer, by
@@ -105,7 +107,11 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
     }
 
     func send(binary: Data) async throws {
-        for reply in answer(binary) { deliver(reply) }
+        // Encrypting and queueing in one step keeps the frames in the order
+        // of their sequence numbers when the phone sends two requests at
+        // once, as `server.rs` writes them in order.
+        let handoff = lock.withLock { queueLocked(answerLocked(binary)) }
+        handoff?()
     }
 
     private func acceptHello(_ text: String) throws -> String {
@@ -114,15 +120,29 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
         return ack
     }
 
-    private func answer(_ binary: Data) -> [CompanionSocketMessage] {
-        lock.withLock {
-            guard let session, let decoded = try? session.decryptFrame(binary) else {
-                XCTFail("the phone sent a frame the Mac cannot open")
-                return []
-            }
-            let request = (try? JSONSerialization.jsonObject(with: decoded.plaintext)) as? [String: Any] ?? [:]
-            return handle(request)
+    /// Called with the lock held.
+    private func answerLocked(_ binary: Data) -> [CompanionSocketMessage] {
+        guard let session, let decoded = try? session.decryptFrame(binary) else {
+            XCTFail("the phone sent a frame the Mac cannot open")
+            return []
         }
+        let request = (try? JSONSerialization.jsonObject(with: decoded.plaintext)) as? [String: Any] ?? [:]
+        return handle(request)
+    }
+
+    /// Called with the lock held: queue `messages` in order; the returned
+    /// step (run after unlocking) hands the first to a waiting receive.
+    private func queueLocked(_ messages: [CompanionSocketMessage]) -> (() -> Void)? {
+        guard !messages.isEmpty else { return nil }
+        var rest = messages
+        if let waiter {
+            self.waiter = nil
+            let first = rest.removeFirst()
+            queue.append(contentsOf: rest)
+            return { waiter.resume(returning: first) }
+        }
+        queue.append(contentsOf: rest)
+        return nil
     }
 
     func receive() async throws -> CompanionSocketMessage {
@@ -149,9 +169,9 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
     /// A push; `progress` is one the phone does not read again for.
     func push(seq: UInt64, event: String = "progress") {
         lock.lock()
-        let frame = encrypted(["v": 3, "type": "push", "event": event, "seq": seq, "data": [:]])
+        let handoff = queueLocked([encrypted(["v": 3, "type": "push", "event": event, "seq": seq, "data": [:]])])
         lock.unlock()
-        deliver(frame)
+        handoff?()
     }
 
     func closeFromMac(reason: String?) {
@@ -160,14 +180,9 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
 
     private func deliver(_ message: CompanionSocketMessage) {
         lock.lock()
-        if let waiter {
-            self.waiter = nil
-            lock.unlock()
-            waiter.resume(returning: message)
-        } else {
-            queue.append(message)
-            lock.unlock()
-        }
+        let handoff = queueLocked([message])
+        lock.unlock()
+        handoff?()
     }
 
     /// Called with the lock held.
@@ -241,7 +256,7 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
             if let answer = config.reads[key] { return [ok(answer)] }
             return [encrypted(["v": 3, "type": "response", "id": id, "ok": false,
                                "error": ["code": "remote_error", "message": "Path outside project or not found"]])]
-        case "task.respond", "task.create":
+        case "task.respond", "task.create", "task.input", "task.interrupt":
             let commandId = params["commandId"] as? String ?? ""
             commands.append((method, commandId))
             commandParams.append(params.compactMapValues { $0 as? String })
@@ -265,6 +280,13 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
             if method == "task.respond" {
                 guard let answer = config.respondResult else { return [] }
                 result = answer
+            } else if method == "task.interrupt", let refusal = config.refuseInterrupt {
+                return [encrypted(["v": 3, "type": "response", "id": id, "ok": false,
+                                   "error": ["code": "remote_error", "message": refusal]])]
+            } else if method == "task.input" {
+                result = ["sent": true, "accepted": true, "deliveryId": "d1"]
+            } else if method == "task.interrupt" {
+                result = ["ok": true, "stopped": "turn"]
             } else {
                 result = ["taskId": "t-new"]
             }

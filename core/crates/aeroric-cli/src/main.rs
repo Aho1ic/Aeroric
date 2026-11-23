@@ -513,6 +513,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                         push_transport: push.as_ref().map(|(_, transport)| Arc::clone(transport)),
                         relay: Some(relay_for_diagnostics),
                         live: Some(Arc::clone(&structured)),
+                        host_services: Some(Arc::clone(&services.services)),
                     });
                 let cfg_port = remote_config.port;
                 let scope = aeroric_core::remote::state::required_listener_scope(&remote_state);

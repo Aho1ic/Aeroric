@@ -38,6 +38,7 @@ pub const COMMANDS: &[&str] = &[
     "task.input",
     "task.respond",
     "task.cancel",
+    "task.interrupt",
     "task.complete",
     "task.create",
     "task.resume",

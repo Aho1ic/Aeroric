@@ -1035,7 +1035,7 @@ fn authenticate_first_message(
                     "host": host,
                     "rpcVersion": rpc_version.as_u32(),
                     "rpcVersions": [3, 2],
-                    "capabilities": crate::remote::rpc::rpc_capabilities_value(),
+                    "capabilities": crate::remote::rpc::rpc_capabilities(state),
                 }),
             );
             Ok(AuthenticatedFirstMessage {
@@ -1063,7 +1063,7 @@ fn authenticate_first_message(
                     "host": host,
                     "rpcVersion": rpc_version.as_u32(),
                     "rpcVersions": [3, 2],
-                    "capabilities": crate::remote::rpc::rpc_capabilities_value(),
+                    "capabilities": crate::remote::rpc::rpc_capabilities(state),
                 }),
             );
             Ok(AuthenticatedFirstMessage {
@@ -1089,7 +1089,7 @@ fn authenticate_first_message(
                     "host": host,
                     "rpcVersion": rpc_version.as_u32(),
                     "rpcVersions": [3, 2],
-                    "capabilities": crate::remote::rpc::rpc_capabilities_value(),
+                    "capabilities": crate::remote::rpc::rpc_capabilities(state),
                 }),
             );
             Ok(AuthenticatedFirstMessage {

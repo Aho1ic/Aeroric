@@ -336,3 +336,67 @@ fn a_task_s_changes_come_from_its_own_copy_when_it_has_one() {
         ("/p".to_string(), "project")
     );
 }
+
+/// D4 (2026-11-23): a phone's message to a structured session and its 停止
+/// go through this host's own `session.prompt` / `session.interrupt`, called
+/// in process; their answer or refusal comes back as it is.
+#[tokio::test]
+async fn a_host_method_is_called_in_process_as_an_authenticated_client() {
+    use aeroric_protocol::envelope::{Frame, Success};
+    use aeroric_protocol::error::ErrorCode;
+    let seen = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+    let mut set = crate::dispatcher::ServiceSet::new();
+    let record = Arc::clone(&seen);
+    set.register(
+        "session.prompt",
+        Arc::new(move |request, _context| {
+            record.lock().push(request.params.clone());
+            let id = request.id.clone();
+            Box::pin(async move {
+                Frame::Success(Success {
+                    v: 1,
+                    id,
+                    ok: true,
+                    result: serde_json::json!({"accepted": true, "deliveryId": "d1"}),
+                    extra: Default::default(),
+                })
+            })
+        }),
+    );
+    set.register(
+        "session.interrupt",
+        Arc::new(|request, _context| {
+            let id = request.id.clone();
+            Box::pin(async move {
+                crate::dispatcher::failure(id, ErrorCode::Busy, "暂停所有 Agent 已打开")
+            })
+        }),
+    );
+    let set = Arc::new(set);
+    let answer = super::call_in_process(
+        &set,
+        "session.prompt",
+        serde_json::json!({"taskId": "t1", "text": "继续"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(answer["deliveryId"], "d1");
+    assert_eq!(
+        *seen.lock(),
+        [serde_json::json!({"taskId": "t1", "text": "继续"})]
+    );
+    assert_eq!(
+        super::call_in_process(
+            &set,
+            "session.interrupt",
+            serde_json::json!({"taskId": "t1"})
+        )
+        .await,
+        Err("暂停所有 Agent 已打开".to_string())
+    );
+    assert!(
+        super::call_in_process(&set, "session.nothing", serde_json::json!({}))
+            .await
+            .is_err()
+    );
+}

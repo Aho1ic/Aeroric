@@ -49,6 +49,12 @@ pub trait RemoteHostHandle: Send + Sync {
     async fn task_respond(&self, task_id: &str, params: Value) -> Result<Value, String>;
     /// `task.cancel`（SSH 任务宿主侧拒绝语义随宿主实现）。
     async fn task_cancel(&self, project_id: &str, task_id: &str) -> Result<Value, String>;
+    /// `task.interrupt` (D4, 2026-11-23): stop the task's current turn — a
+    /// structured session the way the app's 停止 does, a terminal with
+    /// Ctrl-C. The task itself stays.
+    async fn task_interrupt(&self, _project_id: &str, _task_id: &str) -> Result<Value, String> {
+        Err("this host cannot interrupt a task".to_string())
+    }
     /// `task.complete`（按会话族复用桌面完成内核）。
     async fn task_complete(&self, project_id: &str, task_id: &str) -> Result<Value, String>;
     /// `task.create`/`task.resume` 的原生执行器（刀二：直连 core TaskService

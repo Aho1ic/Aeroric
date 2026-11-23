@@ -38,10 +38,24 @@ pub const RPC_CAPABILITIES: &[&str] = &[
     "remote.relay-diagnostics",
     // D4: commands with a `commandId` run once; `hostEpoch` in `hello`.
     "commands.idempotent",
+    // D4 (2026-11-23): `task.interrupt` stops a task's current turn, and
+    // `task.input` reaches a structured session the way the app's does.
+    "tasks.interrupt",
 ];
 
+/// Every capability this host's code has, whatever this Mac turned on.
 pub fn rpc_capabilities_value() -> Value {
     json!(RPC_CAPABILITIES)
+}
+
+/// What a paired device is told: `files.write` only when this Mac turned
+/// remote file writes on (2026-11-23, off by default).
+pub fn rpc_capabilities(state: &RemoteState) -> Value {
+    let writes = state.config.lock().allow_file_writes;
+    json!(RPC_CAPABILITIES
+        .iter()
+        .filter(|name| writes || **name != "files.write")
+        .collect::<Vec<_>>())
 }
 
 pub fn str_param(params: &Value, key: &str) -> Result<String, String> {
@@ -170,6 +184,11 @@ pub async fn dispatch(
             let task_id = str_param(&params, "taskId")?;
             handle.task_cancel(&project_id, &task_id).await
         }
+        "task.interrupt" => {
+            let project_id = str_param(&params, "projectId")?;
+            let task_id = str_param(&params, "taskId")?;
+            handle.task_interrupt(&project_id, &task_id).await
+        }
         "task.complete" => {
             let project_id = str_param(&params, "projectId")?;
             let task_id = str_param(&params, "taskId")?;
@@ -200,7 +219,7 @@ async fn hello(state: &RemoteState, handle: &dyn RemoteHostHandle) -> Result<Val
         "version": handle.desktop_version(),
         "platform": std::env::consts::OS,
         "rpcVersions": [3, 2],
-        "capabilities": rpc_capabilities_value(),
+        "capabilities": rpc_capabilities(state),
         // D4: commands carry it back; another means the host restarted.
         "hostEpoch": state.host_epoch,
     });

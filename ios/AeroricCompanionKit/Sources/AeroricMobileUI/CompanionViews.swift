@@ -285,6 +285,7 @@ public struct CompanionTaskPage: View {
     @Bindable var store: CompanionStore
     let taskId: String
     @State private var errorMessage: String?
+    @State private var draft = ""
 
     public init(store: CompanionStore, taskId: String) {
         self.store = store
@@ -322,6 +323,7 @@ public struct CompanionTaskPage: View {
                     }
                 }
             }
+            Section("发给这个任务") { messageSection }
             if let changes = store.taskChanges, changes.taskId == taskId {
                 Section("改动") { changesSection(changes) }
             }
@@ -337,6 +339,42 @@ public struct CompanionTaskPage: View {
             if let document = store.taskChanges?.document {
                 CompanionDocumentView(document: document) { store.closeTaskDiff() }
             }
+        }
+    }
+
+    /// D4 (2026-11-23): a message to the task, and 停止 for its current turn.
+    @ViewBuilder
+    private var messageSection: some View {
+        let online = store.connectionState.isMacOnline
+        TextField("写给 Agent 的话…", text: $draft, axis: .vertical)
+            .lineLimit(1...5)
+            .disabled(!online)
+            .accessibilityIdentifier("companion.task.message")
+        HStack {
+            Button("发送") {
+                attempt {
+                    try store.sendMessage(taskId: taskId, text: draft)
+                    draft = ""
+                }
+            }
+            .disabled(!online || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityIdentifier("companion.task.send")
+            Spacer()
+            Button("停止这一轮", role: .destructive) {
+                attempt { try store.stopTask(taskId: taskId) }
+            }
+            .disabled(!online)
+            .accessibilityIdentifier("companion.task.stop")
+        }
+        .buttonStyle(.borderless)
+        if let action = store.taskActions[taskId] {
+            Text(action.note)
+                .font(.caption)
+                .foregroundStyle(action.state.isFailure ? Color.red : Color.secondary)
+                .accessibilityIdentifier("companion.task.action-note")
+        }
+        if !online {
+            Text("连上 Mac 后才能发").font(.caption).foregroundStyle(.secondary)
         }
     }
 

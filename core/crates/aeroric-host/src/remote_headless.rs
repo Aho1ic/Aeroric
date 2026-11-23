@@ -56,6 +56,11 @@ pub struct CliRemoteHandle {
     /// permission requests goes to its driver, and the phone is told what
     /// the agent got (A2), not just that the answer was taken.
     pub live: Option<Arc<aeroric_core::sessions::live::executor::StructuredExecutor>>,
+    /// D4 (2026-11-23): this host's own services. A phone's message to a
+    /// structured session goes through `session.prompt` (the delivery queue,
+    /// receipts, 暂停所有 Agent) and its 停止 through `session.interrupt`,
+    /// exactly as the app's do. `None`: terminal tasks only.
+    pub host_services: Option<Arc<crate::dispatcher::ServiceSet>>,
 }
 
 /// D4: how long a phone's answer waits for the driver's settlement before
@@ -222,6 +227,40 @@ impl CliRemoteHandle {
         Ok(())
     }
 
+    /// D4 (2026-11-23): whether a task runs as a structured session (its
+    /// driver is open, or its runs would go to one).
+    fn structured_task(&self, task_id: &str) -> bool {
+        let Some(live) = &self.live else {
+            return false;
+        };
+        if live.registry().get(task_id).is_some() {
+            return true;
+        }
+        let Some(project) = self.find_project_of_task(task_id) else {
+            return false;
+        };
+        let Some(project_id) = mutations::id_of(&project).map(str::to_string) else {
+            return false;
+        };
+        self.task_record(&project_id, task_id)
+            .is_some_and(|record| {
+                crate::session_live_services::runs_structured(
+                    live,
+                    self.families.as_ref(),
+                    &record,
+                    &project,
+                )
+            })
+    }
+
+    async fn call_host(&self, method: &str, params: Value) -> Result<Value, String> {
+        let services = self
+            .host_services
+            .as_ref()
+            .ok_or("这台 Mac 的宿主没有接上会话服务")?;
+        call_in_process(services, method, params).await
+    }
+
     /// The tree `git.changes` / `git.diff` read: the task's own copy when
     /// the params name a task that has one, else the project.
     fn task_tree(
@@ -301,9 +340,34 @@ impl RemoteHostHandle for CliRemoteHandle {
     }
 
     async fn task_input(&self, task_id: &str, text: &str) -> Result<Value, String> {
+        // D4 (2026-11-23): a structured session takes the message the way
+        // the app sends it; a terminal gets it pasted.
+        if self.structured_task(task_id) {
+            if text.trim().is_empty() {
+                return Err("消息是空的".to_string());
+            }
+            let result = self
+                .call_host("session.prompt", json!({ "taskId": task_id, "text": text }))
+                .await?;
+            return Ok(json!({
+                "sent": true,
+                "accepted": true,
+                "deliveryId": result.get("deliveryId").cloned().unwrap_or(Value::Null),
+            }));
+        }
         let data = format!("\x1b[200~{text}\x1b[201~\r");
         self.executor.input(task_id, data.as_bytes())?;
         Ok(json!({ "sent": true }))
+    }
+
+    async fn task_interrupt(&self, _project_id: &str, task_id: &str) -> Result<Value, String> {
+        if self.structured_task(task_id) {
+            self.call_host("session.interrupt", json!({ "taskId": task_id }))
+                .await?;
+            return Ok(json!({ "ok": true, "taskId": task_id, "stopped": "turn" }));
+        }
+        self.executor.input(task_id, b"\x03")?;
+        Ok(json!({ "ok": true, "taskId": task_id, "stopped": "terminal" }))
     }
 
     async fn task_respond(&self, task_id: &str, params: Value) -> Result<Value, String> {
@@ -1422,6 +1486,35 @@ pub fn attach_live_pending(
             })
             .collect();
         item["pendingApprovals"] = Value::Array(list);
+    }
+}
+
+/// D4 (2026-11-23): one of this host's own methods, called in process as an
+/// authenticated client of its own — the phone's request was already
+/// authenticated by the remote plane. A failure comes back as its message.
+pub async fn call_in_process(
+    services: &Arc<crate::dispatcher::ServiceSet>,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    let mut connection = crate::subscriptions::Connection::new();
+    connection.mark_authenticated("remote-phone".to_string());
+    let context = Arc::new(crate::dispatcher::CallContext {
+        services: Arc::clone(services),
+        connection: Arc::new(tokio::sync::Mutex::new(connection)),
+    });
+    let request = aeroric_protocol::envelope::Request {
+        v: 1,
+        id: format!("remote-{method}"),
+        method: method.to_string(),
+        idempotency_key: None,
+        params,
+        extra: Default::default(),
+    };
+    match crate::dispatcher::dispatch(request, context).await {
+        aeroric_protocol::envelope::Frame::Success(success) => Ok(success.result),
+        aeroric_protocol::envelope::Frame::Failure(failure) => Err(failure.error.message),
+        other => Err(format!("{method} 的回答不对：{other:?}")),
     }
 }
 

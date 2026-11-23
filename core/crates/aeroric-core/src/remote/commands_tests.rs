@@ -358,9 +358,45 @@ async fn remote_file_writes_are_off_until_the_mac_turns_them_on() {
         serde_json::from_value(json!({"enabled": true, "port": 6790})).unwrap();
     assert!(!old.allow_file_writes, "a config written before stays off");
 
+    let told = crate::remote::rpc::rpc_capabilities(&state);
+    assert!(
+        !told.as_array().unwrap().contains(&json!("files.write")),
+        "not offered while off"
+    );
+    assert!(told.as_array().unwrap().contains(&json!("tasks.interrupt")));
+
     state.config.lock().allow_file_writes = true;
     crate::remote::rpc::dispatch(&state, &mac, "project.writeFile", write)
         .await
         .unwrap();
     assert_eq!(mac.writes.load(Ordering::SeqCst), 1);
+    assert!(crate::remote::rpc::rpc_capabilities(&state)
+        .as_array()
+        .unwrap()
+        .contains(&json!("files.write")));
+}
+
+/// D4 (2026-11-23): `task.interrupt` is a command (it changes the Mac), and
+/// a host that cannot interrupt says so.
+#[tokio::test]
+async fn interrupting_a_task_is_a_command_the_host_may_refuse() {
+    assert!(super::COMMANDS.contains(&"task.interrupt"));
+    let state = RemoteState::new_in_memory();
+    let refused = crate::remote::rpc::dispatch(
+        &state,
+        &Counting::default(),
+        "task.interrupt",
+        json!({"projectId": "p1", "taskId": "t1"}),
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.contains("cannot interrupt"), "{refused}");
+    assert!(crate::remote::rpc::dispatch(
+        &state,
+        &Counting::default(),
+        "task.interrupt",
+        json!({"projectId": "p1"})
+    )
+    .await
+    .is_err());
 }

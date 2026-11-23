@@ -328,6 +328,7 @@ fn harness(
         push_transport: Some(Arc::clone(&transport)),
         relay: relay.map(|(url, token)| (url.to_string(), token.map(str::to_string))),
         live: None,
+        host_services: None,
     });
     let _ = topic;
     Harness {

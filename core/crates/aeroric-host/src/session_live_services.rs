@@ -1124,6 +1124,31 @@ fn blocking(live: &Arc<Live>, run: Run) -> Handler {
     })
 }
 
+/// Whether this task's runs go to a structured driver (Codex, Claude, DSH,
+/// OMP sessions) rather than a terminal. D4 (2026-11-23): the remote plane
+/// asks too, to send a phone's message the way the app does.
+pub fn runs_structured(
+    executor: &StructuredExecutor,
+    families: &dyn AgentFamilies,
+    record: &Record,
+    project: &Record,
+) -> bool {
+    working_directory(record, project).is_some_and(|cwd| {
+        executor.takes_task(
+            launch_family_of(record, families),
+            record
+                .get("agent")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            record
+                .get("agentConfigId")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty()),
+            &cwd,
+        )
+    })
+}
+
 fn params<T: DeserializeOwned>(request: &Request) -> Result<T, Box<Frame>> {
     serde_json::from_value(request.params.clone()).map_err(|error| {
         Box::new(failure(
@@ -1159,20 +1184,7 @@ impl Live {
 
     /// Whether this task's runs go to a structured driver.
     fn structured(&self, record: &Record, project: &Record) -> bool {
-        working_directory(record, project).is_some_and(|cwd| {
-            self.executor.takes_task(
-                launch_family_of(record, self.families.as_ref()),
-                record
-                    .get("agent")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                record
-                    .get("agentConfigId")
-                    .and_then(Value::as_str)
-                    .filter(|id| !id.is_empty()),
-                &cwd,
-            )
-        })
+        runs_structured(&self.executor, self.families.as_ref(), record, project)
     }
 
     fn settle_orphaned(&self) -> Vec<String> {
