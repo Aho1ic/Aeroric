@@ -27,6 +27,8 @@ public final class CompanionConnector {
     private let pause: @MainActor (Double) async throws -> Void
     private var loop: Task<Void, Never>?
     private var dropped: CheckedContinuation<Void, Never>?
+    private var readingTranscript = false
+    private var transcriptAgain = false
 
     public static let maxBackoffSeconds = 30.0
 
@@ -51,6 +53,7 @@ public final class CompanionConnector {
         }
         link.onClose = { [weak self] _ in self?.connectionEnded() }
         store.onCommandIssued = { [weak self] in self?.sendWaiting() }
+        store.onTranscriptWanted = { [weak self] in self?.readTranscript() }
         store.pushRegistrationUpload = { [weak self] token, deviceId, platform in
             guard let self else { throw CompanionLinkError.closed("没有连接") }
             return try await self.registerPush(token: token, deviceId: deviceId, platform: platform)
@@ -246,6 +249,41 @@ public final class CompanionConnector {
         guard link.isConnected else { return }
         Task { [weak self] in try? await self?.link.flush() }
     }
+
+    /// D4 (2026-11-23): read the open task's latest messages. One read at a
+    /// time; a request during a read asks for one more after it. Not
+    /// connected: the next snapshot asks again.
+    private func readTranscript() {
+        guard link.isConnected else { return }
+        guard !readingTranscript else {
+            transcriptAgain = true
+            return
+        }
+        guard let taskId = store.transcript.taskId,
+              let task = store.tasks.first(where: { $0.id == taskId }) else { return }
+        readingTranscript = true
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let answer = try await self.link.call("session.messages",
+                                                      ["projectId": task.projectId, "taskId": taskId,
+                                                       "limit": Self.transcriptLimit])
+                self.store.applyTranscript(taskId: taskId, answer: answer)
+            } catch let error as CompanionLinkError {
+                self.store.transcriptFailed(taskId: taskId, message: Self.describe(error))
+            } catch {
+                self.store.transcriptFailed(taskId: taskId, message: String(describing: error))
+            }
+            self.readingTranscript = false
+            if self.transcriptAgain {
+                self.transcriptAgain = false
+                if let taskId = self.store.transcript.taskId { self.store.openTask(taskId) }
+            }
+        }
+    }
+
+    /// How many of the latest messages the task page asks for.
+    public static let transcriptLimit = 40
 
     private func registerPush(token: String, deviceId: String, platform: String) async throws -> String {
         try await link.call("push.register", ["deviceId": deviceId, "token": token, "platform": platform])

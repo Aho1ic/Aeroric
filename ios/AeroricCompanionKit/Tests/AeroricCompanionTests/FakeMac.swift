@@ -21,6 +21,8 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
         var invite = "invite-1"
         var confirmation: Confirmation = .confirm
         var issuedToken = "token-1"
+        /// D4 (2026-11-23): what `session.messages` answers, by task id.
+        var transcripts: [String: [String: Any]] = [:]
     }
 
     enum Confirmation { case confirm, refuse, silent, legacy }
@@ -47,6 +49,18 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
     /// D4 step 6: the Mac's tasks change (a rerun) without a push.
     func setTasks(_ tasks: [String: [[String: Any]]]) {
         lock.lock(); config.tasks = tasks; lock.unlock()
+    }
+
+    /// D4 (2026-11-23): the Mac's transcript of a task changes.
+    func setTranscript(_ taskId: String, _ answer: [String: Any]) {
+        lock.lock(); config.transcripts[taskId] = answer; lock.unlock()
+    }
+
+    /// The `session.messages` requests received: task id and limit.
+    private(set) var transcriptReads: [(taskId: String, limit: Int?)] = []
+    var receivedTranscriptReads: [(taskId: String, limit: Int?)] {
+        lock.lock(); defer { lock.unlock() }
+        return transcriptReads
     }
 
     var receivedParams: [[String: String]] {
@@ -200,6 +214,10 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
             return pushes + [ok(config.projects)]
         case "tasks.list":
             return [ok(config.tasks[params["projectId"] as? String ?? ""] ?? [])]
+        case "session.messages":
+            let taskId = params["taskId"] as? String ?? ""
+            transcriptReads.append((taskId, params["limit"] as? Int))
+            return [ok(config.transcripts[taskId] ?? ["available": false, "reason": "no_session", "messages": []])]
         case "task.respond", "task.create":
             let commandId = params["commandId"] as? String ?? ""
             commands.append((method, commandId))

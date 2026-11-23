@@ -435,7 +435,11 @@ public final class CompanionStore {
     public var selectedProjectId: String?
     public private(set) var tasks: [CompanionTask] = []
     public var selectedTaskId: String?
-    public private(set) var sessionMessages: [String] = []
+    /// D4 (2026-11-23): the session of the task the user opened.
+    public private(set) var transcript: CompanionTranscriptState = .closed
+    /// Told when the open task's session should be read (opened, or the Mac's
+    /// state changed); the connector reads `session.messages`.
+    public var onTranscriptWanted: (@MainActor () -> Void)?
     public private(set) var pendingApprovals: [CompanionApproval] = []
     public private(set) var terminalBuffer: String = ""
     public private(set) var files: [CompanionFileEntry] = []
@@ -547,6 +551,55 @@ public final class CompanionStore {
         pendingApprovals = snapshotApprovals.filter { $0.hostEpoch == newEpoch }
         resyncNeeded = false
         lastPushKind = nil
+        refreshTranscriptAfterSnapshot()
+    }
+
+    // MARK: - The open task's session (D4, 2026-11-23)
+
+    /// The user opened a task: read its session.
+    public func openTask(_ taskId: String) {
+        selectedTaskId = taskId
+        if case let .shown(current, _) = transcript, current.taskId == taskId {
+            transcript = .shown(current, refreshing: true)
+        } else {
+            transcript = .loading(taskId: taskId)
+        }
+        onTranscriptWanted?()
+    }
+
+    /// The user left the task page.
+    public func closeTask(_ taskId: String) {
+        guard transcript.taskId == taskId else { return }
+        transcript = .closed
+    }
+
+    /// What the Mac answered for `taskId`; ignored when the user has since
+    /// left that task.
+    public func applyTranscript(taskId: String, answer: String) {
+        guard transcript.taskId == taskId else { return }
+        transcript = .reading(taskId: taskId, answer: answer)
+    }
+
+    /// The read got no answer. A session already shown stays, so a dropped
+    /// connection does not blank the page.
+    public func transcriptFailed(taskId: String, message: String) {
+        guard transcript.taskId == taskId else { return }
+        if case let .shown(current, _) = transcript {
+            transcript = .shown(current, refreshing: false)
+        } else {
+            transcript = .failed(taskId: taskId, message: message)
+        }
+    }
+
+    /// A snapshot changed what the Mac says: read the open task's session
+    /// again, or say the task is gone.
+    private func refreshTranscriptAfterSnapshot() {
+        guard let taskId = transcript.taskId else { return }
+        guard tasks.contains(where: { $0.id == taskId }) else {
+            transcript = .unavailable(taskId: taskId, reason: "这个任务在 Mac 上已经没有了")
+            return
+        }
+        openTask(taskId)
     }
 
     /// D4 step 4: the project list from the Mac's snapshot (`projects.list`).
@@ -577,7 +630,7 @@ public final class CompanionStore {
         tasks = []
         selectedProjectId = nil
         selectedTaskId = nil
-        sessionMessages = []
+        transcript = .closed
         files = []
         gitChanges = []
         adapterCapabilities = .none

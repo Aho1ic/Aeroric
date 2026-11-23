@@ -245,3 +245,76 @@ fn approvals_and_turns_are_written_for_the_phone() {
         ]
     );
 }
+
+/// D4 (2026-11-23): a phone gets the latest messages of a transcript, long
+/// blocks cut and marked, attachment data left out, and how many it missed.
+#[test]
+fn a_phone_gets_the_latest_messages_cut_to_size() {
+    use aeroric_core::sessions::{SessionContent, SessionMessage};
+    let text = |role: &str, text: &str| SessionMessage {
+        role: role.into(),
+        content: vec![SessionContent::Text { text: text.into() }],
+        message_id: None,
+    };
+    let mut messages: Vec<SessionMessage> =
+        (0..50).map(|i| text("user", &format!("m{i}"))).collect();
+    messages.push(SessionMessage {
+        role: "assistant".into(),
+        content: vec![
+            SessionContent::ToolUse {
+                id: "c1".into(),
+                name: "Bash".into(),
+                input: "x".repeat(super::PHONE_BLOCK_CHARS + 10),
+            },
+            SessionContent::Attachment {
+                name: "a.png".into(),
+                media_type: "image/png".into(),
+                source: "base64...".into(),
+            },
+            SessionContent::Text {
+                text: "完成".into(),
+            },
+        ],
+        message_id: Some("last".into()),
+    });
+
+    let reply = super::phone_transcript(messages.clone(), None);
+    assert_eq!(reply["available"], true);
+    assert_eq!(reply["total"], 51);
+    assert_eq!(reply["omitted"], 51 - super::PHONE_MESSAGES_DEFAULT);
+    let shown = reply["messages"].as_array().unwrap();
+    assert_eq!(shown.len(), super::PHONE_MESSAGES_DEFAULT);
+    assert_eq!(
+        shown[0]["content"][0]["text"], "m11",
+        "the latest, oldest first"
+    );
+    let last = &shown[shown.len() - 1];
+    assert_eq!(last["messageId"], "last");
+    let tool = &last["content"][0];
+    assert_eq!(tool["type"], "tool_use");
+    assert_eq!(
+        tool["input"].as_str().unwrap().chars().count(),
+        super::PHONE_BLOCK_CHARS
+    );
+    assert_eq!(tool["truncated"], true);
+    assert!(
+        last["content"][1].get("source").is_none(),
+        "no attachment data"
+    );
+    assert_eq!(last["content"][1]["truncated"], true);
+    assert_eq!(
+        last["content"][2],
+        serde_json::json!({"type": "text", "text": "完成"})
+    );
+
+    let few = super::phone_transcript(messages.clone(), Some(3));
+    assert_eq!(few["messages"].as_array().unwrap().len(), 3);
+    assert_eq!(few["omitted"], 48);
+    let capped = super::phone_transcript(messages.clone(), Some(10_000));
+    assert_eq!(capped["messages"].as_array().unwrap().len(), 51);
+    assert_eq!(capped["omitted"], 0);
+    assert_eq!(
+        super::phone_transcript(Vec::new(), Some(0))["messages"],
+        serde_json::json!([])
+    );
+}

@@ -222,26 +222,19 @@ impl CliRemoteHandle {
         Ok(())
     }
 
-    fn parse_family_messages(lines: &[String], family: ProtocolFamily) -> Vec<Value> {
+    /// The transcript's messages in the family's own format. A DSH or OMP
+    /// transcript that does not parse says why instead of reading as empty.
+    fn parse_family_messages(
+        lines: &[String],
+        family: ProtocolFamily,
+    ) -> Result<Vec<aeroric_core::sessions::SessionMessage>, String> {
         match family {
-            ProtocolFamily::Dsh => parse_dsh_session_lines(lines)
-                .into_iter()
-                .map(serde_json::to_value)
-                .map(Result::unwrap_or_default)
-                .collect(),
-            ProtocolFamily::Omp => parse_omp_session_lines(lines)
-                .into_iter()
-                .map(serde_json::to_value)
-                .map(Result::unwrap_or_default)
-                .collect(),
+            ProtocolFamily::Dsh => parse_dsh_session_lines(lines),
+            ProtocolFamily::Omp => parse_omp_session_lines(lines),
             other => {
                 let mut messages = Vec::new();
                 parse_session_lines(lines, other == ProtocolFamily::Codex, &mut messages);
-                messages
-                    .into_iter()
-                    .map(serde_json::to_value)
-                    .map(Result::unwrap_or_default)
-                    .collect()
+                Ok(messages)
             }
         }
     }
@@ -555,12 +548,21 @@ impl RemoteHostHandle for CliRemoteHandle {
         let raw = std::fs::read_to_string(&session_path)
             .map_err(|e| format!("cannot read session transcript: {e}"))?;
         let lines: Vec<String> = raw.lines().map(str::to_string).collect();
-        let messages = Self::parse_family_messages(&lines, family);
-        Ok(json!({
-            "available": true,
-            "isCodex": is_codex,
-            "messages": messages,
-        }))
+        let messages = match Self::parse_family_messages(&lines, family) {
+            Ok(messages) => messages,
+            Err(error) => {
+                return Ok(json!({
+                    "available": false, "reason": "unreadable", "detail": error, "messages": []
+                }))
+            }
+        };
+        let limit = params
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize);
+        let mut reply = phone_transcript(messages, limit);
+        reply["isCodex"] = json!(is_codex);
+        Ok(reply)
     }
 
     async fn project_files(&self, params: Value) -> Result<Value, String> {
@@ -1419,6 +1421,61 @@ pub fn attach_live_pending(
             .collect();
         item["pendingApprovals"] = Value::Array(list);
     }
+}
+
+/// How many of a transcript's latest messages `session.messages` returns
+/// when the caller does not say, and at most.
+pub const PHONE_MESSAGES_DEFAULT: usize = 40;
+pub const PHONE_MESSAGES_MAX: usize = 200;
+/// Longest text, thinking, tool input or tool output sent per block.
+pub const PHONE_BLOCK_CHARS: usize = 4000;
+
+/// D4 (2026-11-23): what `session.messages` sends a phone — the latest
+/// `limit` messages in the transcript's wire shape, each long text cut to
+/// [`PHONE_BLOCK_CHARS`] (the block marked `truncated`), attachments without
+/// their data. `total` and `omitted` say how much is not shown.
+pub fn phone_transcript(
+    messages: Vec<aeroric_core::sessions::SessionMessage>,
+    limit: Option<usize>,
+) -> Value {
+    let limit = limit
+        .unwrap_or(PHONE_MESSAGES_DEFAULT)
+        .clamp(1, PHONE_MESSAGES_MAX);
+    let total = messages.len();
+    let start = total.saturating_sub(limit);
+    let shown: Vec<Value> = messages[start..]
+        .iter()
+        .map(|message| {
+            let mut value = serde_json::to_value(message).unwrap_or_default();
+            if let Some(blocks) = value.get_mut("content").and_then(Value::as_array_mut) {
+                for block in blocks {
+                    let Some(block) = block.as_object_mut() else {
+                        continue;
+                    };
+                    if block.remove("source").is_some() {
+                        block.insert("truncated".into(), json!(true));
+                    }
+                    for key in ["text", "thinking", "input", "output"] {
+                        let Some(text) = block.get(key).and_then(Value::as_str) else {
+                            continue;
+                        };
+                        if text.chars().count() > PHONE_BLOCK_CHARS {
+                            let cut: String = text.chars().take(PHONE_BLOCK_CHARS).collect();
+                            block.insert(key.into(), json!(cut));
+                            block.insert("truncated".into(), json!(true));
+                        }
+                    }
+                }
+            }
+            value
+        })
+        .collect();
+    json!({
+        "available": true,
+        "messages": shown,
+        "total": total,
+        "omitted": start,
+    })
 }
 
 /// headless serve 的数据目录路径（审计落点）。

@@ -207,7 +207,7 @@ final class CompanionIntegrationTests: XCTestCase {
         store.handleDeviceRevoked()
         XCTAssertEqual(store.connectionState, .revoked(reason: "Device access revoked by Mac host"))
         // B4-4: nothing the revoked device was shown stays behind.
-        XCTAssertTrue(store.projects.isEmpty && store.tasks.isEmpty && store.sessionMessages.isEmpty)
+        XCTAssertTrue(store.projects.isEmpty && store.tasks.isEmpty && store.transcript == .closed)
         XCTAssertTrue(store.files.isEmpty && store.gitChanges.isEmpty && store.controlOutcomes.isEmpty)
         XCTAssertNil(store.selectedProjectId)
         XCTAssertNil(store.selectedTaskId)

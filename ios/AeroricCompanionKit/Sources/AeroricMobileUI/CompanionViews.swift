@@ -167,95 +167,251 @@ public struct CompanionTasksPane: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Picker("Agent", selection: $selectedAgent) {
-                    Text("Claude").tag("claude")
-                    Text("Codex").tag("codex")
-                    Text("DSH").tag("dsh")
-                    Text("OMP").tag("omp")
-                }
-                .pickerStyle(.segmented)
-                TextField("输入任务指令…", text: $promptDraft)
-                    .textFieldStyle(.roundedBorder)
-                Button("提交") {
-                    do {
-                        _ = try store.createTask(
-                            projectId: store.selectedProjectId ?? "default",
-                            agent: selectedAgent,
-                            prompt: promptDraft
-                        )
-                        promptDraft = ""
-                    } catch {
-                        errorMessage = String(describing: error)
-                    }
-                }
-                .disabled(!store.connectionState.isMacOnline || promptDraft.isEmpty)
-                .accessibilityIdentifier("companion.task.submit")
-            }
-
-            // B4-4: a refused action says why instead of doing nothing.
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .accessibilityIdentifier("companion.error")
-            }
-
-            if !store.pendingApprovals.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("待审批请求").font(.subheadline).bold()
-                    ForEach(store.pendingApprovals) { approval in
-                        let answerable = store.connectionState.isMacOnline && approval.state.canSubmit
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text(approval.summary)
-                                Spacer()
-                                Button("批准") {
-                                    attempt { try store.submitApproval(requestId: approval.requestId, approve: true) }
-                                }
-                                .disabled(!answerable)
-                                Button("拒绝") {
-                                    attempt { try store.submitApproval(requestId: approval.requestId, approve: false) }
-                                }
-                                .disabled(!answerable)
-                            }
-                            if let note = approval.state.note {
-                                Text(note)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .accessibilityIdentifier("companion.approval.note")
-                            }
-                        }
-                    }
-                }
-                .padding(8)
-                .accessibilityIdentifier("companion.approvals")
-            }
-
-            HStack(spacing: 8) {
-                // B4-4: only what the Mac's adapter says it offers.
-                ForEach(store.adapterCapabilities.offeredControls, id: \.self) { ctrl in
-                    Button(ctrl.rawValue) {
-                        if let taskId = store.selectedTaskId ?? store.tasks.first?.id {
-                            attempt { _ = try store.triggerSessionControl(ctrl, taskId: taskId) }
-                        }
-                    }
-                    .disabled(!store.connectionState.isMacOnline)
-                }
-            }
-            .accessibilityIdentifier("companion.session-controls")
-
-            List(store.tasks) { task in
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text(task.title)
-                    Spacer()
+                    Picker("Agent", selection: $selectedAgent) {
+                        Text("Claude").tag("claude")
+                        Text("Codex").tag("codex")
+                        Text("DSH").tag("dsh")
+                        Text("OMP").tag("omp")
+                    }
+                    .pickerStyle(.segmented)
+                    TextField("输入任务指令…", text: $promptDraft)
+                        .textFieldStyle(.roundedBorder)
+                    Button("提交") {
+                        do {
+                            _ = try store.createTask(
+                                projectId: store.selectedProjectId ?? "default",
+                                agent: selectedAgent,
+                                prompt: promptDraft
+                            )
+                            promptDraft = ""
+                        } catch {
+                            errorMessage = String(describing: error)
+                        }
+                    }
+                    .disabled(!store.connectionState.isMacOnline || promptDraft.isEmpty)
+                    .accessibilityIdentifier("companion.task.submit")
+                }
+
+                // B4-4: a refused action says why instead of doing nothing.
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("companion.error")
+                }
+
+                if !store.pendingApprovals.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("待审批请求").font(.subheadline).bold()
+                        ForEach(store.pendingApprovals) { approval in
+                            CompanionApprovalRow(store: store, approval: approval, attempt: attempt)
+                        }
+                    }
+                    .padding(8)
+                    .accessibilityIdentifier("companion.approvals")
+                }
+
+                HStack(spacing: 8) {
+                    // B4-4: only what the Mac's adapter says it offers.
+                    ForEach(store.adapterCapabilities.offeredControls, id: \.self) { ctrl in
+                        Button(ctrl.rawValue) {
+                            if let taskId = store.selectedTaskId ?? store.tasks.first?.id {
+                                attempt { _ = try store.triggerSessionControl(ctrl, taskId: taskId) }
+                            }
+                        }
+                        .disabled(!store.connectionState.isMacOnline)
+                    }
+                }
+                .accessibilityIdentifier("companion.session-controls")
+
+                // D4 (2026-11-23): a task opens its page with the session.
+                List(store.tasks) { task in
+                    NavigationLink(value: task.id) {
+                        HStack {
+                            Text(task.title)
+                            Spacer()
+                            Text("\(task.agent) · \(task.status)")
+                                .font(.caption)
+                        }
+                    }
+                    .accessibilityIdentifier("companion.task.\(task.id)")
+                }
+            }
+            .padding(12)
+            .navigationDestination(for: String.self) { taskId in
+                CompanionTaskPage(store: store, taskId: taskId)
+            }
+        }
+    }
+}
+
+/// One approval with its buttons and what became of the answer.
+struct CompanionApprovalRow: View {
+    @Bindable var store: CompanionStore
+    let approval: CompanionApproval
+    let attempt: (() throws -> Void) -> Void
+
+    var body: some View {
+        let answerable = store.connectionState.isMacOnline && approval.state.canSubmit
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(approval.summary)
+                Spacer()
+                Button("批准") {
+                    attempt { try store.submitApproval(requestId: approval.requestId, approve: true) }
+                }
+                .disabled(!answerable)
+                Button("拒绝") {
+                    attempt { try store.submitApproval(requestId: approval.requestId, approve: false) }
+                }
+                .disabled(!answerable)
+            }
+            if let note = approval.state.note {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("companion.approval.note")
+            }
+        }
+    }
+}
+
+/// D4 (2026-11-23): one task — its open approvals and the latest messages of
+/// its session, read again whenever the Mac says the task changed.
+public struct CompanionTaskPage: View {
+    @Bindable var store: CompanionStore
+    let taskId: String
+    @State private var errorMessage: String?
+
+    public init(store: CompanionStore, taskId: String) {
+        self.store = store
+        self.taskId = taskId
+    }
+
+    private var task: CompanionTask? { store.tasks.first { $0.id == taskId } }
+
+    private func attempt(_ action: () throws -> Void) {
+        do {
+            try action()
+            errorMessage = nil
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    public var body: some View {
+        List {
+            if let task {
+                Section {
                     Text("\(task.agent) · \(task.status)")
                         .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            let approvals = store.pendingApprovals.filter { $0.taskId == taskId }
+            if !approvals.isEmpty {
+                Section("待审批") {
+                    ForEach(approvals) { approval in
+                        CompanionApprovalRow(store: store, approval: approval, attempt: attempt)
+                    }
+                    if let errorMessage {
+                        Text(errorMessage).font(.caption).foregroundStyle(.red)
+                    }
+                }
+            }
+            Section("会话") { transcriptSection }
+        }
+        .navigationTitle(task?.title ?? "任务")
+        .accessibilityIdentifier("companion.task-page")
+        .onAppear { store.openTask(taskId) }
+        .onDisappear { store.closeTask(taskId) }
+    }
+
+    @ViewBuilder
+    private var transcriptSection: some View {
+        switch store.transcript {
+        case .closed, .loading:
+            HStack {
+                ProgressView()
+                Text("正在从 Mac 读会话…").foregroundStyle(.secondary)
+            }
+        case let .shown(transcript, refreshing):
+            if transcript.messages.isEmpty {
+                Text("会话里还没有消息").foregroundStyle(.secondary)
+            }
+            if transcript.omitted > 0 {
+                Text("只显示最近 \(transcript.messages.count) 条，较早的 \(transcript.omitted) 条在 Mac 上看")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("companion.transcript.omitted")
+            }
+            ForEach(transcript.messages) { message in
+                CompanionMessageView(message: message)
+            }
+            if refreshing {
+                Text("正在更新…").font(.caption).foregroundStyle(.secondary)
+            }
+        case let .unavailable(_, reason):
+            Text(reason)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("companion.transcript.unavailable")
+        case let .failed(_, message):
+            VStack(alignment: .leading, spacing: 6) {
+                Text("没读到会话：\(message)").foregroundStyle(.red)
+                Button("重试") { store.openTask(taskId) }
+                    .disabled(!store.connectionState.isMacOnline)
+            }
+            .accessibilityIdentifier("companion.transcript.failed")
+        }
+    }
+}
+
+struct CompanionMessageView: View {
+    let message: CompanionMessage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(message.role == "user" ? "你" : "Agent")
+                .font(.caption)
+                .bold()
+                .foregroundStyle(message.role == "user" ? Color.accentColor : Color.secondary)
+            ForEach(Array(message.lines.enumerated()), id: \.offset) { _, line in
+                lineView(line)
+                if line.truncated {
+                    Text("（太长，只显示了前面一部分）").font(.caption2).foregroundStyle(.secondary)
                 }
             }
         }
-        .padding(12)
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func lineView(_ line: CompanionMessageLine) -> some View {
+        switch line.kind {
+        case .text:
+            Text(line.text).textSelection(.enabled)
+        case .thinking:
+            Text(line.text).font(.callout).italic().foregroundStyle(.secondary).lineLimit(4)
+        case .tool:
+            Text("工具 · \(line.text)")
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(3)
+        case .toolResult:
+            Text(line.text)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(6)
+        case .failedToolResult:
+            Text(line.text)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.red)
+                .lineLimit(6)
+        case .attachment:
+            Text("附件 · \(line.text)").font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
