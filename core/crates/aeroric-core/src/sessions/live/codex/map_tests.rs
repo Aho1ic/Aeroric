@@ -324,43 +324,29 @@ fn policies_and_version_gate() {
     assert!(version_supported("garbage").is_err());
 }
 
-/// The oldest supported Codex and the newest checked (E 批 2026-11-08) both
-/// have every method the driver calls, takes and listens for.
+/// Every Codex snapshot in `contracts/codex/` (the oldest supported, the
+/// newest checked, and any added for an upgrade, E9) has every method the
+/// driver calls, takes and listens for.
 #[test]
 fn codex_methods_exist_in_the_snapshot() {
-    for snapshot in ["app-server-0.162.1", "app-server-0.167.0"] {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../contracts/codex")
-            .join(snapshot);
-        let methods = |file: &str| -> Vec<String> {
-            let schema: Value =
-                serde_json::from_slice(&std::fs::read(dir.join(file)).expect(file)).unwrap();
-            schema["oneOf"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|v| {
-                    v.pointer("/properties/method/enum/0")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .collect()
-        };
-        let client = methods("ClientRequest.json");
+    use crate::sessions::live::codex::contract::{methods, snapshots};
+    for snapshot in snapshots() {
+        let snapshot_name = &snapshot.name;
+        let client = methods(&snapshot.client_requests);
         for method in CLIENT_METHODS {
             assert!(
                 client.iter().any(|m| m == method),
-                "{method} missing from {snapshot}"
+                "{method} missing from {snapshot_name}"
             );
         }
-        let server = methods("ServerRequest.json");
+        let server = methods(&snapshot.server_requests);
         for method in SERVER_REQUESTS {
             assert!(
                 server.iter().any(|m| m == method),
-                "{method} missing from {snapshot}"
+                "{method} missing from {snapshot_name}"
             );
         }
-        let notifications = methods("ServerNotification.json");
+        let notifications = methods(&snapshot.notifications);
         for method in [
             "turn/started",
             "turn/completed",
@@ -374,7 +360,7 @@ fn codex_methods_exist_in_the_snapshot() {
         ] {
             assert!(
                 notifications.iter().any(|m| m == method),
-                "{method} missing from {snapshot}"
+                "{method} missing from {snapshot_name}"
             );
         }
     }

@@ -425,6 +425,20 @@
           "minCases": 17,
           "$note": "负例在临时副本上跑，绝不改动已冻结清单。首次实现即抓出一个假阳性：按引用比较对象让自校验把自己刚写的分片判成不匹配。2026-09-28 数组分片那批用例又抓到一个更严重的：重建断言只比对计划载荷、没比对磁盘上的片，等于对手工改过的分片全盲；现在从磁盘重组，且计划不再产出的同名孤儿片必须报错。同批还查明 `pnpm native:digest --check` 展开成 `--write --check`，也就是一直在写不在查——CLI 现在拒绝同时给两个模式。",
           "timeoutMs": 300000
+        },
+        {
+          "name": "codex-contract-diff-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/codex-contract-diff.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 5,
+          "$note": "E9：升级 Codex 前对比 contracts/codex/ 里两份快照的方法表和驱动在用方法的参数。驱动实际发出的请求由 Rust 的假 Codex 逐条按每份快照核对（sessions::live::codex::contract），这里只测报告本身。",
+          "timeoutMs": 120000
         }
       ]
     },

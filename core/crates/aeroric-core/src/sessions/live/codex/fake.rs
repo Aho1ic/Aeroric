@@ -1,6 +1,7 @@
 //! Test support: a scripted in-process `codex app-server` peer and a sink that
 //! records what a driver reported.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,10 +17,14 @@ use crate::tasks::{ProtocolFamily, TaskStatus};
 
 const WAIT: Duration = Duration::from_secs(5);
 
-/// The server's side of one launched process.
+/// The server's side of one launched process. Everything the driver sends
+/// is checked against the Codex schema snapshots (E9, [`super::contract`]).
 pub struct Peer {
     from_client: mpsc::UnboundedReceiver<String>,
     to_client: Option<mpsc::UnboundedSender<String>>,
+    /// The id → method of each request this peer sent, so an answer is
+    /// checked against the request it answers.
+    asked: Mutex<HashMap<String, String>>,
 }
 
 impl Peer {
@@ -28,7 +33,9 @@ impl Peer {
             .await
             .expect("the client sent nothing")
             .expect("the client closed");
-        serde_json::from_str(&line).expect("a JSON line")
+        let message: Value = serde_json::from_str(&line).expect("a JSON line");
+        super::contract::assert_fits(&message, &self.asked.lock());
+        message
     }
 
     pub async fn expect(&mut self, method: &str) -> Value {
@@ -64,6 +71,7 @@ impl Peer {
     }
 
     pub fn request(&self, id: i64, method: &str, params: Value) {
+        self.asked.lock().insert(id.to_string(), method.to_string());
         self.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
     }
 
@@ -94,6 +102,7 @@ pub fn launcher() -> (Launcher, mpsc::UnboundedReceiver<Peer>) {
         let _ = peers_tx.send(Peer {
             from_client,
             to_client: Some(to_client),
+            asked: Mutex::default(),
         });
         Ok((transport, None))
     });

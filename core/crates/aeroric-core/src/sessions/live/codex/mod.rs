@@ -7,6 +7,8 @@ pub mod rpc;
 pub mod server;
 
 #[cfg(test)]
+pub(crate) mod contract;
+#[cfg(test)]
 pub(crate) mod fake;
 #[cfg(test)]
 mod real_tests;

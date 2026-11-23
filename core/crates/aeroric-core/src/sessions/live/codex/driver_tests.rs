@@ -570,6 +570,30 @@ async fn the_context_server_is_required() {
     assert_eq!(server["command"], "aeroric-cli");
 }
 
+/// E9: `/compact` and `/review` go out in Codex's terms. The peer checks
+/// both requests against every snapshot in `contracts/codex/`.
+#[tokio::test]
+async fn slash_commands_reach_codex_in_every_snapshot_s_terms() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    complete(&peer, "completed");
+    let sink = Arc::clone(&h.sink);
+    until("done", move || sink.last_status() == Some(TaskStatus::Done)).await;
+
+    h.session.command(SlashCommand::Compact).unwrap();
+    let compact = peer.expect("thread/compact/start").await;
+    assert_eq!(compact["params"], json!({"threadId": "th1"}));
+    peer.reply(&compact, json!({}));
+
+    h.session.command(SlashCommand::Review).unwrap();
+    let review = peer.expect("review/start").await;
+    assert_eq!(
+        review["params"]["target"],
+        json!({"type": "uncommittedChanges"})
+    );
+    peer.reply(&review, json!({}));
+}
+
 /// R1-2: the delivery receipts the driver pushed.
 fn receipts(sink: &Sink) -> Vec<(String, ReceiptOutcome)> {
     sink.updates
