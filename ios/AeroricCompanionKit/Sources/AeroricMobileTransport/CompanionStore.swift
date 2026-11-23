@@ -60,6 +60,9 @@ public struct CompanionTask: Identifiable, Equatable, Sendable {
     public var agent: String
     public var status: String
     public var permissionMode: String
+    /// D4 step 6: which run of the task the Mac last said this is
+    /// (`generation`); commands about it carry it so a rerun refuses them.
+    public var generation: String?
 
     public init(
         id: String,
@@ -67,7 +70,8 @@ public struct CompanionTask: Identifiable, Equatable, Sendable {
         title: String,
         agent: String,
         status: String,
-        permissionMode: String = "ask"
+        permissionMode: String = "ask",
+        generation: String? = nil
     ) {
         self.id = id
         self.projectId = projectId
@@ -75,6 +79,7 @@ public struct CompanionTask: Identifiable, Equatable, Sendable {
         self.agent = agent
         self.status = status
         self.permissionMode = permissionMode
+        self.generation = generation
     }
 }
 
@@ -195,6 +200,9 @@ public struct CompanionCommand: Identifiable, Equatable, Sendable {
 
 /// D4: the prefix of the Mac's refusal of a command based on an earlier start.
 public let staleHostEpochPrefix = "STALE_HOST_EPOCH"
+/// D4 step 6: the prefix of the Mac's refusal of a command based on an
+/// earlier run of its task.
+public let staleTaskGenerationPrefix = "STALE_TASK_GENERATION"
 
 public struct CompanionFileEntry: Identifiable, Equatable, Sendable {
     public var id: String { path }
@@ -698,7 +706,7 @@ public final class CompanionStore {
     public func applyCommandReply(commandId: String, failure: String? = nil) {
         guard let index = outbox.firstIndex(where: { $0.commandId == commandId }) else { return }
         outbox.remove(at: index)
-        if let failure, failure.hasPrefix(staleHostEpochPrefix) {
+        if let failure, failure.hasPrefix(staleHostEpochPrefix) || failure.hasPrefix(staleTaskGenerationPrefix) {
             resyncNeeded = true
         }
     }
@@ -742,7 +750,13 @@ public final class CompanionStore {
         }
         pendingApprovals[index].state = .submitting(approve: approve)
         let action = approve ? "approve" : "deny"
-        issue("task.respond", ["taskId": approval.taskId, "requestId": requestId, "action": action], epoch: activeEpoch)
+        var params = ["taskId": approval.taskId, "requestId": requestId, "action": action]
+        // D4 step 6: the run this answer was decided on.
+        if let task = tasks.first(where: { $0.id == approval.taskId }) {
+            params["projectId"] = task.projectId
+            if let generation = task.generation { params["basedOnGeneration"] = generation }
+        }
+        issue("task.respond", params, epoch: activeEpoch)
         sentFramesLog.append("task.respond:\(approval.taskId):\(requestId):\(action)")
     }
 

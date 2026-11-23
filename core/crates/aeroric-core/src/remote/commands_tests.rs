@@ -5,7 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use super::{Admit, CommandLedger, KEEP_MS, STALE};
+use super::{Admit, CommandLedger, KEEP_MS, STALE, STALE_TASK};
 use crate::remote::auth::AuthOutcome;
 use crate::remote::server::dispatch_once;
 use crate::remote::services::{RemoteHostHandle, RemoteTerminalStreams};
@@ -67,6 +67,8 @@ fn a_command_id_names_one_command_per_device() {
 #[derive(Default)]
 struct Counting {
     cancels: AtomicUsize,
+    /// D4 step 6: what `load_project_tasks` answers.
+    tasks: parking_lot::Mutex<Value>,
 }
 
 #[async_trait]
@@ -83,7 +85,8 @@ impl RemoteHostHandle for Counting {
         Ok(())
     }
     async fn load_project_tasks(&self, _: &str) -> Result<Value, String> {
-        Ok(json!([]))
+        let tasks = self.tasks.lock().clone();
+        Ok(if tasks.is_null() { json!([]) } else { tasks })
     }
     async fn task_input(&self, _: &str, _: &str) -> Result<Value, String> {
         Err("no".into())
@@ -244,4 +247,82 @@ async fn hello_says_which_host_start_this_is() {
         .as_array()
         .unwrap()
         .contains(&json!("commands.idempotent")));
+}
+
+/// D4 step 6 (2026-11-23): a command names the run of its task it was
+/// decided on. Matching: run. Run again since: refused, nothing reaches the
+/// Mac. The same `commandId` resent after the task ran again: the first
+/// result. The task gone: refused.
+#[tokio::test]
+async fn a_command_based_on_an_earlier_run_of_its_task_is_refused() {
+    let state = RemoteState::new_in_memory();
+    let mac = Counting::default();
+    *mac.tasks.lock() = json!([{"id": "t1", "projectId": "p1", "generation": "3"}]);
+    let device = paired(&state);
+    let epoch = state.host_epoch.clone();
+    let based = |id: &str, generation: Value| json!({"projectId": "p1", "taskId": "t1", "commandId": id, "hostEpoch": epoch, "basedOnGeneration": generation});
+
+    let ran = dispatch_once(
+        &state,
+        &mac,
+        &device,
+        "task.cancel",
+        based("c1", json!("3")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ran["n"], 1);
+
+    let stale = dispatch_once(&state, &mac, &device, "task.cancel", based("c2", json!(2)))
+        .await
+        .unwrap_err();
+    assert!(stale.starts_with(STALE_TASK), "{stale}");
+    assert!(
+        stale.contains("第 3 次") && stale.contains("第 2 次"),
+        "{stale}"
+    );
+    assert_eq!(
+        mac.cancels.load(Ordering::SeqCst),
+        1,
+        "a refused command never runs"
+    );
+
+    *mac.tasks.lock() = json!([{"id": "t1", "projectId": "p1", "generation": "4"}]);
+    let again = dispatch_once(
+        &state,
+        &mac,
+        &device,
+        "task.cancel",
+        based("c1", json!("3")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again, ran, "a resend keeps the first verdict");
+
+    *mac.tasks.lock() = json!([]);
+    let gone = dispatch_once(
+        &state,
+        &mac,
+        &device,
+        "task.cancel",
+        based("c3", json!("4")),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        gone.starts_with(STALE_TASK) && gone.contains("不在了"),
+        "{gone}"
+    );
+
+    // Older records have no generation: the command passes.
+    *mac.tasks.lock() = json!([{"id": "t1", "projectId": "p1"}]);
+    assert!(dispatch_once(
+        &state,
+        &mac,
+        &device,
+        "task.cancel",
+        based("c4", json!("9"))
+    )
+    .await
+    .is_ok());
 }

@@ -59,6 +59,8 @@ public final class CompanionLink {
     /// after `handleReconnect`, which resets the watermark to `latestSeq`.
     private var syncing = false
     private var heldPushes: [UInt64] = []
+    /// D4 step 6: a re-read is running (one at a time).
+    private var resyncing = false
 
     public init(store: CompanionStore) {
         self.store = store
@@ -272,7 +274,8 @@ public final class CompanionLink {
                     title: (record["name"] as? String) ?? (record["title"] as? String) ?? taskId,
                     agent: (record["agent"] as? String) ?? "",
                     status: (record["status"] as? String) ?? "",
-                    permissionMode: (record["permissionMode"] as? String) ?? "ask"))
+                    permissionMode: (record["permissionMode"] as? String) ?? "ask",
+                    generation: (record["generation"] as? String) ?? (record["generation"] as? NSNumber)?.stringValue))
                 if let approval = record["approval"] as? [String: Any],
                    let requestId = approval["requestId"] as? String {
                     let summary = (approval["toolName"] as? String) ?? (approval["kind"] as? String) ?? "待审批"
@@ -351,6 +354,7 @@ public final class CompanionLink {
                 switch decoded.kind {
                 case .control:
                     handleControl(String(decoding: decoded.plaintext, as: UTF8.self))
+                    resyncIfNeeded()
                 case .terminal:
                     if let frame = TerminalFrame.decode(decoded.plaintext) { store.ingestTerminalFrame(frame) }
                 }
@@ -362,6 +366,35 @@ public final class CompanionLink {
                 await closeSocket(reason: reason == "signed-out" ? "电脑端已退出远程连接" : "和 Mac 的连接断开了",
                                   remoteClosed: true)
                 return
+            }
+        }
+    }
+
+    /// D4 step 6: the store no longer trusts what it shows (a stale refusal,
+    /// a gap, an overflow): read the Mac's state again on this connection.
+    private func resyncIfNeeded() {
+        guard store.resyncNeeded, isConnected, !syncing, !resyncing,
+              let epoch = store.currentEpoch, case let .macOnline(_, mode) = store.connectionState else { return }
+        resyncing = true
+        let current = generation
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.resyncing = false }
+            do {
+                self.syncing = true
+                let since = Self.object(try await self.read("events.since", ["after": self.store.lastEventSeq]))
+                let latestSeq = Self.uint(since["latestSeq"]) ?? self.store.lastEventSeq
+                let (projects, tasks, approvals) = try await self.readSnapshot(epoch: epoch)
+                guard self.generation == current else { return }
+                self.store.applySnapshotProjects(projects)
+                self.store.handleReconnect(newEpoch: epoch, latestHostSeq: max(latestSeq, self.store.lastEventSeq),
+                                           mode: mode, snapshotTasks: tasks, snapshotApprovals: approvals)
+                self.syncing = false
+                for seq in self.heldPushes.sorted() { self.store.ingestHostEvent(seq: seq) }
+                self.heldPushes = []
+            } catch {
+                // Left for the next frame or the next connection.
+                if self.generation == current { self.syncing = false }
             }
         }
     }

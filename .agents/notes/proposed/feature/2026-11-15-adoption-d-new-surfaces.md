@@ -122,7 +122,7 @@ Status: proposed
 
 ### D4 手机：先只读跟随，再做带回执的审批
 
-2026-11-21 第一步已实现，见 [D4 第一步笔记](../../implemented/feature/2026-11-21-d4-command-identity.md)：做法第 1、2、5 条的宿主一侧，`commandId` 去重、`hostEpoch` 判旧（第 2 条里 `task_id`、`generation`、修订号的判旧还没做）、撤销设备清结果。2026-11-21 第二步已实现，见 [D4 第二步笔记](../../implemented/feature/2026-11-21-d4-phone-commands.md)：手机端的命令带上这两项，序号跳变、溢出、过期拒绝都要求重新同步（第 3 条）。2026-11-21 第三步已实现，见 [D4 第三步笔记](../../implemented/feature/2026-11-21-d4-approval-receipts.md)：第二阶段的审批回执（第 4 条）。2026-11-23 第四步已实现，见 [D4 第四步笔记](../../implemented/feature/2026-11-23-d4-companion-link.md)：手机端的连接循环 `CompanionLink`（握手、认证、快照、重发、回答和推送交给 store），用假连接测试。2026-11-23 第五步已实现，见 [D4 第五步笔记](../../implemented/feature/2026-11-23-d4-pairing-and-reconnect.md)：粘贴配对链接配对（先落盘再确认）、凭据存钥匙串、App 进前台连接、断了退避重连、命令自动发出、推送登记走真实通道。扫码、按 `generation` 和修订号判旧还没做。
+2026-11-21 第一步已实现，见 [D4 第一步笔记](../../implemented/feature/2026-11-21-d4-command-identity.md)：做法第 1、2、5 条的宿主一侧，`commandId` 去重、`hostEpoch` 判旧（第 2 条里 `task_id`、`generation`、修订号的判旧还没做）、撤销设备清结果。2026-11-21 第二步已实现，见 [D4 第二步笔记](../../implemented/feature/2026-11-21-d4-phone-commands.md)：手机端的命令带上这两项，序号跳变、溢出、过期拒绝都要求重新同步（第 3 条）。2026-11-21 第三步已实现，见 [D4 第三步笔记](../../implemented/feature/2026-11-21-d4-approval-receipts.md)：第二阶段的审批回执（第 4 条）。2026-11-23 第四步已实现，见 [D4 第四步笔记](../../implemented/feature/2026-11-23-d4-companion-link.md)：手机端的连接循环 `CompanionLink`（握手、认证、快照、重发、回答和推送交给 store），用假连接测试。2026-11-23 第五步已实现，见 [D4 第五步笔记](../../implemented/feature/2026-11-23-d4-pairing-and-reconnect.md)：粘贴配对链接配对（先落盘再确认）、凭据存钥匙串、App 进前台连接、断了退避重连、命令自动发出、推送登记走真实通道。2026-11-23 第六步已实现，见 [D4 第六步笔记](../../implemented/feature/2026-11-23-d4-task-generation-staleness.md)：命令带上任务的 `generation`，任务重新运行过就拒绝；手机判出状态过期就在同一条连接上重读。对象修订号没有用：任务列表的修订号是整个项目一份，拿它判几乎每条命令都会被拒。扫码还没做。
 
 **前置：** A1、A2、C8。
 

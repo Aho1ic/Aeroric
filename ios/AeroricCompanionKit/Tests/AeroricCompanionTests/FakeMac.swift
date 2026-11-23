@@ -36,10 +36,22 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
     private(set) var executed: [String] = []
     private(set) var closedByPhone = false
     private(set) var confirmations = 0
+    /// D4 step 6: each command's params as strings.
+    private(set) var commandParams: [[String: String]] = []
 
     init(responder: ServerHandshakeResponder, config: Config = Config()) {
         self.responder = responder
         self.config = config
+    }
+
+    /// D4 step 6: the Mac's tasks change (a rerun) without a push.
+    func setTasks(_ tasks: [String: [[String: Any]]]) {
+        lock.lock(); config.tasks = tasks; lock.unlock()
+    }
+
+    var receivedParams: [[String: String]] {
+        lock.lock(); defer { lock.unlock() }
+        return commandParams
     }
 
     func setRespondResult(_ result: [String: Any]?) {
@@ -190,6 +202,17 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
         case "task.respond", "task.create":
             let commandId = params["commandId"] as? String ?? ""
             commands.append((method, commandId))
+            commandParams.append(params.compactMapValues { $0 as? String })
+            // D4 step 6: a command based on an earlier run of its task.
+            if let based = params["basedOnGeneration"] as? String,
+               let taskId = params["taskId"] as? String, let projectId = params["projectId"] as? String {
+                let task = config.tasks[projectId]?.first { $0["id"] as? String == taskId }
+                if let current = task?["generation"] as? String, current != based {
+                    return [encrypted(["v": 3, "type": "response", "id": id, "ok": false,
+                                       "error": ["code": "remote_error",
+                                                 "message": "STALE_TASK_GENERATION: 任务 \(taskId) 已经重新运行过"]])]
+                }
+            }
             if params["hostEpoch"] as? String != config.hostEpoch {
                 return [encrypted(["v": 3, "type": "response", "id": id, "ok": false,
                                    "error": ["code": "remote_error", "message": "STALE_HOST_EPOCH: restarted"]])]

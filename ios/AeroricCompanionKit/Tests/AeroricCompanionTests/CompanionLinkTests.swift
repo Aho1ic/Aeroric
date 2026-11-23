@@ -72,9 +72,12 @@ final class CompanionLinkTests: XCTestCase {
         socket.push(seq: 7)
         await eventually("seq 7 arrives") { store.lastEventSeq == 7 }
         XCTAssertFalse(store.resyncNeeded)
+        // Seq 8 was missed: the phone reads the Mac again (D4 step 6).
+        let snapshots = store.snapshotResyncCount
         socket.push(seq: 9)
-        await eventually("seq 9 arrives") { store.lastEventSeq == 9 }
-        XCTAssertTrue(store.resyncNeeded, "seq 8 was missed")
+        await eventually("read again after the gap") { store.snapshotResyncCount == snapshots + 1 }
+        XCTAssertEqual(store.lastEventSeq, 9)
+        XCTAssertFalse(store.resyncNeeded)
     }
 
     @MainActor
@@ -178,5 +181,51 @@ final class CompanionLinkTests: XCTestCase {
         socket.closeFromMac(reason: "signed-out")
         await eventually("offline") { !store.connectionState.isMacOnline }
         XCTAssertEqual(store.connectionState, .disconnected(reason: "电脑端已退出远程连接"))
+    }
+
+    /// D4 step 6 (2026-11-23): an answer names the run it was decided on; a
+    /// rerun on the Mac refuses it, and the phone reads the Mac again at once.
+    @MainActor
+    func testAnAnswerToAnEarlierRunIsRefusedAndThePhoneResyncs() async throws {
+        let store = try pairedStore()
+        func record(_ generation: String, _ approval: String) -> [String: Any] {
+            ["id": "t1", "projectId": "p1", "name": "修 bug", "agent": "codex", "status": "input_required",
+             "generation": generation, "approval": ["requestId": approval, "kind": "command", "toolName": "Bash"]]
+        }
+        var config = FakeMac.Config()
+        config.tasks = ["p1": [record("3", "r1")]]
+        let socket = FakeMac(responder: mac, config: config)
+        let link = CompanionLink(store: store)
+        try await link.connect(socket: socket, deviceToken: "token-1", mode: .directLAN)
+        XCTAssertEqual(store.tasks.first?.generation, "3")
+        let snapshots = store.snapshotResyncCount
+
+        // The task is stopped and run again on the Mac; the phone still shows r1.
+        socket.setTasks(["p1": [record("4", "r2")]])
+        try store.submitApproval(requestId: "r1", approve: true)
+        try await link.flush()
+        XCTAssertEqual(socket.receivedParams.first?["basedOnGeneration"], "3")
+        XCTAssertEqual(socket.receivedParams.first?["projectId"], "p1")
+
+        await eventually("read again") { store.snapshotResyncCount == snapshots + 1 }
+        XCTAssertEqual(store.pendingApprovals.map(\.requestId), ["r2"])
+        XCTAssertEqual(store.tasks.first?.generation, "4")
+        XCTAssertFalse(store.resyncNeeded)
+        XCTAssertTrue(store.outbox.isEmpty)
+        XCTAssertTrue(link.isConnected, "on the same connection")
+    }
+
+    /// D4 step 6: a gap in the pushes is read again on the spot too.
+    @MainActor
+    func testAGapInThePushesIsReadAgainOnTheSameConnection() async throws {
+        let store = try pairedStore()
+        let socket = FakeMac(responder: mac)
+        let link = CompanionLink(store: store)
+        try await link.connect(socket: socket, deviceToken: "token-1", mode: .directLAN)
+        let snapshots = store.snapshotResyncCount
+        socket.push(seq: 3)
+        await eventually("read again") { store.snapshotResyncCount == snapshots + 1 }
+        XCTAssertFalse(store.resyncNeeded)
+        XCTAssertEqual(store.lastEventSeq, 3)
     }
 }

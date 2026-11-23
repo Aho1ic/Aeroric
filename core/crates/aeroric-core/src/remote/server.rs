@@ -1151,15 +1151,19 @@ pub(crate) async fn dispatch_once(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
+    // D4 step 6: a command based on an earlier run of its task is refused.
+    let checked = |params: serde_json::Value| async move {
+        if COMMANDS.contains(&method) {
+            crate::remote::commands::check_task_generation(handle, &params).await?;
+        }
+        crate::remote::rpc::dispatch(state, handle, method, params).await
+    };
     match state
         .commands
         .admit(device_id, method, &params, &state.host_epoch, now)
     {
-        Admit::Run => crate::remote::rpc::dispatch(state, handle, method, params).await,
+        Admit::Run => checked(params).await,
         Admit::Refuse(why) => Err(why),
-        Admit::Once(outcome) => outcome
-            .get_or_init(|| crate::remote::rpc::dispatch(state, handle, method, params))
-            .await
-            .clone(),
+        Admit::Once(outcome) => outcome.get_or_init(|| checked(params)).await.clone(),
     }
 }

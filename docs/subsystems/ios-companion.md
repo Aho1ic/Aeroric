@@ -17,6 +17,7 @@
 - 命令带身份（D4）：审批和新建任务各生成一个 `CompanionCommand`，带设备生成的 `commandId` 和当时的 `hostEpoch`，发出后留在 `outbox` 直到 Mac 回答；重连到同一次启动时原样重发（同一个 id，Mac 只执行一次），Mac 换了启动就丢掉、记进 `droppedCommands`，不重发；Mac 以 `STALE_HOST_EPOCH` 拒绝、事件序号跳变或缓冲溢出时置 `resyncNeeded`，状态横幅写“正在和 Mac 重新同步”。
 - 连接循环（D4 第四步）：`CompanionLink` 照 `core/.../remote/server.rs` 说话：明文 `hello` 握手（钉配对时的公钥）、v2 `auth`、之后 v3；连上读 `hello`（`hostEpoch`）、`events.since`（水位线）、`projects.list` 和各项目的 `tasks.list` 组成快照交给 `handleReconnect`，读的时候到的推送攒到之后再按序号交；`flush()` 发出 `outbox` 里这条连接没发过的命令，回答按请求 id 交给 `applyCommandReply` / `applyApprovalReply`；断开时等回答的审批记为不确定，命令留着等同一次启动重发；令牌不认识按设备撤销处理。网络藏在 `CompanionSocket` 后面，真机用 `URLSessionCompanionSocket`。
 - 配对与重连（D4 第五步）：`CompanionPairingOffer.parse` 读 Mac 的 `aeroric://pair?code=…`；`CompanionLink.pair` 用邀请认证，凭据先 `stagePending` 再发 `pairing.confirm`，`confirmed` 后转正、被拒丢掉、没回答留着（下次启动先拿它去连）；凭据在钥匙串（`KeychainCredentialStore`，本机解锁后可读、不同步）。`CompanionConnector` 由 App 持有：进前台 `start()`、进后台 `stop()`，按顺序试每个地址（局域网在前、Relay 在后），连不上退避到最多 30 秒，断了重连，令牌被拒清凭据；store 的 `onCommandIssued` 接到 `flush()`，`push.register` 走已认证的通道。“配对与连接”一页可粘贴配对链接、看连接状态、取消配对。扫码和点链接跳进 App 还没做。
+- 按任务的运行次数判旧（D4 第六步）：`task.respond` 带 `projectId` 和快照里的 `basedOnGeneration`，宿主（`commands::check_task_generation`，在只执行一次之内）发现任务已重新运行或不在了，以 `STALE_TASK_GENERATION` 拒绝；手机把它和 `STALE_HOST_EPOCH` 一样置 `resyncNeeded`，连接循环看到 `resyncNeeded` 就在同一条连接上重读快照（推送跳号、缓冲溢出也一样）。
 - 范围是完整任务伴随与相关高级操作，不复制桌面 IDE/DAP、数据库网格、基础设施与笔记工作区。
 
 ## 测试

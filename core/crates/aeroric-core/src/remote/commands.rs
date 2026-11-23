@@ -47,6 +47,53 @@ pub const COMMANDS: &[&str] = &[
 
 /// The prefix of a stale-command refusal (the phone matches it).
 pub const STALE: &str = "STALE_HOST_EPOCH";
+/// D4 step 6: the prefix of a refusal for a command based on an earlier run
+/// of its task (the phone matches it too).
+pub const STALE_TASK: &str = "STALE_TASK_GENERATION";
+
+/// D4 step 6 (2026-11-23): a command that names the run it was decided on
+/// (`basedOnGeneration`, with `taskId` and `projectId`) is refused when the
+/// task has run again since, or is gone. A task without a `generation`
+/// (older records) passes. Runs inside the once-per-`commandId` cell, so a
+/// resend gets the first verdict.
+pub async fn check_task_generation(
+    handle: &dyn crate::remote::services::RemoteHostHandle,
+    params: &Value,
+) -> Result<(), String> {
+    let Some(based) = params.get("basedOnGeneration").map(generation_text) else {
+        return Ok(());
+    };
+    let (Some(task_id), Some(project_id)) = (
+        params.get("taskId").and_then(Value::as_str),
+        params.get("projectId").and_then(Value::as_str),
+    ) else {
+        return Ok(());
+    };
+    let tasks = handle.load_project_tasks(project_id).await?;
+    let Some(task) = tasks.as_array().and_then(|items| {
+        items
+            .iter()
+            .find(|t| t.get("id").and_then(Value::as_str) == Some(task_id))
+    }) else {
+        return Err(format!(
+            "{STALE_TASK}: 任务 {task_id} 已经不在了；重新同步后再决定"
+        ));
+    };
+    match task.get("generation").map(generation_text) {
+        Some(current) if current != based => Err(format!(
+            "{STALE_TASK}: 任务 {task_id} 已经重新运行过（现在是第 {current} 次，这条命令依据第 {based} 次）；重新同步后再决定"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// `"3"` and `3` are the same generation.
+fn generation_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
 
 type Outcome = Result<Value, String>;
 
