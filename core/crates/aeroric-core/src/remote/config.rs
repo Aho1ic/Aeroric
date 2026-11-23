@@ -33,6 +33,11 @@ pub struct RemoteConfig {
     /// 额外公网地址(Tailscale/frp/cloudflared 等),写入配对 QR。
     #[serde(default)]
     pub public_endpoints: Vec<String>,
+    /// 已配对设备能不能经 `project.writeFile` 改项目里的文件。默认关
+    /// （backlog §4.4-8「远程写文件默认关闭」，2026-11-23 补上门禁）；
+    /// 没有界面，要打开就在 `remote-config.json` 里写 `true`。
+    #[serde(default)]
+    pub allow_file_writes: bool,
 }
 
 impl Default for RemoteConfig {
@@ -44,6 +49,7 @@ impl Default for RemoteConfig {
             relay_url: None,
             relay_token: None,
             public_endpoints: Vec::new(),
+            allow_file_writes: false,
         }
     }
 }

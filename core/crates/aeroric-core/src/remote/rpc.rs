@@ -99,6 +99,10 @@ pub(crate) async fn live_identity(state: &RemoteState) -> Value {
     })
 }
 
+/// Prefix of the refusal when a paired device asks to write a file and this
+/// Mac has not turned remote file writes on (`RemoteConfig::allow_file_writes`).
+pub const FILE_WRITES_OFF: &str = "REMOTE_FILE_WRITES_OFF";
+
 /// 已认证连接的请求入口。auth 在 server 层处理,这里只见白名单业务方法。
 pub async fn dispatch(
     state: &RemoteState,
@@ -130,7 +134,17 @@ pub async fn dispatch(
         "session.messages" => handle.session_messages(params).await,
         "project.files" => handle.project_files(params).await,
         "project.readFile" => handle.project_read_file(params).await,
-        "project.writeFile" => handle.project_write_file(params).await,
+        "project.writeFile" => {
+            // backlog §4.4-8: off unless this Mac turned it on.
+            if !state.config.lock().allow_file_writes {
+                handle.audit_log(
+                    "remote-file-write-refused",
+                    json!({"projectId": params.get("projectId"), "path": params.get("path")}),
+                );
+                return Err(format!("{FILE_WRITES_OFF}: 这台 Mac 没有打开远程写文件"));
+            }
+            handle.project_write_file(params).await
+        }
         "agentConfig.list" => handle.agent_config_list().await,
         "agentConfig.save" => handle.agent_config_save(params).await,
         "agentConfig.detectModels" => handle.agent_config_detect_models(params).await,

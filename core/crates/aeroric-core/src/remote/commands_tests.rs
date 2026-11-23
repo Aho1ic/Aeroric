@@ -67,6 +67,9 @@ fn a_command_id_names_one_command_per_device() {
 #[derive(Default)]
 struct Counting {
     cancels: AtomicUsize,
+    /// What `project.writeFile` reached the Mac, and what was audited.
+    writes: AtomicUsize,
+    audits: parking_lot::Mutex<Vec<String>>,
     /// D4 step 6: what `load_project_tasks` answers.
     tasks: parking_lot::Mutex<Value>,
 }
@@ -77,7 +80,9 @@ impl RemoteHostHandle for Counting {
         "test".into()
     }
     fn emit(&self, _: &str, _: Value) {}
-    fn audit_log(&self, _: &str, _: Value) {}
+    fn audit_log(&self, event: &str, _: Value) {
+        self.audits.lock().push(event.to_string());
+    }
     async fn load_projects(&self) -> Result<Value, String> {
         Ok(json!([]))
     }
@@ -115,7 +120,8 @@ impl RemoteHostHandle for Counting {
         Err("no".into())
     }
     async fn project_write_file(&self, _: Value) -> Result<Value, String> {
-        Err("no".into())
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        Ok(json!({"available": true, "ok": true}))
     }
     async fn git_changes(&self, _: Value) -> Result<Value, String> {
         Err("no".into())
@@ -325,4 +331,36 @@ async fn a_command_based_on_an_earlier_run_of_its_task_is_refused() {
     )
     .await
     .is_ok());
+}
+
+/// backlog §4.4-8 (2026-11-23): a paired device cannot write a project file
+/// unless this Mac turned remote file writes on; the refusal is audited and
+/// nothing reaches the handle. Reading stays open.
+#[tokio::test]
+async fn remote_file_writes_are_off_until_the_mac_turns_them_on() {
+    let state = RemoteState::new_in_memory();
+    let mac = Counting::default();
+    let write = json!({"projectId": "p1", "path": "/demo/a.txt", "content": "x"});
+    let refused = crate::remote::rpc::dispatch(&state, &mac, "project.writeFile", write.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        refused.starts_with(crate::remote::rpc::FILE_WRITES_OFF),
+        "{refused}"
+    );
+    assert_eq!(mac.writes.load(Ordering::SeqCst), 0);
+    assert_eq!(*mac.audits.lock(), ["remote-file-write-refused"]);
+    assert!(
+        !crate::remote::config::RemoteConfig::default().allow_file_writes,
+        "off by default"
+    );
+    let old: crate::remote::config::RemoteConfig =
+        serde_json::from_value(json!({"enabled": true, "port": 6790})).unwrap();
+    assert!(!old.allow_file_writes, "a config written before stays off");
+
+    state.config.lock().allow_file_writes = true;
+    crate::remote::rpc::dispatch(&state, &mac, "project.writeFile", write)
+        .await
+        .unwrap();
+    assert_eq!(mac.writes.load(Ordering::SeqCst), 1);
 }

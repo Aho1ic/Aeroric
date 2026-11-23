@@ -55,7 +55,7 @@ Status: implemented
   - 只按项目看，不按任务的 worktree 看；
   - 不能改文件，不能暂存或提交；
   - 每次快照都会让 Mac 跑一次 `git status` 并列一次目录，只在这一页打开时才会；
-  - 宿主的 `project.writeFile` 仍对已配对设备开放，和“远程写文件默认关闭”不一致。手机不调用它，但没有在宿主上关掉，留给后续处理；
+  - 宿主的 `project.writeFile` 仍对已配对设备开放，和“远程写文件默认关闭”不一致。手机不调用它。同日已在宿主上默认关掉，见 [远程写文件默认关闭](../bug-fix/2026-11-23-remote-file-writes-off-by-default.md)；
   - 真机、真实 Mac、真实 Relay 上 NOT RUN，界面没有目检。
 - **验证：**
   - 手机新增 5 个测试：
