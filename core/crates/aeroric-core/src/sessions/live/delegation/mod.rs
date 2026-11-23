@@ -341,6 +341,13 @@ impl Delegations {
                 if let Some(entry) = find_mut(&mut state, parent, &id) {
                     if entry.card.acceptance != acceptance {
                         entry.card.acceptance = acceptance;
+                        // Review 2026-11-23 (1123 A5): "done with criteria
+                        // unchecked" stops being true once they all pass
+                        // (the user confirmed them, say); left up it keeps
+                        // the delegation waiting on the user.
+                        if entry.card.acceptance_passed() {
+                            entry.card.probes.retain(|p| p.kind != "unverifiedDone");
+                        }
                         changed.push(id);
                     }
                 }

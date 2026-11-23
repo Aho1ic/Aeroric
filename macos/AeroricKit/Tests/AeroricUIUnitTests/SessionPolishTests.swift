@@ -110,6 +110,34 @@ final class SessionPolishTests: XCTestCase {
         XCTAssertEqual(SessionStatsText.contextChip(fraction: 0.17, used: 43_600), "17%")
     }
 
+    /// Review 2026-11-23 (1123 A2): a DSH session's live usage has only the
+    /// context window; the token count comes from its transcript instead of
+    /// reading "—", and live figures still win where they exist.
+    func testLiveUsageWithoutTokensTakesThemFromTheTranscript() {
+        let transcript = try! XCTUnwrap(SessionTranscriptStats.decode(.object([
+            "inputTokens": .number("13000"), "cachedInputTokens": .number("6500"), "outputTokens": .number("900"),
+            "contextUsed": .number("100"), "contextLimit": .number("1000"),
+            "modelMs": .number("0"), "toolMs": .number("0"),
+            "firstTokenMsTotal": .number("0"), "firstTokenSamples": .number("0"),
+        ])))
+        let acp = UsageSummary(contextUsed: 13_000, contextLimit: 1_000_000, inputTokens: nil, outputTokens: nil)
+        let merged = UsageSummary.merged(live: acp, transcript: transcript)
+        XCTAssertEqual(merged.totalTokens, 13_900)
+        XCTAssertEqual(merged.cacheHitRate, 0.5)
+        XCTAssertEqual(merged.contextUsed, 13_000, "the live context window wins")
+        XCTAssertEqual(merged.contextLimit, 1_000_000)
+
+        let codex = UsageSummary(contextUsed: nil, contextLimit: nil, inputTokens: 20_000, outputTokens: 100,
+                                 cachedInputTokens: 1_000)
+        let both = UsageSummary.merged(live: codex, transcript: transcript)
+        XCTAssertEqual(both.totalTokens, 20_100, "live tokens win")
+        XCTAssertEqual(both.cacheHitRate, 0.05, "the hit rate comes from the same source as the tokens")
+        XCTAssertEqual(both.contextUsed, 100)
+
+        XCTAssertEqual(UsageSummary.merged(live: nil, transcript: transcript), UsageSummary(transcript: transcript))
+        XCTAssertTrue(UsageSummary.merged(live: nil, transcript: nil).isEmpty)
+    }
+
     /// A preset uses its first installed family; one not installed, or an
     /// unknown custom name, falls back to the system font (2026-10-29).
     func testChineseFontChoiceResolvesToAnInstalledFamily() {

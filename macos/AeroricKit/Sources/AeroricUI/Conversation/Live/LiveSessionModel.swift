@@ -643,6 +643,26 @@ public struct UsageSummary: Equatable, Sendable {
         self.cachedInputTokens = cachedInputTokens
     }
 
+    /// The 统计栏's figures: the live ones while the page sees them, each
+    /// part the live updates leave out taken from the transcript (an ended
+    /// session, a restart). Review 2026-11-23 (1123 A2): an ACP agent's
+    /// live usage carries only the context window, so taking it whole left
+    /// the token count at "—" while the transcript had it. The context pair
+    /// and the token counts each come from one source, so the hit rate never
+    /// mixes two snapshots.
+    public static func merged(live: UsageSummary?, transcript: SessionTranscriptStats?) -> UsageSummary {
+        let saved = transcript.map(UsageSummary.init(transcript:))
+        var out = UsageSummary(contextUsed: nil, contextLimit: nil, inputTokens: nil, outputTokens: nil)
+        let contextSource = [live, saved].compactMap { $0 }.first { $0.contextUsed != nil || $0.contextLimit != nil }
+        out.contextUsed = contextSource?.contextUsed
+        out.contextLimit = contextSource?.contextLimit
+        let tokenSource = [live, saved].compactMap { $0 }.first { $0.inputTokens != nil || $0.outputTokens != nil }
+        out.inputTokens = tokenSource?.inputTokens
+        out.outputTokens = tokenSource?.outputTokens
+        out.cachedInputTokens = tokenSource?.cachedInputTokens
+        return out
+    }
+
     /// Input plus output, the 统计栏's headline count.
     public var totalTokens: UInt64? {
         guard inputTokens != nil || outputTokens != nil else { return nil }

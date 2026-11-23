@@ -656,11 +656,7 @@ public struct LiveSessionView: View {
 
     private var statsBar: some View {
         let counts = turnAndStepCounts
-        // Live figures while the page sees them; the transcript's otherwise
-        // (an ended session, or after the App or host restarted).
-        let live = store.model?.usage
-        let usage = live.flatMap { $0.isEmpty ? nil : $0 } ?? store.transcriptStats.map(UsageSummary.init(transcript:))
-            ?? UsageSummary(contextUsed: nil, contextLimit: nil, inputTokens: nil, outputTokens: nil)
+        let usage = UsageSummary.merged(live: store.model?.usage, transcript: store.transcriptStats)
         let stats = store.transcriptStats.map(SessionStats.init(transcript:)) ?? store.model?.stats ?? SessionStats()
         return SessionStatsBar(usage: usage, stats: stats, turns: counts.turns, steps: counts.steps)
     }

@@ -818,13 +818,18 @@ fn done_without_the_criteria_or_without_evidence_is_flagged() {
     });
     // A diff is evidence; the open criterion is not done.
     assert_eq!(probes(&rig, &id), ["unverifiedDone"]);
+    assert!(rig.card(&id).probes[0].detail.contains("还没有自动核对"));
+    // Review 2026-11-23 (1123 A5): once the user confirms it, the probe goes.
+    assert!(checkpoints.set_obligation(&child, "a1", ObligationState::Passed));
+    rig.d.refresh_acceptance("p");
+    assert!(rig.card(&id).acceptance_passed());
+    assert!(probes(&rig, &id).is_empty(), "{:?}", probes(&rig, &id));
     let (other, child) = rig.running(contract("查"), Origin::User);
     rig.answer(&child, "t1", "大概是这样", None, false);
     wait("reported", || {
         rig.card(&other).state == DelegationState::Reported
     });
     assert_eq!(probes(&rig, &other), ["noEvidence"]);
-    assert!(rig.card(&id).probes[0].detail.contains("还没有自动核对"));
     // A child that read and ran things left traces: not "no evidence".
     let (traced, child) = rig.running(contract("查"), Origin::User);
     rig.answer_after(&child, "t1", &["cat facts.md"], "red=7", None, false);
