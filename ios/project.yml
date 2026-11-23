@@ -12,6 +12,15 @@ targets:
     platform: iOS
     sources:
       - path: AeroricCompanionApp
+    # D4 step 7: `aeroric://pair?code=…` opens the app (the code lands in the
+    # pairing page; the user still taps 配对). The generated Info.plist cannot
+    # carry URL types, so this small one is merged into it.
+    info:
+      path: AeroricCompanionApp/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: com.aeroric.ios.companion.pairing
+            CFBundleURLSchemes: [aeroric]
     dependencies:
       - package: AeroricCompanionKit
         product: AeroricMobileTransport
@@ -31,3 +40,5 @@ targets:
         # Remote notifications must be delivered in the background; without this
         # the app cannot learn that a task finished while suspended.
         INFOPLIST_KEY_UIBackgroundModes: remote-notification
+        # D4 step 7: scanning the pairing QR code on the Mac's screen.
+        INFOPLIST_KEY_NSCameraUsageDescription: 扫描 Mac 上的配对二维码

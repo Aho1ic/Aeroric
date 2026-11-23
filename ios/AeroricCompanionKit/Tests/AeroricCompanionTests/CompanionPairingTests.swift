@@ -262,4 +262,42 @@ final class CompanionPairingTests: XCTestCase {
         XCTAssertNil(store.pairedStaticPubB64)
         XCTAssertTrue(store.projects.isEmpty)
     }
+
+    // MARK: - D4 step 7: scanned or opened links
+
+    /// A link from the camera or another app only fills the pairing page:
+    /// nothing is dialled until the user taps 配对.
+    @MainActor
+    func testAnOfferedLinkIsOnlyProposedNeverPairedOnItsOwn() async throws {
+        let store = CompanionStore()
+        var dialled = 0
+        let connector = CompanionConnector(store: store, credentials: InMemoryCredentialStore(),
+                                           makeSocket: { _ in dialled += 1; return DeadSocket() }, pause: { _ in })
+        XCTAssertTrue(connector.offerPairingLink("  \(pairingLink())\n"))
+        XCTAssertEqual(connector.proposedPairingCode, pairingLink())
+        XCTAssertEqual(connector.proposedHostName, "Studio Mac")
+        XCTAssertEqual(dialled, 0, "offering a link connects nothing")
+        XCTAssertEqual(store.connectionState, .unpaired)
+
+        XCTAssertEqual(connector.takeProposedPairingCode(), pairingLink())
+        XCTAssertNil(connector.proposedPairingCode, "taken once")
+
+        XCTAssertFalse(connector.offerPairingLink("aeroric://pair?code=not-json"))
+        XCTAssertNil(connector.proposedPairingCode)
+        XCTAssertEqual(connector.lastError, "配对码读不出来，请从 Mac 上重新复制")
+    }
+
+    /// Pairing from the offered link clears what was proposed.
+    @MainActor
+    func testPairingFromAnOfferedLinkClearsTheProposal() async throws {
+        let store = CompanionStore()
+        let connector = CompanionConnector(store: store, credentials: InMemoryCredentialStore(),
+                                           makeSocket: { _ in FakeMac(responder: self.mac) }, pause: { _ in })
+        connector.offerPairingLink(pairingLink())
+        let code = try XCTUnwrap(connector.takeProposedPairingCode())
+        try await connector.pair(code: code, deviceName: "Test iPhone")
+        XCTAssertNil(connector.proposedHostName)
+        XCTAssertEqual(connector.credentials?.hostName, "Studio Mac")
+        await connector.stop()
+    }
 }

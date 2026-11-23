@@ -124,6 +124,8 @@ struct AeroricCompanionApp: App {
     @State private var store = CompanionStore()
     /// D4 step 5: pairing, the keychain, and staying connected.
     @State private var connector: CompanionConnector?
+    /// D4 step 7: a pairing link that launched the app before the connector existed.
+    @State private var launchLink: String?
     @StateObject private var push = PushCoordinator()
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -148,6 +150,19 @@ struct AeroricCompanionApp: App {
                     let made = CompanionConnector(store: store, credentials: KeychainCredentialStore())
                     connector = made
                     made.start()
+                    if let link = launchLink {
+                        made.offerPairingLink(link)
+                        launchLink = nil
+                    }
+                }
+            }
+            // D4 step 7: `aeroric://pair?code=…` only fills the pairing page.
+            .onOpenURL { url in
+                guard url.scheme?.lowercased() == "aeroric" else { return }
+                if let connector {
+                    connector.offerPairingLink(url.absoluteString)
+                } else {
+                    launchLink = url.absoluteString
                 }
             }
         }

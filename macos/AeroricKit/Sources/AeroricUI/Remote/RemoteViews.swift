@@ -1,4 +1,9 @@
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+import CoreImage
+import CoreImage.CIFilterBuiltins
+#endif
 
 import AeroricClient
 
@@ -403,10 +408,35 @@ public struct RemoteAccessSettingsView: View {
     }
 }
 
-// MARK: - PairingView（二维码内容＋端点展示；QR 渲染本身由调用方注入）
+// MARK: - PairingView（二维码＋链接＋端点）
 
-/// 配对视图：展示 pairingUrl（桌面壳负责把 URL 渲染成 QR 图像——Kit 只出
-/// 文本与复制按钮，避免引入 QR 依赖）。
+#if canImport(AppKit)
+/// D4 step 7 (2026-11-23): the pairing link as a QR code for the phone to
+/// scan — CoreImage's generator, error correction M, scaled by a whole
+/// number with no smoothing so the modules stay sharp, with the white
+/// quiet zone round it. nil if it fails.
+enum PairingQRCode {
+    static func image(for text: String, side: CGFloat = 240) -> NSImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(text.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage, output.extent.width > 0 else { return nil }
+        let scale = max(1, (side / output.extent.width).rounded(.down))
+        // The quiet zone the standard asks for: four white modules all round.
+        let margin = 4 * scale
+        let scaled = output
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            .transformed(by: CGAffineTransform(translationX: margin, y: margin))
+        let canvas = CGRect(x: 0, y: 0, width: output.extent.width * scale + 2 * margin,
+                            height: output.extent.height * scale + 2 * margin)
+        let composed = scaled.composited(over: CIImage(color: CIColor.white).cropped(to: canvas))
+        guard let cgImage = CIContext().createCGImage(composed, from: canvas) else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: canvas.width, height: canvas.height))
+    }
+}
+#endif
+
+/// 配对视图：二维码（D4 第七步）、配对链接与复制按钮、端点、有效期。
 public struct PairingView: View {
     @ObservedObject var store: RemoteStore
     @Environment(\.dismiss) private var dismiss
@@ -421,6 +451,14 @@ public struct PairingView: View {
             if let pairing = store.pairing {
                 Text("手机扫码或复制下面的链接完成配对")
                     .font(.headline)
+                #if canImport(AppKit)
+                if let code = PairingQRCode.image(for: pairing.pairingURL) {
+                    Image(nsImage: code)
+                        .interpolation(.none)
+                        .accessibilityLabel("配对二维码")
+                        .accessibilityIdentifier("remote.pairing-qr")
+                }
+                #endif
                 Text(pairing.pairingURL)
                     .font(.caption.monospaced())
                     .textSelection(.enabled)

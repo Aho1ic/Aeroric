@@ -75,6 +75,10 @@ public struct CompanionRootView: View {
             }
         }
         .accessibilityIdentifier("companion.root")
+        // D4 step 7: a scanned or opened pairing link shows the pairing page.
+        .onChange(of: connector?.proposedPairingCode) { _, code in
+            if code != nil { selectedSection = .connection }
+        }
     }
 
     @ViewBuilder
@@ -337,13 +341,15 @@ public struct CompanionFilesAndGitPane: View {
 }
 
 /// D4 step 5: pair from the Mac's link, see what the connection is doing,
-/// forget the Mac.
+/// forget the Mac. D4 step 7: scan the Mac's QR code, or take a link that
+/// opened the app — either only fills the field; pairing is the user's tap.
 public struct CompanionConnectionPane: View {
     @Bindable var store: CompanionStore
     var connector: CompanionConnector?
     @State private var pairingCode = ""
     @State private var deviceName = "iPhone"
     @State private var pairing = false
+    @State private var scanning = false
 
     public init(store: CompanionStore, connector: CompanionConnector? = nil) {
         self.store = store
@@ -358,7 +364,7 @@ public struct CompanionConnectionPane: View {
                         LabeledContent("Mac", value: credentials.hostName)
                         Text(connector.activity)
                             .accessibilityIdentifier("companion.connection.activity")
-                        if let error = connector.lastError {
+                        if let error = connector.lastError, pairingCode.isEmpty {
                             Text(error).font(.caption).foregroundStyle(.secondary)
                         }
                         Button(connector.isRunning ? "断开" : "连接") {
@@ -371,39 +377,77 @@ public struct CompanionConnectionPane: View {
                         }
                         .accessibilityIdentifier("companion.connection.forget")
                     }
-                } else {
-                    Section("和 Mac 配对") {
-                        Text("在 Mac 上的 Aeroric 打开远程访问，生成配对链接，复制后粘贴到这里。链接 10 分钟内有效。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("aeroric://pair?code=…", text: $pairingCode, axis: .vertical)
-                            .lineLimit(3)
-                            .autocorrectionDisabled()
-                            .accessibilityIdentifier("companion.pairing.code")
-                        TextField("这台设备的名称", text: $deviceName)
-                            .accessibilityIdentifier("companion.pairing.device-name")
-                        Button(pairing ? "正在配对…" : "配对") {
-                            pairing = true
-                            Task {
-                                try? await connector.pair(code: pairingCode, deviceName: deviceName)
-                                pairing = false
-                                if connector.credentials != nil { pairingCode = "" }
-                            }
-                        }
-                        .disabled(pairing || pairingCode.isEmpty || deviceName.isEmpty)
-                        .accessibilityIdentifier("companion.pairing.submit")
-                        if let error = connector.lastError {
-                            Text(error)
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                                .accessibilityIdentifier("companion.pairing.error")
-                        }
-                    }
+                }
+                if connector.credentials == nil || !pairingCode.isEmpty {
+                    pairingSection(connector)
                 }
             } else {
                 Text("这个预览没有连接。")
             }
         }
         .padding(12)
+        .onAppear { takeOffered() }
+        .onChange(of: connector?.proposedPairingCode) { _, _ in takeOffered() }
+        #if os(iOS) && canImport(VisionKit)
+        .sheet(isPresented: $scanning) {
+            CompanionPairingScanner { text in
+                scanning = false
+                connector?.offerPairingLink(text)
+            }
+            .ignoresSafeArea()
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private func pairingSection(_ connector: CompanionConnector) -> some View {
+        Section(connector.credentials == nil ? "和 Mac 配对" : "换一台 Mac") {
+            Text("在 Mac 上的 Aeroric 打开远程访问，生成配对二维码：扫码，或复制链接粘贴到这里。10 分钟内有效。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let name = connector.proposedHostName, !pairingCode.isEmpty {
+                Text("链接里的 Mac：\(name)。确认是你的 Mac 再点“配对”。")
+                    .accessibilityIdentifier("companion.pairing.offered-host")
+            }
+            if let current = connector.credentials {
+                Text("配对会替换现在的 \(current.hostName)")
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("companion.pairing.replaces")
+            }
+            #if os(iOS) && canImport(VisionKit)
+            if let reason = CompanionPairingScanner.unavailableReason {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            } else {
+                Button("扫描 Mac 上的二维码") { scanning = true }
+                    .accessibilityIdentifier("companion.pairing.scan")
+            }
+            #endif
+            TextField("aeroric://pair?code=…", text: $pairingCode, axis: .vertical)
+                .lineLimit(3)
+                .autocorrectionDisabled()
+                .accessibilityIdentifier("companion.pairing.code")
+            TextField("这台设备的名称", text: $deviceName)
+                .accessibilityIdentifier("companion.pairing.device-name")
+            Button(pairing ? "正在配对…" : "配对") {
+                pairing = true
+                Task {
+                    try? await connector.pair(code: pairingCode, deviceName: deviceName)
+                    pairing = false
+                    if connector.lastError == nil { pairingCode = "" }
+                }
+            }
+            .disabled(pairing || pairingCode.isEmpty || deviceName.isEmpty)
+            .accessibilityIdentifier("companion.pairing.submit")
+            if let error = connector.lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("companion.pairing.error")
+            }
+        }
+    }
+
+    private func takeOffered() {
+        if let code = connector?.takeProposedPairingCode() { pairingCode = code }
     }
 }

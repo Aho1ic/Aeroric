@@ -16,6 +16,11 @@ public final class CompanionConnector {
     public private(set) var lastError: String?
     public private(set) var isRunning = false
     public private(set) var credentials: CompanionCredentials?
+    /// D4 step 7: a pairing link that came from a scan or from opening an
+    /// `aeroric://pair` link, waiting for the user to look and tap 配对.
+    public private(set) var proposedPairingCode: String?
+    /// The Mac that link names, shown before pairing.
+    public private(set) var proposedHostName: String?
 
     private let vault: CompanionCredentialStore
     private let makeSocket: @MainActor (URL) -> CompanionSocket
@@ -97,6 +102,7 @@ public final class CompanionConnector {
                     mode: CompanionPairingOffer.mode(of: endpoint, hostId: offer.hostId))
                 credentials = paired
                 lastError = nil
+                proposedHostName = nil
                 activity = "已连上 \(paired.hostName)"
                 isRunning = true
                 loop = Task { [weak self] in await self?.stayConnected(paired, after: endpoint) }
@@ -112,6 +118,32 @@ public final class CompanionConnector {
         lastError = failures.joined(separator: "\n")
         activity = "配对没成功"
         throw CompanionLinkError.closed(lastError ?? "配对没成功")
+    }
+
+    /// D4 step 7: a link from the camera or from another app. It is only
+    /// offered — never paired on its own: a link from anywhere must not
+    /// connect this phone to a Mac the user did not choose. A link that does
+    /// not read says why and offers nothing.
+    @discardableResult
+    public func offerPairingLink(_ text: String) -> Bool {
+        do {
+            let offer = try CompanionPairingOffer.parse(text)
+            proposedPairingCode = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            proposedHostName = offer.hostName
+            lastError = nil
+            return true
+        } catch let error as CompanionPairingOffer.ParseError {
+            lastError = CompanionPairingOffer.describe(error)
+        } catch {
+            lastError = "\(error)"
+        }
+        return false
+    }
+
+    /// The pairing page took the offered link into its field.
+    public func takeProposedPairingCode() -> String? {
+        defer { proposedPairingCode = nil }
+        return proposedPairingCode
     }
 
     /// Forget this Mac on the phone. (The Mac still lists the device until
