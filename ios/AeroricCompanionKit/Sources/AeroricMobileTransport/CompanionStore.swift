@@ -421,6 +421,8 @@ public final class CompanionStore {
     /// Told what the 文件与 Git page needs read; the connector sends it and
     /// answers with `applyRead` / `readFailed`.
     public var onRead: (@MainActor (CompanionRead) -> Void)?
+    /// D4 (2026-11-23): the open task's 改动.
+    public private(set) var taskChanges: CompanionTaskChanges?
     public private(set) var sentFramesLog: [String] = []
     /// D4: commands sent and not answered yet, oldest first. After a
     /// reconnect to the same host start they are sent again as they are
@@ -543,10 +545,29 @@ public final class CompanionStore {
             transcript = .loading(taskId: taskId)
         }
         onTranscriptWanted?()
+        if let task = tasks.first(where: { $0.id == taskId }) {
+            if taskChanges?.taskId != taskId {
+                taskChanges = CompanionTaskChanges(taskId: taskId, projectId: task.projectId)
+            }
+            for read in taskChanges?.reads ?? [] { onRead?(read) }
+        }
+    }
+
+    /// The task page's diff of one change, read in the task's tree.
+    public func openTaskDiff(_ change: CompanionGitChange) {
+        guard var current = taskChanges else { return }
+        current.document = CompanionDocument(kind: .diff(staged: change.staged), path: change.path)
+        taskChanges = current
+        if let read = current.reads.last { onRead?(read) }
+    }
+
+    public func closeTaskDiff() {
+        taskChanges?.document = nil
     }
 
     /// The user left the task page.
     public func closeTask(_ taskId: String) {
+        if taskChanges?.taskId == taskId { taskChanges = nil }
         guard transcript.taskId == taskId else { return }
         transcript = .closed
     }
@@ -575,6 +596,7 @@ public final class CompanionStore {
         guard let taskId = transcript.taskId else { return }
         guard tasks.contains(where: { $0.id == taskId }) else {
             transcript = .unavailable(taskId: taskId, reason: "这个任务在 Mac 上已经没有了")
+            taskChanges = nil
             return
         }
         openTask(taskId)
@@ -610,6 +632,7 @@ public final class CompanionStore {
         selectedTaskId = nil
         transcript = .closed
         browse = nil
+        taskChanges = nil
         adapterCapabilities = .none
         controlOutcomes = []
     }
@@ -955,13 +978,14 @@ public final class CompanionStore {
     /// What the Mac answered for `read`; ignored unless the page still shows
     /// what it was read for.
     public func applyRead(_ read: CompanionRead, answer: String) {
+        if applyTaskRead(read, answer: answer) { return }
         guard var current = browse else { return }
         switch read {
-        case let .changes(projectId) where projectId == current.projectId:
+        case let .changes(projectId, nil) where projectId == current.projectId:
             current.changes = CompanionBrowse.changes(answer)
         case let .files(projectId, directory) where projectId == current.projectId && directory == current.directory:
             current.entries = CompanionBrowse.entries(answer)
-        case let .diff(projectId, path, staged)
+        case let .diff(projectId, path, staged, nil)
             where projectId == current.projectId && current.document?.path == path
             && current.document?.kind == .diff(staged: staged):
             current.document?.content = CompanionBrowse.text(answer, key: "diff")
@@ -974,15 +998,50 @@ public final class CompanionStore {
         browse = current
     }
 
+    /// A task read (`taskId` given): the task page's, if it is still open.
+    private func applyTaskRead(_ read: CompanionRead, answer: String) -> Bool {
+        switch read {
+        case let .changes(_, taskId?):
+            guard var current = taskChanges, current.taskId == taskId else { return true }
+            current.changes = CompanionBrowse.changes(answer)
+            current.scope = CompanionBrowse.scope(answer) ?? current.scope
+            taskChanges = current
+            return true
+        case let .diff(_, path, staged, taskId?):
+            guard var current = taskChanges, current.taskId == taskId, current.document?.path == path,
+                  current.document?.kind == .diff(staged: staged) else { return true }
+            current.document?.content = CompanionBrowse.text(answer, key: "diff")
+            taskChanges = current
+            return true
+        default:
+            return false
+        }
+    }
+
     /// A read got no answer. What the page already shows stays.
     public func readFailed(_ read: CompanionRead, message: String) {
+        switch read {
+        case let .changes(_, taskId?):
+            if taskChanges?.taskId == taskId, taskChanges?.changes.value == nil {
+                taskChanges?.changes = .failed(message)
+            }
+            return
+        case let .diff(_, path, _, taskId?):
+            if taskChanges?.taskId == taskId, taskChanges?.document?.path == path,
+               taskChanges?.document?.content.value == nil {
+                taskChanges?.document?.content = .failed(message)
+            }
+            return
+        default:
+            break
+        }
         guard var current = browse, current.projectId == projectOf(read) else { return }
         switch read {
         case .changes:
             if current.changes.value == nil { current.changes = .failed(message) }
         case let .files(_, directory) where directory == current.directory:
             if current.entries.value == nil { current.entries = .failed(message) }
-        case let .diff(_, path, _), let .file(_, path):
+        case let .diff(_, path, _, _), let .file(_, path):
             guard current.document?.path == path, current.document?.content.value == nil else { return }
             current.document?.content = .failed(message)
         default:
@@ -993,7 +1052,7 @@ public final class CompanionStore {
 
     private func projectOf(_ read: CompanionRead) -> String {
         switch read {
-        case let .files(projectId, _), let .changes(projectId), let .diff(projectId, _, _), let .file(projectId, _):
+        case let .files(projectId, _), let .changes(projectId, _), let .diff(projectId, _, _, _), let .file(projectId, _):
             projectId
         }
     }

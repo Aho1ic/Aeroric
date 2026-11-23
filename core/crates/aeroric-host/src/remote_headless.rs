@@ -222,6 +222,23 @@ impl CliRemoteHandle {
         Ok(())
     }
 
+    /// The tree `git.changes` / `git.diff` read: the task's own copy when
+    /// the params name a task that has one, else the project.
+    fn task_tree(
+        &self,
+        project: &aeroric_core::storage::Record,
+        project_id: &str,
+        params: &Value,
+    ) -> Result<(String, &'static str), String> {
+        let root = mutations::text(project, "path").ok_or("Project has no path")?;
+        let worktree = params
+            .get("taskId")
+            .and_then(Value::as_str)
+            .and_then(|task_id| self.task_record(project_id, task_id))
+            .and_then(|task| mutations::text(&task, "worktreePath").map(str::to_string));
+        Ok(tree_to_read(root, worktree.as_deref()))
+    }
+
     /// The transcript's messages in the family's own format. A DSH or OMP
     /// transcript that does not parse says why instead of reading as empty.
     fn parse_family_messages(
@@ -731,16 +748,9 @@ impl RemoteHostHandle for CliRemoteHandle {
         if let Some(reason) = Self::non_local_reason(&project) {
             return Ok(json!({ "available": false, "reason": reason }));
         }
-        let mut root = mutations::text(&project, "path")
-            .ok_or("Project has no path")?
-            .to_string();
-        if let Some(task_id) = params.get("taskId").and_then(Value::as_str) {
-            if let Some(task) = self.task_record(project_id, task_id) {
-                if let Some(wt) = mutations::text(&task, "worktreePath").filter(|s| !s.is_empty()) {
-                    root = wt.to_string();
-                }
-            }
-        }
+        // D4 (2026-11-23): say which tree was read, so a task without its
+        // own copy is not shown the whole project's changes as its own.
+        let (root, scope) = self.task_tree(&project, project_id, &params)?;
         let changes = tokio::task::spawn_blocking(move || {
             aeroric_core::git::service::status(std::path::Path::new(&root))
         })
@@ -748,6 +758,7 @@ impl RemoteHostHandle for CliRemoteHandle {
         .map_err(|e| e.to_string())??;
         Ok(json!({
             "available": true,
+            "scope": scope,
             "changes": serde_json::to_value(changes).map_err(|e| e.to_string())?,
         }))
     }
@@ -775,16 +786,7 @@ impl RemoteHostHandle for CliRemoteHandle {
         if let Some(reason) = Self::non_local_reason(&project) {
             return Ok(json!({ "available": false, "reason": reason }));
         }
-        let mut root = mutations::text(&project, "path")
-            .ok_or("Project has no path")?
-            .to_string();
-        if let Some(task_id) = params.get("taskId").and_then(Value::as_str) {
-            if let Some(task) = self.task_record(project_id, task_id) {
-                if let Some(wt) = mutations::text(&task, "worktreePath").filter(|s| !s.is_empty()) {
-                    root = wt.to_string();
-                }
-            }
-        }
+        let (root, _) = self.task_tree(&project, project_id, &params)?;
         let diff = tokio::task::spawn_blocking(move || {
             aeroric_core::git::service::file_diff(std::path::Path::new(&root), &file_path, staged)
         })
@@ -1420,6 +1422,15 @@ pub fn attach_live_pending(
             })
             .collect();
         item["pendingApprovals"] = Value::Array(list);
+    }
+}
+
+/// D4 (2026-11-23): a task with its own copy (`worktreePath`) is read
+/// there (`"worktree"`); otherwise the project is (`"project"`).
+pub fn tree_to_read(project_root: &str, worktree: Option<&str>) -> (String, &'static str) {
+    match worktree.filter(|w| !w.trim().is_empty()) {
+        Some(worktree) => (worktree.to_string(), "worktree"),
+        None => (project_root.to_string(), "project"),
     }
 }
 

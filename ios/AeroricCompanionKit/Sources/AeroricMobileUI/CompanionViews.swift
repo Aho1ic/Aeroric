@@ -322,12 +322,64 @@ public struct CompanionTaskPage: View {
                     }
                 }
             }
+            if let changes = store.taskChanges, changes.taskId == taskId {
+                Section("改动") { changesSection(changes) }
+            }
             Section("会话") { transcriptSection }
         }
         .navigationTitle(task?.title ?? "任务")
         .accessibilityIdentifier("companion.task-page")
         .onAppear { store.openTask(taskId) }
         .onDisappear { store.closeTask(taskId) }
+        .sheet(isPresented: Binding(
+            get: { store.taskChanges?.taskId == taskId && store.taskChanges?.document != nil },
+            set: { if !$0 { store.closeTaskDiff() } })) {
+            if let document = store.taskChanges?.document {
+                CompanionDocumentView(document: document) { store.closeTaskDiff() }
+            }
+        }
+    }
+
+    /// D4 (2026-11-23): what the task changed — in its own copy, or, when it
+    /// works in the project folder, everything uncommitted there.
+    @ViewBuilder
+    private func changesSection(_ changes: CompanionTaskChanges) -> some View {
+        switch changes.scope {
+        case .worktree:
+            Text("这个任务在自己的副本里改，下面是它的改动")
+                .font(.caption).foregroundStyle(.secondary)
+        case .project:
+            Text("这个任务直接在项目目录里改，下面是项目里全部没提交的改动，可能有别的任务或你自己的")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("companion.task.changes.project-scope")
+        case nil:
+            EmptyView()
+        }
+        switch changes.changes {
+        case .loading:
+            ProgressView()
+        case let .loaded(list) where list.isEmpty:
+            Text("没有未提交的改动").foregroundStyle(.secondary)
+        case let .loaded(list):
+            ForEach(list) { change in
+                Button { store.openTaskDiff(change) } label: {
+                    HStack {
+                        Text(change.status)
+                            .font(.system(.caption, design: .monospaced))
+                            .bold()
+                            .frame(minWidth: 24, alignment: .leading)
+                        Text(change.path).lineLimit(2)
+                        Spacer()
+                        if change.staged { Text("已暂存").font(.caption2).foregroundStyle(.secondary) }
+                    }
+                }
+                .accessibilityIdentifier("companion.task.change.\(change.id)")
+            }
+        case let .unavailable(reason):
+            Text(reason).foregroundStyle(.secondary)
+        case let .failed(message):
+            Text("没读到：\(message)").foregroundStyle(.red)
+        }
     }
 
     @ViewBuilder

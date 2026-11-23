@@ -318,3 +318,21 @@ fn a_phone_gets_the_latest_messages_cut_to_size() {
         serde_json::json!([])
     );
 }
+
+/// D4 (2026-11-23): a task's changes are read in its own copy when it has
+/// one, and the answer says which tree it was.
+#[test]
+fn a_task_s_changes_come_from_its_own_copy_when_it_has_one() {
+    assert_eq!(
+        super::tree_to_read("/p", Some("/p/.aeroric/wt/t1")),
+        ("/p/.aeroric/wt/t1".to_string(), "worktree")
+    );
+    assert_eq!(
+        super::tree_to_read("/p", None),
+        ("/p".to_string(), "project")
+    );
+    assert_eq!(
+        super::tree_to_read("/p", Some(" ")),
+        ("/p".to_string(), "project")
+    );
+}

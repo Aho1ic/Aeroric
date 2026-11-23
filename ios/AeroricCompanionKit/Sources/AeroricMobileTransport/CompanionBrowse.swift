@@ -7,10 +7,10 @@ import Foundation
 public enum CompanionRead: Equatable, Sendable {
     /// `project.files`; `directory` nil is the project's root.
     case files(projectId: String, directory: String?)
-    /// `git.changes`.
-    case changes(projectId: String)
-    /// `git.diff` of one changed file.
-    case diff(projectId: String, path: String, staged: Bool)
+    /// `git.changes`; with a task, in its own copy when it has one.
+    case changes(projectId: String, taskId: String? = nil)
+    /// `git.diff` of one changed file; with a task, as `changes`.
+    case diff(projectId: String, path: String, staged: Bool, taskId: String? = nil)
     /// `project.readFile`.
     case file(projectId: String, path: String)
 
@@ -29,10 +29,14 @@ public enum CompanionRead: Equatable, Sendable {
             var params: [String: Any] = ["projectId": projectId]
             if let directory { params["path"] = directory }
             return params
-        case let .changes(projectId):
-            return ["projectId": projectId]
-        case let .diff(projectId, path, staged):
-            return ["projectId": projectId, "path": path, "staged": staged]
+        case let .changes(projectId, taskId):
+            var params: [String: Any] = ["projectId": projectId]
+            if let taskId { params["taskId"] = taskId }
+            return params
+        case let .diff(projectId, path, staged, taskId):
+            var params: [String: Any] = ["projectId": projectId, "path": path, "staged": staged]
+            if let taskId { params["taskId"] = taskId }
+            return params
         case let .file(projectId, path):
             return ["projectId": projectId, "path": path]
         }
@@ -180,10 +184,50 @@ public struct CompanionBrowse: Equatable, Sendable {
         })
     }
 
+    /// `git.changes` says which tree it read (`worktree` / `project`).
+    static func scope(_ answer: String) -> CompanionTaskChanges.Scope? {
+        (object(answer)?["scope"] as? String).flatMap(CompanionTaskChanges.Scope.init(rawValue:))
+    }
+
     static func text(_ answer: String, key: String) -> CompanionLoad<CompanionDocumentText> {
         guard let object = object(answer) else { return .failed("Mac 的回答读不懂") }
         if let reason = unavailable(object) { return .unavailable(reason) }
         return .loaded(CompanionDocumentText(text: (object[key] as? String) ?? "",
                                              truncated: (object["truncated"] as? Bool) ?? false))
+    }
+}
+
+/// D4 (2026-11-23): the task page's 改动 — read with the task, so a task in
+/// its own copy shows that copy's changes.
+public struct CompanionTaskChanges: Equatable, Sendable {
+    public enum Scope: String, Equatable, Sendable {
+        /// The task's own copy (`worktreePath`).
+        case worktree
+        /// The project folder: every uncommitted change there, not only
+        /// this task's.
+        case project
+    }
+
+    public var taskId: String
+    public var projectId: String
+    public var scope: Scope?
+    public var changes: CompanionLoad<[CompanionGitChange]>
+    public var document: CompanionDocument?
+
+    public init(taskId: String, projectId: String) {
+        self.taskId = taskId
+        self.projectId = projectId
+        scope = nil
+        changes = .loading
+        document = nil
+    }
+
+    /// The reads that show what the section shows now.
+    public var reads: [CompanionRead] {
+        var reads: [CompanionRead] = [.changes(projectId: projectId, taskId: taskId)]
+        if let document, case let .diff(staged) = document.kind {
+            reads.append(.diff(projectId: projectId, path: document.path, staged: staged, taskId: taskId))
+        }
+        return reads
     }
 }

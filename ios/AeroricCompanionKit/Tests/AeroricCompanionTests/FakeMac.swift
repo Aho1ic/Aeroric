@@ -24,7 +24,8 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
         /// D4 (2026-11-23): what `session.messages` answers, by task id.
         var transcripts: [String: [String: Any]] = [:]
         /// D4 (2026-11-23): what the 文件与 Git reads answer, by
-        /// `method` + " " + the path asked (empty for none).
+        /// `method` + " " + the path asked (empty for none), + " @taskId"
+        /// for a task's read.
         var reads: [String: [String: Any]] = [:]
     }
 
@@ -234,7 +235,8 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
             transcriptReads.append((taskId, params["limit"] as? Int))
             return [ok(config.transcripts[taskId] ?? ["available": false, "reason": "no_session", "messages": []])]
         case "project.files", "git.changes", "git.diff", "project.readFile":
-            let key = "\(method) \(params["path"] as? String ?? "")"
+            var key = "\(method) \(params["path"] as? String ?? "")"
+            if let taskId = params["taskId"] as? String { key += " @\(taskId)" }
             reads.append(key)
             if let answer = config.reads[key] { return [ok(answer)] }
             return [encrypted(["v": 3, "type": "response", "id": id, "ok": false,

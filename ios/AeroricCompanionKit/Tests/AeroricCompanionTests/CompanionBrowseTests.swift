@@ -162,4 +162,81 @@ final class CompanionBrowseTests: XCTestCase {
         XCTAssertFalse(fake.receivedReads.contains { $0.hasPrefix("project.writeFile") }, "read only")
         await connector.stop()
     }
+
+    // MARK: - A task's 改动 (task page)
+
+    @MainActor
+    func testTheTaskPageReadsChangesInTheTasksTree() {
+        let store = CompanionStore()
+        var reads: [CompanionRead] = []
+        store.onRead = { reads.append($0) }
+        let task = CompanionTask(id: "t1", projectId: "p1", title: "x", agent: "codex", status: "running")
+        store.handleReconnect(newEpoch: "e1", latestHostSeq: 0, mode: .directLAN, snapshotTasks: [task], snapshotApprovals: [])
+        XCTAssertEqual(CompanionRead.changes(projectId: "p1", taskId: "t1").params["taskId"] as? String, "t1")
+
+        store.openTask("t1")
+        XCTAssertEqual(reads, [.changes(projectId: "p1", taskId: "t1")])
+        store.applyRead(.changes(projectId: "p1"), answer: json(["available": true, "changes": []]))
+        XCTAssertEqual(store.taskChanges?.changes, .loading, "the project's answer is not the task's")
+        store.applyRead(.changes(projectId: "p1", taskId: "t1"), answer: json([
+            "available": true, "scope": "worktree", "changes": [["path": "a.swift", "status": "M", "staged": false]],
+        ]))
+        XCTAssertEqual(store.taskChanges?.scope, .worktree)
+        XCTAssertEqual(store.taskChanges?.changes.value?.map(\.path), ["a.swift"])
+        XCTAssertNil(store.browse, "the 文件与 Git page is not opened by it")
+
+        store.openTaskDiff(store.taskChanges!.changes.value![0])
+        XCTAssertEqual(reads.last, .diff(projectId: "p1", path: "a.swift", staged: false, taskId: "t1"))
+        store.applyRead(.diff(projectId: "p1", path: "a.swift", staged: false, taskId: "t1"),
+                        answer: json(["available": true, "diff": "+x"]))
+        XCTAssertEqual(store.taskChanges?.document?.content.value?.text, "+x")
+
+        reads = []
+        store.handleReconnect(newEpoch: "e1", latestHostSeq: 1, mode: .directLAN, snapshotTasks: [task], snapshotApprovals: [])
+        XCTAssertEqual(reads, [.changes(projectId: "p1", taskId: "t1"),
+                               .diff(projectId: "p1", path: "a.swift", staged: false, taskId: "t1")],
+                       "a snapshot reads again what the section shows")
+        XCTAssertEqual(store.taskChanges?.changes.value?.count, 1, "and keeps showing it meanwhile")
+        store.readFailed(.changes(projectId: "p1", taskId: "t1"), message: "断了")
+        XCTAssertEqual(store.taskChanges?.changes.value?.count, 1)
+
+        store.closeTaskDiff()
+        XCTAssertNil(store.taskChanges?.document)
+        store.handleReconnect(newEpoch: "e1", latestHostSeq: 2, mode: .directLAN, snapshotTasks: [], snapshotApprovals: [])
+        XCTAssertNil(store.taskChanges, "the task is gone")
+
+        store.handleReconnect(newEpoch: "e1", latestHostSeq: 3, mode: .directLAN, snapshotTasks: [task], snapshotApprovals: [])
+        store.openTask("t1")
+        store.closeTask("t1")
+        XCTAssertNil(store.taskChanges)
+        store.applyRead(.changes(projectId: "p1", taskId: "t1"), answer: json(["available": true, "changes": []]))
+        XCTAssertNil(store.taskChanges, "a late answer after leaving")
+    }
+
+    @MainActor
+    func testATasksChangesAndDiffAreReadInItsOwnCopyOverTheConnection() async throws {
+        let store = CompanionStore()
+        let vault = InMemoryCredentialStore(current: CompanionCredentials(
+            hostName: "Studio Mac", hostId: "host-1", publicKey: mac.publicBase64Url,
+            endpoints: ["ws://192.168.1.33:8765"], deviceId: "dev-1", deviceToken: "token-1"))
+        var config = FakeMac.Config()
+        config.tasks = ["p1": [["id": "t1", "projectId": "p1", "name": "x", "agent": "codex", "status": "running"]]]
+        config.reads = [
+            "git.changes  @t1": ["available": true, "scope": "project",
+                                 "changes": [["path": "a.swift", "status": "M", "staged": false]]],
+            "git.diff a.swift @t1": ["available": true, "diff": "-old\n+new"],
+        ]
+        let fake = FakeMac(responder: mac, config: config)
+        let connector = CompanionConnector(store: store, credentials: vault, makeSocket: { _ in fake }, pause: { _ in })
+        connector.start()
+        await eventually("online") { store.connectionState.isMacOnline && !store.tasks.isEmpty }
+
+        store.openTask("t1")
+        await eventually("changes") { store.taskChanges?.changes.value?.count == 1 }
+        XCTAssertEqual(store.taskChanges?.scope, .project)
+        store.openTaskDiff(store.taskChanges!.changes.value![0])
+        await eventually("diff") { store.taskChanges?.document?.content.value?.text == "-old\n+new" }
+        XCTAssertTrue(fake.receivedReads.contains("git.diff a.swift @t1"), "\(fake.receivedReads)")
+        await connector.stop()
+    }
 }
