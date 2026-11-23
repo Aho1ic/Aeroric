@@ -122,6 +122,8 @@ struct AeroricCompanionApp: App {
     /// token callback (`didRegisterForRemoteNotificationsWithDeviceToken`) is lost.
     @UIApplicationDelegateAdaptor(CompanionAppDelegate.self) private var appDelegate
     @State private var store = CompanionStore()
+    /// D4 step 5: pairing, the keychain, and staying connected.
+    @State private var connector: CompanionConnector?
     @StateObject private var push = PushCoordinator()
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -131,6 +133,7 @@ struct AeroricCompanionApp: App {
         WindowGroup {
             CompanionRootView(
                 store: store,
+                connector: connector,
                 isIPadLayout: horizontalSizeClass == .regular,
                 reduceTransparency: reduceTransparency
             )
@@ -138,23 +141,30 @@ struct AeroricCompanionApp: App {
             .onAppear {
                 appDelegate.push = push
                 push.store = store
-                // The store owns *when* a token may be uploaded (Mac online +
-                // device id known); this closure owns *how* it reaches the Mac.
-                // It must go over the already-authenticated E2EE channel
-                // (`push.register`), never an unauthenticated path. No live E2EE
-                // transport exists in this build, so the honest behaviour is to
-                // report that clearly rather than pretend the token was bound.
-                store.pushRegistrationUpload = { _, _, _ in
-                    throw PushBridgeError.registrationRefused(
-                        "E2EE push.register transport is not wired in this build"
-                    )
+                // D4 step 5: the connector wires the store's push upload to
+                // `push.register` on the authenticated E2EE channel, and sends
+                // what the store issues.
+                if connector == nil {
+                    let made = CompanionConnector(store: store, credentials: KeychainCredentialStore())
+                    connector = made
+                    made.start()
                 }
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            // Register on activation, while the Mac is reachable. Registration is
-            // refused (not queued) when the Mac is offline — see `push_register`.
-            guard phase == .active, store.connectionState.isMacOnline else { return }
+            switch phase {
+            case .active:
+                connector?.start()
+            case .background:
+                Task { await connector?.stop() }
+            default:
+                break
+            }
+        }
+        .onChange(of: store.connectionState.isMacOnline) { _, online in
+            // Register while the Mac is reachable. Registration is refused
+            // (not queued) when it is offline — see `push_register`.
+            guard online, scenePhase == .active else { return }
             Task { await push.requestAuthorizationAndRegister() }
         }
     }

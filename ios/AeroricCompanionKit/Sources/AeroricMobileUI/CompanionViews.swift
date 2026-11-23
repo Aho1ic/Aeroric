@@ -22,16 +22,20 @@ public enum CompanionSection: String, CaseIterable, Hashable, Sendable {
 /// and native Liquid Glass chrome (`#available(iOS 26.0, macOS 26.0, *)`).
 public struct CompanionRootView: View {
     @Bindable var store: CompanionStore
+    /// D4 step 5: pairing and the live connection; nil in previews.
+    public var connector: CompanionConnector?
     public var isIPadLayout: Bool
     public var reduceTransparency: Bool
     @State private var selectedSection: CompanionSection = .tasks
 
     public init(
         store: CompanionStore,
+        connector: CompanionConnector? = nil,
         isIPadLayout: Bool = false,
         reduceTransparency: Bool = false
     ) {
         self.store = store
+        self.connector = connector
         self.isIPadLayout = isIPadLayout
         self.reduceTransparency = reduceTransparency
     }
@@ -83,7 +87,7 @@ public struct CompanionRootView: View {
         case .filesAndGit:
             CompanionFilesAndGitPane(store: store)
         case .connection:
-            CompanionConnectionPane(store: store)
+            CompanionConnectionPane(store: store, connector: connector)
         }
     }
 }
@@ -332,19 +336,73 @@ public struct CompanionFilesAndGitPane: View {
     }
 }
 
+/// D4 step 5: pair from the Mac's link, see what the connection is doing,
+/// forget the Mac.
 public struct CompanionConnectionPane: View {
     @Bindable var store: CompanionStore
-    @State private var hostName = "My-Aeroric-Mac"
-    @State private var relayURL = ""
+    var connector: CompanionConnector?
+    @State private var pairingCode = ""
+    @State private var deviceName = "iPhone"
+    @State private var pairing = false
 
-    public init(store: CompanionStore) {
+    public init(store: CompanionStore, connector: CompanionConnector? = nil) {
         self.store = store
+        self.connector = connector
     }
 
     public var body: some View {
         Form {
-            TextField("Mac 主机名称", text: $hostName)
-            TextField("自托管 Relay URL (可选，无官方默认)", text: $relayURL)
+            if let connector {
+                if let credentials = connector.credentials {
+                    Section("已配对") {
+                        LabeledContent("Mac", value: credentials.hostName)
+                        Text(connector.activity)
+                            .accessibilityIdentifier("companion.connection.activity")
+                        if let error = connector.lastError {
+                            Text(error).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Button(connector.isRunning ? "断开" : "连接") {
+                            Task {
+                                if connector.isRunning { await connector.stop() } else { connector.start() }
+                            }
+                        }
+                        Button("取消配对", role: .destructive) {
+                            Task { await connector.forget() }
+                        }
+                        .accessibilityIdentifier("companion.connection.forget")
+                    }
+                } else {
+                    Section("和 Mac 配对") {
+                        Text("在 Mac 上的 Aeroric 打开远程访问，生成配对链接，复制后粘贴到这里。链接 10 分钟内有效。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField("aeroric://pair?code=…", text: $pairingCode, axis: .vertical)
+                            .lineLimit(3)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("companion.pairing.code")
+                        TextField("这台设备的名称", text: $deviceName)
+                            .accessibilityIdentifier("companion.pairing.device-name")
+                        Button(pairing ? "正在配对…" : "配对") {
+                            pairing = true
+                            Task {
+                                try? await connector.pair(code: pairingCode, deviceName: deviceName)
+                                pairing = false
+                                if connector.credentials != nil { pairingCode = "" }
+                            }
+                        }
+                        .disabled(pairing || pairingCode.isEmpty || deviceName.isEmpty)
+                        .accessibilityIdentifier("companion.pairing.submit")
+                        if let error = connector.lastError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .accessibilityIdentifier("companion.pairing.error")
+                        }
+                    }
+                }
+            } else {
+                Text("这个预览没有连接。")
+            }
         }
         .padding(12)
     }

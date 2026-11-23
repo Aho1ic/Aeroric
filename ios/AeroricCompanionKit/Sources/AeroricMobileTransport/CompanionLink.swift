@@ -64,6 +64,9 @@ public final class CompanionLink {
         self.store = store
     }
 
+    /// Called whenever a connection ends, with the reason the store shows.
+    public var onClose: (@MainActor (String) -> Void)?
+
     /// Handshake, authenticate, read the Mac's state into the store, then
     /// send what is waiting. Throws if any step fails; the connection is
     /// closed and the store says why.
@@ -72,75 +75,162 @@ public final class CompanionLink {
         deviceToken: String,
         mode: CompanionConnectionState.TransportMode
     ) async throws {
-        if self.socket != nil { await disconnect() }
         guard let staticPub = store.pairedStaticPubB64 else { throw CompanionLinkError.notPaired }
+        let current = await begin(socket)
+        do {
+            try await handshake(staticPub: staticPub)
+            _ = try await authenticate(["deviceToken": deviceToken], revokeOnUnknownToken: true)
+            try await synchronize(mode: mode, generation: current)
+        } catch {
+            await fail(current, error)
+            throw error
+        }
+    }
+
+    /// D4 step 5: pair with an invite from the Mac's pairing link. The
+    /// credentials are staged durably before `pairing.confirm` (the Mac keeps
+    /// the device only after it), committed on `confirmed`, dropped if the
+    /// Mac refuses, and left staged if the answer never came. Then the same
+    /// state read as `connect`.
+    @discardableResult
+    public func pair(
+        socket: CompanionSocket,
+        offer: CompanionPairingOffer,
+        deviceName: String,
+        credentials: CompanionCredentialStore,
+        mode: CompanionConnectionState.TransportMode
+    ) async throws -> CompanionCredentials {
+        let current = await begin(socket)
+        do {
+            try await handshake(staticPub: offer.publicKey)
+            let reply = try await authenticate(
+                ["invite": offer.invite, "deviceName": deviceName,
+                 "pairingConfirmationVersion": CompanionPairingOffer.confirmationVersion],
+                revokeOnUnknownToken: false)
+            guard let deviceId = reply["deviceId"] as? String, !deviceId.isEmpty,
+                  let token = reply["deviceToken"] as? String, !token.isEmpty else {
+                throw CompanionLinkError.unexpected("配对的回答里没有设备令牌")
+            }
+            let host = reply["host"] as? [String: Any]
+            let paired = CompanionCredentials(
+                hostName: (host?["name"] as? String) ?? offer.hostName, hostId: offer.hostId,
+                publicKey: offer.publicKey, endpoints: offer.endpoints, deviceId: deviceId, deviceToken: token)
+            try credentials.stagePending(paired)
+            if let pairingId = reply["pairingId"] as? String {
+                let confirm = try RemoteRpcCodec.encodeRequest(
+                    version: .v2, id: "2", method: "pairing.confirm",
+                    params: ["pairingId": pairingId,
+                             "pairingConfirmationVersion": CompanionPairingOffer.confirmationVersion])
+                try await sendControl(confirm)
+                switch try await receiveControlDirectly() {
+                case let .responseSuccess(_, result) where (Self.object(result)["confirmed"] as? Bool) == true:
+                    try credentials.commitPending()
+                case let .responseFailure(_, _, message):
+                    try? credentials.discardPending()
+                    throw CompanionLinkError.authRejected(message)
+                default:
+                    // Whether the Mac kept the device is unknown: stay staged.
+                    throw CompanionLinkError.unexpected("Mac 没有确认这次配对")
+                }
+                nextRequest = 3
+            } else {
+                // An older Mac keeps the device at once.
+                try credentials.commitPending()
+            }
+            store.restorePairing(hostName: paired.hostName, staticPubB64: paired.publicKey,
+                                 deviceID: paired.deviceId)
+            try await synchronize(mode: mode, generation: current)
+            return paired
+        } catch {
+            await fail(current, error)
+            throw error
+        }
+    }
+
+    /// D4 step 5: one v3 request on the authenticated channel (`push.register`).
+    public func call(_ method: String, _ params: [String: Any] = [:]) async throws -> String {
+        guard isConnected else { throw CompanionLinkError.closed("没有连上 Mac") }
+        return try await read(method, params)
+    }
+
+    // MARK: - Connection steps
+
+    private func begin(_ socket: CompanionSocket) async -> Int {
+        if self.socket != nil { await disconnect() }
         generation += 1
-        let current = generation
         self.socket = socket
         sentThisConnection = []
         heldPushes = []
         nextRequest = 1
-        do {
-            // 1. The plaintext handshake, pinned to the key from pairing.
-            let pending = try PendingClientHandshake.start(serverStaticPubBase64Url: staticPub)
-            try await socket.send(text: pending.helloJSON)
-            guard case let .text(ack) = try await socket.receive() else {
-                throw CompanionLinkError.handshake("Mac 没有回握手")
-            }
-            do {
-                session = try pending.finish(ackJSON: ack)
-            } catch let error as E2eeError {
-                throw CompanionLinkError.handshake(Self.describe(error))
-            }
+        return generation
+    }
 
-            // 2. `auth` is always v2; it says which RPC version follows.
-            let auth = try RemoteRpcCodec.encodeRequest(
-                version: .v2, id: "1", method: "auth",
-                params: ["deviceToken": deviceToken, "supportedRpcVersions": [3]])
-            try await sendControl(auth)
-            switch try await receiveControlDirectly() {
-            case let .responseSuccess(_, result):
-                let reply = Self.object(result)
-                version = (reply["rpcVersion"] as? Int) == 3 ? .v3 : .v2
-            case let .responseFailure(_, _, message):
-                if message == "Unknown device token" {
-                    store.handleDeviceRevoked(reason: "Mac 不再认这台设备，需要重新配对")
-                }
-                throw CompanionLinkError.authRejected(message)
-            default:
-                throw CompanionLinkError.unexpected("认证没有得到回答")
-            }
-            nextRequest = 2
+    private func fail(_ current: Int, _ error: Error) async {
+        if generation == current { await closeSocket(reason: Self.reason(for: error)) }
+    }
 
-            // 3. From here the receive loop owns the socket; reads wait on it.
-            syncing = true
-            Task { [weak self] in await self?.receiveLoop(socket, generation: current) }
-
-            let hello = Self.object(try await read("hello"))
-            guard let epoch = hello["hostEpoch"] as? String, !epoch.isEmpty else {
-                throw CompanionLinkError.unexpected("hello 没有 hostEpoch")
-            }
-            let since = Self.object(try await read("events.since", ["after": store.lastEventSeq]))
-            let latestSeq = Self.uint(since["latestSeq"]) ?? store.lastEventSeq
-            let (projects, tasks, approvals) = try await readSnapshot(epoch: epoch)
-
-            // 4. The snapshot is authoritative; a new host start drops the outbox.
-            store.applySnapshotProjects(projects)
-            store.handleReconnect(newEpoch: epoch, latestHostSeq: latestSeq, mode: mode,
-                                  snapshotTasks: tasks, snapshotApprovals: approvals)
-            syncing = false
-            for seq in heldPushes.sorted() { store.ingestHostEvent(seq: seq) }
-            heldPushes = []
-            isConnected = true
-
-            // 5. Same host start: what was not answered goes again, same ids.
-            try await flush()
-        } catch {
-            if generation == current {
-                await closeSocket(reason: Self.reason(for: error))
-            }
-            throw error
+    /// The plaintext handshake, pinned to `staticPub`.
+    private func handshake(staticPub: String) async throws {
+        guard let socket else { throw CompanionLinkError.closed("没有连接") }
+        let pending = try PendingClientHandshake.start(serverStaticPubBase64Url: staticPub)
+        try await socket.send(text: pending.helloJSON)
+        guard case let .text(ack) = try await socket.receive() else {
+            throw CompanionLinkError.handshake("Mac 没有回握手")
         }
+        do {
+            session = try pending.finish(ackJSON: ack)
+        } catch let error as E2eeError {
+            throw CompanionLinkError.handshake(Self.describe(error))
+        }
+    }
+
+    /// `auth` is always v2; its answer says which RPC version follows.
+    private func authenticate(_ params: [String: Any], revokeOnUnknownToken: Bool) async throws -> [String: Any] {
+        var params = params
+        params["supportedRpcVersions"] = [3]
+        try await sendControl(try RemoteRpcCodec.encodeRequest(version: .v2, id: "1", method: "auth", params: params))
+        nextRequest = 2
+        switch try await receiveControlDirectly() {
+        case let .responseSuccess(_, result):
+            let reply = Self.object(result)
+            version = (reply["rpcVersion"] as? Int) == 3 ? .v3 : .v2
+            return reply
+        case let .responseFailure(_, _, message):
+            if revokeOnUnknownToken, message == "Unknown device token" {
+                store.handleDeviceRevoked(reason: "Mac 不认这台设备了，需要重新配对")
+            }
+            throw CompanionLinkError.authRejected(message)
+        default:
+            throw CompanionLinkError.unexpected("认证没有得到回答")
+        }
+    }
+
+    /// From here the receive loop owns the socket: read the Mac's state into
+    /// the store, then send what is waiting.
+    private func synchronize(mode: CompanionConnectionState.TransportMode, generation current: Int) async throws {
+        guard let socket else { throw CompanionLinkError.closed("没有连接") }
+        syncing = true
+        Task { [weak self] in await self?.receiveLoop(socket, generation: current) }
+
+        let hello = Self.object(try await read("hello"))
+        guard let epoch = hello["hostEpoch"] as? String, !epoch.isEmpty else {
+            throw CompanionLinkError.unexpected("hello 没有 hostEpoch")
+        }
+        let since = Self.object(try await read("events.since", ["after": store.lastEventSeq]))
+        let latestSeq = Self.uint(since["latestSeq"]) ?? store.lastEventSeq
+        let (projects, tasks, approvals) = try await readSnapshot(epoch: epoch)
+
+        // The snapshot is authoritative; a new host start drops the outbox.
+        store.applySnapshotProjects(projects)
+        store.handleReconnect(newEpoch: epoch, latestHostSeq: latestSeq, mode: mode,
+                              snapshotTasks: tasks, snapshotApprovals: approvals)
+        syncing = false
+        for seq in heldPushes.sorted() { store.ingestHostEvent(seq: seq) }
+        heldPushes = []
+        isConnected = true
+
+        // Same host start: what was not answered goes again, same ids.
+        try await flush()
     }
 
     /// Send every command in the store's outbox this connection has not sent
@@ -333,6 +423,7 @@ public final class CompanionLink {
             store.markMacOffline(relayStillConnected: false, reason: reason)
         }
         if !remoteClosed { await socket.close() }
+        onClose?(reason)
     }
 
     // MARK: - Helpers

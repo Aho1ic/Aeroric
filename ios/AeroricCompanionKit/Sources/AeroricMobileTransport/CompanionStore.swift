@@ -437,6 +437,10 @@ public final class CompanionStore {
     /// reconnect to the same host start they are sent again as they are
     /// (same `commandId`); a new host start drops them.
     public private(set) var outbox: [CompanionCommand] = []
+    /// D4 step 5: told when a command goes into the outbox; the connector
+    /// sends it (`CompanionLink.flush`). The store itself never touches the
+    /// network.
+    public var onCommandIssued: (@MainActor () -> Void)?
     /// D4: commands dropped because the Mac restarted before answering — the
     /// user decides again from the fresh state.
     public private(set) var droppedCommands: [CompanionCommand] = []
@@ -470,6 +474,28 @@ public final class CompanionStore {
         self.currentEpoch = initialEpoch
         self.lastEventSeq = 0
         self.connectionState = .macOnline(hostEpoch: initialEpoch, transportMode: mode)
+    }
+
+    /// D4 step 5: a pairing saved on this phone (or just made), not
+    /// connected yet. The host start is unknown until the Mac says (`hello`),
+    /// so nothing is shown as online and nothing can be sent.
+    public func restorePairing(hostName: String, staticPubB64: String, deviceID: String, relayURL: String? = nil) {
+        pairedHostName = hostName
+        pairedDeviceID = deviceID
+        pairedStaticPubB64 = staticPubB64
+        selfHostedRelayURL = relayURL
+        currentEpoch = nil
+        lastEventSeq = 0
+        connectionState = .disconnected(reason: "正在连接 Mac")
+    }
+
+    /// D4 step 5: the user forgot this Mac. Everything it showed goes, as on
+    /// revocation, and the phone is unpaired rather than revoked.
+    public func unpair() {
+        handleDeviceRevoked(reason: "")
+        pairedHostName = nil
+        selfHostedRelayURL = nil
+        connectionState = .unpaired
     }
 
     public func markMacOffline(relayStillConnected: Bool, reason: String = "Mac host disconnected") {
@@ -656,6 +682,7 @@ public final class CompanionStore {
     private func issue(_ method: String, _ params: [String: String], epoch: String) -> CompanionCommand {
         let command = CompanionCommand(method: method, params: params, hostEpoch: epoch)
         outbox.append(command)
+        onCommandIssued?()
         return command
     }
 
