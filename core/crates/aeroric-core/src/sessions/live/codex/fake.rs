@@ -17,8 +17,9 @@ use crate::tasks::{ProtocolFamily, TaskStatus};
 
 const WAIT: Duration = Duration::from_secs(5);
 
-/// The server's side of one launched process. Everything the driver sends
-/// is checked against the Codex schema snapshots (E9, [`super::contract`]).
+/// The server's side of one launched process. Everything the driver sends,
+/// and every notification and request the test plays as Codex, is checked
+/// against the Codex schema snapshots (E9, [`super::contract`]).
 pub struct Peer {
     from_client: mpsc::UnboundedReceiver<String>,
     to_client: Option<mpsc::UnboundedSender<String>>,
@@ -66,13 +67,26 @@ impl Peer {
         self.send(json!({"jsonrpc": "2.0", "id": request["id"], "error": {"code": code, "message": message}}));
     }
 
+    /// A notification as Codex sends it: checked against every snapshot
+    /// (fields may be left out, but each one named must be one Codex sends).
     pub fn notify(&self, method: &str, params: Value) {
+        let message = json!({"jsonrpc": "2.0", "method": method, "params": params});
+        super::contract::assert_codex_sends(&message);
+        self.send(message);
+    }
+
+    /// A notification no snapshot has, for a case about what a later Codex
+    /// might send (an end state the driver does not know).
+    pub fn notify_unlike_any_snapshot(&self, method: &str, params: Value) {
         self.send(json!({"jsonrpc": "2.0", "method": method, "params": params}));
     }
 
+    /// A server request as Codex sends it, checked like [`Self::notify`].
     pub fn request(&self, id: i64, method: &str, params: Value) {
         self.asked.lock().insert(id.to_string(), method.to_string());
-        self.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        super::contract::assert_codex_sends(&message);
+        self.send(message);
     }
 
     pub async fn handshake(&mut self) {

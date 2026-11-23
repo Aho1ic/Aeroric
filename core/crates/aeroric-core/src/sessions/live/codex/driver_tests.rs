@@ -1010,7 +1010,8 @@ async fn a_subagent_s_unknown_end_state_is_not_done_on_its_card() {
     spawn_worker(&peer);
     let sink = Arc::clone(&h.sink);
     until("started line", move || !card_lines(&sink).is_empty()).await;
-    peer.notify(
+    // No Codex sends "paused" yet; the case is about one that might.
+    peer.notify_unlike_any_snapshot(
         "turn/completed",
         json!({"threadId": "th-kid", "turn": {"id": "ku1", "status": "paused"}}),
     );

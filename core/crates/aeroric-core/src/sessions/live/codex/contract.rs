@@ -113,11 +113,31 @@ fn type_fits(name: &str, value: &Value) -> bool {
 /// it. Codex ignores such a field, so a renamed parameter would otherwise be
 /// dropped without a word.
 pub fn check(root: &Value, schema: &Value, value: &Value, path: &str, errors: &mut Vec<String>) {
+    check_as(root, schema, value, path, Fill::Whole, errors)
+}
+
+/// Whether the value must carry every required field. A test's stand-in for
+/// what Codex sends is `Partial`: it names only what the case needs, but
+/// every field it names must be one Codex sends, with a value Codex sends.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Fill {
+    Whole,
+    Partial,
+}
+
+fn check_as(
+    root: &Value,
+    schema: &Value,
+    value: &Value,
+    path: &str,
+    fill: Fill,
+    errors: &mut Vec<String>,
+) {
     if schema == &Value::Bool(true) {
         return;
     }
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-        return check(root, resolve(root, reference), value, path, errors);
+        return check_as(root, resolve(root, reference), value, path, fill, errors);
     }
     // Fields the schema names beside its branches are checked here, not by
     // each branch (`{"type": "audio"}` + one of `{url}` / `{fileId}`).
@@ -147,7 +167,7 @@ pub fn check(root: &Value, schema: &Value, value: &Value, path: &str, errors: &m
             let mut closest: Option<Vec<String>> = None;
             for branch in branches {
                 let mut found = Vec::new();
-                check(root, branch, &narrowed, path, &mut found);
+                check_as(root, branch, &narrowed, path, fill, &mut found);
                 if found.is_empty() {
                     closest = None;
                     break;
@@ -164,7 +184,7 @@ pub fn check(root: &Value, schema: &Value, value: &Value, path: &str, errors: &m
     }
     if let Some(parts) = schema.get("allOf").and_then(Value::as_array) {
         for part in parts {
-            check(root, part, value, path, errors);
+            check_as(root, part, value, path, fill, errors);
         }
     }
     let types: Vec<&str> = match schema.get("type") {
@@ -198,7 +218,7 @@ pub fn check(root: &Value, schema: &Value, value: &Value, path: &str, errors: &m
             .flatten()
             .filter_map(Value::as_str)
         {
-            if !object.contains_key(name) {
+            if fill == Fill::Whole && !object.contains_key(name) {
                 errors.push(format!("{path}.{name}: required, not sent"));
             }
         }
@@ -208,9 +228,11 @@ pub fn check(root: &Value, schema: &Value, value: &Value, path: &str, errors: &m
                 properties.and_then(|p| p.get(key)),
                 schema.get("additionalProperties"),
             ) {
-                (Some(property), _) => check(root, property, field, &at, errors),
+                (Some(property), _) => check_as(root, property, field, &at, fill, errors),
                 (None, Some(Value::Bool(true))) => {}
-                (None, Some(extra)) if extra.is_object() => check(root, extra, field, &at, errors),
+                (None, Some(extra)) if extra.is_object() => {
+                    check_as(root, extra, field, &at, fill, errors)
+                }
                 (None, Some(_)) => errors.push(format!("{at}: not a field this Codex knows")),
                 (None, None) if branch_fields.contains(&key.as_str()) => {}
                 (None, None) if properties.is_some() => {
@@ -222,7 +244,7 @@ pub fn check(root: &Value, schema: &Value, value: &Value, path: &str, errors: &m
     }
     if let (Some(items), Some(array)) = (schema.get("items"), value.as_array()) {
         for (index, item) in array.iter().enumerate() {
-            check(root, items, item, &format!("{path}[{index}]"), errors);
+            check_as(root, items, item, &format!("{path}[{index}]"), fill, errors);
         }
     }
 }
@@ -274,6 +296,42 @@ pub fn problems(
         _ => {}
     }
     errors
+}
+
+/// What one snapshot finds wrong with a message a test plays as Codex: a
+/// server request or a notification. Checked as [`Fill::Partial`].
+pub fn problems_from_codex(snapshot: &Snapshot, message: &Value) -> Vec<String> {
+    let Some(method) = message.get("method").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let (root, kind) = if message.get("id").is_some() {
+        (&snapshot.server_requests, "request")
+    } else {
+        (&snapshot.notifications, "notification")
+    };
+    let Some(entry) = entry(root, method) else {
+        return vec![format!("{method}: not a {kind} this Codex sends")];
+    };
+    let mut errors = Vec::new();
+    if let Some(schema) = entry.pointer("/properties/params") {
+        let params = message.get("params").unwrap_or(&Value::Null);
+        check_as(root, schema, params, method, Fill::Partial, &mut errors);
+    }
+    errors
+}
+
+/// Panics, naming the snapshot, when a test plays Codex sending what no
+/// Codex of that version sends.
+pub fn assert_codex_sends(message: &Value) {
+    for snapshot in snapshots() {
+        let errors = problems_from_codex(snapshot, message);
+        assert!(
+            errors.is_empty(),
+            "the test plays Codex sending what {} does not send:\n  {}\nmessage: {message}",
+            snapshot.name,
+            errors.join("\n  ")
+        );
+    }
 }
 
 /// Panics, naming the snapshot, when a message the driver sent does not fit.
@@ -408,6 +466,60 @@ mod tests {
         assert!(
             !audio(json!({"type": "audio"})).is_empty(),
             "neither url nor fileId"
+        );
+    }
+
+    /// What a test plays as Codex may leave fields out, but each field it
+    /// names, and each value, must be one Codex sends.
+    #[test]
+    fn a_stand_in_for_codex_is_checked_but_may_be_partial() {
+        let from_codex = |message: Value| -> Vec<String> {
+            snapshots()
+                .iter()
+                .flat_map(|s| problems_from_codex(s, &message))
+                .collect()
+        };
+        let partial = json!({"method": "turn/completed", "params": {"turn": {"id": "u1", "status": "completed"}}});
+        assert_eq!(
+            from_codex(partial),
+            Vec::<String>::new(),
+            "threadId left out"
+        );
+        let approval = json!({"id": 3, "method": "item/commandExecution/requestApproval",
+            "params": {"threadId": "th1", "command": "ls"}});
+        assert_eq!(from_codex(approval), Vec::<String>::new());
+
+        let state = from_codex(
+            json!({"method": "turn/completed", "params": {"turn": {"status": "paused"}}}),
+        );
+        assert!(
+            state
+                .iter()
+                .any(|e| e.starts_with("turn/completed.turn.status:")),
+            "{state:?}"
+        );
+        let field =
+            from_codex(json!({"method": "turn/started", "params": {"turn": {"turnId": "u1"}}}));
+        assert!(
+            field
+                .iter()
+                .any(|e| e == "turn/started.turn.turnId: not a field this Codex knows"),
+            "{field:?}"
+        );
+        let method = from_codex(json!({"method": "turn/paused", "params": {}}));
+        assert!(
+            method
+                .iter()
+                .any(|e| e == "turn/paused: not a notification this Codex sends"),
+            "{method:?}"
+        );
+        let request =
+            from_codex(json!({"id": 1, "method": "item/shell/requestApproval", "params": {}}));
+        assert!(
+            request
+                .iter()
+                .any(|e| e == "item/shell/requestApproval: not a request this Codex sends"),
+            "{request:?}"
         );
     }
 
