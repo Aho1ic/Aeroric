@@ -328,8 +328,10 @@ struct DelegationPanelSection: View {
                 Button("隔离（只给指令和文件）") { draft.contextMode = "isolated" }
                 Button("续做（带上本会话的对话）") { draft.contextMode = "fork" }
             }
-            CapsulePicker(title: draft.workspace.map { $0 == "shared" ? "共享可写" : $0 == "copy" ? "独立副本" : "只读" }
-                              ?? "工作区按角色",
+            CapsulePicker(title: WorkPlanText.draftWorkspace(
+                              draft.workspace, roleWorkspace: draft.role.flatMap { id in
+                                  model.roles.first { $0.id == id }?.workspace
+                              }),
                           systemImage: "folder") {
                 Button("按角色默认") { draft.workspace = nil }
                 Button("只读") { draft.workspace = "readOnly" }
@@ -575,6 +577,15 @@ public enum WorkPlanText {
     /// "调研 · 进行中 · 在运行", with what it depends on.
     /// Review 2026-11-22: where a unit may write; a plan's units default to
     /// read-only, and one that has to write files cannot when left so.
+    /// 目检 1124: the picker read "工作区按角色" with no role chosen, and the
+    /// child came up read-only (`plan`) — a task to write a file could not.
+    /// Say what the child will get.
+    public static func draftWorkspace(_ chosen: String?, roleWorkspace: String?) -> String {
+        if let chosen { return chosen == "shared" ? "共享可写" : chosen == "copy" ? "独立副本" : "只读" }
+        guard let roleWorkspace else { return "只读（默认）" }
+        return "按角色：\(workspace(roleWorkspace))"
+    }
+
     public static func workspace(_ workspace: String) -> String {
         switch workspace {
         case "shared": "在当前目录写"

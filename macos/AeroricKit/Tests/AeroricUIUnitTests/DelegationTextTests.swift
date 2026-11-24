@@ -257,4 +257,12 @@ final class DelegationTextTests: XCTestCase {
         XCTAssertEqual(draft.contract.budgetTokens, 50_000)
         XCTAssertEqual(draft.contract.json.fields["budget"]?.fields["tokens"]?.numberText, "50000")
     }
+
+    /// 目检 1124: with no role and no workspace picked the child is read-only; say so.
+    func testTheDraftWorkspaceSaysWhatTheChildGets() {
+        XCTAssertEqual(WorkPlanText.draftWorkspace(nil, roleWorkspace: nil), "只读（默认）")
+        XCTAssertEqual(WorkPlanText.draftWorkspace(nil, roleWorkspace: "copy"), "按角色：在副本里写")
+        XCTAssertEqual(WorkPlanText.draftWorkspace("shared", roleWorkspace: "readOnly"), "共享可写")
+        XCTAssertEqual(WorkPlanText.draftWorkspace("readOnly", roleWorkspace: nil), "只读")
+    }
 }

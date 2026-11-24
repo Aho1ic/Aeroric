@@ -59,9 +59,16 @@ pub struct CliRemoteHandle {
     /// D4 (2026-11-23): this host's own services. A phone's message to a
     /// structured session goes through `session.prompt` (the delivery queue,
     /// receipts, 暂停所有 Agent) and its 停止 through `session.interrupt`,
-    /// exactly as the app's do. `None`: terminal tasks only.
-    pub host_services: Option<Arc<crate::dispatcher::ServiceSet>>,
+    /// exactly as the app's do. Empty: terminal tasks only.
+    ///
+    /// 1124: filled once the host's services exist. The handle is built
+    /// before them, because the app's `remote.*` methods (registered with
+    /// those services) need it.
+    pub host_services: HostServicesCell,
 }
+
+/// The host's own services, set after the handle that needs them is built.
+pub type HostServicesCell = Arc<std::sync::OnceLock<Arc<crate::dispatcher::ServiceSet>>>;
 
 /// D4: how long a phone's answer waits for the driver's settlement before
 /// the phone is told it is not confirmed yet.
@@ -256,7 +263,7 @@ impl CliRemoteHandle {
     async fn call_host(&self, method: &str, params: Value) -> Result<Value, String> {
         let services = self
             .host_services
-            .as_ref()
+            .get()
             .ok_or("这台 Mac 的宿主没有接上会话服务")?;
         call_in_process(services, method, params).await
     }

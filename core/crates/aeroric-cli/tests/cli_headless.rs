@@ -159,6 +159,33 @@ fn approval_and_task_lifecycle_real_cli_e2e() {
     let val: serde_json::Value = serde_json::from_slice(&out.stdout).expect("parse json");
     assert_eq!(val["approvals"].as_array().unwrap().len(), 0);
 
+    // 1124: the app's remote controls answer even while remote access is
+    // off (they were never registered by `serve`, so it could not be turned on).
+    let empty = scratch.0.join("empty.json");
+    std::fs::write(&empty, "{}").unwrap();
+    let out = scratch
+        .cli()
+        .arg("--data-dir")
+        .arg(&data_dir)
+        .args([
+            "rpc",
+            "remote.status",
+            "--params-file",
+            empty.to_str().unwrap(),
+        ])
+        .output()
+        .expect("remote.status");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "remote.status: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let reply: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("parse remote.status");
+    let status = reply.get("result").cloned().unwrap_or(reply);
+    assert_eq!(status["running"], serde_json::json!(false), "{status}");
+
     let inject_file = scratch.0.join("inject_ev1.json");
     std::fs::write(
         &inject_file,

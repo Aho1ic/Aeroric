@@ -454,11 +454,68 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             // P8-04 刀三：用量族与降级账总在；维护面端口**不给**——通知抓取与
             // "替换正在运行的 app"是桌面宿主的能力，无头宿主注册一个空壳只会让
             // 客户端以为能力存在（见 `HostWiring::maintenance`）。
+            // 1124: the remote plane's state and handle always exist, so the
+            // app's `remote.*` methods (status, start, pairing, devices) are
+            // always offered — before this they were never registered here,
+            // and the app could not turn remote access on. The listener
+            // itself starts only when remote-config.json says enabled, or
+            // when the app's `remote.start` asks.
+            // Read through the same typed, path-aware loader as the remote
+            // state itself. Raw JSON here could disagree with defaults and
+            // security normalization applied by `load_config_in`.
+            let remote_config = aeroric_core::remote::config::load_config_in(data_dir);
+            let remote_state = Arc::new(aeroric_core::remote::state::RemoteState::new_at(data_dir));
+            // D4 step 8: task events go on to connected phones; the push
+            // dispatcher (if any) still sees every event.
+            bridge_log.set_observer(Some(Arc::new(
+                aeroric_core::remote::bridge::PhoneEventBridge::new(
+                    Arc::clone(&remote_state),
+                    push.as_ref().map(|(dispatcher, _)| {
+                        Arc::clone(dispatcher) as Arc<dyn aeroric_core::events::EventObserver>
+                    }),
+                ),
+            )));
+            // 诊断用的 relay 配置取自 state(即服务真正会用的那份),而不是再读一遍文件。
+            let relay_for_diagnostics = {
+                let cfg = remote_state.config.lock();
+                (
+                    cfg.relay_url.clone().unwrap_or_default(),
+                    cfg.relay_token.clone(),
+                )
+            };
+            let host_services_cell: aeroric_host::remote_headless::HostServicesCell =
+                Default::default();
+            let approvals_for_remote = Arc::new(std::sync::Mutex::new(
+                aeroric_host::services::HostApprovals::default(),
+            ));
+            let remote_handle: Arc<dyn aeroric_core::remote::services::RemoteHostHandle> =
+                Arc::new(aeroric_host::remote_headless::CliRemoteHandle {
+                    service: task_service_for_remote,
+                    context: Arc::clone(&started.context),
+                    executor: Arc::clone(&executor),
+                    terminal: terminal_for_remote,
+                    registry: registry_for_remote,
+                    approvals: Arc::clone(&approvals_for_remote),
+                    families: families_for_remote,
+                    push: push.as_ref().map(|(dispatcher, _)| Arc::clone(dispatcher)),
+                    push_transport: push.as_ref().map(|(_, transport)| Arc::clone(transport)),
+                    relay: Some(relay_for_diagnostics),
+                    live: Some(Arc::clone(&structured)),
+                    host_services: Arc::clone(&host_services_cell),
+                });
+            // P8-04 刀三：用量族与降级账总在；维护面端口**不给**——通知抓取与
+            // "替换正在运行的 app"是桌面宿主的能力，无头宿主注册一个空壳只会让
+            // 客户端以为能力存在（见 `HostWiring::maintenance`）。
             let wiring = aeroric_host::dispatcher::HostWiring {
                 agent_config_external_home: Some(agent_config_external_home),
                 live: Some(Arc::clone(&structured)),
                 keep_awake: Some(Arc::new(aeroric_host::keep_awake::CaffeinateAssertion)),
                 quota_sampler: true,
+                remote: Some(aeroric_host::dispatcher::RemotePlaneInjection {
+                    state: Arc::clone(&remote_state),
+                    handle: Arc::clone(&remote_handle),
+                }),
+                approvals: Some(Arc::clone(&approvals_for_remote)),
                 ..Default::default()
             };
             let services = HostServices::with_tasks_and_wiring(
@@ -472,49 +529,11 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 registry,
                 wiring,
             );
+            let _ = host_services_cell.set(Arc::clone(&services.services));
             // P8-03 刀四：remote-config.json enabled 时拉起无头远程 WS 服务
             // （core `remote::server` + CliRemoteHandle 真实任务面）。默认关闭，
             // 与桌面端同一份配置文件语义。
-            // Read through the same typed, path-aware loader as the remote
-            // state itself. Raw JSON here could disagree with defaults and
-            // security normalization applied by `load_config_in`.
-            let remote_config = aeroric_core::remote::config::load_config_in(data_dir);
             if remote_config.enabled {
-                let remote_state =
-                    Arc::new(aeroric_core::remote::state::RemoteState::new_at(data_dir));
-                // D4 step 8: task events go on to connected phones; the push
-                // dispatcher (if any) still sees every event.
-                bridge_log.set_observer(Some(Arc::new(
-                    aeroric_core::remote::bridge::PhoneEventBridge::new(
-                        Arc::clone(&remote_state),
-                        push.as_ref().map(|(dispatcher, _)| {
-                            Arc::clone(dispatcher) as Arc<dyn aeroric_core::events::EventObserver>
-                        }),
-                    ),
-                )));
-                // 诊断用的 relay 配置取自 state(即服务真正会用的那份),而不是再读一遍文件。
-                let relay_for_diagnostics = {
-                    let cfg = remote_state.config.lock();
-                    (
-                        cfg.relay_url.clone().unwrap_or_default(),
-                        cfg.relay_token.clone(),
-                    )
-                };
-                let remote_handle: Arc<dyn aeroric_core::remote::services::RemoteHostHandle> =
-                    Arc::new(aeroric_host::remote_headless::CliRemoteHandle {
-                        service: task_service_for_remote,
-                        context: Arc::clone(&started.context),
-                        executor: Arc::clone(&executor),
-                        terminal: terminal_for_remote,
-                        registry: registry_for_remote,
-                        approvals: Arc::clone(&services.approvals),
-                        families: families_for_remote,
-                        push: push.as_ref().map(|(dispatcher, _)| Arc::clone(dispatcher)),
-                        push_transport: push.as_ref().map(|(_, transport)| Arc::clone(transport)),
-                        relay: Some(relay_for_diagnostics),
-                        live: Some(Arc::clone(&structured)),
-                        host_services: Some(Arc::clone(&services.services)),
-                    });
                 let cfg_port = remote_config.port;
                 let scope = aeroric_core::remote::state::required_listener_scope(&remote_state);
                 match aeroric_core::remote::server::start_with_scope(

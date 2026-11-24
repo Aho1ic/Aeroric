@@ -251,6 +251,9 @@ pub struct HostWiring {
     /// `Arc` 之后就不可变了,而且 `handshake` 与 remote 面必须落在**同一个**
     /// 集合里,否则认证过的连接看不到这些方法。
     pub remote: Option<RemotePlaneInjection>,
+    /// 1124: the approvals table, when the caller built it first (the remote
+    /// handle shares it and is built before these services). Default: a new one.
+    pub approvals: Option<Arc<std::sync::Mutex<crate::services::HostApprovals>>>,
     /// AP7:外部 Agent 适配器探测结果。给了才注册 `adapters.capabilities` 与
     /// `session.control`,并把探测到的能力**如实**写进握手清单——没给意味着这个宿主
     /// 形态没有结构化会话控制面(`session.control` = method-not-found),而不是
@@ -416,9 +419,11 @@ impl HostServices {
             &mut set,
             wiring.conda.clone(),
         );
-        let approvals = Arc::new(std::sync::Mutex::new(
-            crate::services::HostApprovals::default(),
-        ));
+        let approvals = wiring.approvals.clone().unwrap_or_else(|| {
+            Arc::new(std::sync::Mutex::new(
+                crate::services::HostApprovals::default(),
+            ))
+        });
         crate::services::register_approval_services(&mut set, Arc::clone(&approvals));
         // 先克隆 context：下面的 if-let 分支里 register_session_services 会
         // 把它 move 走，而重放面还要一份。

@@ -766,7 +766,7 @@ async fn headless_remote_handle_serves_streams_approvals_sessions_files_git_and_
         push_transport: None,
         relay: None,
         live: None,
-        host_services: None,
+        host_services: Default::default(),
     });
 
     // 1. Create a git-backed project workspace and launch a task via task_request.
