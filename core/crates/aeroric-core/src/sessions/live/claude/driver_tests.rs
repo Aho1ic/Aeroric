@@ -290,6 +290,8 @@ async fn a_message_during_a_turn_is_claude_s_next_turn() {
     assert_eq!(peer.expect_user().await, "also this");
     peer.result("success");
     peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    peer.send(json!({"type": "system", "subtype": "init", "session_id": "cs1"}));
     let sink = Arc::clone(&h.sink);
     until("a second turn", move || {
         sink.update_types()
@@ -300,6 +302,33 @@ async fn a_message_during_a_turn_is_claude_s_next_turn() {
     })
     .await;
     peer.result("success");
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    assert!(!h.session.snapshot().turn_active);
+}
+
+/// 1124c: Claude folded a message written mid-turn into the running turn
+/// (one `result` for both). No turn is left open, and a later stop finds
+/// nothing running.
+#[tokio::test]
+async fn a_message_folded_into_the_turn_leaves_no_turn_open() {
+    let mut h = start(spec());
+    let mut peer = running(&mut h).await;
+    h.session.prompt("also this".into()).unwrap();
+    assert_eq!(peer.expect_user().await, "also this");
+    peer.result("success");
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(turns_started(&h.sink), 1);
+    assert!(!h.session.snapshot().turn_active);
+    assert_eq!(h.sink.last_status(), Some(TaskStatus::Done));
+
+    // Idle says nothing more is coming; a turn Claude opens later is its own.
+    peer.send(json!({"type": "system", "subtype": "session_state_changed", "state": "idle", "session_id": "cs1"}));
+    peer.send(json!({"type": "system", "subtype": "init", "session_id": "cs1"}));
+    wait_status(&h.sink, TaskStatus::Running).await;
+    peer.send(json!({"type": "system", "subtype": "session_state_changed", "state": "idle", "session_id": "cs1"}));
     peer.context_usage().await;
     wait_status(&h.sink, TaskStatus::Done).await;
     assert!(!h.session.snapshot().turn_active);

@@ -324,12 +324,13 @@ public struct CompanionTaskPage: View {
                 }
             }
             Section("发给这个任务") { messageSection }
+            Section("会话") { transcriptSection }
             if let changes = store.taskChanges, changes.taskId == taskId {
                 Section("改动") { changesSection(changes) }
             }
-            Section("会话") { transcriptSection }
         }
         .navigationTitle(task?.title ?? "任务")
+        .refreshable { store.openTask(taskId) }
         .accessibilityIdentifier("companion.task-page")
         .onAppear { store.openTask(taskId) }
         .onDisappear { store.closeTask(taskId) }
@@ -591,11 +592,20 @@ public struct CompanionFilesAndGitPane: View {
                     .accessibilityIdentifier("companion.browse.project")
                 }
                 if let browse = store.browse {
-                    Section("Git 改动") { changesSection(browse.changes) }
+                    Section {
+                        changesSection(browse.changes)
+                    } header: {
+                        Text("Git 改动")
+                    } footer: {
+                        // 1124c: the Mac says so only when a task's turn
+                        // starts or ends; other edits wait for a pull.
+                        Text("任务每轮开始和结束时自动更新；在 Mac 上直接改的文件，下拉刷新")
+                    }
                     Section(folderTitle(browse)) { filesSection(browse) }
                 }
             }
         }
+        .refreshable { if let projectId { store.openBrowse(projectId: projectId) } }
         .accessibilityIdentifier("companion.browse")
         .onAppear { if let projectId { store.openBrowse(projectId: projectId) } }
         .onDisappear { store.closeBrowse() }

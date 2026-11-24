@@ -780,15 +780,17 @@ impl Actor {
                     self.echoed(&message);
                     return;
                 }
-                // A turn Claude starts on its own (a background task reported
-                // back) opens with its `system/init`, as ours do. Nothing else
-                // may open one: a background subagent's frames look like the
+                // Between turns only `system/init` opens one: for a message
+                // written during the last turn, or one Claude starts on its
+                // own (a background task reported back). Nothing else may
+                // open one: a background subagent's frames look like the
                 // main session's, and no `result` would close its turn.
                 let init = message.get("type").and_then(Value::as_str) == Some("system")
                     && message.get("subtype").and_then(Value::as_str) == Some("init");
-                if init && self.outstanding == 0 && self.state.lock().active_turn.is_none() {
+                if init && self.state.lock().active_turn.is_none() {
+                    let own = self.outstanding == 0;
                     self.begin_turn();
-                    self.own_turn = true;
+                    self.own_turn = own;
                 }
                 let (updates, signal) = self.mapper.map(&message);
                 for update in updates {
@@ -823,8 +825,13 @@ impl Actor {
                         self.turn_result(failed, error).await
                     }
                     Some(ClaudeSignal::SessionIdle) => {
-                        if self.own_turn && self.state.lock().active_turn.is_some() {
+                        let active = self.state.lock().active_turn.is_some();
+                        if self.own_turn && active {
                             self.turn_result(false, None).await;
+                        } else if !active {
+                            // 1124c: Claude folded the messages written
+                            // during the last turn into it; none is left.
+                            self.outstanding = 0;
                         }
                     }
                     Some(ClaudeSignal::AuthRefused { reason }) => {
@@ -898,10 +905,11 @@ impl Actor {
                 self.push(update);
             }
         }
-        // A message written during the turn is Claude's next turn.
-        if self.outstanding > 0 {
-            self.begin_turn();
-        }
+        // 1124c: a message written during the turn is not always a turn of
+        // its own. Claude may fold it into the running turn (a
+        // `queued_command`) and answer both with one `result`; a turn opened
+        // here would then never end, and 停止 would not end it either. The
+        // next turn opens when Claude says `system/init`.
     }
 
     /// Mirror the mapper's background tasks for `idle_since_ms`; the idle

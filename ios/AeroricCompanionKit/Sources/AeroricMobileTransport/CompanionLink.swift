@@ -226,6 +226,11 @@ public final class CompanionLink {
         let latestSeq = Self.uint(since["latestSeq"]) ?? store.lastEventSeq
         let (projects, tasks, approvals) = try await readSnapshot(epoch: epoch)
 
+        // 1124c: connected before the snapshot lands. Applying it asks the
+        // open pages (文件与 Git, the task page) to read again, and the
+        // connector drops a read while the link is not connected: a page that
+        // failed when the last connection dropped stayed failed.
+        isConnected = true
         // The snapshot is authoritative; a new host start drops the outbox.
         store.applySnapshotProjects(projects)
         store.handleReconnect(newEpoch: epoch, latestHostSeq: latestSeq, mode: mode,
@@ -233,7 +238,6 @@ public final class CompanionLink {
         syncing = false
         for seq in heldPushes.sorted() { store.ingestHostEvent(seq: seq) }
         heldPushes = []
-        isConnected = true
 
         // Same host start: what was not answered goes again, same ids.
         try await flush()
@@ -277,7 +281,7 @@ public final class CompanionLink {
                 tasks.append(CompanionTask(
                     id: taskId,
                     projectId: (record["projectId"] as? String) ?? id,
-                    title: (record["name"] as? String) ?? (record["title"] as? String) ?? taskId,
+                    title: CompanionTask.title(of: record, fallback: taskId),
                     agent: (record["agent"] as? String) ?? "",
                     status: (record["status"] as? String) ?? "",
                     permissionMode: (record["permissionMode"] as? String) ?? "ask",

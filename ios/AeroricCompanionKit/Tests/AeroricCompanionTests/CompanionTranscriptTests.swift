@@ -169,4 +169,13 @@ final class CompanionTranscriptTests: XCTestCase {
         XCTAssertEqual(fake.receivedTranscriptReads.count, reads, "a closed page is not read")
         await connector.stop()
     }
+
+    /// 1124c: a task without a name is titled by the first line of what was
+    /// asked, not its id.
+    func testATaskIsTitledByItsNameOrTheFirstLineOfItsPrompt() {
+        XCTAssertEqual(CompanionTask.title(of: ["prompt": "\n  Reply with OK.\nmore"], fallback: "F13E"),
+                       "Reply with OK.")
+        XCTAssertEqual(CompanionTask.title(of: ["name": "整理", "prompt": "Reply"], fallback: "F13E"), "整理")
+        XCTAssertEqual(CompanionTask.title(of: ["name": " ", "prompt": ""], fallback: "F13E"), "F13E")
+    }
 }

@@ -87,6 +87,19 @@ public final class RemoteStore: ObservableObject {
         auditLines = auditReader()
     }
 
+    /// 1124c: a phone that pairs, or goes on- or offline, while the page is
+    /// open shows up without leaving the page. Reads the device list every
+    /// few seconds until the page goes away (its task is cancelled).
+    public func watchDevices(every interval: Duration = .seconds(3)) async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: interval)
+            guard !Task.isCancelled, let client else { return }
+            if let read = try? await client.listDevices(), read != devices {
+                devices = read
+            }
+        }
+    }
+
     // MARK: - AP6: push plane and relay diagnostics
 
     /// 注销某台设备的推送。
@@ -310,7 +323,10 @@ public struct RemoteAccessSettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .accessibilityIdentifier("settings.remote")
-        .task { await store.refresh() }
+        .task {
+            await store.refresh()
+            await store.watchDevices()
+        }
         .sheet(isPresented: $showPairing) {
             PairingView(store: store)
         }

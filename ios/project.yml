@@ -21,6 +21,9 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.aeroric.ios.companion.pairing
             CFBundleURLSchemes: [aeroric]
+        # 1124c: without a launch screen iOS runs the app letterboxed at an
+        # old phone's size, and the task page's lower sections fall off it.
+        UILaunchScreen: {}
     dependencies:
       - package: AeroricCompanionKit
         product: AeroricMobileTransport

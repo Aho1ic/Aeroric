@@ -163,6 +163,27 @@ final class CompanionBrowseTests: XCTestCase {
         await connector.stop()
     }
 
+    /// 1124c: a page open while the phone was offline (here: before it
+    /// connected; in the review: after the connection dropped) is read once
+    /// the connection is back, from the snapshot, without the user touching it.
+    @MainActor
+    func testAPageOpenWhileOfflineIsReadOnceConnected() async throws {
+        let store = CompanionStore()
+        let vault = InMemoryCredentialStore(current: CompanionCredentials(
+            hostName: "Studio Mac", hostId: "host-1", publicKey: mac.publicBase64Url,
+            endpoints: ["ws://192.168.1.33:8765"], deviceId: "dev-1", deviceToken: "token-1"))
+        var config = FakeMac.Config()
+        config.reads = ["git.changes ": ["available": true, "changes": []], "project.files ": rootFiles]
+        let fake = FakeMac(responder: mac, config: config)
+        let connector = CompanionConnector(store: store, credentials: vault, makeSocket: { _ in fake }, pause: { _ in })
+        store.openBrowse(projectId: "p1")
+        connector.start()
+        await eventually("read once online") {
+            store.browse?.entries.value?.count == 2 && store.browse?.changes.value?.isEmpty == true
+        }
+        await connector.stop()
+    }
+
     // MARK: - A task's 改动 (task page)
 
     @MainActor

@@ -118,6 +118,20 @@ public struct CompanionTask: Identifiable, Equatable, Sendable {
         self.permissionMode = permissionMode
         self.generation = generation
     }
+
+    /// 1124c: the name a `tasks.list` record shows. Most tasks carry no
+    /// `name`; the first line of what was asked is the title, as on the Mac.
+    public static func title(of record: [String: Any], fallback: String) -> String {
+        for key in ["name", "title", "prompt"] {
+            let line = ((record[key] as? String) ?? "")
+                .split(whereSeparator: \.isNewline)
+                .lazy
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty }
+            if let line { return line }
+        }
+        return fallback
+    }
 }
 
 /// A2: where an answer from this phone stands. A card leaves only when the
