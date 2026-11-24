@@ -135,6 +135,8 @@ enum WorkspaceSection: String, CaseIterable, Hashable, Sendable {
     var listed: Bool {
         switch self {
         case .database, .notebook: false
+        // 1124: phone pairing lives in Settings › 集成 › 远程与手机.
+        case .remote: false
         default: true
         }
     }
@@ -177,7 +179,7 @@ struct TaskWorkspaceView: View {
     @State private var taskInputGate = TaskPresentationInputGate()
     @State private var terminalPresentationOwner = UUID()
     @State private var visitedResourceProjects: Set<String> = []
-    @Environment(\.mainShellBudget) private var shellBudget
+    @Environment(\.mainShellInspectorColumn) private var shellBudget
     @Environment(\.mainShellNavigationEpoch) private var navigationEpoch
     @Environment(\.mainShellInspectorWidth) private var inspectorWidthPreference
     @Environment(\.mainShellInspectorOverlay) private var inspectorOverlay
@@ -235,7 +237,8 @@ struct TaskWorkspaceView: View {
                         services.openRemoteRequested = false
                         Task { @MainActor in
                             await services.refreshWorkspace()
-                            selection = id
+                            // 1123: like a local project, open to its new-session page.
+                            selection = SessionNavigation.draft(projectID: id)
                         }
                     },
                     onCancel: { services.openRemoteRequested = false }
@@ -253,7 +256,7 @@ struct TaskWorkspaceView: View {
     }
 
     private var showsAuxiliary: Bool {
-        !usesFullWorkspace && (shellBudget?.inspectorWidth ?? 0) > 0
+        !usesFullWorkspace && (shellBudget?.width ?? 0) > 0
     }
 
     /// F3: a window too narrow for the column shows the panel over the
@@ -276,10 +279,10 @@ struct TaskWorkspaceView: View {
             .background(AeroricColor.canvas)
             if let shellBudget, !showsAuxiliaryOverlay {
                 let gap = NativePanelGeometry.mainShell.handleWidth
-                let panelWidth = max(0, (shellBudget.inspectorWidth > 0
-                    ? shellBudget.inspectorWidth : NativePanelGeometry.mainShell.minimumInspectorWidth) - gap)
+                let panelWidth = max(0, (shellBudget.width > 0
+                    ? shellBudget.width : NativePanelGeometry.mainShell.minimumInspectorWidth) - gap)
                 InspectorResizeHandle(width: inspectorWidthPreference,
-                                      effectiveWidth: shellBudget.inspectorWidth,
+                                      effectiveWidth: shellBudget.width,
                                       totalWidth: shellBudget.totalWidth)
                     .frame(width: showsAuxiliary ? gap : 0)
                     .allowsHitTesting(showsAuxiliary)

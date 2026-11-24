@@ -276,6 +276,23 @@ private struct MainShellBudgetKey: EnvironmentKey {
     static let defaultValue: NativePanelGeometry.MainShellBudget? = nil
 }
 
+/// 1123: what the content column needs of the budget — the inspector's
+/// width and the window's. Dragging the sidebar changes the rest of the
+/// budget on every frame; reading the whole budget re-evaluated the entire
+/// workspace page each time, and the drag stuttered.
+public struct MainShellInspectorColumn: Equatable, Sendable {
+    public let width: CGFloat
+    public let totalWidth: CGFloat
+    public init(width: CGFloat, totalWidth: CGFloat) {
+        self.width = width
+        self.totalWidth = totalWidth
+    }
+}
+
+private struct MainShellInspectorColumnKey: EnvironmentKey {
+    static let defaultValue: MainShellInspectorColumn? = nil
+}
+
 private struct MainShellNavigationEpochKey: EnvironmentKey {
     static let defaultValue: UInt64 = 0
 }
@@ -284,6 +301,10 @@ public extension EnvironmentValues {
     var mainShellBudget: NativePanelGeometry.MainShellBudget? {
         get { self[MainShellBudgetKey.self] }
         set { self[MainShellBudgetKey.self] = newValue }
+    }
+    var mainShellInspectorColumn: MainShellInspectorColumn? {
+        get { self[MainShellInspectorColumnKey.self] }
+        set { self[MainShellInspectorColumnKey.self] = newValue }
     }
     var mainShellNavigationEpoch: UInt64 {
         get { self[MainShellNavigationEpochKey.self] }

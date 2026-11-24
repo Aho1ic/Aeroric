@@ -34,7 +34,7 @@ public final class RemoteStore: ObservableObject {
     /// 产品方关于 relay 责任的原话(不提供默认 relay);由宿主给出,这里不改写。
     @Published public private(set) var relayDisclosure: String = ""
 
-    private let client: RemoteClient?
+    private var client: RemoteClient?
     /// 审计文件读取钩子（生产=DataDir/remote/audit.log；测试注入内存行）。
     private let auditReader: () -> [String]
 
@@ -50,6 +50,13 @@ public final class RemoteStore: ObservableObject {
         self.devices = devices
         self.auditLines = auditLines
         self.auditReader = { [] }
+    }
+
+    /// 1124: the host connection arrived (or went away); the settings page
+    /// reads again when it next opens.
+    public func attach(client: RemoteClient?) {
+        self.client = client
+        readState = client == nil ? .unavailable : .notLoaded
     }
 
     /// 生产构造：审计行从磁盘读（调用方给读取闭包，避免 Kit 依赖路径解析）。

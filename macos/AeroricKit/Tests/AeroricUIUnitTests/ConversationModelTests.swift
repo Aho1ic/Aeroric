@@ -256,6 +256,33 @@ final class ConversationModelTests: XCTestCase {
         XCTAssertEqual(LiveRowGrouping.title(mixed), "已调用 2 个工具")
     }
 
+    /// 1123: thinking and tool calls with no reply between them are one row
+    /// that shows only the latest step while it moves.
+    func testThinkingAndToolsFoldIntoOneWorkRow() {
+        let thought: (String, String) -> LiveItem = { .thought(id: $0, text: $1, summary: false) }
+        let rows = LiveRowGrouping.rows([
+            thought("t0", "look first"),
+            .message(id: "m", text: "我先看一下现场"),
+            liveTool("a", .completed), liveTool("b", .failed),
+            thought("t1", "hm"),
+            liveTool("c", .completed),
+            thought("t2", "line one\nnext step: read the log\n"),
+        ])
+        XCTAssertEqual(rows.count, 3, "a thought alone stays a row; reply text ends a run")
+        guard case .item(.thought) = rows[0] else { return XCTFail("lone thought") }
+        guard case let .work(id, items) = rows[2] else { return XCTFail("work row") }
+        XCTAssertEqual(id, "tool:a")
+        XCTAssertEqual(items.count, 5)
+        XCTAssertEqual(LiveRowGrouping.workTitle(items), "思考 2 次 · 执行 3 个指令")
+        XCTAssertEqual(LiveRowGrouping.latestStep(items), "思考：next step: read the log")
+        let running = items + [liveTool("d", .running)]
+        XCTAssertEqual(LiveRowGrouping.latestStep(running), "正在执行：ls d")
+        var mixed = items
+        mixed[3] = .tool(LiveTool(id: "c", kind: .mcp, title: "", input: .null, output: "", status: .completed, result: nil))
+        XCTAssertEqual(LiveRowGrouping.workTitle(mixed), "思考 2 次 · 调用 3 个工具")
+        XCTAssertEqual(LiveRowGrouping.latestStep([thought("t", "")]), "正在思考…")
+    }
+
     func testCodexFallbackMetadataWarningIsRecognised() {
         let warning = "Model metadata for `cline-pass/deepseek-v4.1-flash` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
         XCTAssertEqual(LiveNoticeRow.fallbackModel(in: warning), "cline-pass/deepseek-v4.1-flash")

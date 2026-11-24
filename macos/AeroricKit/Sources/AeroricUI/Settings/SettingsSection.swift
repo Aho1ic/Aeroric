@@ -58,6 +58,15 @@ public protocol SettingsStateProviding: AnyObject {
     var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? { get }
     /// G: bring the main window to the Agent configuration page; nil hides the button.
     var settingsOpenAgentConfig: (@MainActor () -> Void)? { get }
+    /// 1124: bring the main window to one of its pages (记忆, 扩展); nil shows 即将支持.
+    var settingsOpenPage: (@MainActor (SettingsMainPage) -> Void)? { get }
+    /// 1124: phone pairing, devices and the remote audit; nil hides the page.
+    var settingsRemote: RemoteStore? { get }
+}
+
+/// Main-window pages a settings row can send the person to.
+public enum SettingsMainPage: Sendable {
+    case memory, skills
 }
 
 public extension SettingsStateProviding {
@@ -71,4 +80,6 @@ public extension SettingsStateProviding {
     var settingsExpert: ExpertStore? { nil }
     var settingsDiagnosticsExporter: (@MainActor () async throws -> DiagnosticsClient.Report)? { nil }
     var settingsOpenAgentConfig: (@MainActor () -> Void)? { nil }
+    var settingsOpenPage: (@MainActor (SettingsMainPage) -> Void)? { nil }
+    var settingsRemote: RemoteStore? { nil }
 }

@@ -313,6 +313,8 @@ final class AppServices {
                         client: CanvasClient(connection: connection),
                         capabilityEnabled: advertised[CanvasClient.capability] == true
                     )
+                    // 1124: the 远程与手机 settings page.
+                    self.remoteStore.attach(client: RemoteClient(connection: connection))
                     self.keepAwakeStore.attach(
                         client: PowerClient(connection: connection),
                         capabilityEnabled: advertised[PowerClient.capability] == true
@@ -1630,6 +1632,16 @@ extension AppServices: SettingsStateProviding {
             self?.requestedSelection = WorkspaceSection.agentConfigs.sidebarID
         }
     }
+    var settingsOpenPage: (@MainActor (SettingsMainPage) -> Void)? {
+        { [weak self] page in
+            WorkspaceActions.showMainWindow()
+            switch page {
+            case .memory: self?.requestedSelection = WorkspaceSection.memory.sidebarID
+            case .skills: self?.requestedSelection = WorkspaceSection.extensions.sidebarID
+            }
+        }
+    }
+    var settingsRemote: RemoteStore? { remoteStore }
     var keepingAwake: Bool { keepAwakeStore.active }
 }
 

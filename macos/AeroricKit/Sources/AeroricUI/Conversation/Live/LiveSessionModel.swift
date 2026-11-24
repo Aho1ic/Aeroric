@@ -732,8 +732,12 @@ public struct SessionStats: Equatable, Sendable {
     public var outputTokens: UInt64?
     public var outputBaseline: UInt64 = 0
 
-    private var turnStartMs: UInt64?
-    private var turnToolMs: UInt64 = 0
+    public private(set) var turnStartMs: UInt64?
+    /// 1124: tool time finished in the running turn, its calls, and the
+    /// output count when it started — for the live "这一轮" figures.
+    public private(set) var turnToolMs: UInt64 = 0
+    public private(set) var turnSteps = 0
+    public private(set) var turnOutputBaseline: UInt64?
     private var awaitingFirstToken = false
     private var toolStarts: [String: UInt64] = [:]
 
@@ -764,12 +768,19 @@ public struct SessionStats: Equatable, Sendable {
         return Double(output - outputBaseline) / (Double(modelMs) / 1000)
     }
 
+    /// 1124: running tools' time so far.
+    func runningToolMs(nowMs: UInt64) -> UInt64 {
+        toolStarts.values.reduce(0) { $0 + (nowMs > $1 ? nowMs - $1 : 0) }
+    }
+
     mutating func observe(_ kind: LiveUpdateKind, atMs: UInt64) {
         switch kind {
         case .turnStarted:
             turns += 1
             turnStartMs = atMs
             turnToolMs = 0
+            turnSteps = 0
+            turnOutputBaseline = outputTokens ?? outputBaseline
             awaitingFirstToken = true
         case .turnEnded:
             if let start = turnStartMs, atMs >= start {
@@ -777,6 +788,7 @@ public struct SessionStats: Equatable, Sendable {
                 modelMs += spent - min(spent, turnToolMs)
             }
             turnStartMs = nil
+            turnOutputBaseline = nil
             awaitingFirstToken = false
             toolStarts.removeAll()
         case .messageChunk, .thoughtChunk:
@@ -787,6 +799,7 @@ public struct SessionStats: Equatable, Sendable {
             }
         case let .toolCall(id, _, _, _):
             steps += 1
+            turnSteps += 1
             toolStarts[id] = atMs
         case let .toolCallUpdate(id, status, _, _):
             guard status != .running, let start = toolStarts.removeValue(forKey: id),
@@ -799,3 +812,52 @@ public struct SessionStats: Equatable, Sendable {
     }
 }
 
+
+/// 1124: the turn that is running now, as the 统计栏 shows it while it runs —
+/// the user wants usage, speed and steps live, not only once a turn ends.
+/// From the page's own updates when it saw the turn start; when the page
+/// opened part-way, the transcript's last turn (read at open) gives the start,
+/// the calls so far and their time, and the updates since then add to it.
+public struct RunningTurn: Equatable, Sendable {
+    public var elapsedMs: UInt64
+    public var modelMs: UInt64
+    public var toolMs: UInt64
+    public var steps: Int
+    /// Output tokens this turn so far; nil when the agent reports none yet.
+    public var outputTokens: UInt64?
+
+    /// Output tokens per second of this turn's model time.
+    public var tokensPerSecond: Double? {
+        guard modelMs >= 1000, let output = outputTokens, output > 0 else { return nil }
+        return Double(output) / (Double(modelMs) / 1000)
+    }
+
+    public static func make(live: SessionStats?, transcript: SessionTranscriptStats?, turnActive: Bool,
+                            nowMs: UInt64) -> RunningTurn? {
+        guard turnActive else { return nil }
+        let live = live ?? SessionStats()
+        var start: UInt64
+        var toolMs = live.turnToolMs + live.runningToolMs(nowMs: nowMs)
+        var steps = live.turnSteps
+        var output: UInt64?
+        if let seen = live.turnStartMs {
+            start = seen
+            if let now = live.outputTokens, let base = live.turnOutputBaseline, now >= base { output = now - base }
+        } else if let last = transcript?.turns.last {
+            start = last.startedAt
+            toolMs += last.tools.reduce(0) { sum, span in
+                guard let end = span.endedAt, end >= span.startedAt else { return sum }
+                return sum + (end - span.startedAt)
+            }
+            steps += last.tools.count + last.moreTools
+            let since = live.outputTokens.map { $0 >= live.outputBaseline ? $0 - live.outputBaseline : 0 }
+            if last.outputTokens != nil || since != nil { output = (last.outputTokens ?? 0) + (since ?? 0) }
+        } else {
+            return nil
+        }
+        start = min(start, nowMs)
+        let elapsed = nowMs - start
+        return RunningTurn(elapsedMs: elapsed, modelMs: elapsed - min(elapsed, toolMs), toolMs: min(toolMs, elapsed),
+                           steps: steps, outputTokens: output)
+    }
+}

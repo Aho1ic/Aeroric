@@ -9,6 +9,8 @@ struct SessionStatsBar: View {
     /// The whole session's turns and tool steps (history plus live rows).
     let turns: Int
     let steps: Int
+    /// 1124: the turn running now, refreshed every second while it runs.
+    var running: RunningTurn? = nil
 
     /// Turns (the person's own messages) and tool steps in a history.
     static func counts(_ history: [SessionMessage]) -> (turns: Int, steps: Int) {
@@ -30,7 +32,8 @@ struct SessionStatsBar: View {
         // unknown figure reads "—" rather than hiding its chip.
         HStack(spacing: AeroricSpace.s) {
             chip(.stats, systemImage: "gauge.with.dots.needle.33percent", text: SessionStatsText.statsChip(
-                turns: turns, steps: steps, tokensPerSecond: stats.tokensPerSecond)) { statsCard }
+                turns: turns, steps: steps, tokensPerSecond: running?.tokensPerSecond ?? stats.tokensPerSecond,
+                runningMs: running?.elapsedMs)) { statsCard }
             chip(.tokens, systemImage: "cylinder", text: SessionStatsText.tokensChip(
                 total: usage.totalTokens, hitRate: usage.cacheHitRate)) { tokensCard }
             contextChip(usage.fraction)
@@ -95,6 +98,21 @@ struct SessionStatsBar: View {
 
     private var statsCard: some View {
         card(systemImage: "gauge.with.dots.needle.33percent", title: "会话统计", trailing: nil) {
+            if let running {
+                Text("这一轮（进行中）")
+                    .font(.system(size: AeroricType.caption, weight: .medium))
+                    .foregroundStyle(AeroricColor.textTertiary)
+                row("已用时", SessionStatsText.duration(running.elapsedMs))
+                row("模型用时", SessionStatsText.duration(running.modelMs))
+                row("工具调用用时", SessionStatsText.duration(running.toolMs))
+                row("步骤", "\(running.steps) 步")
+                row("输出", running.outputTokens.map { "\(SessionStatsText.grouped($0)) tok" })
+                row("输出速度（TPS）", running.tokensPerSecond.map { "\(Int($0.rounded())) tok/s" })
+                Divider()
+                Text("整个会话")
+                    .font(.system(size: AeroricType.caption, weight: .medium))
+                    .foregroundStyle(AeroricColor.textTertiary)
+            }
             row("模型用时", stats.modelMs > 0 ? SessionStatsText.duration(stats.modelMs) : nil)
             row("工具调用用时", stats.toolMs > 0 ? SessionStatsText.duration(stats.toolMs) : nil)
             row("首 token 平均（TTFT）", stats.averageFirstTokenMs.map(SessionStatsText.duration))
@@ -180,10 +198,20 @@ struct SessionStatsBar: View {
 
 /// Text for the 统计栏 (pure, tested).
 enum SessionStatsText {
-    static func statsChip(turns: Int, steps: Int, tokensPerSecond: Double?) -> String {
-        let base = "\(turns) 轮 \(steps) 步"
-        guard let tokensPerSecond else { return base }
-        return base + " · \(Int(tokensPerSecond.rounded())) tok/s"
+    /// `3 轮 42 步 · 2 分 5 秒 · 35 tok/s`; the time only while a turn runs.
+    static func statsChip(turns: Int, steps: Int, tokensPerSecond: Double?, runningMs: UInt64? = nil) -> String {
+        var text = "\(turns) 轮 \(steps) 步"
+        if let runningMs { text += " · \(clock(runningMs))" }
+        if let tokensPerSecond { text += " · \(Int(tokensPerSecond.rounded())) tok/s" }
+        return text
+    }
+
+    /// Whole seconds for the ticking chip: `48 秒`, `2 分 5 秒`, `1 小时 3 分`.
+    static func clock(_ ms: UInt64) -> String {
+        let whole = Int(ms / 1000)
+        if whole < 60 { return "\(whole) 秒" }
+        if whole < 3600 { return "\(whole / 60) 分 \(whole % 60) 秒" }
+        return "\(whole / 3600) 小时 \(whole % 3600 / 60) 分"
     }
 
     static func tokensChip(total: UInt64?, hitRate: Double?) -> String {

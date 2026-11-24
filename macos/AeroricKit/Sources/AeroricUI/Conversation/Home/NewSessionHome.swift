@@ -106,18 +106,22 @@ public struct NewSessionHome: View {
         return NewSessionLayout.defaultHarness(preferred: preferredHarness, availability: availability)
     }
 
+    /// 1123: the choices made so far carry over in the new harness's terms
+    /// (`NewSessionDraft.switchHarness`).
     private func selectHarness(_ value: String) {
         guard draft.isEditable else { return }
-        draft.selectHarness(value)
-        if let first = NewSessionLayout.firstConfiguration(for: value, in: configurations) {
-            draft.apply(first)
-        }
+        draft.switchHarness(value, configurations: configurations)
     }
 
     /// A fresh draft gets the default harness and its first usable entry; a
-    /// choice the user made is never replaced.
+    /// choice the user made is never replaced, only moved to its entry's
+    /// newer version.
     private func adoptDefaults() {
-        guard draft.isEditable, draft.configurationID == nil, !configurations.isEmpty else { return }
+        guard draft.isEditable, !configurations.isEmpty else { return }
+        guard draft.configurationID == nil else {
+            draft.refresh(from: configurations)
+            return
+        }
         selectHarness(NewSessionLayout.defaultHarness(preferred: preferredHarness, availability: availability))
     }
 

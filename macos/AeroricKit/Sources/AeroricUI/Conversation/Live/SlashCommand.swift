@@ -124,6 +124,16 @@ public struct SlashSuggestionPopup: View {
     }
 }
 
+/// 1124: when to post "finished" — a session that was working (running or
+/// waiting on the person) becomes done or failed while the app is in the
+/// background.
+public enum FinishedNotificationGate {
+    public static func shouldNotify(previous: String?, current: String, appActive: Bool) -> Bool {
+        guard !appActive, ["done", "failed"].contains(current) else { return false }
+        return ["running", "input_required", "pending"].contains(previous ?? "")
+    }
+}
+
 /// When to post "needs your approval" (N4 D5): only while the app is in the
 /// background, once per task entering `input_required`.
 public struct ApprovalNotificationGate: Equatable, Sendable {

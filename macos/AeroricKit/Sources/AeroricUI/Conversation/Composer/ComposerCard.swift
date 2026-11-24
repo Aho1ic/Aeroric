@@ -31,6 +31,52 @@ public struct ComposerCard<Footer: View>: View {
     let footer: () -> Footer
     @FocusState private var focused: Bool
     @Environment(\.colorSchemeContrast) private var contrast
+    /// 1123: what was typed and not handed to `text` yet. Typing with an
+    /// input method lagged on the new-session page: every keystroke (each
+    /// composing step too) went through the window's whole state and saved
+    /// every draft. The editor edits this copy; `text` gets it once typing
+    /// pauses, and before anything reads it to send.
+    @State private var typed: String?
+    @State private var push: Task<Void, Never>?
+    /// The last value handed over, so its own echo is not taken for an
+    /// outside change.
+    @State private var pushed: String?
+    static var pushDelay: Duration { .milliseconds(150) }
+
+    private var shown: String { typed ?? text }
+
+    private var editing: Binding<String> {
+        Binding(get: { typed ?? text }, set: { value in
+            typed = value
+            push?.cancel()
+            push = Task { @MainActor in
+                try? await Task.sleep(for: Self.pushDelay)
+                guard !Task.isCancelled else { return }
+                flush()
+            }
+        })
+    }
+
+    /// Hand what was typed to `text` now.
+    private func flush() {
+        push?.cancel()
+        push = nil
+        guard let value = typed else { return }
+        typed = nil
+        if text != value {
+            pushed = value
+            text = value
+        }
+    }
+
+    private func send() {
+        flush()
+        onSend()
+    }
+
+    private func sendAfterTurn(_ action: @escaping () -> Void) -> () -> Void {
+        { flush(); action() }
+    }
 
     public static var maxLines: Int { 12 }
 
@@ -85,11 +131,20 @@ public struct ComposerCard<Footer: View>: View {
             return SessionAttachmentReferences.append(urls, to: &attachments)
         }
         .onChange(of: focusRequest) { _, _ in focused = true }
+        // Set from outside (sent and cleared, a command picked): that wins.
+        .onChange(of: text) { _, new in
+            guard typed != nil, new != pushed else { return }
+            push?.cancel()
+            push = nil
+            typed = nil
+        }
+        .onDisappear(perform: flush)
     }
 
     /// The hidden Text sizes the card (wrapping, 12-line cap); the editor
     /// overlays it and scrolls once the text is longer than that.
     private var editor: some View {
+        let text = shown
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).count
         let padding = String(repeating: "\n", count: max(0, minLines - lines))
         return Text(text.isEmpty ? " " + padding : text + padding + " ")
@@ -109,7 +164,7 @@ public struct ComposerCard<Footer: View>: View {
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     }
-                    TextEditor(text: $text)
+                    TextEditor(text: editing)
                         .font(font)
                         .scrollContentBackground(.hidden)
                         .scrollIndicators(.never)
@@ -118,7 +173,7 @@ public struct ComposerCard<Footer: View>: View {
                         // before the menu's shortcut saw it.
                         .onKeyPress(.return, phases: .down) { press in
                             guard press.modifiers == .option, let onSendAfterTurn, canSend else { return .ignored }
-                            onSendAfterTurn()
+                            sendAfterTurn(onSendAfterTurn)()
                             return .handled
                         }
                         .disabled(!isEditable)
@@ -179,8 +234,8 @@ public struct ComposerCard<Footer: View>: View {
                 .accessibilityIdentifier("\(identifierPrefix).stopping")
         case .ready, .blocked:
             let ready = sendState == .ready && isEditable
-                && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            Button(action: onSend) {
+                && !shown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            Button(action: send) {
                 PaperPlane()
                     .stroke(ready ? AeroricColor.onPrimary : AeroricColor.textTertiary,
                             style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
@@ -195,7 +250,7 @@ public struct ComposerCard<Footer: View>: View {
             .help(blockedReason ?? "发送 ⌘↩")
             .accessibilityLabel("发送")
             .accessibilityIdentifier("\(identifierPrefix).submit")
-            if ready, let onSendAfterTurn { sendMode(onSendAfterTurn) }
+            if ready, let onSendAfterTurn { sendMode(sendAfterTurn(onSendAfterTurn)) }
         }
     }
 
@@ -227,7 +282,7 @@ public struct ComposerCard<Footer: View>: View {
     }
 
     private var canSend: Bool {
-        sendState == .ready && isEditable && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        sendState == .ready && isEditable && !shown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var blockedReason: String? {

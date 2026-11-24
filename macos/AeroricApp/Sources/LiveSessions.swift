@@ -518,8 +518,14 @@ extension AppServices {
         task.updatedAtMs = UInt64(Date().timeIntervalSince1970 * 1000)
         taskStore.upsertTask(task)
         if notificationGate.shouldNotify(taskID: taskID, previous: previous, current: status,
-                                         appActive: NSApp.isActive) {
+                                         appActive: NSApp.isActive), NotificationPreferences.approval {
             notifyApproval(task)
+        }
+        // 1124: Settings › 通知 › 会话做完或失败时 (off by default).
+        if NotificationPreferences.finished,
+           FinishedNotificationGate.shouldNotify(previous: previous, current: status, appActive: NSApp.isActive) {
+            notifier.post(taskID: task.id, title: status == "done" ? "\(task.title) 做完了" : "\(task.title) 失败了",
+                          body: status == "done" ? "这一轮已完成" : "这一轮没有成功，点开看原因", kind: "finished")
         }
     }
 
@@ -555,16 +561,17 @@ final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate, @unchec
     }
 
     @MainActor
-    func post(taskID: String, title: String, body: String) {
+    func post(taskID: String, title: String, body: String, kind: String = "approval") {
+        let sound = NotificationPreferences.sound
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             let deliver = {
                 let content = UNMutableNotificationContent()
                 content.title = title
                 content.body = body
-                content.sound = .default
+                content.sound = sound ? .default : nil
                 content.userInfo = [Self.taskKey: taskID]
-                center.add(UNNotificationRequest(identifier: "approval.\(taskID)", content: content, trigger: nil))
+                center.add(UNNotificationRequest(identifier: "\(kind).\(taskID)", content: content, trigger: nil))
             }
             switch settings.authorizationStatus {
             case .authorized, .provisional:

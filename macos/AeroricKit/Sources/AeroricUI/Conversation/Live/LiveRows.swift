@@ -23,32 +23,91 @@ struct LiveThoughtRow: View {
 /// Live rows with consecutive tool calls folded into one group (2026-10-27:
 /// "已执行 n 个指令", collapsed by default; expand for the list, expand a
 /// line for its output).
+///
+/// 1123: a long Claude turn alternated "思考 · n 字" and "已执行 2 个指令"
+/// for dozens of rows. A run of thinking and tool calls with no reply text
+/// between them is now one work row: while it moves it shows only the latest
+/// step on one line, replaced in place; when it stops it reads "思考 n 次 ·
+/// 执行 m 个指令". Reply text still ends a run, so what the agent says stays
+/// in the page.
 enum LiveRowGrouping {
     enum Row: Identifiable, Equatable {
         case item(LiveItem)
         case tools(id: String, [LiveTool])
+        /// Thinking and tool calls, in order (at least one thought and two parts).
+        case work(id: String, [LiveItem])
 
         var id: String {
             switch self {
             case let .item(item): item.id
             case let .tools(id, _): "tools:\(id)"
+            case let .work(id, _): "work:\(id)"
             }
         }
     }
 
     static func rows(_ items: [LiveItem]) -> [Row] {
         var rows: [Row] = []
-        var run: [LiveTool] = []
+        var run: [LiveItem] = []
         func flush() {
-            if run.count == 1 { rows.append(.item(.tool(run[0]))) }
-            else if !run.isEmpty { rows.append(.tools(id: run[0].id, run)) }
-            run = []
+            defer { run = [] }
+            let tools = run.compactMap { item -> LiveTool? in if case let .tool(tool) = item { return tool }; return nil }
+            if tools.count == run.count {
+                if tools.count == 1 { rows.append(.item(.tool(tools[0]))) }
+                else if !tools.isEmpty { rows.append(.tools(id: tools[0].id, tools)) }
+            } else if run.count == 1 {
+                rows.append(.item(run[0]))
+            } else if let first = run.first {
+                rows.append(.work(id: first.id, run))
+            }
         }
         for item in items {
-            if case let .tool(tool) = item { run.append(tool) } else { flush(); rows.append(.item(item)) }
+            switch item {
+            case .tool, .thought: run.append(item)
+            default: flush(); rows.append(.item(item))
+            }
         }
         flush()
         return rows
+    }
+
+    /// "思考 3 次 · 执行 5 个指令" (or "调用 5 个工具"); a part with none is left out.
+    static func workTitle(_ items: [LiveItem]) -> String {
+        var thoughts = 0
+        var tools: [LiveTool] = []
+        for item in items {
+            switch item {
+            case .thought: thoughts += 1
+            case let .tool(tool): tools.append(tool)
+            default: break
+            }
+        }
+        var parts: [String] = []
+        if thoughts > 0 { parts.append("思考 \(thoughts) 次") }
+        if !tools.isEmpty {
+            let commands = tools.allSatisfy { $0.kind == .command }
+            parts.append(commands ? "执行 \(tools.count) 个指令" : "调用 \(tools.count) 个工具")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The step a moving run is on, as one line: a running call's title, or
+    /// the last line of the thinking that is streaming in.
+    static func latestStep(_ items: [LiveItem]) -> String {
+        if let running = items.last(where: {
+            if case let .tool(tool) = $0 { return tool.status == .running }; return false
+        }), case let .tool(tool) = running {
+            return "正在执行：\(tool.title.isEmpty ? "工具" : tool.title)"
+        }
+        switch items.last {
+        case let .thought(_, text, _)?:
+            let line = text.split(whereSeparator: \.isNewline).last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            return line.map { "思考：\($0.trimmingCharacters(in: .whitespaces))" } ?? "正在思考…"
+        case let .tool(tool)?:
+            return "\(tool.status == .failed ? "失败" : "已执行")：\(tool.title.isEmpty ? "工具" : tool.title)"
+        default:
+            return "正在思考…"
+        }
     }
 
     /// "已执行 3 个指令" when every call is a command, else "已调用 3 个工具";
@@ -214,6 +273,88 @@ struct LiveToolGroup: View {
                 ForEach(tools, id: \.id) { tool in
                     LiveToolLine(tool: tool).padding(.leading, AeroricSpace.l)
                 }
+            }
+        }
+    }
+}
+
+/// 1123: a run of thinking and tool calls as one line. While it moves
+/// (`active`) the line is the latest step, replaced in place; expanded it
+/// lists every thought and call.
+struct LiveWorkRow: View {
+    let id: String
+    let items: [LiveItem]
+    let active: Bool
+    @State private var expanded = false
+    @State private var hovered = false
+
+    private var tools: [LiveTool] {
+        items.compactMap { item in if case let .tool(tool) = item { return tool }; return nil }
+    }
+
+    private var moving: Bool { active || tools.contains { $0.status == .running } }
+
+    private var activity: ActivityState {
+        if moving { return .running }
+        if tools.contains(where: { $0.status == .failed }) { return .failed }
+        return .done
+    }
+
+    var body: some View {
+        let title = LiveRowGrouping.workTitle(items)
+        VStack(alignment: .leading, spacing: AeroricSpace.xxs) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: AeroricSpace.m) {
+                    StatusDot(activity, label: title)
+                    Image(systemName: moving ? "ellipsis" : "list.bullet")
+                        .font(.system(size: 11))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .frame(width: 14)
+                    if moving {
+                        Text(LiveRowGrouping.latestStep(items))
+                            .font(AeroricType.mono(AeroricType.secondary))
+                            .foregroundStyle(AeroricColor.textSecondary)
+                            .lineLimit(1).truncationMode(.tail)
+                        Spacer(minLength: AeroricSpace.s)
+                        Text(title)
+                            .font(.system(size: AeroricType.caption))
+                            .foregroundStyle(AeroricColor.textTertiary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    } else {
+                        Text(title)
+                            .font(.system(size: AeroricType.secondary))
+                            .foregroundStyle(AeroricColor.textSecondary)
+                        let failed = tools.filter { $0.status == .failed }.count
+                        if failed > 0 {
+                            Text("\(failed) 个失败").font(.system(size: AeroricType.caption)).foregroundStyle(AeroricColor.danger)
+                        }
+                        Spacer(minLength: AeroricSpace.s)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(AeroricColor.textTertiary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                }
+                .padding(.horizontal, AeroricSpace.m)
+                .frame(height: 26)
+                .background(Capsule(style: .continuous).fill(hovered ? AeroricColor.hover : .clear))
+                .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .onHover { hovered = $0 }
+            .accessibilityIdentifier("session.live.work.\(id)")
+            if expanded {
+                VStack(alignment: .leading, spacing: AeroricSpace.xs) {
+                    ForEach(items) { item in
+                        switch item {
+                        case let .thought(id, text, summary): LiveThoughtRow(id: id, text: text, summary: summary)
+                        case let .tool(tool): LiveToolLine(tool: tool)
+                        default: EmptyView()
+                        }
+                    }
+                }
+                .padding(.leading, AeroricSpace.l)
             }
         }
     }

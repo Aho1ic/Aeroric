@@ -76,6 +76,10 @@ public struct LiveSessionView: View {
             default: break
             }
         }
+        // 1123: a session's first turn, started with its opening prompt,
+        // read "0 轮" for as long as it ran (an hour) — the prompt shows as
+        // a bubble but is in neither history nor the live echoes yet.
+        if turns == 0, openingPrompt != nil || store.turnActive { turns = 1 }
         return (turns, steps)
     }
 
@@ -366,10 +370,14 @@ public struct LiveSessionView: View {
                         if let opening = openingPrompt {
                             MessageBubble(role: "user", content: [.text(text: opening)], columnWidth: column)
                         }
-                        ForEach(LiveRowGrouping.rows(liveItems)) { row in
+                        let rows = LiveRowGrouping.rows(liveItems)
+                        ForEach(rows) { row in
                             switch row {
                             case let .item(item): liveRow(item, column: column)
                             case let .tools(id, tools): LiveToolGroup(id: id, tools: tools)
+                            case let .work(id, items):
+                                LiveWorkRow(id: id, items: items,
+                                            active: store.turnActive && row.id == rows.last?.id)
                             }
                         }
                         ForEach(store.pending, id: \.id) { request in
@@ -655,11 +663,27 @@ public struct LiveSessionView: View {
         }
     }
 
-    private var statsBar: some View {
+    /// 1124: while a turn runs the bar ticks every second (time, speed,
+    /// steps of the running turn); otherwise it redraws only on updates.
+    @ViewBuilder private var statsBar: some View {
+        if store.turnActive {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                statsBar(nowMs: UInt64(context.date.timeIntervalSince1970 * 1000))
+            }
+        } else {
+            statsBar(nowMs: nil)
+        }
+    }
+
+    private func statsBar(nowMs: UInt64?) -> some View {
         let counts = turnAndStepCounts
         let usage = UsageSummary.merged(live: store.model?.usage, transcript: store.transcriptStats)
         let stats = store.transcriptStats.map(SessionStats.init(transcript:)) ?? store.model?.stats ?? SessionStats()
-        return SessionStatsBar(usage: usage, stats: stats, turns: counts.turns, steps: counts.steps)
+        let running = nowMs.flatMap {
+            RunningTurn.make(live: store.model?.stats, transcript: store.transcriptStats,
+                             turnActive: store.turnActive, nowMs: $0)
+        }
+        return SessionStatsBar(usage: usage, stats: stats, turns: counts.turns, steps: counts.steps, running: running)
     }
 
     /// B4-2: "#…" offers the roles and harnesses a delegation can go to.

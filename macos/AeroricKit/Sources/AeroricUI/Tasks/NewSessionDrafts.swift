@@ -116,6 +116,76 @@ public struct NewSessionDraft: Equatable, Sendable {
         task.agent = agent
     }
 
+    /// 1123: switching harness keeps what the person picked, in the new
+    /// harness's terms. The same connection's entry for that harness (a
+    /// Codex connection reached over `/v1/responses` becomes its Claude entry
+    /// over `/v1/messages`; the gateway converts), else an entry with the
+    /// same name, else the harness's first usable one. The model, effort and
+    /// a permission the person chose carry over when the new entry offers them.
+    public mutating func switchHarness(_ harness: String, configurations: [SessionConfiguration]) {
+        guard isEditable else { return }
+        let before = (configuration: configurationID, model: task.model, effort: task.effort,
+                      permission: task.permissionMode,
+                      permissionChosen: !task.permissionMode.isEmpty && permissionAgent == task.agent)
+        selectHarness(harness)
+        guard let target = Self.counterpart(of: before.configuration, harness: harness, in: configurations)
+                ?? NewSessionLayout.firstConfiguration(for: harness, in: configurations) else { return }
+        apply(target)
+        carry(model: before.model, effort: before.effort, into: target)
+        if before.permissionChosen, target.options.permissionModes.contains(before.permission) {
+            selectPermission(before.permission)
+        }
+    }
+
+    /// The configuration's newer version, or after a restart the same entry
+    /// again: the id is what the person chose; the version only moves when
+    /// the entry is edited. Keeps the model and effort when still offered.
+    public mutating func refresh(from configurations: [SessionConfiguration]) {
+        guard isEditable, let id = configurationID,
+              !configurations.contains(where: { $0.id == id && $0.version == configurationVersion }),
+              let current = configurations.first(where: { $0.id == id && $0.harness == selectedHarness }) else { return }
+        let before = (model: task.model, effort: task.effort)
+        apply(current)
+        carry(model: before.model, effort: before.effort, into: current)
+    }
+
+    private mutating func carry(model: String?, effort: String?, into configuration: SessionConfiguration) {
+        if let model, configuration.options.models.contains(model) { task.model = model }
+        if let effort, configuration.options.efforts.contains(effort) { task.effort = effort }
+    }
+
+    /// `harness`'s entry for the configuration `id` names, if it has one.
+    static func counterpart(of id: String?, harness: String,
+                            in configurations: [SessionConfiguration]) -> SessionConfiguration? {
+        guard let id else { return nil }
+        let usable = configurations.filter { $0.harness == harness && $0.blockedReasons.isEmpty }
+        if usable.contains(where: { $0.id == id }) { return usable.first { $0.id == id } }
+        // `agent-config:via-<harness>-<connection>`: the same connection.
+        let via = NewSessionLayout.connectionPrefix
+        if id.hasPrefix(via) {
+            let rest = id.dropFirst(via.count)
+            if let dash = rest.firstIndex(of: "-"),
+               let same = usable.first(where: { $0.id == via + harness + rest[dash...] }) {
+                return same
+            }
+        }
+        guard let old = configurations.first(where: { $0.id == id }) else { return nil }
+        // A harness's own login stands for the other's own login.
+        if !NewSessionLayout.isAgentConfig(old) {
+            return usable.first { !NewSessionLayout.isAgentConfig($0) }
+        }
+        let name = baseTitle(old.title)
+        return usable.first { NewSessionLayout.isAgentConfig($0) && baseTitle($0.title) == name }
+    }
+
+    /// A title without the harness it names ("GPT 5.5 · Claude" → "GPT 5.5").
+    static func baseTitle(_ title: String) -> String {
+        let harnesses: Set<String> = ["codex", "claude", "claude code", "dsh", "deepseek harness", "omp"]
+        return title.components(separatedBy: " · ")
+            .filter { !harnesses.contains($0.trimmingCharacters(in: .whitespaces).lowercased()) }
+            .joined(separator: " · ")
+    }
+
     public mutating func apply(_ configuration: SessionConfiguration) {
         guard isEditable, configuration.harness == selectedHarness else { return }
         task.agent = configuration.agent
@@ -209,8 +279,9 @@ public struct NewSessionDraft: Equatable, Sendable {
     }
 }
 
-/// Successful submissions retain form choices only. Do not keep a copy of
-/// the sent prompt, attachment references, submission identity or worktree.
+/// A project's form choices only (1123: kept on every choice, not only on a
+/// successful submission). Do not keep a copy of the prompt, attachment
+/// references, submission identity or worktree.
 private struct SuccessfulSessionPreferences: Equatable, Sendable {
     let agent: String
     let harness: String
@@ -307,7 +378,13 @@ public struct NewSessionMemos: Codable, Equatable, Sendable {
 
 public struct NewSessionDraftBook: Equatable, Sendable {
     private var drafts: [SessionDraftScope: NewSessionDraft] = [:]
+    /// Each project's latest choices. 1123: taken on every choice the person
+    /// makes, not only when a session starts, so the next new session, a
+    /// return to the page and a restart all open with them.
     private var successfulPreferences: [String: SuccessfulSessionPreferences] = [:]
+    /// Pages opened but not touched yet: a restart's saved page replaces them
+    /// (the page can open before the saved pages are read back).
+    private var untouched: Set<SessionDraftScope> = []
     public init() {}
 
     public mutating func open(_ scope: SessionDraftScope) {
@@ -317,6 +394,7 @@ public struct NewSessionDraftBook: Equatable, Sendable {
             previous.restoreChoices(into: &next)
         }
         drafts[scope] = next
+        untouched.insert(scope)
     }
 
     public subscript(scope: SessionDraftScope) -> NewSessionDraft? { drafts[scope] }
@@ -347,7 +425,18 @@ public struct NewSessionDraftBook: Equatable, Sendable {
         }
         for (key, memo) in memos.drafts {
             let scope: SessionDraftScope = key.isEmpty ? .global : .project(key)
-            if drafts[scope] == nil { drafts[scope] = memo.draft() }
+            if drafts[scope] == nil || untouched.contains(scope) {
+                drafts[scope] = memo.draft()
+                untouched.remove(scope)
+            }
+        }
+        // A page opened before this, with nothing of its own saved, takes the
+        // project's restored choices.
+        for scope in untouched {
+            guard let projectID = scope.projectID, let previous = successfulPreferences[projectID],
+                  var draft = drafts[scope] else { continue }
+            previous.restoreChoices(into: &draft)
+            drafts[scope] = draft
         }
     }
 
@@ -357,7 +446,13 @@ public struct NewSessionDraftBook: Equatable, Sendable {
         let previous = value
         update(&value)
         value.keepIdentity(of: previous)
-        if value != previous { value.renewAfterKnownFailure() }
+        if value != previous {
+            value.renewAfterKnownFailure()
+            untouched.remove(scope)
+            if let projectID = scope.projectID, value.configurationID != nil {
+                successfulPreferences[projectID] = SuccessfulSessionPreferences(value)
+            }
+        }
         drafts[scope] = value
     }
 

@@ -254,6 +254,75 @@ fn the_latest_call_usage_stands_in_for_context_size() {
 }
 
 #[test]
+fn counts_move_while_a_turn_runs() {
+    let mut m = ClaudeMapper::default();
+    m.map(
+        &json!({"type": "result", "subtype": "success", "is_error": false, "session_id": "s",
+        "usage": {"input_tokens": 10, "output_tokens": 5}}),
+    );
+    let usage = |updates: &[SessionUpdateKind]| {
+        updates.iter().find_map(|u| match u {
+            SessionUpdateKind::Usage {
+                input_tokens,
+                output_tokens,
+                cached_input_tokens,
+                context_used,
+                ..
+            } => Some((
+                *input_tokens,
+                *output_tokens,
+                *cached_input_tokens,
+                *context_used,
+            )),
+            _ => None,
+        })
+    };
+    let (first, _) = m.map(
+        &json!({"type": "assistant", "session_id": "s", "message": {"id": "m1",
+        "content": [{"type": "thinking", "thinking": "hm"}],
+        "usage": {"input_tokens": 3, "cache_read_input_tokens": 100, "output_tokens": 2}}}),
+    );
+    assert_eq!(
+        usage(&first),
+        Some((Some(113), Some(7), Some(100), Some(105)))
+    );
+    // The same call's next block repeats its usage: no new figures.
+    let (again, _) = m.map(
+        &json!({"type": "assistant", "session_id": "s", "message": {"id": "m1",
+        "content": [{"type": "text", "text": "ok"}],
+        "usage": {"input_tokens": 3, "cache_read_input_tokens": 100, "output_tokens": 2}}}),
+    );
+    assert_eq!(usage(&again), None);
+    let (second, _) = m.map(&json!({"type": "assistant", "session_id": "s", "message": {"id": "m2",
+        "content": [], "usage": {"input_tokens": 4, "cache_read_input_tokens": 110, "output_tokens": 6}}}));
+    assert_eq!(
+        usage(&second),
+        Some((Some(227), Some(13), Some(210), Some(120)))
+    );
+    // The result's own totals replace the calls' running sum.
+    let (end, _) = m.map(
+        &json!({"type": "result", "subtype": "success", "is_error": false, "session_id": "s",
+        "usage": {"input_tokens": 7, "cache_read_input_tokens": 210, "output_tokens": 8}}),
+    );
+    assert_eq!(
+        usage(&end),
+        Some((Some(227), Some(13), Some(210), Some(120)))
+    );
+    // A result without usage keeps what the calls said.
+    m.map(
+        &json!({"type": "assistant", "session_id": "s", "message": {"id": "m3",
+        "content": [], "usage": {"input_tokens": 1, "output_tokens": 1}}}),
+    );
+    let (bare, _) = m.map(
+        &json!({"type": "result", "subtype": "success", "is_error": false, "session_id": "s"}),
+    );
+    assert_eq!(
+        usage(&bare),
+        Some((Some(228), Some(14), Some(210), Some(2)))
+    );
+}
+
+#[test]
 fn unknown_messages_are_kept() {
     let mut m = ClaudeMapper::default();
     let (updates, _) = m.map(&json!({"type": "future_thing", "x": 1}));

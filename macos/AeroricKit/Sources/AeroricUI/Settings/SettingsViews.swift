@@ -7,9 +7,17 @@ import UniformTypeIdentifiers
 // Settings building blocks (M3). Only settings that something actually reads
 // live here; unwired ones were removed rather than shown as working (D4).
 
-/// Settings window navigation.
+/// Settings window navigation. 1124 (settings redesign, note
+/// `2026-11-24-settings-redesign`): grouped like the reference apps' settings
+/// — 应用 / Agents / 数据与隐私 / 集成 / 编码, 关于 last — each page with a
+/// one-line subtitle.
 public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
-    case general, appearance, agents, references, imports, connection, legacyCleanup, about
+    case general, appearance, notifications, shortcuts
+    case agents, legacyCleanup
+    case imports, memory, diagnostics
+    case skills, references, remote, connection
+    case git, worktrees
+    case about
 
     public var id: String { rawValue }
 
@@ -17,12 +25,41 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .general: "通用"
         case .appearance: "外观"
-        case .agents: "Agents"
-        case .references: "参考代码库"
-        case .imports: "导入"
-        case .connection: "连接"
+        case .notifications: "通知"
+        case .shortcuts: "键盘快捷键"
+        case .agents: "新会话与 Agent"
         case .legacyCleanup: "旧版 Agent 清理"
+        case .imports: "导入"
+        case .memory: "记忆与整理"
+        case .diagnostics: "诊断"
+        case .skills: "技能与扩展"
+        case .references: "参考代码库"
+        case .remote: "远程与手机"
+        case .connection: "宿主连接"
+        case .git: "Git"
+        case .worktrees: "工作副本"
         case .about: "关于"
+        }
+    }
+
+    public var subtitle: String {
+        switch self {
+        case .general: "启动引导、菜单栏、电源与 Agent 进程"
+        case .appearance: "主题、材质、字体与字号"
+        case .notifications: "什么时候用系统通知提醒你"
+        case .shortcuts: "Aeroric 里能用的键盘快捷键"
+        case .agents: "新会话的默认选择、内置 Agent、Agent 配置与求助专家"
+        case .legacyCleanup: "清理旧版自定义 Agent 留下的配置"
+        case .imports: "把 Claude Code、Codex 等已有的会话导入 Aeroric"
+        case .memory: "项目记忆、后台整理与按意思找"
+        case .diagnostics: "导出脱敏的诊断报告，用来排查问题"
+        case .skills: "Agent 能用的技能，以及 MCP 服务器、Hook 与插件"
+        case .references: "给 Agent 查阅的外部代码库"
+        case .remote: "与手机配对、管理已配对的设备、查看远程访问记录"
+        case .connection: "Aeroric 宿主的连接状态与协议版本"
+        case .git: "委派和审查开工作副本时用到的 Git 设置"
+        case .worktrees: "会话的独立工作副本放在哪、什么时候清理"
+        case .about: "版本与构建信息"
         }
     }
 
@@ -30,12 +67,122 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .general: "gearshape"
         case .appearance: "paintpalette"
+        case .notifications: "bell"
+        case .shortcuts: "keyboard"
         case .agents: "cpu"
-        case .references: "books.vertical"
-        case .imports: "tray.and.arrow.down"
-        case .connection: "bolt.horizontal"
         case .legacyCleanup: "trash"
+        case .imports: "tray.and.arrow.down"
+        case .memory: "brain.head.profile"
+        case .diagnostics: "stethoscope"
+        case .skills: "puzzlepiece.extension"
+        case .references: "books.vertical"
+        case .remote: "iphone.radiowaves.left.and.right"
+        case .connection: "bolt.horizontal"
+        case .git: "arrow.triangle.branch"
+        case .worktrees: "square.on.square"
         case .about: "info.circle"
+        }
+    }
+
+    public var group: SettingsGroup {
+        switch self {
+        case .general, .appearance, .notifications, .shortcuts: .app
+        case .agents, .legacyCleanup: .agents
+        case .imports, .memory, .diagnostics: .data
+        case .skills, .references, .remote, .connection: .integrations
+        case .git, .worktrees: .coding
+        case .about: .about
+        }
+    }
+
+    /// Pages that bring their own scrolling (a grouped `Form`).
+    var scrollsItself: Bool { self == .remote }
+}
+
+/// The left column's groups, in order; 关于 has no heading.
+public enum SettingsGroup: String, CaseIterable, Sendable {
+    case app, agents, data, integrations, coding, about
+
+    public var title: String? {
+        switch self {
+        case .app: "应用"
+        case .agents: "Agents"
+        case .data: "数据与隐私"
+        case .integrations: "集成"
+        case .coding: "编码"
+        case .about: nil
+        }
+    }
+}
+
+/// 1124: what the settings search looks through — every row's title and
+/// explanation, by page. Kept beside the rows it names; a test holds the
+/// common words to their rows.
+public enum SettingsIndex {
+    public struct Entry: Equatable, Sendable, Identifiable {
+        public var pane: SettingsPane
+        /// The row's `SettingsRow` anchor (its title unless the row says otherwise).
+        public var anchor: String
+        public var detail: String
+        public var id: String { "\(pane.rawValue).\(anchor)" }
+    }
+
+    static func entry(_ pane: SettingsPane, _ anchor: String, _ detail: String = "") -> Entry {
+        Entry(pane: pane, anchor: anchor, detail: detail)
+    }
+
+    public static let entries: [Entry] = [
+        entry(.general, "重新打开引导", "首次启动 检测 Agent 打开项目 导入"),
+        entry(.general, "会话呈现", "原生 终端"),
+        entry(.general, "运行任务时阻止 Mac 睡眠", "电源 睡眠 唤醒"),
+        entry(.general, "空闲后释放 Agent 进程", "进程 空闲 释放"),
+        entry(.general, "无人值守的会话被打断或没跑成时自动继续", "重启 续跑 重试 额度"),
+        entry(.general, "在菜单栏显示 Aeroric", "菜单栏 状态栏"),
+        entry(.general, "导入的会话显示“已导入”", "侧栏"),
+        entry(.appearance, "外观", "主题 浅色 深色 跟随系统 暗色"),
+        entry(.appearance, "材质", "玻璃 经典 透明"),
+        entry(.appearance, "会话中文字体", "字体 更纱 苹方"),
+        entry(.appearance, "正文", "字号 界面文字 大小"),
+        entry(.appearance, "会话", "字号 消息 大小"),
+        entry(.appearance, "代码", "字号 diff 大小"),
+        entry(.appearance, "终端", "字号 大小"),
+        entry(.notifications, "需要我批准时", "审批 通知 提醒"),
+        entry(.notifications, "会话做完或失败时", "完成 失败 通知 提醒"),
+        entry(.notifications, "提示音", "声音 通知"),
+        entry(.shortcuts, "新建会话", "⌘N 快捷键"),
+        entry(.shortcuts, "命令面板", "⌘K 快捷键"),
+        entry(.shortcuts, "发送", "⌘↩ 快捷键"),
+        entry(.agents, "默认 Harness", "新会话 Codex Claude DSH omp"),
+        entry(.agents, "每个项目记住新会话的选择", "配置 模型 思考强度 权限 记住"),
+        entry(.agents, "管理 Agent 配置", "第三方 API 连接 号池 路由 升级"),
+        entry(.agents, "专家模型", "求助专家 Smart Friend"),
+        entry(.legacyCleanup, "旧版 Agent 清理", "自定义 Agent"),
+        entry(.imports, "选择要导入的会话", "导入 Claude Code Codex"),
+        entry(.memory, "打开记忆页", "记忆 整理 做梦 embedding 按意思找"),
+        entry(.diagnostics, "导出诊断报告", "日志 排查 诊断"),
+        entry(.skills, "技能目录", "技能 skill"),
+        entry(.skills, "MCP 服务器", "mcp"),
+        entry(.skills, "Hook", "钩子 hook"),
+        entry(.skills, "插件", "plugin"),
+        entry(.references, "参考代码库", "索引 参考 文件夹"),
+        entry(.remote, "启用远程访问", "手机 配对 二维码 设备 远控 Relay 推送"),
+        entry(.connection, "连接状态", "宿主 协议版本 环境"),
+        entry(.git, "工作副本的分支前缀", "分支 Git"),
+        entry(.git, "提交说明的附加指引", "提交 commit"),
+        entry(.worktrees, "工作副本根目录", "worktree 目录"),
+        entry(.worktrees, "自动清理旧的工作副本", "worktree 清理 保留数量"),
+        entry(.about, "构建", "版本 应用标识"),
+    ]
+
+    /// Rows whose page, title or words contain every word of `query`.
+    public static func search(_ query: String, in panes: [SettingsPane]) -> [Entry] {
+        let words = query.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return [] }
+        return entries.filter { entry in
+            guard panes.contains(entry.pane) else { return false }
+            let haystack = [entry.pane.title, entry.pane.subtitle, entry.anchor, entry.detail]
+                .joined(separator: " ").lowercased()
+            return words.allSatisfy { haystack.contains($0) }
         }
     }
 }
@@ -73,7 +220,9 @@ public enum AppTheme: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// Rounded card grouping settings rows, separated by hairlines.
+/// A group of settings rows under a grey heading. 1124: flat — rows are
+/// split by hairlines, the group has no border or fill (the reference apps'
+/// look; a page of bordered cards read as a wall of boxes).
 public struct SettingsCard<Content: View>: View {
     let title: String?
     let content: Content
@@ -84,21 +233,27 @@ public struct SettingsCard<Content: View>: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: AeroricSpace.s) {
+        VStack(alignment: .leading, spacing: AeroricSpace.xs) {
             if let title {
                 Text(title)
-                    .font(AeroricType.sectionLabel())
+                    .font(.system(size: AeroricType.caption, weight: .medium))
                     .foregroundStyle(AeroricColor.textTertiary)
-                    .padding(.leading, AeroricSpace.xs)
             }
-            // Each row draws a top hairline; the first one sits on the card
-            // edge and is hidden by the clip, so rows read as separated.
-            VStack(spacing: 0) { content }
-                .padding(.top, -1)
-                .background(AeroricColor.layer1)
-                .clipShape(AeroricRadius.shape(AeroricRadius.m))
-                .overlay { AeroricRadius.shape(AeroricRadius.m).strokeBorder(AeroricColor.separator1, lineWidth: 1) }
+            VStack(alignment: .leading, spacing: 0) { content }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The row search landed on, flashed once (1124).
+struct SettingsHighlightKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
+extension EnvironmentValues {
+    var settingsHighlight: String? {
+        get { self[SettingsHighlightKey.self] }
+        set { self[SettingsHighlightKey.self] = newValue }
     }
 }
 
@@ -106,11 +261,15 @@ public struct SettingsCard<Content: View>: View {
 public struct SettingsRow<Control: View>: View {
     let title: String
     let detail: String?
+    let anchor: String
     let control: Control
+    @Environment(\.settingsHighlight) private var highlight
 
-    public init(_ title: String, detail: String? = nil, @ViewBuilder control: () -> Control) {
+    /// `anchor` names the row for search (`SettingsIndex`); the title by default.
+    public init(_ title: String, detail: String? = nil, anchor: String? = nil, @ViewBuilder control: () -> Control) {
         self.title = title
         self.detail = detail
+        self.anchor = anchor ?? title
         self.control = control()
     }
 
@@ -128,11 +287,19 @@ public struct SettingsRow<Control: View>: View {
             Spacer(minLength: AeroricSpace.l)
             control
         }
-        .padding(.horizontal, AeroricSpace.l)
+        .padding(.horizontal, AeroricSpace.s)
         .padding(.vertical, AeroricSpace.m + 2)
         .frame(minHeight: 44)
-        .overlay(alignment: .top) { HairlineDivider().padding(.leading, AeroricSpace.l) }
+        .background(AeroricRadius.shape(AeroricRadius.s)
+            .fill(highlight == anchor ? AeroricColor.accent.opacity(0.14) : .clear))
+        .overlay(alignment: .top) { HairlineDivider() }
+        .animation(.easeOut(duration: 0.4), value: highlight == anchor)
+        .id(SettingsRowAnchor.id(anchor))
     }
+}
+
+enum SettingsRowAnchor {
+    static func id(_ anchor: String) -> String { "settings.row.\(anchor)" }
 }
 
 // MARK: - Panes
@@ -237,7 +404,7 @@ struct IdleReleaseSettingsCard: View {
 
     var body: some View {
         SettingsCard("Agent 进程") {
-            SettingsRow("空闲 \(hours)后释放 Agent 进程", detail: detail) {
+            SettingsRow("空闲 \(hours)后释放 Agent 进程", detail: detail, anchor: "空闲后释放 Agent 进程") {
                 Toggle("", isOn: Binding(
                     get: { store.enabled },
                     set: { on in Task { await store.setEnabled(on) } }
@@ -370,6 +537,12 @@ struct AgentsSettingsPane: View {
                                             asset: NativeHarnessPicker.harnesses.first { $0.id == id }?.asset)
                                   })
                         .fixedSize()
+                }
+                SettingsRow("每个项目记住新会话的选择",
+                            detail: "在一个项目里选过的 Agent 配置、模型、思考强度和权限，下次新建会话、重启后都还在；切换 Harness 时换到同一个连接在那个 Harness 下的配置。") {
+                    Text("自动")
+                        .font(.system(size: AeroricType.secondary))
+                        .foregroundStyle(AeroricColor.textSecondary)
                 }
             }
             if let expert, expert.isAvailable {
@@ -504,11 +677,178 @@ struct AboutSettingsPane<State: SettingsStateProviding>: View {
                         .accessibilityIdentifier("settings.application")
                 }
             }
-            if let exporter = state.settingsDiagnosticsExporter {
-                DiagnosticsExportCard(export: exporter)
-            }
         }
         .accessibilityIdentifier("settings.about")
+    }
+}
+
+/// 1124: which system notifications Aeroric posts (read by the app's
+/// notifier; approval on and finished turns off by default).
+public enum NotificationPreferences {
+    public static let approvalKey = "notifications.approval"
+    public static let finishedKey = "notifications.finished"
+    public static let soundKey = "notifications.sound"
+
+    public static var approval: Bool { UserDefaults.standard.object(forKey: approvalKey) as? Bool ?? true }
+    public static var finished: Bool { UserDefaults.standard.object(forKey: finishedKey) as? Bool ?? false }
+    public static var sound: Bool { UserDefaults.standard.object(forKey: soundKey) as? Bool ?? true }
+}
+
+struct NotificationSettingsPane: View {
+    @AppStorage(NotificationPreferences.approvalKey) private var approval = true
+    @AppStorage(NotificationPreferences.finishedKey) private var finished = false
+    @AppStorage(NotificationPreferences.soundKey) private var sound = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.xl) {
+            SettingsCard("系统通知") {
+                SettingsRow("需要我批准时", detail: "Aeroric 不在前台时，会话等你批准命令或改文件，就发一条通知；点它回到那张审批卡。") {
+                    switchControl($approval, "settings.notifications.approval")
+                }
+                SettingsRow("会话做完或失败时", detail: "Aeroric 不在前台时，一个会话从运行中变成已完成或失败，就发一条通知。定时任务和委派开的会话也算。") {
+                    switchControl($finished, "settings.notifications.finished")
+                }
+                SettingsRow("提示音", detail: "通知带系统默认提示音。") {
+                    switchControl($sound, "settings.notifications.sound")
+                }
+            }
+            Text("系统设置 › 通知 里关掉 Aeroric 时，这里打开也收不到。")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+        }
+    }
+
+    private func switchControl(_ value: Binding<Bool>, _ identifier: String) -> some View {
+        Toggle("", isOn: value).toggleStyle(.switch).labelsHidden().accessibilityIdentifier(identifier)
+    }
+}
+
+/// 1124: the shortcuts Aeroric has, read-only.
+struct ShortcutsSettingsPane: View {
+    struct Shortcut: Identifiable {
+        let title: String
+        let keys: String
+        var note: String? = nil
+        var id: String { title }
+    }
+
+    struct Group: Identifiable {
+        let title: String
+        let items: [Shortcut]
+        var id: String { title }
+    }
+
+    static let groups: [Group] = [
+        Group(title: "窗口与导航", items: [
+            Shortcut(title: "新建会话", keys: "⌘N"),
+            Shortcut(title: "新建窗口", keys: "⇧⌘N"),
+            Shortcut(title: "打开项目…", keys: "⌘O"),
+            Shortcut(title: "命令面板", keys: "⌘K"),
+            Shortcut(title: "设置…", keys: "⌘,"),
+            Shortcut(title: "关闭标签或窗口", keys: "⌘W"),
+            Shortcut(title: "折叠或展开侧栏", keys: "⌃⌘S"),
+            Shortcut(title: "显示或隐藏辅助面板", keys: "⌥⌘I"),
+        ]),
+        Group(title: "会话输入框", items: [
+            Shortcut(title: "发送", keys: "⌘↩"),
+            Shortcut(title: "这轮结束后再发", keys: "⌥↩", note: "一轮正在跑时"),
+            Shortcut(title: "问答卡选第 n 项", keys: "1 – 9", note: "Agent 提问时"),
+        ]),
+        Group(title: "编辑", items: [
+            Shortcut(title: "保存", keys: "⌘S", note: "文件、Agent 配置和笔记的编辑器里"),
+        ]),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.xxl) {
+            ForEach(Self.groups) { group in
+                SettingsCard(group.title) {
+                    ForEach(group.items) { item in
+                        SettingsRow(item.title, detail: item.note) {
+                            Text(item.keys)
+                                .font(.system(size: AeroricType.secondary, design: .rounded).weight(.medium))
+                                .foregroundStyle(AeroricColor.textSecondary)
+                                .padding(.horizontal, AeroricSpace.s)
+                                .frame(minHeight: 22)
+                                .background(AeroricColor.layer2, in: AeroricRadius.shape(AeroricRadius.xs))
+                        }
+                    }
+                }
+            }
+            Text("快捷键现在不能改。")
+                .font(.system(size: AeroricType.caption))
+                .foregroundStyle(AeroricColor.textTertiary)
+        }
+    }
+}
+
+/// A row that sends the person to a page of the main window.
+struct SettingsOpenRow: View {
+    let title: String
+    let detail: String
+    let button: String
+    let open: (@MainActor () -> Void)?
+    var identifier: String
+
+    var body: some View {
+        SettingsRow(title, detail: detail) {
+            if let open {
+                Button(button) { open() }
+                    .buttonStyle(AeroricCapsuleButtonStyle(.ghost, compact: true))
+                    .accessibilityIdentifier(identifier)
+            } else {
+                ComingSoonBadge()
+            }
+        }
+    }
+}
+
+struct MemorySettingsPane: View {
+    var open: (@MainActor () -> Void)?
+
+    var body: some View {
+        SettingsCard {
+            SettingsOpenRow(title: "打开记忆页",
+                            detail: "每个项目的记忆、待确认的候选、后台整理（做梦）、整理记录和“按意思找”的开关都在主窗口的“记忆”页。",
+                            button: "打开记忆", open: open, identifier: "settings.memory.open")
+        }
+    }
+}
+
+struct SkillsSettingsPane: View {
+    var openSkills: (@MainActor () -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AeroricSpace.xl) {
+            SettingsCard("技能") {
+                SettingsOpenRow(title: "技能目录",
+                                detail: "内置、记忆沉淀、你自己的目录和 Claude Code 插件里的技能，在主窗口的“扩展”页按来源列出。",
+                                button: "打开技能目录", open: openSkills, identifier: "settings.skills.open")
+            }
+            SettingsCard("还没有提供的") {
+                SettingsRow("MCP 服务器", detail: "管理 Agent 能连的 MCP 服务器。") { ComingSoonBadge() }
+                SettingsRow("Hook", detail: "按用户配置、插件和项目列出钩子，标出有问题和待审核的。") { ComingSoonBadge() }
+                SettingsRow("插件", detail: "启用、停用和升级插件。") { ComingSoonBadge() }
+            }
+        }
+    }
+}
+
+struct GitSettingsPane: View {
+    var body: some View {
+        SettingsCard("即将支持") {
+            SettingsRow("工作副本的分支前缀", detail: "委派、审查和重跑开工作副本时，新分支名前面加的前缀。") { ComingSoonBadge() }
+            SettingsRow("提交说明的附加指引", detail: "Agent 写提交说明时额外遵守的要求。") { ComingSoonBadge() }
+        }
+    }
+}
+
+struct WorktreeSettingsPane: View {
+    var body: some View {
+        SettingsCard("即将支持") {
+            SettingsRow("工作副本根目录", detail: "会话的独立工作副本放在哪个目录。") { ComingSoonBadge() }
+            SettingsRow("自动清理旧的工作副本", detail: "超过保留数量时，删掉最旧的、已经没有会话在用的工作副本。") { ComingSoonBadge() }
+        }
     }
 }
 

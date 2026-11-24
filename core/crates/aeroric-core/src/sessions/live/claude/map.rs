@@ -65,6 +65,10 @@ pub struct ClaudeMapper {
     /// Prompt plus reply of the latest API call: what the window holds now.
     /// Fallback for when `get_context_usage` answers nothing (gateways).
     last_context: Option<u64>,
+    /// This turn's API calls by message id (input, output, cached), so the
+    /// counts move while a long turn runs; the result replaces them with
+    /// the turn's own totals (1123: a turn of an hour showed "—" until it ended).
+    turn_calls: HashMap<String, (u64, u64, u64)>,
     /// Claude's tasks still running, by task id. Task ids belong to the
     /// session, not the turn: an interrupt does not end background ones.
     tasks: HashMap<String, Task>,
@@ -390,17 +394,29 @@ impl ClaudeMapper {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        let mut updates = Vec::new();
         if let Some(usage) = message.pointer("/message/usage") {
             let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
-            let total = count("input_tokens")
+            let input = count("input_tokens")
                 + count("cache_read_input_tokens")
-                + count("cache_creation_input_tokens")
-                + count("output_tokens");
-            if total > 0 {
-                self.last_context = Some(total);
+                + count("cache_creation_input_tokens");
+            let call = (
+                input,
+                count("output_tokens"),
+                count("cache_read_input_tokens"),
+            );
+            if input + call.1 > 0 {
+                self.last_context = Some(input + call.1);
+                // One API call arrives as several messages with the same id,
+                // each repeating its usage; keep the largest of each count.
+                let seen = self.turn_calls.entry(id.clone()).or_default();
+                let merged = (seen.0.max(call.0), seen.1.max(call.1), seen.2.max(call.2));
+                if merged != *seen {
+                    *seen = merged;
+                    updates.push(self.running_usage());
+                }
             }
         }
-        let mut updates = Vec::new();
         for block in &blocks {
             match s(block, "type") {
                 Some("text") => {
@@ -454,6 +470,24 @@ impl ClaudeMapper {
         updates
     }
 
+    fn turn_calls_total(&self) -> (u64, u64, u64) {
+        self.turn_calls
+            .values()
+            .fold((0, 0, 0), |a, c| (a.0 + c.0, a.1 + c.1, a.2 + c.2))
+    }
+
+    /// Earlier turns' totals plus this turn's calls so far.
+    fn running_usage(&self) -> SessionUpdateKind {
+        let turn = self.turn_calls_total();
+        SessionUpdateKind::Usage {
+            context_used: self.last_context,
+            context_limit: None,
+            input_tokens: Some(self.input_tokens + turn.0),
+            output_tokens: Some(self.output_tokens + turn.1),
+            cached_input_tokens: Some(self.cached_input_tokens + turn.2),
+        }
+    }
+
     fn user(&mut self, message: &Value) -> Vec<SessionUpdateKind> {
         let blocks = message
             .pointer("/message/content")
@@ -491,11 +525,23 @@ impl ClaudeMapper {
     fn result(&mut self, message: &Value) -> (Vec<SessionUpdateKind>, Option<ClaudeSignal>) {
         let usage = message.get("usage").unwrap_or(&Value::Null);
         let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
-        self.input_tokens += count("input_tokens")
-            + count("cache_read_input_tokens")
-            + count("cache_creation_input_tokens");
-        self.output_tokens += count("output_tokens");
-        self.cached_input_tokens += count("cache_read_input_tokens");
+        let reported = (
+            count("input_tokens")
+                + count("cache_read_input_tokens")
+                + count("cache_creation_input_tokens"),
+            count("output_tokens"),
+            count("cache_read_input_tokens"),
+        );
+        // The result's usage is the turn's; without one, what its calls said.
+        let turn = if reported.0 + reported.1 > 0 {
+            reported
+        } else {
+            self.turn_calls_total()
+        };
+        self.turn_calls.clear();
+        self.input_tokens += turn.0;
+        self.output_tokens += turn.1;
+        self.cached_input_tokens += turn.2;
         let failed = message
             .get("is_error")
             .and_then(Value::as_bool)

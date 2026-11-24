@@ -37,6 +37,42 @@ final class SessionPolishTests: XCTestCase {
         XCTAssertEqual(stats.tokensPerSecond ?? 0, 125, accuracy: 0.01)
     }
 
+    /// 1124: the running turn's time, steps, output and speed while it runs.
+    func testTheRunningTurnIsMeasuredLive() {
+        var stats = SessionStats(outputBaseline: 100)
+        stats.outputTokens = 100
+        stats.observe(.turnStarted(turnId: "t"), atMs: 1_000)
+        stats.observe(.toolCall(id: "a", kind: .command, title: "ls", input: .null), atMs: 2_000)
+        stats.observe(.toolCallUpdate(id: "a", status: .completed, outputDelta: nil, result: nil), atMs: 4_000)
+        stats.observe(.toolCall(id: "b", kind: .command, title: "make", input: .null), atMs: 9_000)
+        stats.outputTokens = 500
+        let now = RunningTurn.make(live: stats, transcript: nil, turnActive: true, nowMs: 11_000)
+        XCTAssertEqual(now?.elapsedMs, 10_000)
+        XCTAssertEqual(now?.toolMs, 4_000, "a finished call plus the running one so far")
+        XCTAssertEqual(now?.modelMs, 6_000)
+        XCTAssertEqual(now?.steps, 2)
+        XCTAssertEqual(now?.outputTokens, 400)
+        XCTAssertEqual(now?.tokensPerSecond ?? 0, 66.67, accuracy: 0.01)
+        XCTAssertNil(RunningTurn.make(live: stats, transcript: nil, turnActive: false, nowMs: 11_000))
+
+        // Opened part-way: the transcript's last turn gives the start and the calls so far.
+        var opened = SessionStats(outputBaseline: 300)
+        opened.outputTokens = 350
+        var last = SessionTranscriptStats.TurnStat(startedAt: 0, endedAt: 20_000, tokens: 0)
+        last.tools = [.init(name: "Bash", startedAt: 1_000, endedAt: 6_000), .init(name: "Bash", startedAt: 7_000, endedAt: nil)]
+        last.moreTools = 1
+        last.outputTokens = 200
+        var transcript = SessionTranscriptStats(modelMs: 0, toolMs: 0, firstTokenMsTotal: 0, firstTokenSamples: 0)
+        transcript.turns = [last]
+        let part = RunningTurn.make(live: opened, transcript: transcript, turnActive: true, nowMs: 30_000)
+        XCTAssertEqual(part?.elapsedMs, 30_000)
+        XCTAssertEqual(part?.toolMs, 5_000)
+        XCTAssertEqual(part?.steps, 3)
+        XCTAssertEqual(part?.outputTokens, 250)
+        XCTAssertEqual(SessionStatsText.statsChip(turns: 1, steps: 3, tokensPerSecond: 12.4, runningMs: 125_400),
+                       "1 轮 3 步 · 2 分 5 秒 · 12 tok/s")
+    }
+
     func testStatsTextAndCacheShare() {
         XCTAssertEqual(SessionStatsText.statsChip(turns: 4, steps: 19, tokensPerSecond: 128.2), "4 轮 19 步 · 128 tok/s")
         XCTAssertEqual(SessionStatsText.duration(196_000), "3 分 16 秒")

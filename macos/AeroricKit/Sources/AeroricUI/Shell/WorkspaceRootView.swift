@@ -35,6 +35,8 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
     @State private var palettePresented = false
 
     @SceneStorage("workspace.preferred-sidebar-width") private var sidebarWidth: Double = 240
+    /// 1123: the width while the divider is dragged; saved when it is let go.
+    @State private var draggedSidebarWidth: Double?
     @SceneStorage("workspace.inspector-visible") private var inspectorVisible = false
     /// Dragged auxiliary-panel width; 0 = first opening (0.45 of the window).
     @SceneStorage("workspace.inspector-width") private var inspectorWidth: Double = 0
@@ -90,7 +92,8 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
             // strip, then the opaque reading canvas (+ inspector inside it).
             let handle = NativePanelGeometry.mainShell.handleWidth
             let budget = NativePanelGeometry.mainShellBudget(
-                totalWidth: max(0, geometry.size.width - handle), preferredSidebarWidth: sidebarWidth,
+                totalWidth: max(0, geometry.size.width - handle),
+                preferredSidebarWidth: draggedSidebarWidth ?? sidebarWidth,
                 inspectorVisible: inspectorVisible, sidebarCollapsed: sidebarCollapsed,
                 preferredInspectorWidth: inspectorWidth > 0 ? inspectorWidth : nil
             )
@@ -121,7 +124,8 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                     if railShown {
                         Color.clear.overlay(alignment: .leading) { HairlineDivider(.vertical) }
                     } else {
-                        SidebarResizeHandle(width: $sidebarWidth, effectiveWidth: budget.sidebarWidth)
+                        SidebarResizeHandle(width: $sidebarWidth, dragged: $draggedSidebarWidth,
+                                            effectiveWidth: budget.sidebarWidth)
                     }
                 }
                 .frame(width: handle)
@@ -157,6 +161,8 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                     }
             }
             .environment(\.mainShellBudget, budget)
+            .environment(\.mainShellInspectorColumn,
+                         MainShellInspectorColumn(width: budget.inspectorWidth, totalWidth: budget.totalWidth))
             .environment(\.mainShellNavigationEpoch, navigationEpoch)
             .environment(\.mainShellInspectorWidth, $inspectorWidth)
             .environment(\.mainShellInspectorOverlay, inspectorNarrow ? $inspectorOverlay : nil)
@@ -366,8 +372,16 @@ private struct SidebarItemsReader<State: WorkspaceStateProviding, Content: View>
 }
 
 /// Drag handle for the sidebar width. Clamps to the P4-04 range 180–360pt.
+///
+/// 1123: dragging stuttered. The handle measured the drag in its own
+/// coordinates while moving with the sidebar's edge, so each step's reading
+/// shifted by the step before; and every step saved the width to scene
+/// storage. Now the drag is measured in window coordinates, the width lives
+/// in `dragged` while the drag lasts (no animation), and it is saved once at
+/// the end.
 struct SidebarResizeHandle: View {
     @Binding var width: Double
+    @Binding var dragged: Double?
     let effectiveWidth: CGFloat
     @State private var dragStartWidth: CGFloat?
 
@@ -381,17 +395,27 @@ struct SidebarResizeHandle: View {
                 if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
             }
             .gesture(
-                DragGesture(minimumDistance: 1)
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
                         if dragStartWidth == nil { dragStartWidth = effectiveWidth }
-                        width = min(NativePanelGeometry.mainShell.maximumSidebarWidth,
-                                    max(NativePanelGeometry.mainShell.minimumSidebarWidth,
-                                        (dragStartWidth ?? effectiveWidth) + value.translation.width))
+                        let next = Self.clamped((dragStartWidth ?? effectiveWidth) + value.translation.width)
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) { dragged = next }
                     }
-                    .onEnded { _ in dragStartWidth = nil }
+                    .onEnded { _ in
+                        if let dragged { width = dragged }
+                        dragged = nil
+                        dragStartWidth = nil
+                    }
             )
             .accessibilityIdentifier("sidebar.resize.handle")
             .accessibilityLabel("调整侧栏宽度")
+    }
+
+    static func clamped(_ value: CGFloat) -> Double {
+        Double(min(NativePanelGeometry.mainShell.maximumSidebarWidth,
+                   max(NativePanelGeometry.mainShell.minimumSidebarWidth, value)))
     }
 }
 

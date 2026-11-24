@@ -24,8 +24,9 @@ enum WorkspaceActions {
     }
 
     /// Directory picker → `project.open` → sidebar upsert → focused window
-    /// selects the new project. Cancelling the panel creates nothing
-    /// (P4-04 Action 5).
+    /// opens the project's new-session page (1123: the project's task list
+    /// was shown, but a project just opened is opened to start something).
+    /// Cancelling the panel creates nothing (P4-04 Action 5).
     static func openProjectPanel(services: AppServices, selection: Binding<String?>? = nil) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -39,7 +40,8 @@ enum WorkspaceActions {
                 let entry = try await services.authorizeAndOpenProject(url: url)
                 // Without a window binding (palette, sidebar button) the
                 // focused window picks the request up.
-                if let selection { selection.wrappedValue = entry.id } else { services.requestedSelection = entry.id }
+                let target = SessionNavigation.draft(projectID: entry.id)
+                if let selection { selection.wrappedValue = target } else { services.requestedSelection = target }
             } catch {
                 presentOpenProjectFailure(error)
             }
