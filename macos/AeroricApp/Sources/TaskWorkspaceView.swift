@@ -1616,8 +1616,13 @@ struct TaskWorkspaceView: View {
                              projects: services.taskStore.projects.map { (id: $0.id, name: $0.name) })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .remote:
-            RemoteAccessSettingsView(store: services.remoteStore)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ScrollView {
+                RemoteAccessSettingsView(store: services.remoteStore)
+                    .padding(24)
+                    .frame(maxWidth: 680, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .operations:
             HSplitView {
                 UsageDashboard(store: services.maintenanceStore)

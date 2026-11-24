@@ -351,8 +351,18 @@ impl ClaudeMapper {
                     .pointer("/message/id")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                vec![]
+                match (self.streaming.clone(), event.pointer("/message/usage")) {
+                    (Some(id), Some(usage)) => self.observe_call(&id, usage).into_iter().collect(),
+                    _ => vec![],
+                }
             }
+            // Review 1124b: behind the gateway a call's usage is 0 when it
+            // starts and the assistant messages repeat that 0; the counts
+            // arrive here, at the end of the call.
+            Some("message_delta") => match (self.streaming.clone(), event.get("usage")) {
+                (Some(id), Some(usage)) => self.observe_call(&id, usage).into_iter().collect(),
+                _ => vec![],
+            },
             Some("content_block_delta") => {
                 let Some(id) = self.streaming.clone() else {
                     return vec![];
@@ -396,26 +406,7 @@ impl ClaudeMapper {
             .unwrap_or_default();
         let mut updates = Vec::new();
         if let Some(usage) = message.pointer("/message/usage") {
-            let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
-            let input = count("input_tokens")
-                + count("cache_read_input_tokens")
-                + count("cache_creation_input_tokens");
-            let call = (
-                input,
-                count("output_tokens"),
-                count("cache_read_input_tokens"),
-            );
-            if input + call.1 > 0 {
-                self.last_context = Some(input + call.1);
-                // One API call arrives as several messages with the same id,
-                // each repeating its usage; keep the largest of each count.
-                let seen = self.turn_calls.entry(id.clone()).or_default();
-                let merged = (seen.0.max(call.0), seen.1.max(call.1), seen.2.max(call.2));
-                if merged != *seen {
-                    *seen = merged;
-                    updates.push(self.running_usage());
-                }
-            }
+            updates.extend(self.observe_call(&id, usage));
         }
         for block in &blocks {
             match s(block, "type") {
@@ -468,6 +459,33 @@ impl ClaudeMapper {
             }
         }
         updates
+    }
+
+    /// One API call's usage, from its assistant messages or its stream
+    /// events. A call repeats its usage across several messages and a
+    /// `message_delta` may carry only the output count, so each count keeps
+    /// its largest value. The running total goes out when a count moved.
+    fn observe_call(&mut self, id: &str, usage: &Value) -> Option<SessionUpdateKind> {
+        let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let input = count("input_tokens")
+            + count("cache_read_input_tokens")
+            + count("cache_creation_input_tokens");
+        let call = (
+            input,
+            count("output_tokens"),
+            count("cache_read_input_tokens"),
+        );
+        if input + call.1 == 0 {
+            return None;
+        }
+        let seen = self.turn_calls.entry(id.to_string()).or_default();
+        let merged = (seen.0.max(call.0), seen.1.max(call.1), seen.2.max(call.2));
+        if merged == *seen {
+            return None;
+        }
+        *seen = merged;
+        self.last_context = Some(merged.0 + merged.1);
+        Some(self.running_usage())
     }
 
     fn turn_calls_total(&self) -> (u64, u64, u64) {

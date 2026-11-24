@@ -112,9 +112,28 @@ public protocol CompanionCredentialStore: AnyObject {
     func clear() throws
 }
 
-public enum CompanionCredentialError: Error, Equatable, Sendable {
+public enum CompanionCredentialError: Error, Equatable, Sendable, LocalizedError {
     case nothingStaged
     case keychain(OSStatus)
+
+    /// Shown on the pairing page. Swift numbers payload cases first, so the
+    /// bare error read "CompanionCredentialError error 0" for a keychain
+    /// refusal (review 1124b).
+    public var errorDescription: String? {
+        switch self {
+        case .nothingStaged:
+            "这台手机上没有待确认的配对信息"
+        case let .keychain(status):
+            Self.keychainText(status)
+        }
+    }
+
+    static func keychainText(_ status: OSStatus) -> String {
+        if status == errSecMissingEntitlement {
+            return "这台手机存不下配对信息：App 缺少钥匙串权限（\(status)）。模拟器里要用带签名的构建"
+        }
+        return "这台手机存不下配对信息：钥匙串出错（\(status)）"
+    }
 }
 
 /// For tests and previews.

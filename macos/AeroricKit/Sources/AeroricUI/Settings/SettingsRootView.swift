@@ -174,35 +174,28 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
     }
 
     @ViewBuilder private var page: some View {
-        if pane.scrollsItself {
-            VStack(alignment: .leading, spacing: AeroricSpace.l) {
-                header.padding(.horizontal, AeroricSpace.xxxl).padding(.top, AeroricSpace.xxxl)
-                content(pane)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: AeroricSpace.xxl) {
+                    header
+                    content(pane)
+                }
+                .padding(AeroricSpace.xxxl)
+                .frame(maxWidth: 680, alignment: .leading)
+                // 2026-10-29: the column is centred in the pane.
+                .frame(maxWidth: .infinity, alignment: .center)
+                .environment(\.settingsHighlight, highlight)
             }
-        } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: AeroricSpace.xxl) {
-                        header
-                        content(pane)
-                    }
-                    .padding(AeroricSpace.xxxl)
-                    .frame(maxWidth: 680, alignment: .leading)
-                    // 2026-10-29: the column is centred in the pane.
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .environment(\.settingsHighlight, highlight)
-                }
-                .scrollIndicators(.hidden)
-                .id(pane.id)
-                .task(id: "\(pane.id)|\(pendingAnchor ?? "")") {
-                    guard let anchor = pendingAnchor else { return }
-                    try? await Task.sleep(for: .milliseconds(80))
-                    withAnimation { proxy.scrollTo(SettingsRowAnchor.id(anchor), anchor: .center) }
-                    highlight = anchor
-                    try? await Task.sleep(for: .milliseconds(1400))
-                    if highlight == anchor { highlight = nil }
-                    pendingAnchor = nil
-                }
+            .scrollIndicators(.hidden)
+            .id(pane.id)
+            .task(id: "\(pane.id)|\(pendingAnchor ?? "")") {
+                guard let anchor = pendingAnchor else { return }
+                try? await Task.sleep(for: .milliseconds(80))
+                withAnimation { proxy.scrollTo(SettingsRowAnchor.id(anchor), anchor: .center) }
+                highlight = anchor
+                try? await Task.sleep(for: .milliseconds(1400))
+                if highlight == anchor { highlight = nil }
+                pendingAnchor = nil
             }
         }
     }

@@ -96,7 +96,6 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// Pages that bring their own scrolling (a grouped `Form`).
-    var scrollsItself: Bool { self == .remote }
 }
 
 /// The left column's groups, in order; 关于 has no heading.

@@ -115,6 +115,10 @@ public final class CompanionConnector {
                 failures.append("\(endpoint)：\(Self.describe(error))")
                 // A refused invite will be refused on every address.
                 if case .authRejected = error { break }
+            } catch let error as CompanionCredentialError {
+                // The phone cannot keep the pairing: no address will help.
+                failures.append(error.localizedDescription)
+                break
             } catch {
                 failures.append("\(endpoint)：连不上（\(error.localizedDescription)）")
             }

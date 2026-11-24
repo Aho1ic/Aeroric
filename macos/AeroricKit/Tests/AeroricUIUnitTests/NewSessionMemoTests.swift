@@ -70,8 +70,12 @@ final class NewSessionMemoTests: XCTestCase {
         draft.switchHarness("claude", configurations: catalogue)
         XCTAssertEqual(draft.configurationID, "agent-config:mine-c", "the same name")
         XCTAssertEqual(draft.task.effort, nil, "an effort the entry does not offer is not kept")
-
+        // Review 1124b: back on Codex the effort chosen there returns, not the entry's default.
         draft.switchHarness("codex", configurations: catalogue)
+        XCTAssertEqual(draft.configurationID, "agent-config:mine")
+        XCTAssertEqual(draft.task.effort, "high")
+        XCTAssertNil(draft.heldEffort)
+
         draft.apply(catalogue[0])
         draft.switchHarness("claude", configurations: catalogue)
         XCTAssertEqual(draft.configurationID, "claude", "own login for own login")

@@ -134,6 +134,16 @@ final class PushSettingsTests: XCTestCase {
         XCTAssertNil(store.relayDiagnostics)
     }
 
+    /// Review 1124b: the pairing sheet asks for an invite when it opens; with
+    /// no host it says so instead of staying on 正在生成配对码….
+    @MainActor
+    func testOpeningThePairingSheetAsksForAnInviteAndSaysWhyNoneCame() async {
+        let store = RemoteStore(client: nil)
+        await store.preparePairing()
+        XCTAssertNil(store.pairing)
+        XCTAssertEqual(store.lastError, "未连接宿主")
+    }
+
     @MainActor
     func testPushActionsSurfaceTheMissingConnectionInsteadOfSilentlyDoingNothing() async {
         let store = RemoteStore(client: nil)

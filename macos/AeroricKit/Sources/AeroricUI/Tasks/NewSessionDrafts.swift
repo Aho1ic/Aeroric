@@ -81,6 +81,10 @@ public struct NewSessionDraft: Equatable, Sendable {
     public private(set) var submission: Submission = .editing
     public private(set) var harnessIdentity: String?
     public private(set) var permissionAgent: String?
+    /// Review 1124b: a model or effort the entry switched to does not offer
+    /// (Claude's entry has no effort), kept so switching back restores it.
+    public private(set) var heldModel: String?
+    public private(set) var heldEffort: String?
     public var selectedHarness: String { harnessIdentity ?? task.agent }
 
     public init(submissionID: String = UUID().uuidString) {
@@ -131,7 +135,11 @@ public struct NewSessionDraft: Equatable, Sendable {
         guard let target = Self.counterpart(of: before.configuration, harness: harness, in: configurations)
                 ?? NewSessionLayout.firstConfiguration(for: harness, in: configurations) else { return }
         apply(target)
-        carry(model: before.model, effort: before.effort, into: target)
+        let model = before.model ?? heldModel
+        let effort = before.effort ?? heldEffort
+        carry(model: model, effort: effort, into: target)
+        heldModel = target.options.models.contains(model ?? "") ? nil : model
+        heldEffort = target.options.efforts.contains(effort ?? "") ? nil : effort
         if before.permissionChosen, target.options.permissionModes.contains(before.permission) {
             selectPermission(before.permission)
         }

@@ -1,5 +1,6 @@
 @testable import AeroricMobileTransport
 import Foundation
+import Security
 import XCTest
 
 /// An address nothing answers on.
@@ -140,6 +141,31 @@ final class CompanionPairingTests: XCTestCase {
     }
 
     // MARK: - The connector
+
+    /// Review 1124b: an unsigned simulator build has no keychain access. The
+    /// page must say so, once, instead of "CompanionCredentialError error 0"
+    /// for every address.
+    @MainActor
+    func testAPhoneThatCannotStoreThePairingSaysWhyAndStops() async throws {
+        let store = CompanionStore()
+        let vault = RefusingVault()
+        var dialled: [String] = []
+        let connector = CompanionConnector(store: store, credentials: vault, makeSocket: { url in
+            dialled.append(url.absoluteString)
+            return FakeMac(responder: self.mac)
+        }, pause: { _ in })
+
+        do {
+            try await connector.pair(code: pairingLink(), deviceName: "Test iPhone")
+            XCTFail("pairing cannot succeed without storage")
+        } catch {}
+        XCTAssertEqual(dialled, [lan], "no other address can help")
+        let shown = try XCTUnwrap(connector.lastError)
+        XCTAssertTrue(shown.contains("存不下配对信息"), shown)
+        XCTAssertTrue(shown.contains("-34018"), shown)
+        XCTAssertFalse(shown.contains("error 0"), shown)
+        XCTAssertNil(connector.credentials)
+    }
 
     @MainActor
     func testTheConnectorPairsTriesTheNextAddressAndReconnectsAfterADrop() async throws {
@@ -300,4 +326,16 @@ final class CompanionPairingTests: XCTestCase {
         XCTAssertEqual(connector.credentials?.hostName, "Studio Mac")
         await connector.stop()
     }
+}
+
+@MainActor
+private final class RefusingVault: CompanionCredentialStore {
+    func load() throws -> CompanionCredentials? { nil }
+    func loadPending() throws -> CompanionCredentials? { nil }
+    func stagePending(_ credentials: CompanionCredentials) throws {
+        throw CompanionCredentialError.keychain(errSecMissingEntitlement)
+    }
+    func commitPending() throws { throw CompanionCredentialError.nothingStaged }
+    func discardPending() throws {}
+    func clear() throws {}
 }

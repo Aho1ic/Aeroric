@@ -163,6 +163,13 @@ public final class RemoteStore: ObservableObject {
         }
     }
 
+    /// 打开配对页时：先清掉上一次的错误和配对码，再向宿主要一个新的。
+    public func preparePairing() async {
+        pairing = nil
+        lastError = nil
+        await createInvite()
+    }
+
     /// 清掉已展示的配对码（用户离开配对页时；invite 本身有过期）。
     public func dismissPairing() {
         pairing = nil
@@ -221,63 +228,75 @@ public struct RemoteAccessSettingsView: View {
         self.store = store
     }
 
+    /// Review 1124b: the flat cards and rows every settings page uses. The
+    /// page does not scroll by itself: Settings and the main window wrap it.
     public var body: some View {
-        Form {
-            Section("远控能力") {
-                Text(store.readState.notice ?? "已读取远控服务与设备状态")
-                    .font(.callout)
-                    .foregroundStyle(AeroricColor.textSecondary)
-                    .accessibilityIdentifier("remote.capability")
-            }
-            Section("服务") {
-                Toggle("启用远程访问", isOn: Binding(
-                    get: { store.status.enabled && store.status.running },
-                    set: { on in
-                        Task {
-                            if on { await store.start(port: nil) } else { await store.stop() }
+        VStack(alignment: .leading, spacing: AeroricSpace.xxl) {
+            SettingsCard("服务") {
+                SettingsRow("启用远程访问", detail: store.readState.notice ?? "手机通过本机或 Relay 连到这台 Mac") {
+                    Toggle("", isOn: Binding(
+                        get: { store.status.enabled && store.status.running },
+                        set: { on in
+                            Task {
+                                if on { await store.start(port: nil) } else { await store.stop() }
+                            }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .disabled(!store.canControl)
+                    .accessibilityIdentifier("remote.enable")
+                }
+                .accessibilityIdentifier("remote.capability")
+                SettingsRow("状态") {
+                    HStack(spacing: AeroricSpace.s) {
+                        Text(store.readState == .loaded ? (store.status.running ? "运行中" : "已停止") : "服务状态未核实")
+                            .foregroundStyle(store.status.running ? AeroricColor.success : AeroricColor.textSecondary)
+                        if store.readState == .loaded {
+                            Text(":\(store.status.port)").font(.caption.monospaced())
+                        }
+                        if store.status.networkExposed {
+                            Text("已暴露到网络").foregroundStyle(AeroricColor.warning)
                         }
                     }
-                ))
-                .disabled(!store.canControl)
-                .accessibilityIdentifier("remote.enable")
-                HStack {
-                    Text(store.readState == .loaded ? (store.status.running ? "运行中" : "已停止") : "服务状态未核实")
-                        .font(.caption)
-                        .foregroundStyle(store.status.running ? AeroricColor.success : AeroricColor.textSecondary)
-                    if store.readState == .loaded {
-                        Text(":\(store.status.port)")
-                        .font(.caption.monospaced())
-                    }
-                    if store.status.networkExposed {
-                        Text("已暴露到网络")
-                            .font(.caption)
-                            .foregroundStyle(AeroricColor.warning)
-                    }
+                    .font(.caption)
+                    .accessibilityIdentifier("remote.status-line")
                 }
-                .accessibilityIdentifier("remote.status-line")
-                Button("生成配对二维码") { showPairing = true }
-                    .disabled(!store.canControl || !store.status.running)
-                    .accessibilityIdentifier("remote.pair-button")
+                SettingsRow("配对新手机", detail: "手机扫码或打开链接，在手机上确认后完成配对") {
+                    Button("生成配对二维码") { showPairing = true }
+                        .disabled(!store.canControl || !store.status.running)
+                        .accessibilityIdentifier("remote.pair-button")
+                }
             }
 
-            Section("Relay / 公网端点") {
-                TextField("Relay URL（wss://，留空不用 relay）", text: $relayURL)
-                    .disabled(!store.canControl)
-                    .accessibilityIdentifier("remote.relay-url")
-                SecureField("Relay 共享口令", text: $relayToken)
-                    .disabled(!store.canControl)
-                    .accessibilityIdentifier("remote.relay-token")
-                Button("保存配置") {
-                    Task {
-                        await store.updateConfig(
-                            relayURL: relayURL.isEmpty ? nil : relayURL,
-                            relayToken: relayToken.isEmpty ? nil : relayToken,
-                            publicEndpoints: nil
-                        )
-                    }
+            SettingsCard("Relay / 公网端点") {
+                SettingsRow("Relay URL", detail: "wss:// 开头，留空不用 Relay") {
+                    TextField("", text: $relayURL)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 260)
+                        .disabled(!store.canControl)
+                        .accessibilityIdentifier("remote.relay-url")
                 }
-                .disabled(!store.canControl)
-                .accessibilityIdentifier("remote.config-save")
+                SettingsRow("Relay 共享口令") {
+                    SecureField("", text: $relayToken)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 260)
+                        .disabled(!store.canControl)
+                        .accessibilityIdentifier("remote.relay-token")
+                }
+                SettingsRow("保存 Relay 设置") {
+                    Button("保存配置") {
+                        Task {
+                            await store.updateConfig(
+                                relayURL: relayURL.isEmpty ? nil : relayURL,
+                                relayToken: relayToken.isEmpty ? nil : relayToken,
+                                publicEndpoints: nil
+                            )
+                        }
+                    }
+                    .disabled(!store.canControl)
+                    .accessibilityIdentifier("remote.config-save")
+                }
             }
 
             DeviceListView(store: store)
@@ -289,9 +308,7 @@ public struct RemoteAccessSettingsView: View {
                     .accessibilityIdentifier("remote.error")
             }
         }
-        .formStyle(.grouped)
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .accessibilityIdentifier("settings.remote")
         .task { await store.refresh() }
         .sheet(isPresented: $showPairing) {
@@ -499,6 +516,9 @@ public struct PairingView: View {
         }
         .padding(24)
         .accessibilityIdentifier("remote.pairing")
+        // Review 1124b: opening the sheet never asked the host for an invite,
+        // so it stayed on 正在生成配对码… for good.
+        .task { await store.preparePairing() }
     }
 }
 
@@ -514,42 +534,39 @@ public struct DeviceListView: View {
     }
 
     public var body: some View {
-        Section("已配对设备") {
+        SettingsCard("已配对设备") {
             if store.devices.isEmpty {
-                Text(store.readState == .loaded ? "暂无设备" : (store.readState.notice ?? "设备列表尚未核实"))
-                    .font(.caption).foregroundStyle(AeroricColor.textSecondary)
+                SettingsRow(store.readState == .loaded ? "暂无设备" : (store.readState.notice ?? "设备列表尚未核实")) {
+                    EmptyView()
+                }
             }
             ForEach(store.devices, id: \.id) { device in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(device.name).accessibilityIdentifier("remote.device.\(device.id)")
-                        Text(Self.timestamp(device.lastSeenAt))
-                            .font(.caption)
-                            .foregroundStyle(AeroricColor.textSecondary)
+                SettingsRow(device.name, detail: Self.timestamp(device.lastSeenAt), anchor: "device.\(device.id)") {
+                    HStack(spacing: AeroricSpace.m) {
+                        if device.online {
+                            Text("在线").font(.caption).foregroundStyle(AeroricColor.success)
+                        }
+                        Button("撤销") { pendingRevoke = device }
+                            .disabled(!store.canControl)
+                            .accessibilityIdentifier("remote.revoke.\(device.id)")
                     }
-                    Spacer()
-                    if device.online {
-                        Text("在线").font(.caption).foregroundStyle(AeroricColor.success)
-                    }
-                    Button("撤销") { pendingRevoke = device }
-                        .disabled(!store.canControl)
-                        .accessibilityIdentifier("remote.revoke.\(device.id)")
                 }
+                .accessibilityIdentifier("remote.device.\(device.id)")
             }
-            .confirmationDialog(
-                "撤销设备「\(pendingRevoke?.name ?? "")」？",
-                isPresented: Binding(
-                    get: { pendingRevoke != nil },
-                    set: { if !$0 { pendingRevoke = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                Button("撤销", role: .destructive) {
-                    if let device = pendingRevoke {
-                        Task { await store.revoke(id: device.id) }
-                    }
-                    pendingRevoke = nil
+        }
+        .confirmationDialog(
+            "撤销设备「\(pendingRevoke?.name ?? "")」？",
+            isPresented: Binding(
+                get: { pendingRevoke != nil },
+                set: { if !$0 { pendingRevoke = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("撤销", role: .destructive) {
+                if let device = pendingRevoke {
+                    Task { await store.revoke(id: device.id) }
                 }
+                pendingRevoke = nil
             }
         }
     }

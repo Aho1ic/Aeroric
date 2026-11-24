@@ -474,3 +474,51 @@ fn a_result_without_a_subtype_fails_the_turn() {
         })
     );
 }
+
+/// Review 1124b: behind the gateway a call starts with 0/0 usage and the
+/// assistant messages repeat it; the counts come in the call's
+/// `message_delta`. The 统计栏 must move then, not only at the result.
+#[test]
+fn counts_from_the_stream_when_the_messages_carry_none() {
+    let mut m = ClaudeMapper::default();
+    let usage = |updates: &[SessionUpdateKind]| {
+        updates.iter().find_map(|u| match u {
+            SessionUpdateKind::Usage {
+                input_tokens,
+                output_tokens,
+                context_used,
+                ..
+            } => Some((*input_tokens, *output_tokens, *context_used)),
+            _ => None,
+        })
+    };
+    let (start, _) = m.map(
+        &json!({"type": "stream_event", "event": {"type": "message_start",
+        "message": {"id": "m1", "usage": {"input_tokens": 0, "output_tokens": 0}}}}),
+    );
+    assert_eq!(usage(&start), None);
+    let (block, _) = m.map(
+        &json!({"type": "assistant", "session_id": "s", "message": {"id": "m1",
+        "content": [{"type": "thinking", "thinking": "hm"}],
+        "usage": {"input_tokens": 0, "output_tokens": 0}}}),
+    );
+    assert_eq!(usage(&block), None);
+    let (delta, _) = m.map(
+        &json!({"type": "stream_event", "event": {"type": "message_delta",
+        "delta": {"stop_reason": "tool_use"},
+        "usage": {"input_tokens": 18774, "output_tokens": 274}}}),
+    );
+    assert_eq!(usage(&delta), Some((Some(18774), Some(274), Some(19048))));
+
+    // The API's own shape: input at the start, only output in the delta.
+    let (start, _) = m.map(
+        &json!({"type": "stream_event", "event": {"type": "message_start",
+        "message": {"id": "m2", "usage": {"input_tokens": 20000, "output_tokens": 1}}}}),
+    );
+    assert_eq!(usage(&start), Some((Some(38774), Some(275), Some(20001))));
+    let (delta, _) = m.map(
+        &json!({"type": "stream_event", "event": {"type": "message_delta",
+        "delta": {}, "usage": {"output_tokens": 90}}}),
+    );
+    assert_eq!(usage(&delta), Some((Some(38774), Some(364), Some(20090))));
+}
