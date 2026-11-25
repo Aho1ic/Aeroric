@@ -826,7 +826,16 @@ impl RemoteHostHandle for CliRemoteHandle {
             aeroric_core::git::service::status(std::path::Path::new(&root))
         })
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| e.to_string())?;
+        let changes = match changes {
+            Ok(changes) => changes,
+            // 1124d: a project folder that is not a repository says so,
+            // instead of git's own `fatal: not a git repository`.
+            Err(error) if error.contains("not a git repository") => {
+                return Ok(json!({ "available": false, "reason": "not_git" }));
+            }
+            Err(error) => return Err(error),
+        };
         Ok(json!({
             "available": true,
             "scope": scope,

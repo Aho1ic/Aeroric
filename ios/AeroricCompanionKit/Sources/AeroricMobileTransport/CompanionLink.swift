@@ -285,7 +285,8 @@ public final class CompanionLink {
                     agent: (record["agent"] as? String) ?? "",
                     status: (record["status"] as? String) ?? "",
                     permissionMode: (record["permissionMode"] as? String) ?? "ask",
-                    generation: (record["generation"] as? String) ?? (record["generation"] as? NSNumber)?.stringValue))
+                    generation: (record["generation"] as? String) ?? (record["generation"] as? NSNumber)?.stringValue,
+                    activityMs: CompanionTaskList.activity(of: record)))
                 if let approval = record["approval"] as? [String: Any],
                    let requestId = approval["requestId"] as? String {
                     let summary = (approval["toolName"] as? String) ?? (approval["kind"] as? String) ?? "待审批"

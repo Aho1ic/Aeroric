@@ -157,6 +157,7 @@ public struct CompanionBrowse: Equatable, Sendable {
         switch object["reason"] as? String {
         case "ssh": return "这个项目在远程主机（SSH）上，手机还看不了它的文件"
         case "wsl": return "这个项目在 WSL 里，手机还看不了它的文件"
+        case "not_git": return "这个项目不是 Git 仓库，没有改动可看"
         case let other?: return "Mac 没有给出：\(other)"
         case nil: return "Mac 没有给出"
         }

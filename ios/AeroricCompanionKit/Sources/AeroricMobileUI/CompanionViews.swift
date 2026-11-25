@@ -58,12 +58,20 @@ public struct CompanionRootView: View {
             if isIPadLayout {
                 NavigationSplitView {
                     List(selection: $store.selectedTaskId) {
-                        ForEach(store.tasks) { task in
-                            VStack(alignment: .leading) {
-                                Text(task.title).font(.headline)
-                                Text("\(task.agent) · \(task.status)").font(.caption)
+                        // 1124d: the same order as the phone's list.
+                        ForEach(CompanionTaskList.sections(store.tasks, projectId: nil)) { section in
+                            Section(section.title) {
+                                ForEach(section.tasks) { task in
+                                    VStack(alignment: .leading) {
+                                        Text(task.title).font(.headline).lineLimit(2)
+                                        Text("\(task.agent) · \(task.status)").font(.caption)
+                                    }
+                                    .tag(Optional(task.id))
+                                }
+                                if section.omitted > 0 {
+                                    Text("较早的 \(section.omitted) 个在 Mac 上看").font(.caption)
+                                }
                             }
-                            .tag(Optional(task.id))
                         }
                     }
                     .navigationTitle("Aeroric iPad")
@@ -151,6 +159,14 @@ public struct CompanionTasksPane: View {
     @State private var selectedAgent = "claude"
     @State private var promptDraft = ""
     @State private var errorMessage: String?
+    /// 1124d: nil shows every project.
+    @State private var projectFilter: String?
+
+    /// "项目 · agent · status" under a task's title.
+    private func caption(_ task: CompanionTask) -> String {
+        let project = store.projects.first { $0.id == task.projectId }?.name
+        return [project, task.agent, task.status].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
 
     public init(store: CompanionStore) {
         self.store = store
@@ -227,17 +243,53 @@ public struct CompanionTasksPane: View {
                 }
                 .accessibilityIdentifier("companion.session-controls")
 
-                // D4 (2026-11-23): a task opens its page with the session.
-                List(store.tasks) { task in
-                    NavigationLink(value: task.id) {
-                        HStack {
-                            Text(task.title)
-                            Spacer()
-                            Text("\(task.agent) · \(task.status)")
-                                .font(.caption)
+                // 1124d: one project or all; what is going on first, then
+                // the latest, newest first and capped.
+                if !store.projects.isEmpty {
+                    Picker("项目", selection: Binding(
+                        get: { projectFilter ?? "" },
+                        set: { id in
+                            projectFilter = id.isEmpty ? nil : id
+                            if !id.isEmpty { store.selectedProjectId = id }
+                        })) {
+                        Text("全部项目").tag("")
+                        ForEach(store.projects) { project in
+                            Text(project.name).tag(project.id)
                         }
                     }
-                    .accessibilityIdentifier("companion.task.\(task.id)")
+                    .accessibilityIdentifier("companion.tasks.project")
+                }
+
+                // D4 (2026-11-23): a task opens its page with the session.
+                List {
+                    ForEach(CompanionTaskList.sections(store.tasks, projectId: projectFilter)) { section in
+                        Section(section.title) {
+                            ForEach(section.tasks) { task in
+                                NavigationLink(value: task.id) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(task.title).lineLimit(2)
+                                        Text(caption(task))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .accessibilityIdentifier("companion.task.\(task.id)")
+                            }
+                            if section.omitted > 0 {
+                                Text("较早的 \(section.omitted) 个在 Mac 上看")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("companion.tasks.omitted")
+                            }
+                        }
+                    }
+                }
+                .overlay {
+                    if store.tasks.isEmpty {
+                        Text(store.connectionState.isMacOnline ? "Mac 上还没有任务" : "连上 Mac 后在这里看任务")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding(12)

@@ -100,6 +100,8 @@ public struct CompanionTask: Identifiable, Equatable, Sendable {
     /// D4 step 6: which run of the task the Mac last said this is
     /// (`generation`); commands about it carry it so a rerun refuses them.
     public var generation: String?
+    /// 1124d: when it last moved (ms), for the list's newest-first order.
+    public var activityMs: Int64?
 
     public init(
         id: String,
@@ -108,7 +110,8 @@ public struct CompanionTask: Identifiable, Equatable, Sendable {
         agent: String,
         status: String,
         permissionMode: String = "ask",
-        generation: String? = nil
+        generation: String? = nil,
+        activityMs: Int64? = nil
     ) {
         self.id = id
         self.projectId = projectId
@@ -117,6 +120,7 @@ public struct CompanionTask: Identifiable, Equatable, Sendable {
         self.status = status
         self.permissionMode = permissionMode
         self.generation = generation
+        self.activityMs = activityMs
     }
 
     /// 1124c: the name a `tasks.list` record shows. Most tasks carry no
