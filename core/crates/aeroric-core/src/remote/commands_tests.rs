@@ -376,6 +376,59 @@ async fn remote_file_writes_are_off_until_the_mac_turns_them_on() {
         .contains(&json!("files.write")));
 }
 
+/// 1124c: 设置 › 远程与手机 turns remote file writes on and off through
+/// `remote.updateConfig`; the status says which, the change is on disk and in
+/// the audit log, and other fields stay as they were.
+#[tokio::test]
+async fn the_mac_turns_remote_file_writes_on_and_off() {
+    let root = std::env::temp_dir().join(format!("aeroric-writes-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let state = Arc::new(RemoteState::new_at(&root));
+    let mac = Arc::new(Counting::default());
+    let handle: Arc<dyn RemoteHostHandle> = mac.clone();
+    let status = crate::remote::control::current_status(&state).await;
+    assert_eq!(status["allowFileWrites"], json!(false));
+
+    let on = crate::remote::control::ConfigChange {
+        allow_file_writes: Some(true),
+        ..Default::default()
+    };
+    let status = crate::remote::control::update_config(&state, &handle, on)
+        .await
+        .unwrap();
+    assert_eq!(status["allowFileWrites"], json!(true));
+    assert!(
+        crate::remote::config::load_config_in(&root).allow_file_writes,
+        "on disk"
+    );
+    assert_eq!(*mac.audits.lock(), ["remote-file-writes"]);
+
+    // A change that leaves writes alone keeps them, and logs nothing.
+    let other = crate::remote::control::ConfigChange {
+        public_endpoints: Some(vec![]),
+        ..Default::default()
+    };
+    crate::remote::control::update_config(&state, &handle, other)
+        .await
+        .unwrap();
+    assert!(state.config.lock().allow_file_writes);
+    assert_eq!(mac.audits.lock().len(), 1);
+
+    let off = crate::remote::control::ConfigChange {
+        allow_file_writes: Some(false),
+        ..Default::default()
+    };
+    let status = crate::remote::control::update_config(&state, &handle, off)
+        .await
+        .unwrap();
+    assert_eq!(status["allowFileWrites"], json!(false));
+    assert_eq!(
+        *mac.audits.lock(),
+        ["remote-file-writes", "remote-file-writes"]
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// D4 (2026-11-23): `task.interrupt` is a command (it changes the Mac), and
 /// a host that cannot interrupt says so.
 #[tokio::test]

@@ -821,6 +821,15 @@ pub fn commit_detail_result(
 /// 修复不是行为变更（agent 结果本来就没人读了）。core 是同步体，deadline
 /// 用 try_wait 轮询实现（同 transport::collect_output 形状）。
 pub fn generate_commit_message(project_path: &Path) -> Result<String, String> {
+    generate_commit_message_with(project_path, &Default::default())
+}
+
+/// 2026-11-24: as [`generate_commit_message`], with the user's 提交说明的附加指引
+/// (设置 › Git) after the project's commit prompt.
+pub fn generate_commit_message_with(
+    project_path: &Path,
+    settings: &crate::settings::git_settings::GitSettings,
+) -> Result<String, String> {
     let diff_output = transport::run_git(
         project_path,
         &["diff", "--staged"],
@@ -845,7 +854,7 @@ pub fn generate_commit_message(project_path: &Path) -> Result<String, String> {
     let config = crate::settings::project_config::read_project_config(
         project_path.to_str().unwrap_or_default(),
     )?;
-    let commit_prompt = config.git.commit_prompt;
+    let commit_prompt = settings.commit_prompt(&config.git.commit_prompt);
     let timeout_secs = config.git.commit_message_timeout_secs.clamp(1, 120);
 
     let agent = if crate::settings::detect_codex_version().is_some() {

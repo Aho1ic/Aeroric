@@ -291,10 +291,12 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
         );
     }
     {
+        let data_dir = context.paths.data_dir().to_path_buf();
         set.register(
             "git.generate_commit_message",
             Arc::new(move |request, _call| {
-                Box::pin(async move { git_generate_commit_message(request).await })
+                let data_dir = data_dir.clone();
+                Box::pin(async move { git_generate_commit_message(request, data_dir).await })
             }),
         );
     }
@@ -2373,7 +2375,7 @@ async fn git_clone(request: Request) -> Frame {
     }
 }
 
-async fn git_generate_commit_message(request: Request) -> Frame {
+async fn git_generate_commit_message(request: Request, data_dir: std::path::PathBuf) -> Frame {
     let id = request.id.clone();
     let Some(params) = request.params.as_object() else {
         return failure(
@@ -2391,7 +2393,12 @@ async fn git_generate_commit_message(request: Request) -> Frame {
     };
     let p_path = project_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        aeroric_core::git::service::generate_commit_message(std::path::Path::new(&p_path))
+        // 2026-11-24: 设置 › Git's 提交说明的附加指引 goes after the project's prompt.
+        let settings = aeroric_core::settings::git_settings::load(&data_dir);
+        aeroric_core::git::service::generate_commit_message_with(
+            std::path::Path::new(&p_path),
+            &settings,
+        )
     })
     .await;
     match result {

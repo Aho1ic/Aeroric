@@ -62,6 +62,10 @@ public protocol SettingsStateProviding: AnyObject {
     var settingsOpenPage: (@MainActor (SettingsMainPage) -> Void)? { get }
     /// 1124: phone pairing, devices and the remote audit; nil hides the page.
     var settingsRemote: RemoteStore? { get }
+    /// 2026-11-24 存储: measure the data folder (`storage.usage`); nil hides the page.
+    var settingsStorageUsage: (@MainActor () async throws -> StorageUsage)? { get }
+    /// 2026-11-24 Git 与工作副本 (`gitSettings.*`, `copies.list`); nil says 未连接宿主.
+    var settingsGitClient: GitSettingsClient? { get }
 }
 
 /// Main-window pages a settings row can send the person to.
@@ -82,4 +86,6 @@ public extension SettingsStateProviding {
     var settingsOpenAgentConfig: (@MainActor () -> Void)? { nil }
     var settingsOpenPage: (@MainActor (SettingsMainPage) -> Void)? { nil }
     var settingsRemote: RemoteStore? { nil }
+    var settingsStorageUsage: (@MainActor () async throws -> StorageUsage)? { nil }
+    var settingsGitClient: GitSettingsClient? { nil }
 }

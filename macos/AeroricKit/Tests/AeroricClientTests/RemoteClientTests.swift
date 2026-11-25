@@ -51,6 +51,15 @@ final class RemoteClientParsingTests: XCTestCase {
         XCTAssertNil(status.lanIP)
     }
 
+    /// The 允许手机改文件 switch reads the host's `allowFileWrites`; a host
+    /// that does not say is off.
+    func testStatusSaysWhetherPhonesMayWriteFiles() {
+        guard case var .object(fields) = status else { return XCTFail() }
+        XCTAssertFalse(RemoteClient.parseStatus(.object(fields)).allowFileWrites)
+        fields["allowFileWrites"] = .bool(true)
+        XCTAssertTrue(RemoteClient.parseStatus(.object(fields)).allowFileWrites)
+    }
+
     func testDeviceListSkipsMalformedRows() {
         let devices = JSONValue.array([
             .object([

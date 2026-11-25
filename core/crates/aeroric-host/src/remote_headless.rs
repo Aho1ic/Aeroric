@@ -1686,18 +1686,19 @@ pub fn register_remote_services(
             let h = std::sync::Arc::clone(&h);
             let id = req.id.clone();
             Box::pin(async move {
-                match control::update_config(
-                    &s,
-                    &h,
-                    req.params
+                let change = control::ConfigChange {
+                    relay_url: req
+                        .params
                         .get("relayUrl")
                         .and_then(Value::as_str)
                         .map(str::to_string),
-                    req.params
+                    relay_token: req
+                        .params
                         .get("relayToken")
                         .and_then(Value::as_str)
                         .map(str::to_string),
-                    req.params
+                    public_endpoints: req
+                        .params
                         .get("publicEndpoints")
                         .and_then(Value::as_array)
                         .map(|a| {
@@ -1706,9 +1707,9 @@ pub fn register_remote_services(
                                 .map(str::to_string)
                                 .collect()
                         }),
-                )
-                .await
-                {
+                    allow_file_writes: req.params.get("allowFileWrites").and_then(Value::as_bool),
+                };
+                match control::update_config(&s, &h, change).await {
                     Ok(v) => crate::services::ok(&req, v),
                     Err(e) => failure(id, ErrorCode::InvalidArgument, &e),
                 }

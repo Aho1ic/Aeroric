@@ -31,12 +31,15 @@ public struct RemoteClient: Sendable {
         public var publicEndpoints: [String]
         /// off | connecting | online | error:<msg>
         public var relayState: String
+        /// Paired devices may write project files (`project.writeFile`); off
+        /// by default.
+        public var allowFileWrites: Bool
 
         public init(
             enabled: Bool, running: Bool, networkExposed: Bool, port: Int,
             lanIP: String?, lanAddresses: [NetworkAddress], onlineCount: Int,
             relayURL: String?, relayToken: String?, publicEndpoints: [String],
-            relayState: String
+            relayState: String, allowFileWrites: Bool = false
         ) {
             self.enabled = enabled
             self.running = running
@@ -49,6 +52,7 @@ public struct RemoteClient: Sendable {
             self.relayToken = relayToken
             self.publicEndpoints = publicEndpoints
             self.relayState = relayState
+            self.allowFileWrites = allowFileWrites
         }
 
         public static func offline() -> Self {
@@ -117,6 +121,16 @@ public struct RemoteClient: Sendable {
             fields["publicEndpoints"] = .array(publicEndpoints.map { .string($0) })
         }
         let frame = try await connection.request("remote.updateConfig", params: .object(fields))
+        return Self.parseStatus(frame.result)
+    }
+
+    /// Turns remote file writes on or off (`remote.updateConfig`,
+    /// `allowFileWrites`); nothing else in the config changes.
+    public func setFileWrites(_ allowed: Bool) async throws -> RemoteStatus {
+        let frame = try await connection.request(
+            "remote.updateConfig",
+            params: .object(["allowFileWrites": .bool(allowed)])
+        )
         return Self.parseStatus(frame.result)
     }
 
@@ -428,7 +442,8 @@ public struct RemoteClient: Sendable {
             relayURL: str("relayUrl"),
             relayToken: str("relayToken"),
             publicEndpoints: endpoints,
-            relayState: str("relayState") ?? "off"
+            relayState: str("relayState") ?? "off",
+            allowFileWrites: bool("allowFileWrites")
         )
     }
 }

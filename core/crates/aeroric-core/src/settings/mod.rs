@@ -50,6 +50,7 @@ pub mod builtin;
 pub mod config_bundles;
 pub mod custom_agents;
 pub mod dsh_home;
+pub mod git_settings;
 pub mod launch_spec;
 pub mod load_save;
 pub mod model_detect;

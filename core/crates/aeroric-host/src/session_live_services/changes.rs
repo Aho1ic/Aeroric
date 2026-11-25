@@ -20,8 +20,12 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>) {
         .set_dir(live.context.paths.data_dir().join("change-review"));
     let copies = live.context.paths.data_dir().join("copies");
     live.executor.change_review().set_copies_dir(copies.clone());
-    // R2-3b: copies with nothing left to bring back for 30 days go.
-    isolated_copy::prune(&copies, now_ms());
+    // R2-3b: copies with nothing left to bring back go after the days
+    // 设置 › 工作副本 says (30 unless changed; 0 keeps them).
+    let git = aeroric_core::settings::git_settings::load(live.context.paths.data_dir());
+    if let Some(keep_ms) = git.keep_cleared_ms() {
+        isolated_copy::prune_after(&copies, now_ms(), keep_ms);
+    }
     set.register(wire::BRING_ALL_METHOD, blocking(live, bring_all));
     set.register(wire::RESOLVE_METHOD, blocking(live, resolve));
     set.register(copy_wire::GET_METHOD, blocking(live, copy_get));

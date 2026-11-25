@@ -31,6 +31,7 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
             case .imports: state.settingsImportBook?.isAvailable == true
             case .references: state.settingsReferences?.isAvailable == true
             case .diagnostics: state.settingsDiagnosticsExporter != nil
+            case .storage: state.settingsStorageUsage != nil
             case .remote: state.settingsRemote != nil
             default: true
             }
@@ -233,6 +234,8 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
             }
         case .imports:
             if let book = state.settingsImportBook { ImportsSettingsPane(book: book) }
+        case .storage:
+            if let load = state.settingsStorageUsage { StorageSettingsPane(load: load) }
         case .memory:
             MemorySettingsPane(open: opener(.memory))
         case .diagnostics:
@@ -246,9 +249,9 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
         case .connection:
             ConnectionSettingsPane(state: state)
         case .git:
-            GitSettingsPane()
+            GitSettingsPane(client: state.settingsGitClient)
         case .worktrees:
-            WorktreeSettingsPane()
+            WorktreeSettingsPane(client: state.settingsGitClient)
         case .about:
             AboutSettingsPane(state: state)
         }

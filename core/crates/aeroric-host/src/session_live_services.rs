@@ -48,6 +48,7 @@ mod delivery;
 mod discussion;
 mod expert;
 mod gateway_usage;
+mod git_settings;
 mod github_review;
 mod memory;
 mod once;
@@ -58,6 +59,7 @@ mod retry;
 mod review;
 mod schedule;
 mod skills;
+mod storage;
 mod todo;
 mod turns;
 mod wiki;
@@ -221,6 +223,10 @@ pub fn register_session_live_services(
     budget::install(set, &live);
     // C7 (2026-11-20): the skill catalog and what each launch mounted.
     skills::install(set, &live);
+    // 2026-11-24 设置 › 存储.
+    storage::install(set, &live);
+    // 2026-11-24 设置 › Git 与工作副本.
+    git_settings::install(set, &live);
     // C8: the context tools with a side effect answer a repeated
     // idempotency key with the first result (after they are registered).
     once::install(set, &live);

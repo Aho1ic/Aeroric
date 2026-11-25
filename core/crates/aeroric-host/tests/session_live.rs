@@ -4743,3 +4743,65 @@ async fn pausing_every_agent_refuses_messages_until_resumed() {
     let again = host.call("budget.status", json!({})).await.unwrap();
     assert_eq!(again["gate"]["kind"], "go");
 }
+
+/// 2026-11-24 设置 › 存储: `storage.usage` reads the data folder by kind.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn storage_usage_reads_the_data_folder_by_kind() {
+    let host = Host::start(true).await;
+    let usage = host.call("storage.usage", json!({})).await.unwrap();
+    let ids: Vec<&str> = usage["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "sessions",
+            "memory",
+            "references",
+            "worktrees",
+            "logs",
+            "remotePackages",
+            "other"
+        ]
+    );
+    assert!(
+        usage["totalBytes"].as_u64().unwrap() > 0,
+        "the data folder holds something"
+    );
+    assert!(!usage["dataDir"].as_str().unwrap().is_empty());
+}
+
+/// 2026-11-24 设置 › Git 与工作副本: the settings over RPC and the copies list.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn git_settings_are_saved_and_checked() {
+    let host = Host::start(true).await;
+    let settings = host.call("gitSettings.get", json!({})).await.unwrap();
+    assert_eq!(settings["clearedCopyKeepDays"], 30);
+    assert_eq!(settings["commitGuidance"], "");
+
+    let saved = host
+        .call(
+            "gitSettings.set",
+            json!({"settings": {"commitGuidance": " 用中文写 ", "clearedCopyKeepDays": 7}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved["commitGuidance"], "用中文写");
+    assert_eq!(
+        host.call("gitSettings.get", json!({})).await.unwrap(),
+        saved
+    );
+    let refused = host
+        .call(
+            "gitSettings.set",
+            json!({"settings": {"commitGuidance": "", "clearedCopyKeepDays": 9999}}),
+        )
+        .await;
+    assert!(refused.is_err());
+
+    let copies = host.call("copies.list", json!({})).await.unwrap();
+    assert_eq!(copies["copies"], json!([]));
+}

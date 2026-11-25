@@ -14,7 +14,7 @@ import UniformTypeIdentifiers
 public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     case general, appearance, notifications, shortcuts
     case agents, legacyCleanup
-    case imports, memory, diagnostics
+    case imports, storage, memory, diagnostics
     case skills, references, remote, connection
     case git, worktrees
     case about
@@ -30,6 +30,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .agents: "新会话与 Agent"
         case .legacyCleanup: "旧版 Agent 清理"
         case .imports: "导入"
+        case .storage: "存储"
         case .memory: "记忆与整理"
         case .diagnostics: "诊断"
         case .skills: "技能与扩展"
@@ -51,14 +52,15 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .agents: "新会话的默认选择、内置 Agent、Agent 配置与求助专家"
         case .legacyCleanup: "清理旧版自定义 Agent 留下的配置"
         case .imports: "把 Claude Code、Codex 等已有的会话导入 Aeroric"
+        case .storage: "Aeroric 的数据占了多少磁盘，各放在哪"
         case .memory: "项目记忆、后台整理与按意思找"
         case .diagnostics: "导出脱敏的诊断报告，用来排查问题"
         case .skills: "Agent 能用的技能，以及 MCP 服务器、Hook 与插件"
         case .references: "给 Agent 查阅的外部代码库"
         case .remote: "与手机配对、管理已配对的设备、查看远程访问记录"
         case .connection: "Aeroric 宿主的连接状态与协议版本"
-        case .git: "委派和审查开工作副本时用到的 Git 设置"
-        case .worktrees: "会话的独立工作副本放在哪、什么时候清理"
+        case .git: "Aeroric 写提交说明时加的要求"
+        case .worktrees: "会话的独立副本放在哪、什么时候清理，以及现有的副本"
         case .about: "版本与构建信息"
         }
     }
@@ -72,6 +74,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .agents: "cpu"
         case .legacyCleanup: "trash"
         case .imports: "tray.and.arrow.down"
+        case .storage: "internaldrive"
         case .memory: "brain.head.profile"
         case .diagnostics: "stethoscope"
         case .skills: "puzzlepiece.extension"
@@ -88,7 +91,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .general, .appearance, .notifications, .shortcuts: .app
         case .agents, .legacyCleanup: .agents
-        case .imports, .memory, .diagnostics: .data
+        case .imports, .storage, .memory, .diagnostics: .data
         case .skills, .references, .remote, .connection: .integrations
         case .git, .worktrees: .coding
         case .about: .about
@@ -157,6 +160,7 @@ public enum SettingsIndex {
         entry(.agents, "专家模型", "求助专家 Smart Friend"),
         entry(.legacyCleanup, "旧版 Agent 清理", "自定义 Agent"),
         entry(.imports, "选择要导入的会话", "导入 Claude Code Codex"),
+        entry(.storage, "数据目录", "存储 占用 磁盘 空间 大小 访达 工作副本 日志"),
         entry(.memory, "打开记忆页", "记忆 整理 做梦 embedding 按意思找"),
         entry(.diagnostics, "导出诊断报告", "日志 排查 诊断"),
         entry(.skills, "技能目录", "技能 skill"),
@@ -165,11 +169,11 @@ public enum SettingsIndex {
         entry(.skills, "插件", "plugin"),
         entry(.references, "参考代码库", "索引 参考 文件夹"),
         entry(.remote, "启用远程访问", "手机 配对 二维码 设备 远控 Relay 推送"),
+        entry(.remote, "允许手机改文件", "手机 写文件 远程写入 权限"),
         entry(.connection, "连接状态", "宿主 协议版本 环境"),
-        entry(.git, "工作副本的分支前缀", "分支 Git"),
-        entry(.git, "提交说明的附加指引", "提交 commit"),
-        entry(.worktrees, "工作副本根目录", "worktree 目录"),
-        entry(.worktrees, "自动清理旧的工作副本", "worktree 清理 保留数量"),
+        entry(.git, "提交说明的附加指引", "提交 commit 生成 提示"),
+        entry(.worktrees, "工作副本根目录", "worktree 目录 位置"),
+        entry(.worktrees, "没有改动的副本保留多久", "worktree 清理 保留 自动删除 独立副本"),
         entry(.about, "构建", "版本 应用标识"),
     ]
 
@@ -829,24 +833,6 @@ struct SkillsSettingsPane: View {
                 SettingsRow("Hook", detail: "按用户配置、插件和项目列出钩子，标出有问题和待审核的。") { ComingSoonBadge() }
                 SettingsRow("插件", detail: "启用、停用和升级插件。") { ComingSoonBadge() }
             }
-        }
-    }
-}
-
-struct GitSettingsPane: View {
-    var body: some View {
-        SettingsCard("即将支持") {
-            SettingsRow("工作副本的分支前缀", detail: "委派、审查和重跑开工作副本时，新分支名前面加的前缀。") { ComingSoonBadge() }
-            SettingsRow("提交说明的附加指引", detail: "Agent 写提交说明时额外遵守的要求。") { ComingSoonBadge() }
-        }
-    }
-}
-
-struct WorktreeSettingsPane: View {
-    var body: some View {
-        SettingsCard("即将支持") {
-            SettingsRow("工作副本根目录", detail: "会话的独立工作副本放在哪个目录。") { ComingSoonBadge() }
-            SettingsRow("自动清理旧的工作副本", detail: "超过保留数量时，删掉最旧的、已经没有会话在用的工作副本。") { ComingSoonBadge() }
         }
     }
 }

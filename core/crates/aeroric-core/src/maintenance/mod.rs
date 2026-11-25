@@ -20,6 +20,7 @@ pub mod diagnostics;
 pub mod notifications;
 pub mod reports;
 pub mod service;
+pub mod storage_usage;
 pub mod updates;
 
 use thiserror::Error;

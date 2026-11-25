@@ -1626,6 +1626,13 @@ extension AppServices: SettingsStateProviding {
         guard let connection = attachedConnection else { return nil }
         return { try await DiagnosticsClient(connection: connection).exportReport() }
     }
+    var settingsGitClient: GitSettingsClient? {
+        attachedConnection.map { GitSettingsClient(connection: $0) }
+    }
+    var settingsStorageUsage: (@MainActor () async throws -> StorageUsage)? {
+        guard let connection = attachedConnection else { return nil }
+        return { try await StorageClient(connection: connection).usage() }
+    }
     var settingsOpenAgentConfig: (@MainActor () -> Void)? {
         { [weak self] in
             WorkspaceActions.showMainWindow()

@@ -271,3 +271,25 @@ fn a_copy_can_start_from_an_earlier_snapshot() {
     )
     .is_err());
 }
+
+/// 2026-11-24 设置 › 工作副本: an emptied copy goes after the kept days; one
+/// with work still to bring back stays, however old.
+#[test]
+fn only_an_emptied_copy_goes_after_the_kept_days() {
+    let dir = repo();
+    let (_, copies) = review(&dir);
+    create(&copies, &dir, "emptied").unwrap();
+    create(&copies, &dir, "working").unwrap();
+    set_cleared(&copies, "emptied", true);
+    let day = 24 * 3600 * 1000;
+    let now = now_ms();
+    assert!(
+        prune_after(&copies, now + 2 * day, 7 * day).is_empty(),
+        "not yet"
+    );
+    assert_eq!(prune_after(&copies, now + 8 * day, 7 * day), ["emptied"]);
+    assert!(load(&copies, "emptied").is_none());
+    assert!(prune_after(&copies, now + 400 * day, day).is_empty());
+    assert!(load(&copies, "working").is_some(), "work still in it: kept");
+    remove(&copies, "working").unwrap();
+}

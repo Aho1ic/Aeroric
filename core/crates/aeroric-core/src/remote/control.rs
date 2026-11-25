@@ -17,7 +17,7 @@ use base64::Engine;
 
 /// 设置页状态卡（原 `RemoteStatus`，序列化形状 camelCase 不变）。
 pub async fn current_status(state: &RemoteState) -> Value {
-    let (enabled, port, preferred_lan_ip, relay_url, relay_token, public_endpoints) = {
+    let (enabled, port, preferred_lan_ip, relay_url, relay_token, public_endpoints, writes) = {
         let cfg = state.config.lock();
         (
             cfg.enabled,
@@ -26,6 +26,7 @@ pub async fn current_status(state: &RemoteState) -> Value {
             cfg.relay_url.clone(),
             cfg.relay_token.clone(),
             cfg.public_endpoints.clone(),
+            cfg.allow_file_writes,
         )
     };
     let (running_port, network_exposed) = {
@@ -54,19 +55,36 @@ pub async fn current_status(state: &RemoteState) -> Value {
         "relayToken": relay_token,
         "publicEndpoints": public_endpoints,
         "relayState": state.relay_state.lock().clone(),
+        "allowFileWrites": writes,
     })
 }
 
-/// `remote.updateConfig`：校验 → 落盘 → 服务在运行时重启以生效。
+/// What `remote.updateConfig` changes; a field left `None` stays as it is.
+#[derive(Debug, Default)]
+pub struct ConfigChange {
+    pub relay_url: Option<String>,
+    pub relay_token: Option<String>,
+    pub public_endpoints: Option<Vec<String>>,
+    /// Paired devices may write project files (`project.writeFile`).
+    pub allow_file_writes: Option<bool>,
+}
+
+/// `remote.updateConfig`：校验 → 落盘 → 服务在运行时重启以生效（重连的
+/// 手机读到新的能力表，比如写文件开关）。
 pub async fn update_config(
     state: &std::sync::Arc<RemoteState>,
     handle: &std::sync::Arc<dyn RemoteHostHandle>,
-    relay_url: Option<String>,
-    relay_token: Option<String>,
-    public_endpoints: Option<Vec<String>>,
+    change: ConfigChange,
 ) -> Result<Value, String> {
+    let ConfigChange {
+        relay_url,
+        relay_token,
+        public_endpoints,
+        allow_file_writes,
+    } = change;
     let _lifecycle = state.lifecycle.lock().await;
     let was_running;
+    let mut writes_turned = None;
     {
         let mut cfg = state.config.lock();
         let mut next = cfg.clone();
@@ -98,12 +116,21 @@ pub async fn update_config(
             }
             next.public_endpoints = cleaned;
         }
+        if let Some(writes) = allow_file_writes {
+            if writes != next.allow_file_writes {
+                writes_turned = Some(writes);
+            }
+            next.allow_file_writes = writes;
+        }
         if next.relay_url.is_some() && next.relay_token.is_none() {
             return Err("Relay token is required when a relay URL is configured".to_string());
         }
         state.persist_config(&next)?;
         was_running = next.enabled;
         *cfg = next;
+    }
+    if let Some(on) = writes_turned {
+        handle.audit_log("remote-file-writes", json!({ "allowed": on }));
     }
     if was_running {
         crate::remote::state::ensure_stopped(state).await;

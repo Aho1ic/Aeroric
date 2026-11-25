@@ -216,6 +216,17 @@ public final class RemoteStore: ObservableObject {
         }
     }
 
+    /// Lets paired phones write project files, or stops them.
+    public func setFileWrites(_ allowed: Bool) async {
+        guard let client = clientForWrite() else { return }
+        do {
+            status = try await client.setFileWrites(allowed)
+            lastError = nil
+        } catch {
+            lastError = String(describing: error)
+        }
+    }
+
     private func clientForWrite() -> RemoteClient? {
         guard let client else {
             lastError = "未连接宿主"
@@ -234,6 +245,7 @@ public struct RemoteAccessSettingsView: View {
     @State private var relayURL: String = ""
     @State private var relayToken: String = ""
     @State private var showPairing = false
+    @State private var confirmFileWrites = false
     /// 最近一次推送动作的结果提示(`store.lastError` 负责失败;这里只说成功)。
     @State private var pushNotice: String?
 
@@ -274,6 +286,27 @@ public struct RemoteAccessSettingsView: View {
                     }
                     .font(.caption)
                     .accessibilityIdentifier("remote.status-line")
+                }
+                SettingsRow("允许手机改文件", detail: "已配对的手机能直接改项目里的文件。默认关，开关记进审计日志；已连着的手机会断开重连") {
+                    // Turning it on asks first (settings proposal 2026-11-24);
+                    // turning it off does not.
+                    Toggle("", isOn: Binding(
+                        get: { store.status.allowFileWrites },
+                        set: { on in
+                            if on { confirmFileWrites = true } else { Task { await store.setFileWrites(false) } }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .disabled(!store.canControl || store.readState != .loaded)
+                    .accessibilityIdentifier("remote.file-writes")
+                    .confirmationDialog("允许已配对的手机改项目里的文件？", isPresented: $confirmFileWrites) {
+                        Button("允许") { Task { await store.setFileWrites(true) } }
+                            .accessibilityIdentifier("remote.file-writes.confirm")
+                        Button("取消", role: .cancel) {}
+                    } message: {
+                        Text("每台已配对的手机都能直接写项目里的任何文件，不经过你确认。只在信得过这些手机时打开。")
+                    }
                 }
                 SettingsRow("配对新手机", detail: "手机扫码或打开链接，在手机上确认后完成配对") {
                     Button("生成配对二维码") { showPairing = true }

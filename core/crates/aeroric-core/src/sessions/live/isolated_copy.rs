@@ -426,11 +426,17 @@ fn working_directories() -> Vec<Running> {
 
 /// Remove copies with nothing left to bring back for [`KEEP_CLEARED_MS`].
 pub fn prune(dir: &Path, now: u64) -> Vec<String> {
+    prune_after(dir, now, KEEP_CLEARED_MS)
+}
+
+/// 2026-11-24: as [`prune`], after `keep_ms` (设置 › 工作副本). A copy with
+/// changes still to bring back has no `cleared_ms` and is never removed here.
+pub fn prune_after(dir: &Path, now: u64, keep_ms: u64) -> Vec<String> {
     list(dir)
         .into_iter()
         .filter(|r| {
             r.cleared_ms
-                .is_some_and(|at| now.saturating_sub(at) > KEEP_CLEARED_MS)
+                .is_some_and(|at| now.saturating_sub(at) > keep_ms)
         })
         .filter(|r| remove(dir, &r.task_id).is_ok())
         .map(|r| r.task_id)
