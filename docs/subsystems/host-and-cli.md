@@ -2,7 +2,7 @@
 
 ## 进程形态
 
-`aeroric-cli serve` 是宿主的唯一进程入口，没有第二个守护进程。启动顺序：取数据目录租约 → 数据格式兼容检查 → 运行时 → 一次性迁移（旧版 Agent 设置迁移失败即启动失败；omp 明文 key 替换与旧版 Claude/Codex hook 清理尽力而为，失败只记日志）→ UDS 监听 → ready（`core/crates/aeroric-host/src/startup.rs`）。macOS App 经 `HostSupervisor` 拉起并监管宿主，宿主随 App 打包在 `Contents/MacOS/aeroric-cli`。`aeroric-cli` 的其它子命令都是宿主的 RPC 客户端；`askpass` 模式为 SSH 密码连接兑换一次性票据。
+`aeroric-cli serve` 是宿主的唯一进程入口，没有第二个守护进程。启动顺序：取数据目录租约 → 数据格式兼容检查 → 运行时 → 一次性迁移（旧版 Agent 设置迁移失败即启动失败；omp 明文 key 替换与旧版 Claude/Codex hook 清理尽力而为，失败只记日志）→ UDS 监听 → ready（`core/crates/aeroric-host/src/startup.rs`）。macOS App 经 `HostSupervisor` 拉起并监管宿主，宿主随 App 打包在 `Contents/MacOS/aeroric-cli`。App 正常退出时在 `applicationWillTerminate` 里停掉宿主；App 没走这一步就没了（崩溃、被 SIGTERM、强制退出）时，带 `--ready-fd` 启动的宿主发现父进程换了，就自己退出，除非用户开了“退出 App 后宿主留在后台”（`background-policy.json` 的 `keepAliveOnUIQuit`，在父进程没了的那一刻读）。`aeroric-cli` 的其它子命令都是宿主的 RPC 客户端；`askpass` 模式为 SSH 密码连接兑换一次性票据。
 
 ## 结构
 

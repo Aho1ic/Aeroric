@@ -954,3 +954,78 @@ fn memory_credentials_are_refused_outside_a_temporary_folder() {
     assert!(!data_dir.join("host.token").exists());
     let _ = std::fs::remove_dir_all(&data_dir);
 }
+
+/// 1124c: a host the app started (`--ready-fd`) leaves when the app dies
+/// without stopping it, unless the user asked it to keep running in the
+/// background (`background-policy.json`). The "app" here is a shell that is
+/// SIGKILLed, so it has no say in how the host ends.
+#[cfg(unix)]
+#[test]
+fn a_host_the_app_started_leaves_when_the_app_dies() {
+    fn alive(pid: i32) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+    fn until(what: &str, seconds: u64, mut done: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        while std::time::Instant::now() < deadline {
+            if done() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("timed out waiting for: {what}");
+    }
+
+    for keep_alive in [false, true] {
+        let scratch = Scratch::new();
+        let data_dir = scratch.0.join("data");
+        std::fs::create_dir_all(&data_dir).expect("create data dir");
+        if keep_alive {
+            std::fs::write(
+                data_dir.join("background-policy.json"),
+                br#"{"keepAliveOnUIQuit":true,"remoteEnabled":false,"launchAtLogin":false,"preventSleep":false}"#,
+            )
+            .expect("policy");
+        }
+        let pid_file = scratch.0.join("host.pid");
+        let mut app = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(r#""$0" --data-dir "$1" serve --ready-fd 3 3>"$2" </dev/null >/dev/null 2>&1 & echo $! > "$3"; wait"#)
+            .arg(env!("CARGO_BIN_EXE_aeroric-cli"))
+            .arg(&data_dir)
+            .arg(scratch.0.join("ready"))
+            .arg(&pid_file)
+            .env("AERORIC_TEST_MEMORY_SECRETS", "1")
+            .env("HOME", &scratch.0)
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("spawn the stand-in app");
+        until("the host is ready", 10, || {
+            data_dir.join("host.sock").exists() && data_dir.join("host.token").exists()
+        });
+        let host: i32 = std::fs::read_to_string(&pid_file)
+            .expect("host pid")
+            .trim()
+            .parse()
+            .expect("a pid");
+        struct HostGuard(i32);
+        impl Drop for HostGuard {
+            fn drop(&mut self) {
+                unsafe { libc::kill(self.0, libc::SIGKILL) };
+            }
+        }
+        let _guard = HostGuard(host);
+        assert!(alive(host));
+
+        app.kill().expect("kill the stand-in app");
+        app.wait().expect("reap the stand-in app");
+        if keep_alive {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            assert!(alive(host), "asked to keep running: the host stays");
+            unsafe { libc::kill(host, libc::SIGTERM) };
+            until("the host stops on SIGTERM", 10, || !alive(host));
+        } else {
+            until("the host follows the app out", 10, || !alive(host));
+        }
+    }
+}

@@ -280,6 +280,9 @@ fn memory_secrets_requested(data_dir: &Path) -> Result<bool, String> {
 /// token 明文在启动后立即登记进 Redactor：进程 stderr 上出现的任何错误文本
 /// （含 panic hook）先洗再写（Action 5 的脱敏半边）。
 async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
+    // 1124c: who started this host, read before anything else: an app that
+    // dies during startup would otherwise leave launchd as the parent seen.
+    let parent = ready_fd.map(|_| (parent_pid(), data_dir));
     use aeroric_core::storage_lock::LeaseOwner;
     use aeroric_host::dispatcher::HostServices;
     use aeroric_host::startup::{
@@ -564,7 +567,14 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             }
             let running = serve_loop(started, services);
             eprintln!("aeroric-cli serve: listening (stderr diagnostics are redacted)");
-            wait_for_signal().await;
+            // 1124c: started by the app (`--ready-fd`), the host follows it out
+            // when the app dies without its own teardown.
+            tokio::select! {
+                _ = wait_for_signal() => {}
+                _ = wait_for_parent_exit(parent) => {
+                    eprintln!("aeroric-cli serve: the app that started this host is gone");
+                }
+            }
             eprintln!(
                 "aeroric-cli serve: shutdown requested; draining (redactor live: {:?})",
                 redactor_probe(&redactor)
@@ -593,6 +603,51 @@ async fn wait_for_signal() {
     {
         let _ = tokio::signal::ctrl_c().await;
     }
+}
+
+/// 1124c: the app quits through `applicationWillTerminate`, which stops the
+/// host. When the app dies any other way (a crash, a SIGTERM, 强制退出) that
+/// never runs, and the host it started kept the data-dir lock with no app on
+/// it: the next app attached to a host of the old build. So a host the app
+/// started watches its parent and, once re-parented, leaves too, unless the
+/// user asked it to keep running in the background after the app quits
+/// (`background-policy.json`, read when the parent goes so a toggle made
+/// while running counts). Without a parent to watch, never returns.
+async fn wait_for_parent_exit(parent: Option<(u32, &Path)>) {
+    let Some((parent, data_dir)) = parent else {
+        return std::future::pending().await;
+    };
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        if parent_pid() == parent {
+            continue;
+        }
+        if keeps_running_after_app_quits(data_dir) {
+            return std::future::pending().await;
+        }
+        return;
+    }
+}
+
+#[cfg(unix)]
+fn parent_pid() -> u32 {
+    std::os::unix::process::parent_id()
+}
+
+/// Off unix the app does not start the host; nothing changes parent.
+#[cfg(not(unix))]
+fn parent_pid() -> u32 {
+    0
+}
+
+/// `background-policy.json`'s `keepAliveOnUIQuit` (the app's
+/// `BackgroundHostPolicy`); missing or unreadable is the default, off.
+fn keeps_running_after_app_quits(data_dir: &Path) -> bool {
+    std::fs::read(data_dir.join("background-policy.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|policy| policy.get("keepAliveOnUIQuit")?.as_bool())
+        .unwrap_or(false)
 }
 
 /// serve 的 stderr 全部经 Redactor 出口——panic hook 也装上（默认 hook 打
@@ -1068,6 +1123,47 @@ async fn approval(data_dir: &Path, cmd: ApprovalCmd) -> i32 {
 mod tests {
     use super::args::Cli;
     use clap::{CommandFactory, Parser};
+
+    /// 1124c: the host stays after the app only when the user asked for it.
+    #[test]
+    fn the_host_stays_after_the_app_only_when_asked() {
+        let dir = std::env::temp_dir().join(format!("aeroric-keepalive-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let policy = dir.join("background-policy.json");
+        let _ = std::fs::remove_file(&policy);
+        assert!(!super::keeps_running_after_app_quits(&dir), "no file: off");
+        std::fs::write(
+            &policy,
+            br#"{"keepAliveOnUIQuit":true,"remoteEnabled":false}"#,
+        )
+        .unwrap();
+        assert!(super::keeps_running_after_app_quits(&dir));
+        std::fs::write(&policy, br#"{"keepAliveOnUIQuit":false}"#).unwrap();
+        assert!(!super::keeps_running_after_app_quits(&dir));
+        std::fs::write(&policy, b"not json").unwrap();
+        assert!(
+            !super::keeps_running_after_app_quits(&dir),
+            "unreadable: off"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 1124c: a host nobody started (no `--ready-fd`) has no parent to follow.
+    #[test]
+    fn a_host_without_a_parent_to_watch_waits_for_a_signal() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let waited = runtime.block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                super::wait_for_parent_exit(None),
+            )
+            .await
+        });
+        assert!(waited.is_err(), "it never returns on its own");
+    }
 
     /// A blocking task that never ends (a scan stuck in a slow folder) does
     /// not hold the exit past `STOP_GRACE`.
