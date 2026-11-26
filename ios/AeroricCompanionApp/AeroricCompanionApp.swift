@@ -171,7 +171,7 @@ struct AeroricCompanionApp: App {
             case .active:
                 connector?.start()
             case .background:
-                Task { await connector?.stop() }
+                Task { await connector?.stop(.background) }
             default:
                 break
             }

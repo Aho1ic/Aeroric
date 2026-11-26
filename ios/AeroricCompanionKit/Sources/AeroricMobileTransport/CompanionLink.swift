@@ -269,8 +269,10 @@ public final class CompanionLink {
     }
 
     /// Close on purpose (the user left, the app went to the background).
-    public func disconnect() async {
-        await closeSocket(reason: "已断开和 Mac 的连接")
+    /// 1126b: the reason says which, so a deliberate close is not taken for
+    /// a dropped connection.
+    public func disconnect(reason: String = "已断开和 Mac 的连接") async {
+        await closeSocket(reason: reason)
     }
 
     // MARK: - Reading the Mac's state

@@ -211,6 +211,27 @@ final class CompanionPairingTests: XCTestCase {
         await connector.stop()
     }
 
+    /// 1126b: going to the background closed the connection on purpose, and
+    /// the review took “已断开和 Mac 的连接” for a drop. The reason says why.
+    @MainActor
+    func testClosingOnPurposeSaysWhy() async throws {
+        let store = CompanionStore()
+        let vault = InMemoryCredentialStore(current: credentials(endpoints: [lan]))
+        let connector = CompanionConnector(store: store, credentials: vault,
+                                           makeSocket: { _ in FakeMac(responder: self.mac) }, pause: { _ in })
+        connector.start()
+        await eventually("online") { store.connectionState.isMacOnline }
+        await connector.stop(.background)
+        XCTAssertEqual(store.connectionState,
+                       .disconnected(reason: "App 退到了后台，已断开和 Mac 的连接；回到前台会自动连上"))
+        XCTAssertEqual(connector.activity, "App 退到了后台，已断开和 Mac 的连接；回到前台会自动连上")
+
+        connector.start()
+        await eventually("online again") { store.connectionState.isMacOnline }
+        await connector.stop(.userTapped)
+        XCTAssertEqual(store.connectionState, .disconnected(reason: "你点了“断开”"))
+    }
+
     /// 1124e: the pairing stored a VM bridge's address. The Mac's `hello`
     /// names the addresses it has now; the phone keeps them, so when that
     /// address goes away the next reconnect tries the others.

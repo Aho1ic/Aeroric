@@ -407,6 +407,14 @@ public struct LiveSessionView: View {
                 // leave the page part-way up).
                 .scrollIndicators(.hidden)
                 .modifier(OpensAtLatest())
+                // 1126b: a resync (停止 in the title bar closes the session)
+                // swaps the tall live rows for history. Scrolling to the
+                // bottom was not enough: the offset stayed past the shorter
+                // content and the page stayed blank, even after scrolling a
+                // little. A new scroll view starts at the latest message, as
+                // when the session is opened.
+                .onAppear { scroller.scrollTo(Self.bottomID, anchor: .bottom) }
+                .id(store.resyncs)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     footer.frame(width: column).padding(.bottom, AeroricSpace.xs).frame(maxWidth: .infinity)
                         .background(alignment: .top) { FooterFade() }
@@ -416,9 +424,6 @@ public struct LiveSessionView: View {
                     if old == 0 || atBottom { scroller.scrollTo(Self.bottomID, anchor: .bottom) }
                 }
                 .onChange(of: store.pending.count) { _, count in if count > 0 { scroll(scroller, to: Self.bottomID) } }
-                // 1126a: read again from scratch (停止 in the title bar closes
-                // the session): land on the latest message, as on opening.
-                .onChange(of: store.resyncs) { _, _ in scroller.scrollTo(Self.bottomID, anchor: .bottom) }
                 .onChange(of: focusApproval) { _, id in if let id { scroll(scroller, to: "approval.\(id)") } }
                 .onReceive(NotificationCenter.default.publisher(for: .aeroricTurnsChanged)) { note in
                     guard note.userInfo?["taskID"] as? String == store.taskID else { return }
@@ -434,7 +439,6 @@ public struct LiveSessionView: View {
                     if let id { scroll(scroller, to: id) }
                     turnScroll = nil
                 }
-                .onAppear { scroller.scrollTo(Self.bottomID, anchor: .bottom) }
             }
         }
         .background(AeroricColor.canvas)

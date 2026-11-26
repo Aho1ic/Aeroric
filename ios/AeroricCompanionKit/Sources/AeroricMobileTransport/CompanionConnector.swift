@@ -82,14 +82,27 @@ public final class CompanionConnector {
         }
     }
 
+    /// Why the phone itself closed the connection (1126b: a review took the
+    /// app going to the background for a dropped connection).
+    public enum StopReason: Sendable {
+        case background, userTapped, repairing
+        var text: String {
+            switch self {
+            case .background: "App 退到了后台，已断开和 Mac 的连接；回到前台会自动连上"
+            case .userTapped: "你点了“断开”"
+            case .repairing: "已断开和 Mac 的连接"
+            }
+        }
+    }
+
     /// The app went to the background: disconnect and stop retrying.
-    public func stop() async {
+    public func stop(_ reason: StopReason = .repairing) async {
         isRunning = false
         loop?.cancel()
         loop = nil
         resumeDropped()
-        await link.disconnect()
-        if credentials != nil { activity = "已断开" }
+        await link.disconnect(reason: reason.text)
+        if credentials != nil { activity = reason == .repairing ? "已断开" : reason.text }
     }
 
     /// Pair from the Mac's pairing link (or its code), then stay connected.

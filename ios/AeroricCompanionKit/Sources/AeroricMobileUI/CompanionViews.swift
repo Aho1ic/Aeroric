@@ -829,7 +829,7 @@ public struct CompanionConnectionPane: View {
                         }
                         Button(connector.isRunning ? "断开" : "连接") {
                             Task {
-                                if connector.isRunning { await connector.stop() } else { connector.start() }
+                                if connector.isRunning { await connector.stop(.userTapped) } else { connector.start() }
                             }
                         }
                         Button("取消配对", role: .destructive) {
