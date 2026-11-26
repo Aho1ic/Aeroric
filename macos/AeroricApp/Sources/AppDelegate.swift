@@ -1,4 +1,5 @@
 import AppKit
+import AeroricClient
 import AeroricUI
 
 /// Window lifecycle policy for the preview app (P4-01 Action 6, real
@@ -23,6 +24,9 @@ import AeroricUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var services: AppServices?
     private var menuBar: MenuBarController?
+    /// 2026-11-25: SIGTERM quits the normal way (see `TerminationSignals`).
+    private var terminationSignals: TerminationSignals?
+    private var terminationRequested = false
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
@@ -31,6 +35,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Light / dark / system from Settings → 外观 (M3), before any window shows.
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppTheme.applyStored()
+        // A SIGTERM runs `applicationWillTerminate` like 退出 does; a second
+        // one, while that quit has not finished, stops the host and exits.
+        let signals = TerminationSignals { [weak self] _ in
+            guard let self else { return }
+            if self.terminationRequested {
+                self.services?.terminateHostForProcessExit()
+                exit(0)
+            }
+            self.terminationRequested = true
+            NSApp.terminate(nil)
+        }
+        signals.start()
+        terminationSignals = signals
         if let services {
             let menuBar = MenuBarController(services: services)
             menuBar.start()
