@@ -211,6 +211,91 @@ final class CompanionPairingTests: XCTestCase {
         await connector.stop()
     }
 
+    /// 1124e: the pairing stored a VM bridge's address. The Mac's `hello`
+    /// names the addresses it has now; the phone keeps them, so when that
+    /// address goes away the next reconnect tries the others.
+    @MainActor
+    func testThePhoneKeepsTheAddressesTheMacGivesOnEachConnection() async throws {
+        let bridge = "ws://192.168.64.1:6790"
+        let en0 = "ws://192.168.0.159:6790"
+        let wireguard = "ws://10.0.0.2:6790"
+        let store = CompanionStore()
+        let vault = InMemoryCredentialStore(current: credentials(endpoints: [bridge]))
+        var config = FakeMac.Config()
+        config.helloIdentity = ["hostId": "host-1", "endpoints": [en0, wireguard, "http://not-a-socket"]]
+        var macs: [FakeMac] = []
+        var dialled: [String] = []
+        let connector = CompanionConnector(store: store, credentials: vault, makeSocket: { url in
+            dialled.append(url.absoluteString)
+            // The bridge answered at pairing time and is gone after the drop.
+            if url.absoluteString == bridge, !macs.isEmpty { return DeadSocket() }
+            let fake = FakeMac(responder: self.mac, config: config)
+            macs.append(fake)
+            return fake
+        }, pause: { _ in })
+        connector.start()
+        await eventually("online") { store.connectionState.isMacOnline }
+        XCTAssertEqual(connector.credentials?.endpoints, [en0, wireguard], "only ws:// and wss:// are kept")
+        XCTAssertEqual(try vault.load()?.endpoints, [en0, wireguard])
+        XCTAssertEqual(try vault.load()?.deviceToken, "token-1")
+
+        macs[0].closeFromMac(reason: nil)
+        await eventually("reconnected") { macs.count == 2 && store.connectionState.isMacOnline }
+        XCTAssertEqual(dialled, [bridge, en0], "the reconnect does not go back to the bridge")
+        await connector.stop()
+    }
+
+    /// 1124e: a `hello` from another Mac, or one without a usable address,
+    /// leaves the stored addresses alone.
+    @MainActor
+    func testAnotherMacsOrAnEmptyAddressListChangesNothing() async throws {
+        for identity: [String: Any] in [["hostId": "host-2", "endpoints": ["ws://10.9.9.9:6790"]],
+                                         ["hostId": "host-1", "endpoints": ["http://x"]],
+                                         ["hostId": "host-1"]] {
+            let store = CompanionStore()
+            let vault = InMemoryCredentialStore(current: credentials(endpoints: [lan]))
+            var config = FakeMac.Config()
+            config.helloIdentity = identity
+            let connector = CompanionConnector(store: store, credentials: vault,
+                                               makeSocket: { _ in FakeMac(responder: self.mac, config: config) },
+                                               pause: { _ in })
+            connector.start()
+            await eventually("online") { store.connectionState.isMacOnline }
+            XCTAssertEqual(connector.credentials?.endpoints, [lan], "\(identity)")
+            XCTAssertEqual(try vault.load()?.endpoints, [lan], "\(identity)")
+            await connector.stop()
+        }
+    }
+
+    /// 1124e: pairing again with the same Mac keeps the new token; the old
+    /// pairing's details are not written back when its `hello` arrives.
+    @MainActor
+    func testPairingAgainKeepsTheNewTokenWhenHelloNamesTheMac() async throws {
+        let store = CompanionStore()
+        var old = credentials(endpoints: [lan])
+        old.deviceToken = "old-token"
+        let vault = InMemoryCredentialStore(current: old)
+        var config = FakeMac.Config()
+        config.issuedToken = "new-token"
+        config.knownToken = "new-token"
+        config.helloIdentity = ["hostId": "host-1", "endpoints": ["ws://192.168.0.159:6790"]]
+        let connector = CompanionConnector(store: store, credentials: vault,
+                                           makeSocket: { _ in FakeMac(responder: self.mac, config: config) },
+                                           pause: { _ in })
+        try await connector.pair(code: pairingLink(endpoints: [lan]), deviceName: "Test iPhone")
+        XCTAssertEqual(try vault.load()?.deviceToken, "new-token")
+        XCTAssertEqual(connector.credentials?.deviceToken, "new-token")
+        await connector.stop()
+    }
+
+    func testNetworkErrorsAreSaidInWords() {
+        XCTAssertEqual(CompanionLink.networkReason(URLError(.timedOut)), "连接超时，Mac 的地址可能变了")
+        let bridged = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut,
+                              userInfo: [NSURLErrorFailingURLStringErrorKey: "http://192.168.64.1:6790/"])
+        XCTAssertEqual(CompanionLink.networkReason(bridged), "连接超时，Mac 的地址可能变了")
+        XCTAssertFalse(CompanionLink.networkReason(URLError(.cannotConnectToHost)).contains("Domain"))
+    }
+
     @MainActor
     func testNoAnswerBacksOffUpToThirtySeconds() async throws {
         let store = CompanionStore()

@@ -73,6 +73,10 @@ public final class CompanionLink {
     /// Called whenever a connection ends, with the reason the store shows.
     public var onClose: (@MainActor (String) -> Void)?
 
+    /// 1124e: the Mac's `hello` names its id and the addresses it can be
+    /// reached at now; the connector keeps them for the next reconnect.
+    public var onHostEndpoints: (@MainActor (_ hostId: String, _ endpoints: [String]) -> Void)?
+
     /// Handshake, authenticate, read the Mac's state into the store, then
     /// send what is waiting. Throws if any step fails; the connection is
     /// closed and the store says why.
@@ -221,6 +225,9 @@ public final class CompanionLink {
         let hello = Self.object(try await read("hello"))
         guard let epoch = hello["hostEpoch"] as? String, !epoch.isEmpty else {
             throw CompanionLinkError.unexpected("hello 没有 hostEpoch")
+        }
+        if let hostId = hello["hostId"] as? String, let endpoints = hello["endpoints"] as? [String] {
+            onHostEndpoints?(hostId, endpoints)
         }
         let since = Self.object(try await read("events.since", ["after": store.lastEventSeq]))
         let latestSeq = Self.uint(since["latestSeq"]) ?? store.lastEventSeq
@@ -521,7 +528,21 @@ public final class CompanionLink {
         case let .unexpected(reason): reason
         case let .remote(method, message): "读取 \(method) 失败：\(message)"
         case .notPaired: "还没配对"
-        case nil: "和 Mac 的连接出错：\(error)"
+        case nil: "和 Mac 的连接出错：\(networkReason(error))"
+        }
+    }
+
+    /// 1124e: a network error in words, not the NSError dictionary (the
+    /// offline banner showed `Error Domain=NSURLErrorDomain Code=-1001 …`).
+    public nonisolated static func networkReason(_ error: Error) -> String {
+        guard let error = error as? URLError else { return error.localizedDescription }
+        switch error.code {
+        case .timedOut: return "连接超时，Mac 的地址可能变了"
+        case .cannotConnectToHost: return "连不上，Mac 的远程访问可能没开"
+        case .networkConnectionLost: return "网络断了"
+        case .notConnectedToInternet: return "这台手机没有联网"
+        case .cannotFindHost, .dnsLookupFailed: return "找不到这个地址"
+        default: return "网络出错（\(error.code.rawValue)）"
         }
     }
 }

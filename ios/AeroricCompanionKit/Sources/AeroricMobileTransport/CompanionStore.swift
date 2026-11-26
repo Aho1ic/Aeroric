@@ -71,7 +71,8 @@ public struct CompanionTaskAction: Equatable, Sendable {
         case (.message, .sending): "正在发给 Mac…"
         case (.message, .done): "Mac 收下了这条消息"
         case (.stop, .sending): "正在请 Mac 停止…"
-        case (.stop, .done): "Mac 已停止这一轮"
+        // 1124e: the Mac answers once the stop is sent, before the turn ends.
+        case (.stop, .done): "Mac 收到了停止；状态变成“已中断”才算停下"
         case let (.message, .failed(why)): "消息没送出：\(why)"
         case let (.stop, .failed(why)): "没能停止：\(why)"
         }

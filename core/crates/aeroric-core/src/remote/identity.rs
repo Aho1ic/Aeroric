@@ -77,26 +77,47 @@ pub fn address_priority(ip: Ipv4Addr, interface_name: &str) -> (u8, u8, String, 
     )
 }
 
+/// 1124e：虚拟机和容器的网桥（`bridge100` 等）只在本机内部可达，随虚拟机
+/// 起停出现或消失；手机连不到，不能当成局域网地址公布。
+fn is_virtual_bridge(interface_name: &str) -> bool {
+    const PREFIXES: [&str; 7] = [
+        "bridge", "vmnet", "vboxnet", "docker", "veth", "virbr", "br-",
+    ];
+    let name = interface_name.to_ascii_lowercase();
+    PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+}
+
 /// 返回所有可用于手机直连的本机 IPv4，并将常规 LAN 地址排在隧道/代理地址之前。
 pub fn lan_addresses() -> Vec<RemoteNetworkAddress> {
+    ranked_addresses(
+        if_addrs::get_if_addrs()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|interface| match interface.ip() {
+                IpAddr::V4(ip) => Some((interface.name, ip)),
+                IpAddr::V6(_) => None,
+            }),
+    )
+}
+
+/// `lan_addresses` 的纯逻辑：去掉回环、网桥和重复的地址，再排序。
+fn ranked_addresses(
+    interfaces: impl IntoIterator<Item = (String, Ipv4Addr)>,
+) -> Vec<RemoteNetworkAddress> {
     let mut seen = HashSet::new();
-    let mut addresses = if_addrs::get_if_addrs()
-        .unwrap_or_default()
+    let mut addresses = interfaces
         .into_iter()
-        .filter_map(|interface| {
-            let IpAddr::V4(ip) = interface.ip() else {
-                return None;
-            };
+        .filter_map(|(name, ip)| {
             if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
                 return None;
             }
-            if !seen.insert(ip) {
+            if is_virtual_bridge(&name) || !seen.insert(ip) {
                 return None;
             }
             Some((
-                address_priority(ip, &interface.name),
+                address_priority(ip, &name),
                 RemoteNetworkAddress {
-                    interface_name: interface.name,
+                    interface_name: name,
                     ip: ip.to_string(),
                 },
             ))
@@ -104,6 +125,32 @@ pub fn lan_addresses() -> Vec<RemoteNetworkAddress> {
         .collect::<Vec<_>>();
     addresses.sort_by(|left, right| left.0.cmp(&right.0));
     addresses.into_iter().map(|(_, address)| address).collect()
+}
+
+/// 1124e：配对链接和 `hello` 都公布的局域网地址。选中的（首选或排第一的）
+/// 在前，其余手机可能连得到的跟在后面：一个地址失效时手机还有别的可试。
+/// 透明代理的 198.18/15 和链路本地地址只在被选中时才公布。
+pub fn lan_endpoints(
+    port: u16,
+    preferred_lan_ip: Option<&str>,
+    addresses: &[RemoteNetworkAddress],
+) -> Vec<String> {
+    let mut ips = Vec::new();
+    if let Some(selected) = selected_lan_ip(preferred_lan_ip, addresses) {
+        ips.push(selected);
+    }
+    for address in addresses {
+        let reachable = address
+            .ip
+            .parse::<Ipv4Addr>()
+            .is_ok_and(|ip| address_priority(ip, &address.interface_name).0 < 9);
+        if reachable && !ips.contains(&address.ip) {
+            ips.push(address.ip.clone());
+        }
+    }
+    ips.into_iter()
+        .map(|ip| format!("ws://{ip}:{port}"))
+        .collect()
 }
 
 pub fn selected_lan_ip(
@@ -137,12 +184,8 @@ pub fn pairing_endpoints(
     config: &crate::remote::config::RemoteConfig,
     host_id: &str,
 ) -> PairingEndpoints {
-    let mut endpoints = Vec::new();
-    let lan_ip = selected_lan_ip(config.preferred_lan_ip.as_deref(), addresses);
-    let includes_lan = lan_ip.is_some();
-    if let Some(ip) = lan_ip {
-        endpoints.push(format!("ws://{ip}:{port}"));
-    }
+    let mut endpoints = lan_endpoints(port, config.preferred_lan_ip.as_deref(), addresses);
+    let includes_lan = !endpoints.is_empty();
     endpoints.extend(config.public_endpoints.iter().cloned());
     if let Some(relay_url) = config
         .relay_url
@@ -206,6 +249,69 @@ mod tests {
                 .any(|e| e.contains("relay.example.com")),
             "relay 连接 URL 应出现在端点里: {:?}",
             snapshot.endpoints
+        );
+    }
+
+    /// 1124e 目检时这台 Mac 的网卡：虚拟机网桥 `bridge100` 按名字排在
+    /// `en0` 前面，配对链接只写了它，虚拟机一停手机就连不上了。
+    fn mac_in_review_1124e() -> Vec<RemoteNetworkAddress> {
+        ranked_addresses([
+            ("lo0".to_string(), Ipv4Addr::new(127, 0, 0, 1)),
+            ("bridge100".to_string(), Ipv4Addr::new(192, 168, 64, 1)),
+            ("en0".to_string(), Ipv4Addr::new(192, 168, 0, 159)),
+            ("utun4".to_string(), Ipv4Addr::new(100, 125, 106, 127)),
+            ("utun5".to_string(), Ipv4Addr::new(10, 0, 0, 2)),
+            ("utun1024".to_string(), Ipv4Addr::new(198, 18, 0, 1)),
+        ])
+    }
+
+    #[test]
+    fn virtual_machine_bridges_are_not_lan_addresses() {
+        let names: Vec<_> = mac_in_review_1124e()
+            .into_iter()
+            .map(|address| address.interface_name)
+            .collect();
+        assert_eq!(names, ["en0", "utun5", "utun4", "utun1024"]);
+        for name in [
+            "bridge100",
+            "vmnet8",
+            "vboxnet0",
+            "docker0",
+            "veth1a2b",
+            "virbr0",
+            "br-5e1f",
+        ] {
+            assert!(is_virtual_bridge(name), "{name}");
+        }
+        for name in ["en0", "en7", "utun4", "wg0", "eth0"] {
+            assert!(!is_virtual_bridge(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn pairing_lists_every_reachable_lan_address_selected_first() {
+        let addresses = mac_in_review_1124e();
+        let snapshot = pairing_endpoints(6790, &addresses, &RemoteConfig::default(), "host-1");
+        assert!(snapshot.includes_lan);
+        assert_eq!(
+            snapshot.endpoints,
+            [
+                "ws://192.168.0.159:6790",
+                "ws://10.0.0.2:6790",
+                "ws://100.125.106.127:6790",
+            ],
+            "198.18/15 is a transparent proxy: listed only when selected"
+        );
+        // A preferred address comes first; the others still follow.
+        assert_eq!(
+            lan_endpoints(6790, Some("10.0.0.2"), &addresses)[..2],
+            ["ws://10.0.0.2:6790", "ws://192.168.0.159:6790"]
+        );
+        // The only address is listed even if a phone may not reach it.
+        let proxy_only = ranked_addresses([("utun1024".to_string(), Ipv4Addr::new(198, 18, 0, 1))]);
+        assert_eq!(
+            lan_endpoints(6790, None, &proxy_only),
+            ["ws://198.18.0.1:6790"]
         );
     }
 

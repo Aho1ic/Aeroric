@@ -334,6 +334,83 @@ async fn a_message_folded_into_the_turn_leaves_no_turn_open() {
     assert!(!h.session.snapshot().turn_active);
 }
 
+fn notices(sink: &Sink) -> Vec<String> {
+    sink.updates
+        .lock()
+        .iter()
+        .filter_map(|u| match &u.kind {
+            SessionUpdateKind::Notice { message, .. } => Some(message.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Stops the running turn while `also this` waits in Claude's queue.
+async fn stopped_with_a_queued_message(h: &mut Harness) -> Peer {
+    let mut peer = running(h).await;
+    h.session.prompt("also this".into()).unwrap();
+    assert_eq!(peer.expect_user().await, "also this");
+    h.session.interrupt().unwrap();
+    let (id, _) = peer.expect_control("interrupt").await;
+    peer.ok(&id, json!({}));
+    peer.result("error_during_execution");
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Interrupted).await;
+    peer
+}
+
+/// 1124e: Claude takes the message queued before the stop and starts a turn
+/// for it on its own. The stop covers it: that turn is stopped as it opens,
+/// and the transcript says the message did not run.
+#[tokio::test]
+async fn a_message_queued_before_a_stop_does_not_run_after_it() {
+    let mut h = start(spec());
+    let mut peer = stopped_with_a_queued_message(&mut h).await;
+
+    peer.send(json!({"type": "system", "subtype": "init", "session_id": "cs1"}));
+    let (id, _) = peer.expect_control("interrupt").await;
+    peer.ok(&id, json!({}));
+    assert_eq!(notices(&h.sink), vec![QUEUED_AFTER_STOP.to_string()]);
+    peer.result("error_during_execution");
+    peer.context_usage().await;
+    let sink = Arc::clone(&h.sink);
+    until("the queued turn ended", move || {
+        sink.update_types()
+            .iter()
+            .filter(|t| *t == "turnEnded")
+            .count()
+            == 2
+    })
+    .await;
+    assert_eq!(h.sink.last_status(), Some(TaskStatus::Interrupted));
+    assert!(!h.session.snapshot().turn_active);
+
+    // Nothing is queued any more: a turn Claude starts later is not stopped.
+    peer.send(json!({"type": "system", "subtype": "init", "session_id": "cs1"}));
+    wait_status(&h.sink, TaskStatus::Running).await;
+    peer.result("success");
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    assert_eq!(notices(&h.sink).len(), 1);
+}
+
+/// 1124e: a message sent after the stop is a new request and runs, even
+/// though Claude may take it together with what was queued.
+#[tokio::test]
+async fn a_message_after_the_stop_runs() {
+    let mut h = start(spec());
+    let mut peer = stopped_with_a_queued_message(&mut h).await;
+
+    h.session.prompt("now this".into()).unwrap();
+    assert_eq!(peer.expect_user().await, "now this");
+    wait_status(&h.sink, TaskStatus::Running).await;
+    peer.send(json!({"type": "system", "subtype": "init", "session_id": "cs1"}));
+    peer.result("success");
+    peer.context_usage().await;
+    wait_status(&h.sink, TaskStatus::Done).await;
+    assert!(notices(&h.sink).is_empty());
+}
+
 #[tokio::test]
 async fn a_crash_fails_the_turn_and_the_next_prompt_resumes_the_session() {
     let mut h = start(spec());

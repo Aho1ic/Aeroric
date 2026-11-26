@@ -52,6 +52,10 @@ pub type ClaudeLauncher =
     Arc<dyn Fn(&ClaudeStart) -> Result<(Transport, Option<ChildGuard>), String> + Send + Sync>;
 
 const CRASH_WINDOW_MS: u64 = 60_000;
+/// 1124e: what the transcript says when a message queued before a stop is
+/// stopped instead of run.
+pub(crate) const QUEUED_AFTER_STOP: &str =
+    "停止之前发的补充说明还在 Claude 的队列里，Claude 想接着处理它；已一并停止，没有执行。需要的话请重新发送。";
 /// B1-4: how long the start handshake may wait for an answer.
 const HANDSHAKE: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -200,6 +204,7 @@ impl ClaudeSession {
             interrupted: false,
             refused: None,
             own_turn: false,
+            stopped_queue: 0,
         };
         runtime.spawn(actor.run(command_rx, inbox_rx));
         Arc::new(Self {
@@ -422,6 +427,10 @@ struct Actor {
     refused: Option<String>,
     /// The active turn is one Claude started on its own (no message of ours).
     own_turn: bool,
+    /// 1124e: messages written before the user stopped that were still in
+    /// Claude's queue. Claude runs each as a turn of its own once the stopped
+    /// one ends; those turns are stopped too. A new message clears it.
+    stopped_queue: u32,
 }
 
 impl Actor {
@@ -564,6 +573,11 @@ impl Actor {
             Command::Interrupt => {
                 if let Some(client) = self.client() {
                     self.interrupted = true;
+                    // 1124e: the running turn answers one message of ours
+                    // (none if Claude started it); the rest wait in Claude's
+                    // queue and would start turns after this one.
+                    let running = u32::from(!self.own_turn);
+                    self.stopped_queue = self.outstanding.saturating_sub(running);
                     if let Err(error) = client.request(json!({"subtype": "interrupt"})).await {
                         self.push(SessionUpdateKind::Error {
                             message: format!("中断失败：{error}"),
@@ -623,6 +637,23 @@ impl Actor {
         self.status(TaskStatus::Running, None);
     }
 
+    /// 1124e: after the user stopped, Claude took a message that was waiting
+    /// in its queue and started a turn for it. The stop covers it too: stop
+    /// this turn as soon as it opens and say why the message did not run.
+    fn stop_queued_turn(&mut self) {
+        self.stopped_queue -= 1;
+        self.interrupted = true;
+        self.push(SessionUpdateKind::Notice {
+            level: "warning".into(),
+            message: QUEUED_AFTER_STOP.into(),
+        });
+        if let Some(client) = self.client() {
+            tokio::spawn(async move {
+                let _ = client.request(json!({"subtype": "interrupt"})).await;
+            });
+        }
+    }
+
     async fn prompt(&mut self, text: String, receipt: Option<String>) {
         let client = match self.process().await {
             Ok(client) => client,
@@ -634,6 +665,9 @@ impl Actor {
         if self.state.lock().active_turn.is_none() {
             self.begin_turn();
         }
+        // 1124e: a message after the stop is a new request. Claude may run it
+        // together with what was queued; stopping that would drop it.
+        self.stopped_queue = 0;
         let session = self.state.lock().session_id.clone();
         match client.send_user(&text, session.as_deref()) {
             Ok(()) => {
@@ -791,6 +825,9 @@ impl Actor {
                     let own = self.outstanding == 0;
                     self.begin_turn();
                     self.own_turn = own;
+                    if !own && self.stopped_queue > 0 {
+                        self.stop_queued_turn();
+                    }
                 }
                 let (updates, signal) = self.mapper.map(&message);
                 for update in updates {
@@ -832,6 +869,7 @@ impl Actor {
                             // 1124c: Claude folded the messages written
                             // during the last turn into it; none is left.
                             self.outstanding = 0;
+                            self.stopped_queue = 0;
                         }
                     }
                     Some(ClaudeSignal::AuthRefused { reason }) => {

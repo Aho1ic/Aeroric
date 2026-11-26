@@ -8,7 +8,7 @@
 use serde_json::{json, Value};
 
 use crate::remote::event_log;
-use crate::remote::identity::{host_name, lan_addresses, selected_lan_ip};
+use crate::remote::identity::{host_name, lan_addresses, lan_endpoints};
 use crate::remote::services::RemoteHostHandle;
 use crate::remote::state::RemoteState;
 
@@ -69,8 +69,8 @@ pub fn str_param(params: &Value, key: &str) -> Result<String, String> {
 
 /// `hello`:除了版本信息,还回传**实时**主机身份与候选地址。
 ///
-/// 手机端用 `hostId` 把「同一台电脑换了网段」识别成同一条已配对记录,并用
-/// `lanEndpoints` 刷新其中过期的内网地址。服务未运行时端口取配置值。
+/// 手机端用 `hostId` 认出是配对的那台 Mac,并用 `endpoints` 替换存下的地址
+/// (1124e,`CompanionConnector.hostAnnounced`)。服务未运行时端口取配置值。
 pub(crate) async fn live_identity(state: &RemoteState) -> Value {
     let running_port = state.running.lock().await.as_ref().map(|h| h.port);
     let addresses = lan_addresses();
@@ -86,17 +86,10 @@ pub(crate) async fn live_identity(state: &RemoteState) -> Value {
             cfg.public_endpoints.clone(),
         )
     };
-    let mut endpoints = Vec::new();
-    if let Some(ip) = selected_lan_ip(preferred_lan_ip.as_deref(), &addresses) {
-        endpoints.push(format!("ws://{ip}:{port}"));
-    }
-    for address in &addresses {
-        let endpoint = format!("ws://{}:{port}", address.ip);
-        if !endpoints.contains(&endpoint) {
-            endpoints.push(endpoint);
-        }
-    }
-    let lan_endpoints = endpoints.clone();
+    // 1124e: the same list as the pairing link; the phone replaces its
+    // stored addresses with these each time it connects.
+    let mut endpoints = lan_endpoints(port, preferred_lan_ip.as_deref(), &addresses);
+    let lan = endpoints.clone();
     endpoints.extend(public_endpoints);
     if let Some(relay) = relay_url {
         endpoints.push(remote_protocol::client_connect_url(
@@ -109,7 +102,7 @@ pub(crate) async fn live_identity(state: &RemoteState) -> Value {
         "hostName": host_name(),
         "endpoints": endpoints,
         // 仅 LAN 的子集:手机端据此只替换旧的内网地址,保留用户手填的隧道地址
-        "lanEndpoints": lan_endpoints,
+        "lanEndpoints": lan,
     })
 }
 

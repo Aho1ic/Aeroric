@@ -110,6 +110,17 @@ public protocol CompanionCredentialStore: AnyObject {
     func discardPending() throws
     /// Forget everything (unpaired, or the Mac no longer knows this phone).
     func clear() throws
+    /// 1124e: the pairing in use, with new details (the Mac's addresses).
+    func replace(_ credentials: CompanionCredentials) throws
+}
+
+public extension CompanionCredentialStore {
+    /// Staged and committed at once: nothing is staged while a pairing is
+    /// in use.
+    func replace(_ credentials: CompanionCredentials) throws {
+        try stagePending(credentials)
+        try commitPending()
+    }
 }
 
 public enum CompanionCredentialError: Error, Equatable, Sendable, LocalizedError {

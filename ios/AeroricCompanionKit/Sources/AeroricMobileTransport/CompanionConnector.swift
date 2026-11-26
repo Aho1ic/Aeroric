@@ -27,6 +27,7 @@ public final class CompanionConnector {
     private let pause: @MainActor (Double) async throws -> Void
     private var loop: Task<Void, Never>?
     private var dropped: CheckedContinuation<Void, Never>?
+    private var pairing = false
     private var readingTranscript = false
     private var transcriptAgain = false
 
@@ -52,6 +53,9 @@ public final class CompanionConnector {
             activity = "还没连接"
         }
         link.onClose = { [weak self] _ in self?.connectionEnded() }
+        link.onHostEndpoints = { [weak self] hostId, endpoints in
+            self?.hostAnnounced(hostId: hostId, endpoints: endpoints)
+        }
         store.onCommandIssued = { [weak self] in self?.sendWaiting() }
         store.onTranscriptWanted = { [weak self] in self?.readTranscript() }
         store.onRead = { [weak self] read in self?.perform(read) }
@@ -96,6 +100,10 @@ public final class CompanionConnector {
             throw error
         }
         await stop()
+        // The old pairing is still `credentials` until this one is taken:
+        // the new `hello` must not write it back (see `hostAnnounced`).
+        pairing = true
+        defer { pairing = false }
         var failures: [String] = []
         for endpoint in offer.endpoints {
             guard let url = URL(string: endpoint) else { continue }
@@ -120,7 +128,7 @@ public final class CompanionConnector {
                 failures.append(error.localizedDescription)
                 break
             } catch {
-                failures.append("\(endpoint)：连不上（\(error.localizedDescription)）")
+                failures.append("\(endpoint)：连不上（\(CompanionLink.networkReason(error))）")
             }
         }
         lastError = failures.joined(separator: "\n")
@@ -180,7 +188,9 @@ public final class CompanionConnector {
         while isRunning, !Task.isCancelled {
             var connected = false
             var failures: [String] = []
-            for endpoint in credentials.endpoints {
+            // 1124e: the addresses the Mac gave on the last connection.
+            let endpoints = (confirming ? credentials : self.credentials ?? credentials).endpoints
+            for endpoint in endpoints {
                 guard isRunning, let url = URL(string: endpoint) else { break }
                 activity = "正在连接 \(credentials.hostName)：\(endpoint)"
                 do {
@@ -200,7 +210,7 @@ public final class CompanionConnector {
                     failures.append("\(endpoint)：\(Self.describe(error))")
                     continue
                 } catch {
-                    failures.append("\(endpoint)：连不上（\(error.localizedDescription)）")
+                    failures.append("\(endpoint)：连不上（\(CompanionLink.networkReason(error))）")
                     continue
                 }
                 if confirming {
@@ -235,6 +245,22 @@ public final class CompanionConnector {
     private func waitUntilDropped() async {
         guard link.isConnected else { return }
         await withCheckedContinuation { continuation in dropped = continuation }
+    }
+
+    /// 1124e: keep the addresses the paired Mac says it has now. A pairing
+    /// stored one address; when it went away (a VM's bridge), reconnecting
+    /// tried only that one forever. Another Mac's id, or no usable address,
+    /// changes nothing; a pairing still being confirmed is updated next time.
+    private func hostAnnounced(hostId: String, endpoints: [String]) {
+        guard !pairing, var current = credentials, current.hostId == hostId else { return }
+        let usable = endpoints.filter {
+            let lower = $0.lowercased()
+            return lower.hasPrefix("ws://") || lower.hasPrefix("wss://")
+        }
+        guard !usable.isEmpty, usable != current.endpoints else { return }
+        current.endpoints = usable
+        try? vault.replace(current)
+        credentials = current
     }
 
     private func connectionEnded() {

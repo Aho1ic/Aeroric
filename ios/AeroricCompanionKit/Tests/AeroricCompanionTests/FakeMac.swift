@@ -29,6 +29,8 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
         /// `method` + " " + the path asked (empty for none), + " @taskId"
         /// for a task's read.
         var reads: [String: [String: Any]] = [:]
+        /// 1124e: what `hello` adds about this Mac (`hostId`, `endpoints`).
+        var helloIdentity: [String: Any] = [:]
     }
 
     enum Confirmation { case confirm, refuse, silent, legacy }
@@ -235,7 +237,7 @@ final class FakeMac: CompanionSocket, @unchecked Sendable {
         }
         switch method {
         case "hello":
-            return [ok(["name": "aeroric", "hostEpoch": config.hostEpoch])]
+            return [ok(config.helloIdentity.merging(["name": "aeroric", "hostEpoch": config.hostEpoch]) { $1 })]
         case "events.since":
             return [ok(["events": [], "latestSeq": config.latestSeq, "reset": false])]
         case "projects.list":
