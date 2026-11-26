@@ -183,6 +183,40 @@ final class CompanionLinkTests: XCTestCase {
         XCTAssertEqual(store.connectionState, .disconnected(reason: "电脑端已退出远程连接"))
     }
 
+    /// 1126a: the Mac rejecting a frame says so instead of "连接断开了".
+    @MainActor
+    func testAFrameTheMacRejectsSaysSo() async throws {
+        let store = try pairedStore()
+        let socket = FakeMac(responder: mac)
+        let link = CompanionLink(store: store)
+        try await link.connect(socket: socket, deviceToken: "token-1", mode: .directLAN)
+        socket.closeFromMac(reason: "frame-rejected")
+        await eventually("offline") { !store.connectionState.isMacOnline }
+        XCTAssertEqual(store.connectionState,
+                       .disconnected(reason: "Mac 拒收了这台手机发来的一条消息（顺序不对或已损坏），已断开"))
+    }
+
+    /// 1126a: requests sent at once reach the Mac in the order of their
+    /// sequence numbers. The socket holds every other frame back a little, as
+    /// the hop off the main actor could; before the fix the next request,
+    /// already numbered, overtook it and the Mac closed the connection.
+    @MainActor
+    func testRequestsSentAtOnceReachTheMacInOrder() async throws {
+        let store = try pairedStore()
+        let fake = FakeMac(responder: mac)
+        let link = CompanionLink(store: store)
+        try await link.connect(socket: StallingSocket(fake), deviceToken: "token-1", mode: .directLAN)
+        var answered = 0
+        for _ in 0..<12 {
+            Task { @MainActor in
+                if (try? await link.call("hello")) != nil { answered += 1 }
+            }
+        }
+        await eventually("every request answered") { answered == 12 }
+        XCTAssertTrue(link.isConnected)
+        XCTAssertTrue(store.connectionState.isMacOnline)
+    }
+
     /// D4 step 6 (2026-11-23): an answer names the run it was decided on; a
     /// rerun on the Mac refuses it, and the phone reads the Mac again at once.
     @MainActor
@@ -259,4 +293,28 @@ final class CompanionLinkTests: XCTestCase {
         socket.push(seq: 2, event: "task-status")
         await eventually("gone") { store.pendingApprovals.isEmpty }
     }
+}
+
+/// Forwards to a fake Mac, holding every other binary frame back for a
+/// moment before it reaches the Mac.
+private final class StallingSocket: CompanionSocket, @unchecked Sendable {
+    private let inner: FakeMac
+    private let lock = NSLock()
+    private var frames = 0
+
+    init(_ inner: FakeMac) { self.inner = inner }
+
+    func send(text: String) async throws { try await inner.send(text: text) }
+
+    func send(binary: Data) async throws {
+        let stall = lock.withLock { () -> Bool in
+            frames += 1
+            return frames.isMultiple(of: 2)
+        }
+        if stall { try await Task.sleep(nanoseconds: 20_000_000) }
+        try await inner.send(binary: binary)
+    }
+
+    func receive() async throws -> CompanionSocketMessage { try await inner.receive() }
+    func close() async { await inner.close() }
 }

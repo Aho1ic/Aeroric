@@ -60,6 +60,18 @@ fn host_signed_out_close() -> Message {
     }))
 }
 
+/// 1126a: a frame from the phone did not open (out of order, replayed or
+/// altered). The connection still ends — the session cannot continue — but
+/// with a reason the phone can show, instead of a bare TCP close.
+const FRAME_REJECTED_CLOSE_REASON: &str = "frame-rejected";
+
+fn frame_rejected_close() -> Message {
+    Message::Close(Some(CloseFrame {
+        code: CloseCode::Protocol,
+        reason: FRAME_REJECTED_CLOSE_REASON.into(),
+    }))
+}
+
 // ── 服务生命周期 ─────────────────────────────────────────────────────────────
 
 /// 默认的低层启动入口保持全网监听，供 LAN roundtrip 测试和显式网络
@@ -823,7 +835,14 @@ pub async fn serve_ws<S>(
                             // authenticated Orca kinds are fully enumerated by
                             // their WebSocket payload type.
                             Ok(DecryptedMessage::Unknown) => {}
-                            Err(_) => break,
+                            Err(error) => {
+                                eprintln!(
+                                    "[remote] {} 发来的帧解不开，断开：{error}",
+                                    authentication.device_id
+                                );
+                                let _ = sink.send(frame_rejected_close()).await;
+                                break;
+                            }
                         }
                     }
                     Some(Ok(Message::Ping(payload))) => {

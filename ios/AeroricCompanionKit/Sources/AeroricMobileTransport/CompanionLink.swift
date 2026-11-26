@@ -45,6 +45,8 @@ public final class CompanionLink {
 
     private var socket: CompanionSocket?
     private var session: E2eeSession?
+    /// The last frame handed to `sendControl`, which the next one waits for.
+    private var sending: Task<Void, Error>?
     private var version: RemoteRpcVersion = .v3
     /// Bumped per connection, so a loop or a reply from an old one is ignored.
     private var generation = 0
@@ -169,6 +171,7 @@ public final class CompanionLink {
         if self.socket != nil { await disconnect() }
         generation += 1
         self.socket = socket
+        sending = nil
         sentThisConnection = []
         heldPushes = []
         nextRequest = 1
@@ -342,10 +345,25 @@ public final class CompanionLink {
 
     // MARK: - The wire
 
+    /// 1126a: frames leave in the order of their sequence numbers. A frame is
+    /// numbered when it is encrypted, and `socket.send` leaves the main actor
+    /// before it reaches the socket: two requests at once (a task page reads
+    /// its transcript and its changes) could reach the Mac out of order, and
+    /// the Mac ends a connection on an out-of-order frame. Each frame now waits
+    /// for the one before it to be handed to the socket, then is encrypted.
     private func sendControl(_ text: String) async throws {
-        guard let socket, let session else { throw CompanionLinkError.closed("没有连接") }
-        let frame = try session.encryptFrame(kind: .control, plaintext: Data(text.utf8))
-        try await socket.send(binary: frame)
+        guard let socket, session != nil else { throw CompanionLinkError.closed("没有连接") }
+        let previous = sending
+        let send = Task { @MainActor [weak self] in
+            _ = await previous?.result
+            guard let self, self.socket === socket, let session = self.session else {
+                throw CompanionLinkError.closed("没有连接")
+            }
+            let frame = try session.encryptFrame(kind: .control, plaintext: Data(text.utf8))
+            try await socket.send(binary: frame)
+        }
+        sending = send
+        try await send.value
     }
 
     /// Before the loop runs (the `auth` answer): read one control frame here.
@@ -391,8 +409,7 @@ public final class CompanionLink {
                 await closeSocket(reason: "握手之后收到了明文，已断开")
                 return
             case let .closed(reason):
-                await closeSocket(reason: reason == "signed-out" ? "电脑端已退出远程连接" : "和 Mac 的连接断开了",
-                                  remoteClosed: true)
+                await closeSocket(reason: Self.closeReason(reason), remoteClosed: true)
                 return
             }
         }
@@ -529,6 +546,15 @@ public final class CompanionLink {
         case let .remote(method, message): "读取 \(method) 失败：\(message)"
         case .notPaired: "还没配对"
         case nil: "和 Mac 的连接出错：\(networkReason(error))"
+        }
+    }
+
+    /// Why the Mac closed the connection, from its close reason (`server.rs`).
+    nonisolated static func closeReason(_ reason: String?) -> String {
+        switch reason {
+        case "signed-out": "电脑端已退出远程连接"
+        case "frame-rejected": "Mac 拒收了这台手机发来的一条消息（顺序不对或已损坏），已断开"
+        default: "和 Mac 的连接断开了"
         }
     }
 
