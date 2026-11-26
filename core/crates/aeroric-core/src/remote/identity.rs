@@ -129,7 +129,10 @@ fn ranked_addresses(
 
 /// 1124e：配对链接和 `hello` 都公布的局域网地址。选中的（首选或排第一的）
 /// 在前，其余手机可能连得到的跟在后面：一个地址失效时手机还有别的可试。
-/// 透明代理的 198.18/15 和链路本地地址只在被选中时才公布。
+/// 1126a：后面跟的只有私有网段（10/8、172.16/12、192.168/16）。iOS 的 App
+/// 传输安全不许明文 `ws://` 连别的地址：Tailscale 的 100.64/10 报 -1022，
+/// 公网地址同理；透明代理的 198.18/15 和链路本地地址本来就连不到。这些只在
+/// 被选中时（用户指定的首选，或者本机没有别的地址）才公布。
 pub fn lan_endpoints(
     port: u16,
     preferred_lan_ip: Option<&str>,
@@ -143,7 +146,7 @@ pub fn lan_endpoints(
         let reachable = address
             .ip
             .parse::<Ipv4Addr>()
-            .is_ok_and(|ip| address_priority(ip, &address.interface_name).0 < 9);
+            .is_ok_and(|ip| ip.is_private());
         if reachable && !ips.contains(&address.ip) {
             ips.push(address.ip.clone());
         }
@@ -295,17 +298,23 @@ mod tests {
         assert!(snapshot.includes_lan);
         assert_eq!(
             snapshot.endpoints,
-            [
-                "ws://192.168.0.159:6790",
-                "ws://10.0.0.2:6790",
-                "ws://100.125.106.127:6790",
-            ],
-            "198.18/15 is a transparent proxy: listed only when selected"
+            ["ws://192.168.0.159:6790", "ws://10.0.0.2:6790"],
+            "only private ranges follow: iOS refuses plain ws:// to Tailscale's 100.x (-1022), \
+             and 198.18/15 is a transparent proxy"
         );
         // A preferred address comes first; the others still follow.
         assert_eq!(
             lan_endpoints(6790, Some("10.0.0.2"), &addresses)[..2],
             ["ws://10.0.0.2:6790", "ws://192.168.0.159:6790"]
+        );
+        // Preferred by the user: listed first even outside the private ranges.
+        assert_eq!(
+            lan_endpoints(6790, Some("100.125.106.127"), &addresses),
+            [
+                "ws://100.125.106.127:6790",
+                "ws://192.168.0.159:6790",
+                "ws://10.0.0.2:6790"
+            ]
         );
         // The only address is listed even if a phone may not reach it.
         let proxy_only = ranked_addresses([("utun1024".to_string(), Ipv4Addr::new(198, 18, 0, 1))]);

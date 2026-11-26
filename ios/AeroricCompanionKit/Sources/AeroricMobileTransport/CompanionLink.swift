@@ -568,6 +568,9 @@ public final class CompanionLink {
         case .networkConnectionLost: return "网络断了"
         case .notConnectedToInternet: return "这台手机没有联网"
         case .cannotFindHost, .dnsLookupFailed: return "找不到这个地址"
+        // 1126a: iOS refuses plain ws:// to an address it does not count as
+        // local (a Tailscale 100.x address).
+        case .appTransportSecurityRequiresSecureConnection: return "iOS 不允许用明文连接这个地址（App 传输安全）"
         default: return "网络出错（\(error.code.rawValue)）"
         }
     }

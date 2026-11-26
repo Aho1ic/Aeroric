@@ -238,6 +238,8 @@ final class CompanionPairingTests: XCTestCase {
         XCTAssertEqual(connector.credentials?.endpoints, [en0, wireguard], "only ws:// and wss:// are kept")
         XCTAssertEqual(try vault.load()?.endpoints, [en0, wireguard])
         XCTAssertEqual(try vault.load()?.deviceToken, "token-1")
+        // 1126a: the page says which address the phone is on.
+        XCTAssertEqual(connector.activity, "已连上 Studio Mac：\(bridge)")
 
         macs[0].closeFromMac(reason: nil)
         await eventually("reconnected") { macs.count == 2 && store.connectionState.isMacOnline }
@@ -294,10 +296,13 @@ final class CompanionPairingTests: XCTestCase {
                               userInfo: [NSURLErrorFailingURLStringErrorKey: "http://192.168.64.1:6790/"])
         XCTAssertEqual(CompanionLink.networkReason(bridged), "连接超时，Mac 的地址可能变了")
         XCTAssertFalse(CompanionLink.networkReason(URLError(.cannotConnectToHost)).contains("Domain"))
+        // 1126a: the Tailscale address iOS refused (-1022).
+        XCTAssertEqual(CompanionLink.networkReason(URLError(.appTransportSecurityRequiresSecureConnection)),
+                       "iOS 不允许用明文连接这个地址（App 传输安全）")
     }
 
     @MainActor
-    func testNoAnswerBacksOffUpToThirtySeconds() async throws {
+    func testNoAnswerBacksOffUpToFifteenSeconds() async throws {
         let store = CompanionStore()
         let vault = InMemoryCredentialStore(current: credentials(endpoints: [lan]))
         var pauses: [Double] = []
@@ -311,7 +316,7 @@ final class CompanionPairingTests: XCTestCase {
         connector.start()
         await eventually("seven rounds") { pauses.count >= 7 }
         await eventually("stopped") { !connector.isRunning }
-        XCTAssertEqual(Array(pauses.prefix(7)), [1, 2, 4, 8, 16, 30, 30])
+        XCTAssertEqual(Array(pauses.prefix(7)), [1, 2, 4, 8, 15, 15, 15])
         XCTAssertNotNil(connector.lastError)
     }
 

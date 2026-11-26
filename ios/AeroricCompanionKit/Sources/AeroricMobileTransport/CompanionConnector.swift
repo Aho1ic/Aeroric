@@ -31,7 +31,9 @@ public final class CompanionConnector {
     private var readingTranscript = false
     private var transcriptAgain = false
 
-    public static let maxBackoffSeconds = 30.0
+    /// 1126a: 15, not 30: a Mac whose remote access came back was waited
+    /// on for up to 30 seconds.
+    public static let maxBackoffSeconds = 15.0
 
     public init(
         store: CompanionStore,
@@ -115,7 +117,7 @@ public final class CompanionConnector {
                 credentials = paired
                 lastError = nil
                 proposedHostName = nil
-                activity = "已连上 \(paired.hostName)"
+                activity = "已连上 \(paired.hostName)：\(endpoint)"
                 isRunning = true
                 loop = Task { [weak self] in await self?.stayConnected(paired, after: endpoint) }
                 return
@@ -222,7 +224,7 @@ public final class CompanionConnector {
                 connected = true
                 failedRounds = 0
                 lastError = nil
-                activity = "已连上 \(credentials.hostName)"
+                activity = "已连上 \(credentials.hostName)：\(endpoint)"
                 await waitUntilDropped()
                 break
             }

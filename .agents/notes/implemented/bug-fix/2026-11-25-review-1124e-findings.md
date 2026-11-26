@@ -46,7 +46,7 @@ Status: implemented
 - **排除虚拟网桥：** `lan_addresses` 不收 `bridge*`、`vmnet*`、`vboxnet*`、`docker*`、`veth*`、`virbr*`、`br-*` 网卡上的地址。
 - **`lan_endpoints` 统一列地址：**
   - 选中的（首选或排第一的）在前；
-  - 其余手机可能连到的跟在后面；
+  - 其余手机可能连到的跟在后面（[1126a](2026-11-26-review-1126a-findings.md) 起只跟私有网段）；
   - 透明代理的 198.18/15 和链路本地地址只在被选中时才列出。
 - **两处共用：** `pairing_endpoints` 和 `hello` 的 `endpoints` / `lanEndpoints` 都用它，两边列表一致。
 
