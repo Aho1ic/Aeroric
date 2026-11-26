@@ -6,7 +6,7 @@ Status: implemented
 
 [各 Harness 原生融合](../../proposed/architecture/2026-11-16-harness-native-capabilities.md) H4 的第 3 条：刚改过的模块，对应的 Wiki 页要当场标上“可能过期”，不等下次编译。
 
-动手前（`main@07c92cf5`）核对的事实：
+动手前（`main@fe043545`）核对的事实：
 
 - 模块页的每段都记着它读过的代码文件和那一版的 blob（`SourceRef { kind: Code, target, version }`）。
 - 只有编译时才拿当前文件比对，在说明段前写“可能过时”（`knowledge/explain.rs` 的 `sources_now`、`stale_lines`）。两次编译之间，页面一直显得是最新的。

@@ -8,7 +8,7 @@ Status: implemented
 
 方案写于 2026-11-15，之后 [各 Harness 原生融合](../../proposed/architecture/2026-11-16-harness-native-capabilities.md)（11-16）查清了 OMP 上游支持 MCP，并把 OMP 的注入划给它的 H2。C9 只剩三件事：DSH、远端，以及如实置灰。
 
-动手前（`main@4b963eb1`）逐处读代码：
+动手前（`main@f1c9de82`）逐处读代码：
 
 - **DSH 其实已经接上了。**
   - 本机 DSH 走 ACP（`Route::Acp`，方言 DSH）。

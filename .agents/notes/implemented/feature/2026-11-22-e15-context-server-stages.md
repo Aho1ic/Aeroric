@@ -13,7 +13,7 @@ Status: implemented
 
 CU 2026-11-13 记过 DSH 等 `tools/list` 卡住整个回合，正是第二个缺口。
 
-动手前（`main@61aea46f`）核对的事实：
+动手前（`main@3424a3c8`）核对的事实：
 
 - Aeroric 自己的 Context 服务器是 `aeroric-cli --data-dir <数据目录> mcp-context`。令牌从环境变量 `AERORIC_CONTEXT_TOKEN` 读。执行器每次给会话配上它时，都签发一个新令牌（`ContextTokens::issue`）。
 - 服务器答 `initialize` 时会先问宿主这个项目有没有记忆、Wiki 等（`memory_enabled`、`host_says`），所以 `initialize` 自己就可能卡在宿主那边。

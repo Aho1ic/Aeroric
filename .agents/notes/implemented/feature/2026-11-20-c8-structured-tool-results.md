@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[C8 第一步](2026-11-20-c8-effective-tool-catalog.md)让会话看得到有哪些工具。方案的第二步要求 Agent 调用 Aeroric 工具之后，结果分得清成功、部分成功、需要重试、被拒绝。动手前 `aeroric-cli mcp-context`（`main@610b34f7`）的情况：
+[C8 第一步](2026-11-20-c8-effective-tool-catalog.md)让会话看得到有哪些工具。方案的第二步要求 Agent 调用 Aeroric 工具之后，结果分得清成功、部分成功、需要重试、被拒绝。动手前 `aeroric-cli mcp-context`（`main@0bd05448`）的情况：
 
 - **结果只有一个布尔值。** `call_tool` 把宿主的回复压成一段文字，失败时 `isError: true`。Agent 分不出三种情况：
   - 宿主说参数不对，重试没用；

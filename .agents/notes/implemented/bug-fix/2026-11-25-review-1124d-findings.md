@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-目检报告在 `~/Documents/computer-use/2026-11-25-0957-aeroric-review-1124d/report.md`，测的是 `ebb50cac`。
+目检报告在 `~/Documents/computer-use/2026-11-25-0957-aeroric-review-1124d/report.md`，测的是 `f6072d7b`。
 
 **通过的：**
 - 手机 App 全屏；

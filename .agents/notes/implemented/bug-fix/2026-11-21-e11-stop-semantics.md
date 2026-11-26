@@ -17,7 +17,7 @@ Status: implemented
 
 方案的做法是先核对，有缺口再补。
 
-核对（`main@96fef996`）：
+核对（`main@7f3275ad`）：
 
 - **四个驱动的结束原因：一致，没有缺口。** 用户要求停下，四个驱动都报“中断”（`TurnEndReason::Interrupted`），任务状态记为 `interrupted`，不记失败：
   - Claude：`interrupted` 标记优先于失败判断；

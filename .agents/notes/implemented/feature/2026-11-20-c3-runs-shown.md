@@ -11,7 +11,7 @@ Status: implemented
 - 只补写失败的条目（`memory.runRetry`，App 的"重试"已改用它）；
 - 重建索引（`memory.reindex`），以及 `memory.runs` 的 `indexHealthy`。
 
-App 只认得新状态的文字，其余都看不到（`main@10ff03a5`）：
+App 只认得新状态的文字，其余都看不到（`main@5a825327`）：
 
 - 没有取消按钮；
 - 进行中的行不会自己更新，要切换标签才刷新；

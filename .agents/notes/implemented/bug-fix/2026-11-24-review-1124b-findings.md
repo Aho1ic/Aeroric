@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-目检报告在 `~/Documents/computer-use/2026-11-24-1126-aeroric-review-1124b/report.md`，测的是 `5ba11581`。
+目检报告在 `~/Documents/computer-use/2026-11-24-1126-aeroric-review-1124b/report.md`，测的是 `238724d3`。
 
 **通过的：**
 - 设置的分组、搜索、跳转、高亮；

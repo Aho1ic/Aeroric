@@ -9,7 +9,7 @@ Status: implemented
 - 通知、快捷键在阶段 2 做；
 - 远程写文件的开关在设置里给出界面，默认关，打开要确认。
 
-动手前核对到（`main@ac179f98` 加上本批未提交的改动）：
+动手前核对到（`main@083097c4` 加上本批未提交的改动）：
 - **远控页拿不到宿主：** `RemoteStore` 由 `AppServices` 用 `RemoteStore(client: nil)` 建出来，从没接过宿主连接。主窗口侧栏的“远控”页即使放出来，也只会写“不可用”。
 - **通知：** 只有一种，Aeroric 不在前台时“需要你批准”（`ApprovalNotificationGate`），没有开关。
 - **远程写文件：** 宿主的 `remote.updateConfig` 不收 `allow_file_writes`，状态里也不报它。要给出开关，得先改宿主方法和 `contracts/` 里的协议文档。

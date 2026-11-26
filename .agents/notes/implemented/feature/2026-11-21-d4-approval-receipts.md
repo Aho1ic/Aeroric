@@ -13,7 +13,7 @@ Status: implemented
 
 做法第 4 条：审批回执复用 A2，宿主只有在回应真正送达 Harness 后，才回复手机“已生效”。完成条件：手机上显示“已生效”的审批，Harness 一定收到了。
 
-动手前（`main@ab6da60b`）核对的事实：
+动手前（`main@4c902898`）核对的事实：
 
 - **手机的审批没接到驱动。** `task.respond` 进的是宿主 `remote_headless.rs` 的钩子审批登记表（`take_waterfall_answer`），只要登记表里还有这条，就回 `accepted: true`。结构化会话（Claude、Codex、OMP 的驱动）的待审批不在那张表里。[A2 笔记](../bug-fix/2026-11-16-a2-approval-answer-must-arrive.md)也写明，手机接驱动留给 D4。
 - **驱动的 `respond` 是同步的，只负责入队。** 结果靠会话事件报出来：写进 Agent 输入的是 `PermissionResolved`；没写进的是 `PermissionSendFailed`，`failed` 表示请求还开着，`ended` 表示随连接结束。另一端正在答，驱动返回 `AlreadyAnswered`；请求已经不在，返回 `UnknownRequest`。

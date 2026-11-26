@@ -14,7 +14,7 @@ Status: implemented
 
 全程对 GitHub 只发读请求。总纲（§7 第 6 问）定了 D 批先做 D1。
 
-动手前（`main@3424afb8`）核对的事实：
+动手前（`main@e26804ab`）核对的事实：
 
 - **Aeroric 不和 GitHub 的接口打交道。**
   - `core/src/git/` 只做本地 Git 和 `git` 命令的远端操作（推送、拉取）；

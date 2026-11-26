@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-目检报告在 `~/Documents/computer-use/2026-11-24-0019-aeroric-review-1124/report.md`。测的是 `b4f58b5b` 之前的构建（宿主 2026-11-23 21:56）。
+目检报告在 `~/Documents/computer-use/2026-11-24-0019-aeroric-review-1124/report.md`。测的是 `8730cefe` 之前的构建（宿主 2026-11-23 21:56）。
 
 **通过的：**
 - A1：新委派能选 Agent 配置和模型；

@@ -10,7 +10,7 @@ Status: implemented
 - 到 80% 时用量页变色，到顶时只通知一次；
 - 侧栏有一个“暂停所有 Agent”开关。
 
-动手前（`main@c22f85eb`）：
+动手前（`main@4cb07ebf`）：
 
 - [第一步](2026-11-21-e6-budget-rules.md)写好了规则；
 - [第二步](2026-11-21-e6-budget-applied.md)让宿主在开始无人值守的工作前检查，并执行全部暂停；还有 `budget.status`、`budget.set` 两个接口。App 里还看不到这些。

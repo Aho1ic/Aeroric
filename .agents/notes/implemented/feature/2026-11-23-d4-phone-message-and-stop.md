@@ -6,7 +6,7 @@ Status: implemented
 
 backlog §4.4-1 定了手机能发的几种意图：输入、批准或拒绝、中断、打开文件。手机任务页能看会话、改动和待审批，也能答审批，但不能给任务说话，也不能让它停下。
 
-动手前（`main@86be8052`）核对的事实：
+动手前（`main@71ae67cf`）核对的事实：
 - **`task.input` 只对终端任务管用：** 宿主（`CliRemoteHandle::task_input`）把文字包成粘贴序列写进 PTY。Aeroric 现在主要用的是 Codex、Claude、DSH、OMP 这类结构化会话，没有 PTY，这条消息送不到。
 - **桌面端怎么发、怎么停：**
   - 发消息走 `session.prompt`：消息进投递队列（R1-2，有回执，回合中发的排到下一轮），暂停所有 Agent 时拒收（E6），处理 `@` 引用（E12）；

@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[C7 第一步](2026-11-20-c7-skill-catalog-and-mounts.md)在宿主上做了 `skills.catalog` 和 `skills.mounted`，但 App 还看不到（`main@5a1b37c6`）。方案 C7 第 5 条还要求：逐个检查 Skill Hub、MCP 管理、插件管理的入口，如实记录，不留点了没反应的按钮。
+[C7 第一步](2026-11-20-c7-skill-catalog-and-mounts.md)在宿主上做了 `skills.catalog` 和 `skills.mounted`，但 App 还看不到（`main@4e776b69`）。方案 C7 第 5 条还要求：逐个检查 Skill Hub、MCP 管理、插件管理的入口，如实记录，不留点了没反应的按钮。
 
 逐个读代码后的结果：
 

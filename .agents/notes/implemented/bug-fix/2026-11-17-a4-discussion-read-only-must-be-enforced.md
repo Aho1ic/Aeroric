@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A4。2026-11-17 在 `main@9603b442` 加未提交的 A3 等改动上复核：
+[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A4。2026-11-17 在 `main@1e682f44` 加未提交的 A3 等改动上复核：
 
 - 讨论成员一律用权限档 `plan`（`core/crates/aeroric-host/src/session_live_services/discussion.rs:44` 的 `READ_ONLY`，建讨论记录和成员任务时写入）。[讨论模式](../feature/2026-11-12-discussion.md)的 Consequences 写的是"只读依赖各 Harness 自己的规划 / 只读模式，Aeroric 不额外拦截"。
 - 各族拿到 `plan` 后的实际情况：

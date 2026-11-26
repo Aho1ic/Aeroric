@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A3。2026-11-17 在 `main@9603b442` 加未提交的"交办选配置""ACP 握手诊断"改动上复核：
+[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A3。2026-11-17 在 `main@1e682f44` 加未提交的"交办选配置""ACP 握手诊断"改动上复核：
 
 - **Codex** `core/crates/aeroric-core/src/sessions/live/codex/map.rs:70–74`：`turn/completed` 的 `turn.status` 只认 `interrupted`、`failed`，其余值和字段缺失都记 `Completed`。Codex app-server 0.167.0 的 Schema 快照里 `TurnStatus` 是 `completed | interrupted | failed | inProgress`，`status` 必填；`inProgress` 出现在 `turn/completed` 上本身就不对，现在也记成完成。
 - **Codex 子代理** `codex/driver.rs:872–918`：子代理的 `turn/completed` 缺状态时默认 `completed`，未知值也在卡片上写"完成"。

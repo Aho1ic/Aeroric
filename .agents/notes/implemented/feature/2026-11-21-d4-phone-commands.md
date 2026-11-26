@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[D4 第一步](2026-11-21-d4-command-identity.md)让宿主按 `commandId` 去重、按 `hostEpoch` 判旧（`main@fad7b1f8`），但手机端还没带上这两项。方案 D4 第 1–3 条在手机这一侧要做到：
+[D4 第一步](2026-11-21-d4-command-identity.md)让宿主按 `commandId` 去重、按 `hostEpoch` 判旧（`main@aa241bce`），但手机端还没带上这两项。方案 D4 第 1–3 条在手机这一侧要做到：
 
 - 命令带设备生成的稳定编号，重发不变；
 - 命令带上它所基于的宿主启动；

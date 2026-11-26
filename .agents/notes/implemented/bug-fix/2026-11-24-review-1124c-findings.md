@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-目检报告在 `~/Documents/computer-use/2026-11-24-1952-aeroric-review-1124c/report.md`，测的是 `9bc498a6`。
+目检报告在 `~/Documents/computer-use/2026-11-24-1952-aeroric-review-1124c/report.md`，测的是 `ce0cc89e`。
 
 **通过的：**
 - “远程与手机”页平铺；

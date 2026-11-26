@@ -11,7 +11,7 @@ Status: implemented
 - 发布后每条有状态：已发布（带链接）、失败（带原因）、结果不明（去 GitHub 核对）；
 - PR 有新提交时拦下发布。
 
-动手前（`main@203531a7`）：
+动手前（`main@b9e4e0b1`）：
 
 - [第一步](2026-11-21-d2-publish-core.md)在 core 里做好了草稿、标记核对、逐条结果；
 - [第二步](2026-11-21-d2-publish-methods.md)给 App 加了 `github.writeDraft`、`writes`、`writeEdit`、`publish`；

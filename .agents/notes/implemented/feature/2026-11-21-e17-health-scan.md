@@ -6,7 +6,7 @@ Status: implemented
 
 [1118 调研](../../proposed/architecture/2026-11-19-new-addition-1118-research.md) E17：`aeroric-cli doctor --scan` 只读扫描数据目录，把失败的回合、卡住的投递、反复出现的错误按特征归组，给出一份报告。不调模型，不改数据。来源是 OMB 的哨兵。
 
-动手前（`main@85d99025`）核对的事实：
+动手前（`main@98cfeee7`）核对的事实：
 
 - `aeroric-cli doctor` 只看数据目录本身：卷、写租约、runtime 元数据、socket 是否在。不看任务和队列。
 - **失败的任务：** 在 `projects/<id>/tasks.json` 里，`status: failed`，原因在 `failureReason`，时间在 `completedAt`（毫秒）。`storage::tasks::load_tasks` 只读文件，不要求写租约。

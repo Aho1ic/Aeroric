@@ -8,7 +8,7 @@ Status: implemented
 
 报告 `2026-11-22-1421-aeroric-review-1122-review` 写道：审查者只能选“自动 / Claude Code / Codex”，选了 Claude Code 也没有连接或模型可选。提示词要求用 Magpie 的 `42/deepseek-flash`（Claude Code 用不了官方订阅），所以审查回环没开。定时任务也是这样，只能选 Agent。结果 C1–C3、D1 和 E16 的结果判定都没跑，因为它们都要先开一次审查或定时任务。
 
-动手前（`main@1239808f`）核对过：
+动手前（`main@436bb182`）核对过：
 
 - **审查：协议早就能带配置。** `ReviewerChoice::Named` 有 `agentConfigId` 和 `model`，宿主开审查会话时也会把它们写进新任务。缺的是两处：
   - `review.reviewers` 只列 Harness，App 的选择器只能选这几项；

@@ -6,7 +6,7 @@ Status: implemented
 
 2026-11-16 复测时，讨论"再来一轮"里 DSH 成员两次报"DSH 握手超时（30 秒没有回答）"；单独启动一个 DSH 会话 4 秒就回。没法判断是进程起得慢、`initialize` 没回，还是别的原因。
 
-当时的代码（`main@9603b442`，`core/crates/aeroric-core/src/sessions/live/acp/driver.rs` 的 `process()`）：
+当时的代码（`main@1e682f44`，`core/crates/aeroric-core/src/sessions/live/acp/driver.rs` 的 `process()`）：
 
 - 只有 `initialize` 有 30 秒超时；超时或失败只返回一句话，不记任何耗时。
 - `codex/rpc.rs` 的 `Transport::spawn` 把进程 stderr 的前 40 行写进宿主日志，但不带时间，也看不出是哪个会话的进程；握手失败时拿不到这个进程最后说了什么。

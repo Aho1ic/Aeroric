@@ -8,7 +8,7 @@ Status: implemented
 - store 里的 `files`、`gitChanges` 只有测试里的 `updateFilesAndGit` 填过；
 - 连接器也没读过宿主的这几个接口。
 
-宿主上这几个接口早就有了（`remote_headless.rs`），动手前（`main@fadbf0c9`）核对过：
+宿主上这几个接口早就有了（`remote_headless.rs`），动手前（`main@d6010b6c`）核对过：
 - **`project.files {projectId, path?}`：** 列一个目录，路径必须在项目里，文件夹排前面。
 - **`git.changes {projectId, taskId?}`：** `git status`，给了任务时用任务的 worktree。
 - **`git.diff {projectId, path, staged, taskId?}`：** 一个文件的差异，大小由 `bounded_file_diff` 限住。

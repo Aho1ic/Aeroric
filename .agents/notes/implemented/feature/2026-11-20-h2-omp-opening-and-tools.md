@@ -10,7 +10,7 @@ Status: implemented
 - **工具**：没有。`Route::runs_locally()` 对 OMP 为假，驱动也不接受工具服务器；
 - **能力表**：OMP 作为子会话和审查者只能写"有差异"。
 
-动手前（`main@6a464303`）核对的事实：
+动手前（`main@9cc364dc`）核对的事实：
 
 - OMP 18.12.0 有 `--append-system-prompt`，参数是路径时读文件。规则在 `system-prompt.ts` 的 `resolvePromptInput`：不含换行就先当路径试读。
 - agent 目录下的 `mcp.json` 支持 `${VAR}` 展开（H1 第二步已核对）。没设的 `${VAR}` 会原样保留，`${VAR:-}` 才变成空串。

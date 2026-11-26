@@ -13,7 +13,7 @@ Status: implemented
 
 方案也写了调研里最常见的失败：Agent 群无界扩张、循环等待、几个 Agent 同时写同一批文件。
 
-动手前（`main@6a20bced`）核对的事实：
+动手前（`main@5f877356`）核对的事实：
 
 - **委派只有一对一的父子关系**（`sessions/live/delegation/`），没有子任务之间的先后依赖。
 - **委派卡（`DelegationCard`）有现成的东西可用：**

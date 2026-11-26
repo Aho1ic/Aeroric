@@ -9,7 +9,7 @@ Status: implemented
 - 设置里能看到每种 Aeroric 能力在每个 Harness 上“该用的时候用了几成”；
 - 新的自动行为先以“候选”出现，能一键退回。
 
-动手前（`main@20d359c2`）核对的事实：
+动手前（`main@a5e8029d`）核对的事实：
 
 - **宿主侧已经有接口。** [H8 第二步](2026-11-21-h8-three-tiers-and-revert.md)做好了档位表和三个接口：`rollout.list`、`rollout.set`、`rollout.revert`。每个自动行为带当前档位、换档历史、判断次数和本来会触发的次数。
 - **App 里还看不到。** 没有任何界面显示这些，只能用 RPC 改。

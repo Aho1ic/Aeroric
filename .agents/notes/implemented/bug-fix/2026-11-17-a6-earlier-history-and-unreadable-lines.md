@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A6。2026-11-17 在 `main@9603b442` 加未提交的 A3–A5 等改动上复核：
+[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A6。2026-11-17 在 `main@1e682f44` 加未提交的 A3–A5 等改动上复核：
 
 - **历史只读前 24 页。** 宿主 `session.history`（`aeroric-host/src/services.rs` 的 `session_history`）每次整份读会话文件、全部解析，再按回复大小切页（一帧 1 MiB，页预算 640 KiB），游标是"还剩多少条更早的消息"。App 的 `SessionsClient.fullHistory` 最多翻 24 页，两个调用方（`LiveSessions.swift` 的 `historyWithStats`、`TaskWorkspaceView.swift` 的 `HostSessionRouteActions.loadPage`）只取消息和统计，`hasMore`、`nextCursor` 被丢掉。工具输出很长的会话，24 页之前的消息看不到，界面也不说。导入会话（`ImportBook.messages`，同样 24 页）一样。
 - **读不出的行静默消失。** 四族解析器遇到不是 JSON 的行都直接跳过：Claude、Codex（`sessions/claude.rs` 的 `parse_claude_session_line`、`parser.rs`）、omp（`omp.rs` 的 `parse_omp_session_lines`）、DSH（`dsh.rs` 的 `parse_dsh_session_lines`）。导入路径（`import.rs` 的 `messages`）同样。

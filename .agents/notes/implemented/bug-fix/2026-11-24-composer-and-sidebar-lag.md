@@ -8,7 +8,7 @@ Status: implemented
 - 在新建会话的输入框里用输入法打字很卡；
 - 拖动分界线改左侧栏宽度时动画很卡。
 
-查到的原因（`main@ac179f98`，代码阅读，没有用 Instruments 实测）：
+查到的原因（`main@083097c4`，代码阅读，没有用 Instruments 实测）：
 
 **输入法打字卡：**
 - **绑定一路连到窗口根：** 输入框（`ComposerCard` 里的 `TextEditor`）直接绑在 `draft.task.prompt` 上。这个绑定一路连到 `TaskWorkspaceView` 的 `@State draftBook`。

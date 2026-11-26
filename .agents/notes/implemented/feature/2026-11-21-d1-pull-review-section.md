@@ -15,7 +15,7 @@ Status: implemented
 
 方案第 8 条：Git 页加 PR 入口、快照视图和审查结论视图。
 
-动手前（`main@2affe710`）核对的事实：
+动手前（`main@c4ed1737`）核对的事实：
 
 - **宿主侧已经齐了。**
   - [第一步](2026-11-21-d1-pull-snapshots.md)有 `github.pullSnapshot`、`github.snapshots`；

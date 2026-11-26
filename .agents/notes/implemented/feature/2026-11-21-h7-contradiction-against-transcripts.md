@@ -6,7 +6,7 @@ Status: implemented
 
 [各 Harness 原生融合](../../proposed/architecture/2026-11-16-harness-native-capabilities.md) H7 第 3 条：整理时发现记忆和会话原文矛盾，提议替换并附原文位置，用 C1 做的定位。完成条件是：一条和录好的会话原文矛盾的记忆，产生一条带原文定位的替换提议。
 
-动手前（`main@754df87d`）核对的事实：
+动手前（`main@15730cb5`）核对的事实：
 
 - **抽取时已经能取代旧记忆。** 抽取一个会话时，模型能看到已有记忆，用 `supersedes` 指出被取代的那条（`extract.rs` 的规则第 3 条）。这条候选以待确认状态写入，用户确认时旧的那条变成“已被取代”（`store.rs` 的 `activate`）。
 - **但抽取这条路有两个漏洞：**

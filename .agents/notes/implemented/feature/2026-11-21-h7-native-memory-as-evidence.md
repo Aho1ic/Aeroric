@@ -8,7 +8,7 @@ Status: implemented
 
 §8 第 3 问已定：整理时把各家原生记忆文件当候选证据读；产出一律走提议和确认，不直接生效，不回写。路线文档 §6.4 原来写的是“只读并展示”“可选择导入为候选”，这一条要原地放宽。
 
-动手前（`main@72071ce1`）核对的事实：
+动手前（`main@7216ab41`）核对的事实：
 
 - `memory/native.rs::discover` 能找到这些文件：
   - Claude 的用户级 `CLAUDE.md`、这个项目的自动记忆 `projects/<编码后的项目路径>/memory/MEMORY.md`；

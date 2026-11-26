@@ -6,7 +6,7 @@ Status: implemented
 
 [待办第一批](./2026-11-15-todos.md)的交办只选 Agent 一族，会话用这一族的默认配置和模型。当时的理由是和定时任务保持一致，需要别的模型可以进会话再换。2026-11-16 复测时，交办出去的会话默认落到 `auto/gpt-6.1-sol`，想换只能进会话、停掉这一轮、换模型再发：交办的那一轮已经白跑了。
 
-当时的代码（`main@9603b442`）：
+当时的代码（`main@1e682f44`）：
 
 - 协议 `todo.assign {id, agent, model?}` 已经收 `model`，但 App 的交办弹窗只给选 Agent，从不传模型。
 - 宿主 `schedule::open_session` 走 `task.run`，带 `selectedModel`；`task.run` 不认配置，`NewTask.agent_config_id` 写死 `None`。

@@ -8,7 +8,7 @@ Status: implemented
 
 按总纲，H1–H3 应排在 C8 之前，实际顺序是 C 批先做完了。C8 已经有每次启动的工具清单，C9 已经有能力表的"Aeroric 工具"一项。
 
-动手前（`main@5b66207c`）读代码：
+动手前（`main@7bcf2532`）读代码：
 
 - **开场内容。** `set_instructions` 的返回值是"这次启动有没有接上系统层"的唯一证据，但没有存下来：
   - 没有交接简报时直接丢弃（`executor.rs` 的 `hand_handoff`）；

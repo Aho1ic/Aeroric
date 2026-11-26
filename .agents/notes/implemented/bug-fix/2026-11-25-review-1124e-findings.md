@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-目检报告在 `~/Documents/computer-use/2026-11-25-1456-aeroric-review-1124e/report.md`，测的是 `8a87b737`。桌面设置 A1–A5 全部通过；手机端两项没过。
+目检报告在 `~/Documents/computer-use/2026-11-25-1456-aeroric-review-1124e/report.md`，测的是 `b1bf9392`。桌面设置 A1–A5 全部通过；手机端两项没过。
 
 **B4：手机插话后点“停止这一轮”，Mac 接着跑了一分多钟。**
 - Claude 的会话记录（`agent-homes/…/c7c6ae71-….jsonl`）里的顺序：

@@ -217,7 +217,7 @@ Status: implemented
 
 ### 2026-11-17 锚点复核
 
-A1、A2 已落地（见 [A1](./2026-11-16-a1-delegation-card-follows-delivery.md)、[A2](./2026-11-16-a2-approval-answer-must-arrive.md)）。2026-11-16 另一条工作线（ACP/DSH、讨论第二到四批、待办、定时任务等 11 个提交）合进了 main。2026-11-17 在 `main@9603b442` 加未提交的"交办选配置"改动上，按内容重新定位了 A3–A11 的锚点。问题都还在，变化如下：
+A1、A2 已落地（见 [A1](./2026-11-16-a1-delegation-card-follows-delivery.md)、[A2](./2026-11-16-a2-approval-answer-must-arrive.md)）。2026-11-16 另一条工作线（ACP/DSH、讨论第二到四批、待办、定时任务等 11 个提交）合进了 main。2026-11-17 在 `main@1e682f44` 加未提交的"交办选配置"改动上，按内容重新定位了 A3–A11 的锚点。问题都还在，变化如下：
 
 | 片 | 现在的位置 | 和上面的说明相比 |
 |---|---|---|

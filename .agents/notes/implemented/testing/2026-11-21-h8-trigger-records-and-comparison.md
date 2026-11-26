@@ -11,7 +11,7 @@ Status: implemented
 
 完成条件里与这一步有关的两条：评测集在仓库里；一次描述修改能产出前后对比表。
 
-动手前（`main@271a425f`）核对的事实：
+动手前（`main@55a946cd`）核对的事实：
 
 - **评测集已在仓库里。** [C8 第三步](2026-11-20-c8-tool-trigger-eval.md)放了 `aeroric-cli/evals/tool-triggers.json`：21 个工具，127 条请求。
 - **运行器和假 Harness 也有。** 运行器在 `tool_eval.rs`，只在测试里编译；假 Harness 是关键词匹配。

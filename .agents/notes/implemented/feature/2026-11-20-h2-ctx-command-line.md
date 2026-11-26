@@ -11,7 +11,7 @@ Status: implemented
 
 完成条件是：`ctx` 与 MCP 对同一输入返回同样的结构化结果，有一条对照测试。
 
-动手前（`main@7f18cecb`）读代码：
+动手前（`main@5cc00553`）读代码：
 
 - MCP 服务（`aeroric-cli mcp-context`）的工具调用在 `mcp_context.rs` 的 `call_tool`。它包含：
   - 工具名到宿主方法的映射；

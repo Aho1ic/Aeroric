@@ -15,7 +15,7 @@ Status: implemented
 - OMB #3142：MCP 起不来时只说“超时”；
 - CU 2026-11-13 记录过 DSH 等 `tools/list` 卡住整个回合。
 
-动手前（`main@b5766a2f`）核对的事实：
+动手前（`main@c4894925`）核对的事实：
 
 - **Codex** 每个 MCP 服务启动时都会发 `mcpServer/startupStatus/updated`：
   - 内容是 `{name, status, error?, failureReason?}`；

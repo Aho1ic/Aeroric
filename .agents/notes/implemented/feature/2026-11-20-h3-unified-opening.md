@@ -6,7 +6,7 @@ Status: implemented
 
 [各 Harness 原生融合](../../proposed/architecture/2026-11-16-harness-native-capabilities.md) 的 H3 要求：换一个 Harness 开会话，Agent 一样知道用户的偏好和项目约定，一样知道这里有 Wiki 和以前的会话可查。
 
-动手前（`main@2a0ebade`）的情况：
+动手前（`main@553581e3`）的情况：
 
 - **开场只有记忆档案。** `hand_brief` 只拼记忆档案（上限 1200 字），有交接简报时接在后面；用户没有记忆时什么都不给。
 - **"Aeroric 能做什么"只写在 MCP 服务说明里。** 那一句在 `mcp_context.rs` 的 `instructions()` 里。Codex 只给模型看这句，并据此决定加载哪组工具（R4-3）。系统层里没有这句，没接工具的会话完全看不到。

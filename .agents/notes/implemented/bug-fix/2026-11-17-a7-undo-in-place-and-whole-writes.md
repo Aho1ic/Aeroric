@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A7。2026-11-17 在 `main@9603b442` 加未提交的 A3–A6 等改动上复核 `core/crates/aeroric-core/src/sessions/live/turn_ledger.rs`：
+[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A7。2026-11-17 在 `main@1e682f44` 加未提交的 A3–A6 等改动上复核 `core/crates/aeroric-core/src/sessions/live/turn_ledger.rs`：
 
 - **已是目标内容也报"又改过"。** `planned` 对每个文件只问一件事：当前内容是不是这一轮留下的样子（撤回撤销时是"撤销后的样子"）。是就写回，不是一律跳过，原因写"这一轮之后又改过"。用户手动改回去的文件、上一次撤销已经写好的文件，都被当成冲突跳过。
 - **撤销做到一半就卡住。** `apply` 逐个写文件，遇到第一个失败就用 `?` 返回错误：

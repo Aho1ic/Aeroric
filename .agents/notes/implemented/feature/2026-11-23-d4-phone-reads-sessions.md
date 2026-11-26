@@ -6,7 +6,7 @@ Status: implemented
 
 D4 八步做完，手机能看到项目和任务列表、答审批、新建任务，但点不进任务。[第八步笔记](2026-11-23-d4-phone-follows-live-sessions.md)的局限里写着：“会话消息、终端、文件和 Git 仍不随推送更新”。
 
-动手前（`main@c7357b63`）核对的事实：
+动手前（`main@123ee5dd`）核对的事实：
 - **宿主早有接口，手机一个没用：** `session.messages`、`project.files`、`git.changes`、`git.diff` 都在宿主上（`remote_headless.rs`），手机端没有任何调用。手机 store 里的 `sessionMessages: [String]` 只在清空时出现过。
 - **`session.messages` 的 DSH、OMP 分支有错：**
   - 对 `Result<Vec<SessionMessage>, String>` 调了 `into_iter()`，整份消息列表被当成一个元素，回给调用方的是 `[[…]]`；

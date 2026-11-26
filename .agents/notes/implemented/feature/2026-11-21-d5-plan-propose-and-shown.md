@@ -9,7 +9,7 @@ Status: implemented
 - 第 8 条：计划由用户创建或确认；Agent 可以通过工具**提议**一个计划，用户确认后才生效。
 - “用户会看到”：拆成几个工作单元，画出谁依赖谁；任何时候都能看到每个单元为什么在等。
 
-动手前（`main@14a28f2f`）：
+动手前（`main@097260f6`）：
 
 - [第一步](2026-11-21-d5-work-plan-rules.md)有了规则；
 - [第二步](2026-11-21-d5-plans-advance.md)有了 `delegation.plans`、`planSave`、`planConfirm`，以及确认后自动推进。

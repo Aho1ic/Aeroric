@@ -12,7 +12,7 @@ Status: implemented
   - 会话统计里模型用时和输出速度都是“—”。
 - **页面被刷屏：** 一轮里“思考 · n 字”和“已执行 2 个指令”交替排下去，几十行都是这两种，没有用的信息把 Agent 说的话挤走了。
 
-核对的事实（`main@ac179f98`）：
+核对的事实（`main@083097c4`）：
 - **用量：**
   - `ClaudeMapper` 只在 `result`（一轮结束）时把这轮的 `usage` 加进总数，发一次 `Usage`；
   - 回合中每条 `assistant` 消息带的 `message.usage`，只用来算上下文的估计（`last_context`），没有发出去；

@@ -13,7 +13,7 @@ Status: implemented
 
 来源是 LinkSense 的跨任务引用和它的 #59：Agent 拿另一个任务的结论时，读到的是带页码、带工具行的分页结果，还得自己去拼。
 
-动手前（`main@2ce5b8f7`）核对的事实：
+动手前（`main@28774f07`）核对的事实：
 
 - `read_session` 由宿主的 `context.readSession` 处理：默认返回最近 40 条消息，工具调用以“[工具] …”一行出现，每条最多 4000 字，被截断的带 `nextOffset`。
 - Agent 的回复如果长，要分几次续读，再自己拼回原文。

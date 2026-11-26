@@ -17,7 +17,7 @@ Status: implemented
 
 完成条件之一：不存在重连后重复执行的命令。
 
-动手前（`main@e8448b71`）核对的事实：
+动手前（`main@b43695d9`）核对的事实：
 
 - **请求入口：** 手机的 RPC 经端到端加密通道进来，在 `remote/server.rs::handle_request` 解析后交给 `remote/rpc.rs::dispatch`，一个方法一个分支。会改东西的方法有：任务输入、审批、取消、完成、新建、续跑，以及置顶、写文件、Agent 配置、推送登记。
 - **宿主一侧没有启动标识。** 手机的 `CompanionStore` 已经按 `hostEpoch` 判断审批是否过期，可是这个值宿主从来没给过。

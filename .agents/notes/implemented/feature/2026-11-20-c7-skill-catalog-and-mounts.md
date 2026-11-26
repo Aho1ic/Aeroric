@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[批次 C 方案](../../proposed/feature/2026-11-15-adoption-c-memory-gateway-skills.md)第 C7 片要求：能列出全部技能及其来源、版本和摘要；任意一次会话，能查到它启动时挂载的每个技能及版本。动手前（`main@f799d71d`）：
+[批次 C 方案](../../proposed/feature/2026-11-15-adoption-c-memory-gateway-skills.md)第 C7 片要求：能列出全部技能及其来源、版本和摘要；任意一次会话，能查到它启动时挂载的每个技能及版本。动手前（`main@267efbf2`）：
 
 - **四种来源各管各的，没有统一视图。**
   - 内置技能编译进 App（`extensions/builtin_skills.rs`），"技能"页的 `builtinSkills.list` 只列内置的；

@@ -12,7 +12,7 @@ Status: implemented
 
 完成条件是界面上的清单与启动参数里实际注入的一致，并由测试比较两者。
 
-动手前（`main@aaa7000d`）：
+动手前（`main@6be6cd5d`）：
 
 - **注入情况不留痕迹。** Aeroric 的 Context 工具由执行器在启动时交给会话（`give_context` → `set_context_server`）。只有本机的 Claude、Codex 和 ACP 会话会接受；OMP 用的是默认实现，返回不接受；远端会话不给。结果只用来决定要不要收回令牌，不留下记录。
 - **工具分组的条件只在命令行进程里。** `aeroric-cli mcp-context` 在 `tools/list` 时问宿主四个问题，按回答决定提供哪几组工具：

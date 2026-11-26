@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A1。2026-11-16 在 `main@d5126573` 上复核，位置与 `8d4391c3` 相同：
+[批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A1。2026-11-16 在 `main@175f9451` 上复核，位置与 `8d4391c3` 相同：
 
 - `core/crates/aeroric-core/src/sessions/live/delegation/mod.rs:658`（`send`）和 `:1046`（`try_return` 自动回传）先写 `card.sent = true` 并发布，再另起线程调 `host.prompt`。
 - `core/crates/aeroric-host/src/session_live_services/delivery.rs:92–114`：`enqueue_internal` 把入队返回的 `Delivery` 丢掉（`.map(|_| ())`），`source_ref` 传 `None`。

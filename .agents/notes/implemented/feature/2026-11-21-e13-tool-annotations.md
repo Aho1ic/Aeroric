@@ -6,7 +6,7 @@ Status: implemented
 
 [1118 调研](../../proposed/architecture/2026-11-19-new-addition-1118-research.md) E13：给 Context 工具标上 MCP 注解 `readOnlyHint`、`destructiveHint`、`openWorldHint`。Codex 等客户端可以据此决定一个工具要不要审批。来源是 agent-knowledge-mcp。
 
-动手前（`main@774623e0`）核对的事实：
+动手前（`main@ee47e76a`）核对的事实：
 
 - 方案写的是 21 个工具，现在是 22 个，D5 加了 `plan_propose`。
 - Context 服务器（`aeroric-cli` 的 `mcp_context.rs`）的 `tools/list` 只回名字、说明和参数结构，没有注解。

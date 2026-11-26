@@ -9,7 +9,7 @@ Status: implemented
 1. 管理界面：加 MCP 服务器、装包、确认来源，用不上的那家写明原因（方案第 3、5 条的“用户会看到”）。
 2. 第 4 条：OMP 会自己导入用户其他 Harness 的 MCP 配置，同名服务器可能出现两次，要写明哪个生效。
 
-动手前（`main@1bdabd18`）核对的事实：
+动手前（`main@e93f2f9d`）核对的事实：
 
 - 界面上的 `MCPSettingsView`、`ExtensionStore` 是 P8-01 留下的空壳：应用创建了 store，但没有页面用它，也没有接到核心层。
 - Agent 配置页有“技能”等分页；“技能”页由 `BuiltinSkillBook` 加宿主的 `builtinSkills.*` 撑起来。

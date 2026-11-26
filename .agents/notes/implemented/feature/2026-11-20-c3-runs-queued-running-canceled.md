@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-[批次 C 方案](../../proposed/feature/2026-11-15-adoption-c-memory-gateway-skills.md)第 C3 片要求：任意时刻整理记录都与实际进行的整理一致，每条候选的去向都能查到。动手前的情况（`main@b1800c0b`）：
+[批次 C 方案](../../proposed/feature/2026-11-15-adoption-c-memory-gateway-skills.md)第 C3 片要求：任意时刻整理记录都与实际进行的整理一致，每条候选的去向都能查到。动手前的情况（`main@dd7f4cd1`）：
 
 - **只有结束态。** `MemoryRunState` 只有完成、部分成功、失败、跳过。一次抽取要等模型回复、写完，才在记录里出现一行。模型调用常常要几十秒，这段时间里记录看不出有整理在进行。
 - **自动巡检是串行的。** 巡检一次可能找到好几个待整理的会话，一个接一个做。排在后面的那些，记录里看不出来。

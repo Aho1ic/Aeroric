@@ -10,7 +10,7 @@ Status: implemented
 - **离开或重启后不丢：** 点开别的页面再回到新建会话，或者退出 App 再打开，选择都还在；
 - **新建项目：** 选完文件夹后显示新建会话，不显示任务列表。
 
-核对的事实（`main@ac179f98`）：
+核对的事实（`main@083097c4`）：
 - **只在发出成功后才记：** `NewSessionDraftBook` 只在会话发出成功（`acknowledge`、`reconcileAccepted`）后，才把选择记成这个项目的偏好。选了没发，下一个新建会话还是上次发出时的选择。
 - **切 Harness 会重选：** `NewSessionHome.selectHarness` 一律选新 Harness 的第一个可用配置，模型、思考强度换成那个配置的默认值。权限要求“为当前 Agent 明确选择”，切过去以后算没选。
 - **同一个连接有两个配置：** 连接在每个 Harness 下各派生一个配置，id 是 `agent-config:via-<harness>-<连接哈希>`，同一个连接的哈希相同。网关负责把 Codex 的 Responses 和 Claude 的 Messages 转到连接的协议上。所以“换到兼容格式”就是换到同一个连接在另一个 Harness 下的那个配置。

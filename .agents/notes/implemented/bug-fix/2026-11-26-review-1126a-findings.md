@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-目检报告在 `~/Documents/computer-use/2026-11-26-1140-aeroric-review-1126a/report.md`，测的是 `a3f4df05`。
+目检报告在 `~/Documents/computer-use/2026-11-26-1140-aeroric-review-1126a/report.md`，测的是 `88aff625`。
 
 **通过的：**
 - R1 收到 SIGTERM 时 App 和宿主 0.5 秒内一起退出；

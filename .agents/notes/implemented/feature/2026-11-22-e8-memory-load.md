@@ -6,7 +6,7 @@ Status: implemented
 
 [1118 调研](../../proposed/architecture/2026-11-19-new-addition-1118-research.md) E8（并入 C1–C3）要求记忆页有加载用量，例如“本次会话带入 3.2k / 6k 字，另有 12 条没带上”。来源是 OMB 记忆，以及 agent-knowledge-mcp 有上限的基础上下文：注入时返回实际带入的条目和截断情况（`sources`、`truncated`）。
 
-E8 的其余几条，动手前（`main@aae2e84d`）核对过，都已经有了：
+E8 的其余几条，动手前（`main@6a7d25dd`）核对过，都已经有了：
 
 | 要求 | 已由谁完成 |
 |---|---|

@@ -6,7 +6,7 @@ Status: implemented
 
 backlog §4.4-8 定了“远程写文件默认关闭”。但做手机“文件与 Git”页时（见 [那一步的笔记](../feature/2026-11-23-d4-phone-files-and-git.md)）查出，宿主上没有这道门。
 
-动手前（`main@35c1f917`）核对的事实：
+动手前（`main@f8b90015`）核对的事实：
 - **宿主照写：** 已配对的设备发 `project.writeFile {projectId, path, content}`，宿主就写：
   - 路径限在项目里，只能写已存在的普通文件，最多 200 KB；
   - 写完记一条审计；

@@ -8,7 +8,7 @@ Status: implemented
 
 第一步（[E12 第一步笔记](2026-11-21-e12-latest-reply.md)）已经让 `read_session` 能只读另一个会话 Agent 的最后一条回复。
 
-动手前（`main@b8d3bd1f`）核对的事实：
+动手前（`main@48d59f2b`）核对的事实：
 
 - `session.prompt` 的参数是 `{taskId, text, mode?}`，结构是 `deny_unknown_fields`。消息先进投递队列，轮到它时由 `send_user` 交给驱动。
 - `send_user` 交出去之前，会在消息前面加两样东西：

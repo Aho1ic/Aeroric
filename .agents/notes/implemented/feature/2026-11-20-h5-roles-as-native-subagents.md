@@ -11,7 +11,7 @@ Status: implemented
 3. 把角色库投影成各家的原生子代理定义；
 4. `delegate` 的说明讲清用途。
 
-动手前（`main@2072c6bb`）核对的事实：
+动手前（`main@52d5c991`）核对的事实：
 
 - **角色库**（`delegation/roles.rs`）：六个内置角色。
   - 调研员：同族，只读；

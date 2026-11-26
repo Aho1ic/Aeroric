@@ -6,7 +6,7 @@ Status: implemented
 
 [批次 A](./2026-11-15-adoption-a-truthful-state.md) 的 A5 原题是"随手记 RAG 搜索接通"。批次笔记的判断是：Swift 调 `notebook.rag.stats/search/neighbors`，宿主注册的是 `notebook.rag_stats/rag_search/rag_neighbors`；工作区建 `RAGSearchView()` 时没传搜索回调。要做的是：改方法名、接上回调、加一条方法名检查。
 
-2026-11-17 在 `main@9603b442` 加未提交的 A3、A4 等改动上复核，情况和批次笔记的设想不同：
+2026-11-17 在 `main@1e682f44` 加未提交的 A3、A4 等改动上复核，情况和批次笔记的设想不同：
 
 - **漂移不止 RAG 三个。** 把 `macos/AeroricKit/Sources` 和 `ios/AeroricCompanionKit/Sources` 里所有 `request("…")`、`call("…")` 的方法名字面量，和 `core/crates/*/src` 里出现过的带点字符串对照，有 17 个对不上，全在 `AeroricClient/NotebookClient.swift`。Swift 写的是 `notebook.<模块>.<动作>`，宿主注册的是 `notebook.<模块>_<动作>`：
   - RAG：`rag.stats`、`rag.search`、`rag.neighbors`

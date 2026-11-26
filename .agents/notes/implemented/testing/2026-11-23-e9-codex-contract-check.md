@@ -10,7 +10,7 @@ Status: implemented
 
 第二步要真实二进制，在“测试 VM 暂停、不碰真实 Agent 配置”期间不能跑。第一步只用仓库里的快照就能做。
 
-动手前（`main@7c1defe3`）核对的事实：
+动手前（`main@8ef73abd`）核对的事实：
 - `contracts/codex/` 有两份快照：`app-server-0.162.1` 是支持的最老版本，`app-server-0.167.0` 是核对过的最新版本。每份都是 `codex app-server generate-json-schema` 的四个文件。
 - 已有的 `codex_methods_exist_in_the_snapshot` 只查方法名在不在：
   - 驱动调用的 10 个请求、要回答的 3 个请求、要听的 9 个通知；

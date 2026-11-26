@@ -6,7 +6,7 @@ Status: implemented
 
 [各 Harness 原生融合](../../proposed/architecture/2026-11-16-harness-native-capabilities.md) 的 H6 要的是：在 Aeroric 里装一个插件或加一个 MCP 服务器，所有 Harness 的新会话都能用，不用到每家的配置里再配一遍；某一家用不上，写明原因。
 
-动手前（`main@d107bfe3`）核对的事实：
+动手前（`main@15282fa3`）核对的事实：
 
 - **Aeroric 没有用户 MCP 服务器的存储。** `extensions/mcp.rs` 只有校验和掩码两个纯函数。界面上的 `MCPSettingsView`、`ExtensionStore` 是 P8-01 留下的，应用里创建了这个 store 但没有页面用它，也没有接到核心层。
 - **`extensions/trust.rs` 的判定只适用于技能**：写入范围必须在 `skills/` 下，否则拒绝。它不能直接用来判断一个包能不能运行命令。

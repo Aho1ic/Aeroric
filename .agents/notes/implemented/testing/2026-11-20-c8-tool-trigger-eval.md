@@ -11,7 +11,7 @@ Status: implemented
 - 真实 Harness 的评测记为 NOT RUN，并写明需要的条件；
 - 评测集放在仓库里，以后改工具描述时作回归输入。
 
-动手前（`main@c40b09e0`），仓库里没有这样的评测集。以前的工具评测都是用真 Harness 跑完、把结果写进笔记，例如 [Wiki](2026-11-10-wiki-agent-eval.md)、[参考库](2026-11-13-reference-library-eval.md)、[Smart Friend](2026-11-13-smart-friend-eval.md)。题目散在各篇笔记里，不能重复跑。改了某个工具的描述，也无法知道别的工具会不会被抢走或误触发。
+动手前（`main@dd1707bc`），仓库里没有这样的评测集。以前的工具评测都是用真 Harness 跑完、把结果写进笔记，例如 [Wiki](2026-11-10-wiki-agent-eval.md)、[参考库](2026-11-13-reference-library-eval.md)、[Smart Friend](2026-11-13-smart-friend-eval.md)。题目散在各篇笔记里，不能重复跑。改了某个工具的描述，也无法知道别的工具会不会被抢走或误触发。
 
 ## Decision
 

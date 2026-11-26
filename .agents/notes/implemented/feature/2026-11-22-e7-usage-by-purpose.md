@@ -13,7 +13,7 @@ Status: implemented
 
 做法里写：网关的每条用量记录加上 `purpose`；另外核对托管 Codex HOME 的 `features.memories`，Codex 的原生记忆默认应关闭。
 
-动手前（`main@4b1d92f9`）核对的事实：
+动手前（`main@d04e81a7`）核对的事实：
 
 - C4 已经让网关按每次尝试记账（`router_attempts`），用量页“网关请求”一节列出每个请求和它的尝试。但没有用途，也不知道请求是哪个任务发的。
 - 每个经网关的请求都带着任务令牌：`task_tokens::lookup` 能查到任务 id。签发令牌的地方有 7 处。

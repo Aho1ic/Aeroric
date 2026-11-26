@@ -9,7 +9,7 @@ Status: implemented
 1. 原生子代理和 `delegate` 开的子会话列在一起，各自标明谁在管理；没有结构化打断方法的，不给打断按钮。
 2. 子代理写到黑板上的内容，标明是哪个子代理写的。
 
-动手前（`main@f6c71ca7`）核对的事实：
+动手前（`main@f663f132`）核对的事实：
 
 - **原生子代理已经有统一的更新**：`SessionUpdateKind::Subagent { id, title, status, detail }`。
   - Claude 的任务事件映射成它（`claude/map.rs`），后台命令也走这条路，标题带“后台命令：”前缀；
