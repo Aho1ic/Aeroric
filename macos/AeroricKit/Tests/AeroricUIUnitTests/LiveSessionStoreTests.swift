@@ -22,8 +22,11 @@ private class FakeLiveActions: LiveSessionActions {
         return batches.isEmpty ? LiveUpdatesBatch(updates: [], latestSeq: after) : batches.removeFirst()
     }
     var failHistory = false
+    /// 1126a: runs when history is read, to see what the page shows then.
+    var onHistory: (() -> Void)?
     func history(taskID: String) async throws -> [AeroricUI.SessionMessage] {
         calls.append("history")
+        onHistory?()
         if failHistory { throw LiveSessionError.unsupported("帧过大") }
         return historyValue
     }
@@ -331,6 +334,33 @@ final class LiveSessionStoreTests: XCTestCase {
         XCTAssertEqual(actions.calls, ["updates 2", "state", "history"])
         XCTAssertEqual(store.model?.cursor, 40)
         XCTAssertEqual(store.history, [user])
+    }
+
+    /// 1126a: 停止 in the title bar closes the session, and the next poll
+    /// reads it again from scratch. History comes in before the live rows
+    /// go: dropping them first left the page much shorter, the scroll
+    /// position below the content, and the conversation blank.
+    func testAResyncDropsTheLiveRowsOnlyOnceHistoryIsIn() async {
+        let actions = FakeLiveActions(state: state(seq: 0))
+        let store = LiveSessionStore(taskID: "t", actions: actions)
+        await store.open()
+        actions.batches = [LiveUpdatesBatch(updates: [
+            update(1, .turnStarted(turnId: "u")),
+            update(2, .messageChunk(messageId: "m", role: "assistant", text: "working")),
+        ], latestSeq: 2)]
+        await store.poll()
+        let liveRows = store.model?.items.count ?? 0
+        XCTAssertGreaterThan(liveRows, 0)
+
+        var rowsWhileReading: Int?
+        actions.onHistory = { rowsWhileReading = store.model?.items.count }
+        actions.historyValue = [user]
+        actions.batches = [LiveUpdatesBatch(updates: [], latestSeq: 0, gapOldestAvailable: 1)]
+        await store.poll()
+        XCTAssertEqual(rowsWhileReading, liveRows, "the live rows are still shown while history is read")
+        XCTAssertEqual(store.model?.items.count, 0)
+        XCTAssertEqual(store.history, [user])
+        XCTAssertEqual(store.resyncs, 1, "the page lands on the latest message")
     }
 
     func testMoreWaitingIsReportedSoTheLoopDoesNotSleep() async {

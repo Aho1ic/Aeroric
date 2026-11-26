@@ -416,6 +416,9 @@ public struct LiveSessionView: View {
                     if old == 0 || atBottom { scroller.scrollTo(Self.bottomID, anchor: .bottom) }
                 }
                 .onChange(of: store.pending.count) { _, count in if count > 0 { scroll(scroller, to: Self.bottomID) } }
+                // 1126a: read again from scratch (停止 in the title bar closes
+                // the session): land on the latest message, as on opening.
+                .onChange(of: store.resyncs) { _, _ in scroller.scrollTo(Self.bottomID, anchor: .bottom) }
                 .onChange(of: focusApproval) { _, id in if let id { scroll(scroller, to: "approval.\(id)") } }
                 .onReceive(NotificationCenter.default.publisher(for: .aeroricTurnsChanged)) { note in
                     guard note.userInfo?["taskID"] as? String == store.taskID else { return }

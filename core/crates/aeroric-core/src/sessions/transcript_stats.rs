@@ -722,7 +722,14 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
                     })
                     .collect();
                 if results.is_empty() {
-                    if value["isMeta"] != true && !super::claude::is_interrupt_marker(message) {
+                    if super::claude::is_interrupt_marker(message) {
+                        // 1126a: Claude's note after a stop ends the turn as
+                        // stopped; the header said 已完成 while the task said
+                        // 已中断.
+                        if let Some(turn) = stats.turns.last_mut() {
+                            turn.interrupted = true;
+                        }
+                    } else if value["isMeta"] != true {
                         clock.start_turn(&mut stats, at);
                         ledger.start_turn();
                     }
@@ -1117,6 +1124,8 @@ mod tests {
         ];
         let stats = claude(&lines(&raw)).unwrap();
         assert_eq!(stats.turns.len(), 1);
+        // 1126a: the note marks the turn it ends as stopped.
+        assert!(stats.turns[0].interrupted);
         let mut messages = Vec::new();
         for line in lines(&raw) {
             crate::sessions::claude::parse_claude_session_line(&line, &mut messages);

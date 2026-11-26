@@ -265,6 +265,10 @@ public final class LiveSessionStore {
     /// turn ran.
     public private(set) var historyItems: [TranscriptItem] = []
     public private(set) var historyTurns: [TranscriptTurn] = []
+    /// 1126a: bumped each time the page was read again from scratch (a gap,
+    /// a closed session); the page then lands on the latest message, as it
+    /// does when it opens.
+    public private(set) var resyncs = 0
     public private(set) var model: LiveSessionModel?
     public private(set) var state: LiveSessionState?
     public private(set) var approvals = LiveApprovalMachine()
@@ -463,10 +467,15 @@ public final class LiveSessionStore {
             self.state = state
             var fresh = model ?? LiveSessionModel(state: state)
             fresh.resync(state)
+            // 1126a: history first, then the live rows go, in one update. The
+            // other way round the page first lost the live rows (much
+            // shorter), the scroll position stayed below the content, and
+            // 停止 in the title bar left the conversation blank.
+            await reloadHistory()
             model = fresh
             retainApprovals(pending: state.pending)
-            await reloadHistory()
             baseline = LiveHistoryMerge.assistantCount(history)
+            resyncs &+= 1
             // Review 2026-11-22: a check that ran before the page opened (a
             // commands-only one has no turn record to show it otherwise).
             if let update = try? await actions.lastAutoCheck(taskID: taskID) {
