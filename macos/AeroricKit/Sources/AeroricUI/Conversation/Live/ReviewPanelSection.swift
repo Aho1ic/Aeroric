@@ -43,6 +43,12 @@ public struct ReviewPanelModel: Equatable, Sendable {
     }
 
     /// 2026-11-22: a configuration's entry in the picker.
+    /// E2 (2026-11-26): what turning the fact check on does.
+    public static let factCheckHelp = "打开后，有阻断意见的审查轮在发给写代码的会话之前，先用记忆“整理设置”里的分析模型对照改动核查一遍："
+        + "只删两种意见：引用的代码不在这次改动里，或改动里有一行字面上直接驳倒它。"
+        + "并发、内存安全、声明一致、行为或兼容性变化、未使用的参数、安全类，以及上一轮提过的意见一律不删。"
+        + "删掉的意见留在审查卡上，可以逐条看依据。"
+
     public static func configurationTitle(_ config: LiveReviewerConfiguration) -> String {
         config.sameFamily ? "\(config.title)（同族）" : config.title
     }
@@ -105,6 +111,8 @@ public struct ReviewPanelModel: Equatable, Sendable {
 
 public enum ReviewPanelAction: Equatable, Sendable {
     case setEnabled(Bool)
+    /// E2 (2026-11-26): the fact check of blocking findings.
+    case setFactCheck(Bool)
     case pick(LiveReviewerChoice)
     case request
     case open(String)
@@ -149,6 +157,28 @@ struct ReviewPanelSection: View {
                 .frame(height: 30)
                 .background(Capsule(style: .continuous).fill(AeroricColor.layer2))
                 .help("打开后，每个改了文件的回合结束时，由另一族的 Agent 只读审查改动；会用你的账号调用模型")
+                if settings.enabled {
+                    HStack(spacing: AeroricSpace.m) {
+                        Image(systemName: "checkmark.shield")
+                            .font(.system(size: AeroricType.secondary))
+                            .foregroundStyle(AeroricColor.textSecondary)
+                            .frame(width: 16)
+                        Text("核查意见")
+                            .font(.system(size: AeroricType.secondary))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Toggle("核查意见", isOn: Binding(get: { settings.factCheck },
+                                                     set: { onAction(.setFactCheck($0)) }))
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            .labelsHidden()
+                            .accessibilityIdentifier("progress.review.fact-check")
+                    }
+                    .padding(.horizontal, AeroricSpace.l)
+                    .frame(height: 30)
+                    .background(Capsule(style: .continuous).fill(AeroricColor.layer2))
+                    .help(ReviewPanelModel.factCheckHelp)
+                }
                 HStack(spacing: AeroricSpace.m) {
                     CapsulePicker(title: model.reviewerTitle, systemImage: "person.crop.circle.badge.checkmark") {
                         Button("自动（优先不同族）") { onAction(.pick(.auto)) }

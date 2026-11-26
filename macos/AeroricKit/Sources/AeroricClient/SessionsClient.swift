@@ -327,11 +327,12 @@ extension SessionsClient {
     /// B4-1: change a task's review settings; answers the settings in force.
     @discardableResult
     public func setReview(taskId: String, enabled: Bool? = nil, reviewer: LiveReviewerChoice? = nil,
-                          paused: Bool? = nil) async throws -> LiveReviewSettings? {
+                          paused: Bool? = nil, factCheck: Bool? = nil) async throws -> LiveReviewSettings? {
         var params: [String: JSONValue] = ["taskId": .string(taskId)]
         if let enabled { params["enabled"] = .bool(enabled) }
         if let reviewer { params["reviewer"] = reviewer.json }
         if let paused { params["paused"] = .bool(paused) }
+        if let factCheck { params["factCheck"] = .bool(factCheck) }
         let frame = try await connection.request("review.set", params: .object(params))
         return LiveReviewSettings.decode(frame.result["settings"])
     }

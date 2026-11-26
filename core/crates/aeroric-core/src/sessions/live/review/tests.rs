@@ -17,6 +17,9 @@ struct FakeHost {
     sent: Mutex<Vec<(String, String)>>,
     fail_start: Mutex<bool>,
     starts: Mutex<u32>,
+    /// E2: what the analysis model answers the fact check, and what it was asked.
+    fact_answer: Mutex<Option<Result<String, String>>>,
+    fact_asked: Mutex<Vec<String>>,
 }
 
 impl ReviewHost for FakeHost {
@@ -43,6 +46,18 @@ impl ReviewHost for FakeHost {
         self.sent.lock().push((task_id.into(), text));
         Ok(())
     }
+    fn fact_check(&self, _system: &str, user: &str) -> Result<FactCheckAnswer, String> {
+        self.fact_asked.lock().push(user.to_string());
+        let answer = self
+            .fact_answer
+            .lock()
+            .clone()
+            .expect("no fact check answer set");
+        answer.map(|text| FactCheckAnswer {
+            text,
+            model: Some("cheap-model".into()),
+        })
+    }
 }
 
 struct Rig {
@@ -59,6 +74,7 @@ fn rig(enabled: bool, paused: bool) -> Rig {
             enabled,
             reviewer: ReviewerChoice::Auto,
             paused,
+            fact_check: false,
         },
     );
     let reviews = ReviewLoop::new(Arc::new(Quiet));
@@ -902,4 +918,148 @@ fn review_messages_say_whose_they_are_and_defuse_imitations() {
         prompt::REVIEW_MARKER
     )));
     assert_eq!(ask.matches("[Aeroric").count(), 1, "{ask}");
+}
+
+/// E2 (2026-11-26): a repository whose turn added a retry cap to src/a.rs.
+fn retry_cap_turn() -> (std::path::PathBuf, TurnDiff) {
+    let dir = std::env::temp_dir().join(format!("aeroric-fc-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let git = |args: &[&str]| -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(
+        dir.join("src/a.rs"),
+        "fn send() {\n    loop {\n        post();\n    }\n}\n",
+    )
+    .unwrap();
+    git(&["add", "-A"]);
+    let before = git(&["write-tree"]);
+    std::fs::write(
+        dir.join("src/a.rs"),
+        "fn send() {\n    let mut attempt = 0;\n    loop {\n        if attempt >= MAX_RETRIES {\n            return;\n        }\n        attempt += 1;\n        post();\n    }\n}\n",
+    )
+    .unwrap();
+    git(&["add", "-A"]);
+    let after = git(&["write-tree"]);
+    let mut changed = diff(&["src/a.rs"]);
+    changed.top = dir.clone();
+    changed.before = before;
+    changed.after = after;
+    (dir, changed)
+}
+
+const CAP_FINDINGS: &str = "```json\n{\"verdict\":\"changes\",\"files\":[{\"path\":\"src/a.rs\",\"status\":\"reviewed\"}],\"findings\":[{\"id\":\"r1\",\"severity\":\"blocker\",\"category\":\"bug\",\"file\":\"src/a.rs\",\"line\":3,\"snippet\":\"post();\",\"text\":\"重试没有上限，post 一直失败时会死循环\"},{\"id\":\"r2\",\"severity\":\"minor\",\"category\":\"style\",\"file\":\"src/a.rs\",\"text\":\"attempt 这个名字不够清楚\"}]}\n```";
+
+fn fact_rig(answer: Result<&str, &str>) -> Rig {
+    let rig = rig(true, false);
+    rig.host.settings.lock().get_mut("t1").unwrap().fact_check = true;
+    *rig.host.fact_answer.lock() = Some(answer.map(str::to_string).map_err(str::to_string));
+    rig
+}
+
+fn wait_state(rig: &Rig, want: ReviewState) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while rig.state() != want {
+        assert!(
+            Instant::now() < deadline,
+            "state stayed {:?}: {:?}",
+            rig.state(),
+            rig.reviews.card("t1")
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// E2: a blocker a diff line refutes is taken out before the writer sees
+/// it; with no blocker left the round passes, and the card says why.
+#[test]
+fn the_fact_check_takes_out_a_refuted_blocker_and_the_round_passes() {
+    let (dir, changed) = retry_cap_turn();
+    let rig = fact_rig(Ok("{\"results\":[{\"id\":\"r1\",\"verdict\":\"refuted\",\"topic\":\"other\",\"line\":\"if attempt >= MAX_RETRIES {\"},{\"id\":\"r2\",\"verdict\":\"keep\",\"topic\":\"other\"}]}"));
+    rig.settled("t1", "u1", Some(changed), false);
+    rig.wait_sent(1);
+    rig.turn("rev-1", "v1", CAP_FINDINGS);
+    wait_state(&rig, ReviewState::Passed);
+    let card = rig.reviews.card("t1").unwrap();
+    let ids: Vec<_> = card.findings.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(ids, ["r2"]);
+    let check = card.fact_check.expect("checked");
+    assert_eq!(check.state, aeroric_protocol::review::FactCheckState::Done);
+    assert_eq!(check.model.as_deref(), Some("cheap-model"));
+    assert_eq!(check.filtered.len(), 1);
+    assert_eq!(check.filtered[0].finding.id, "r1");
+    assert_eq!(check.filtered[0].evidence, "if attempt >= MAX_RETRIES {");
+    // The model saw the findings and the diff; the writer saw nothing.
+    let asked = rig.host.fact_asked.lock().clone();
+    assert!(
+        asked[0].contains("重试没有上限")
+            && asked[0].contains("+        if attempt >= MAX_RETRIES {"),
+        "{}",
+        asked[0]
+    );
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(rig.host.sent.lock().len(), 1, "nothing went to the writer");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// E2: a protected topic stays whatever the model says, and a check that
+/// cannot run keeps every finding; either way the writer gets them.
+#[test]
+fn a_guarded_or_failed_fact_check_sends_every_finding() {
+    const CONCURRENCY: &str = "```json\n{\"verdict\":\"changes\",\"findings\":[{\"id\":\"r1\",\"severity\":\"blocker\",\"category\":\"bug\",\"file\":\"src/a.rs\",\"snippet\":\"attempt += 1;\",\"text\":\"attempt 的自增在多个线程里没有加锁，存在竞态\"}]}\n```";
+    let (dir, changed) = retry_cap_turn();
+    let rig = fact_rig(Ok("{\"results\":[{\"id\":\"r1\",\"verdict\":\"refuted\",\"topic\":\"other\",\"line\":\"attempt += 1;\"}]}"));
+    rig.settled("t1", "u1", Some(changed.clone()), false);
+    rig.wait_sent(1);
+    rig.turn("rev-1", "v1", CONCURRENCY);
+    let sent = rig.wait_sent(2);
+    assert_eq!(sent[1].0, "t1");
+    let card = rig.reviews.card("t1").unwrap();
+    assert_eq!(card.state, ReviewState::WaitingCoder);
+    assert_eq!(card.findings.len(), 1);
+    let check = card.fact_check.unwrap();
+    assert!(check.filtered.is_empty());
+    assert_eq!(check.guarded, 1);
+
+    let rig = fact_rig(Err("HTTP 401: bad key"));
+    rig.settled("t1", "u1", Some(changed), false);
+    rig.wait_sent(1);
+    rig.turn("rev-1", "v1", CAP_FINDINGS);
+    let sent = rig.wait_sent(2);
+    assert!(sent[1].1.contains("重试没有上限"), "{}", sent[1].1);
+    let card = rig.reviews.card("t1").unwrap();
+    assert_eq!(card.findings.len(), 2);
+    let check = card.fact_check.unwrap();
+    assert_eq!(
+        check.state,
+        aeroric_protocol::review::FactCheckState::Failed
+    );
+    assert_eq!(
+        check.reason.as_deref(),
+        Some("核查没跑成：HTTP 401: bad key；意见全部保留")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// E2: off by default — no call, the findings go straight to the writer.
+#[test]
+fn the_fact_check_is_off_unless_turned_on() {
+    let (dir, changed) = retry_cap_turn();
+    let rig = rig(true, false);
+    rig.settled("t1", "u1", Some(changed), false);
+    rig.wait_sent(1);
+    rig.turn("rev-1", "v1", CAP_FINDINGS);
+    rig.wait_sent(2);
+    let card = rig.reviews.card("t1").unwrap();
+    assert!(card.fact_check.is_none());
+    assert!(rig.host.fact_asked.lock().is_empty());
+    std::fs::remove_dir_all(&dir).ok();
 }

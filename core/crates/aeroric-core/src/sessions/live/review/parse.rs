@@ -211,7 +211,7 @@ fn decision(raw: Option<&str>) -> Decision {
     }
 }
 
-fn candidate(text: &str) -> Option<&str> {
+pub(crate) fn candidate(text: &str) -> Option<&str> {
     if let Some(start) = text.rfind("```json") {
         let body = &text[start + "```json".len()..];
         if let Some(end) = body.find("```") {

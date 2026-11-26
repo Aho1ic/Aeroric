@@ -13,6 +13,8 @@
 
 pub mod compare;
 pub mod coverage;
+pub mod fact_check;
+pub mod fact_check_eval;
 pub mod gates;
 pub mod locate;
 pub mod parse;
@@ -28,8 +30,8 @@ use serde::{Deserialize, Serialize};
 
 use aeroric_protocol::checkpoint::ObligationSource;
 use aeroric_protocol::review::{
-    CoverageState, Decision, ReviewCard, ReviewSettings, ReviewState, ReviewerChoice, Severity,
-    MAX_RAW_CHARS, MAX_ROUNDS,
+    CoverageState, Decision, FactCheck, FactCheckState, Finding, ReviewCard, ReviewSettings,
+    ReviewState, ReviewerChoice, Severity, MAX_RAW_CHARS, MAX_ROUNDS,
 };
 
 pub use super::turn_changes::{TurnDiff, TurnSettled};
@@ -54,6 +56,18 @@ pub trait ReviewHost: Send + Sync {
     fn start_reviewer(&self, parent: &str, prompt: String) -> Result<Reviewer, String>;
     /// Send `text` to a task as a user message, reopening its session if needed.
     fn prompt(&self, task_id: &str, text: String) -> Result<(), String>;
+    /// E2 (2026-11-26): one call to the analysis model for the fact check:
+    /// its answer and the model's name. Blocks; called off the loop's lock.
+    fn fact_check(&self, _system: &str, _user: &str) -> Result<FactCheckAnswer, String> {
+        Err("宿主没有接通核查".into())
+    }
+}
+
+/// The analysis model's answer to a fact check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FactCheckAnswer {
+    pub text: String,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -139,6 +153,15 @@ enum Act {
     PromptWriter {
         parent: String,
         text: String,
+    },
+    /// E2: check this round's findings against its diff.
+    FactCheck {
+        parent: String,
+        review_id: String,
+        round: u32,
+        findings: Vec<Finding>,
+        diff: TurnDiff,
+        left_out: Vec<String>,
     },
 }
 
@@ -619,6 +642,28 @@ impl ReviewLoop {
                     let result = host.prompt(&parent, text);
                     (parent, result)
                 }
+                Act::FactCheck {
+                    parent,
+                    review_id,
+                    round,
+                    findings,
+                    diff,
+                    left_out,
+                } => {
+                    let left_out: Vec<&str> = left_out.iter().map(String::as_str).collect();
+                    let answer = match diff_text(&diff, &left_out) {
+                        None => Err("读不到这一轮的改动".to_string()),
+                        Some(text) => host
+                            .fact_check(fact_check::SYSTEM, &fact_check::prompt(&findings, &text))
+                            .map(|answer| (answer, text)),
+                    };
+                    let next = this.fact_checked(&parent, &review_id, round, answer);
+                    this.publish(&parent);
+                    if let Some(next) = next {
+                        this.run(next);
+                    }
+                    return;
+                }
             };
             if let Err(error) = outcome {
                 if let Some(l) = this.state.lock().loops.get_mut(&parent) {
@@ -760,12 +805,9 @@ impl ReviewLoop {
         error: Option<&str>,
         text: &str,
     ) -> Option<Act> {
-        let paused = self
-            .host
-            .lock()
-            .clone()
-            .and_then(|h| h.settings(parent))
-            .is_some_and(|s| s.paused);
+        let settings = self.host.lock().clone().and_then(|h| h.settings(parent));
+        let paused = settings.as_ref().is_some_and(|s| s.paused);
+        let checking = settings.as_ref().is_some_and(|s| s.fact_check);
         let l = state.loops.get_mut(parent)?;
         // A reviewer replaced by a changed choice may still finish a turn.
         if l.card.state != ReviewState::Reviewing
@@ -814,9 +856,9 @@ impl ReviewLoop {
         // E1: what the round rests on, from the files alone.
         let opened = state.opened.remove(reviewer).unwrap_or_default();
         let coverage = coverage::judge(&plan, verdict.files.as_deref(), &opened);
-        let unreviewed = coverage.state == CoverageState::Unreviewed;
         l.card.coverage = Some(coverage);
-        // E3: from round 2, what became of the last round's findings.
+        // E3: from round 2, what became of the last round's findings. Before
+        // the fact check: a finding said again is never taken out.
         if let Some(previous) = &l.previous {
             l.card.compare = Some(compare::compare(
                 previous,
@@ -824,21 +866,111 @@ impl ReviewLoop {
                 l.card.coverage.as_ref(),
             ));
         }
-        if verdict.pass && unreviewed {
-            l.card.state = ReviewState::Escalated;
-            l.card.raw = Some(coverage::NOT_REVIEWED.into());
-            return None;
+        l.card.fact_check = None;
+        // E2: a round that would go to the writer is checked first, when the
+        // task asked for it; the round goes on once the answer is in.
+        if checking && !verdict.pass {
+            if let Some(diff) = l.diff.clone() {
+                l.card.fact_check = Some(FactCheck::default());
+                return Some(Act::FactCheck {
+                    parent: parent.to_string(),
+                    review_id: l.card.review_id.clone(),
+                    round: l.card.round,
+                    findings: l.card.findings.clone(),
+                    diff,
+                    left_out: plan.excluded.iter().map(|(p, _)| p.clone()).collect(),
+                });
+            }
         }
-        if verdict.pass {
-            l.card.state = ReviewState::Passed;
-            return None;
-        }
-        if paused {
-            l.card.state = ReviewState::WaitingSend;
-            return None;
-        }
-        Some(to_writer(parent, l))
+        decide(parent, l, paused)
     }
+
+    /// E2: the fact check's answer for `parent`'s round; dropped when the
+    /// round moved on while it ran.
+    fn fact_checked(
+        &self,
+        parent: &str,
+        review_id: &str,
+        round: u32,
+        answer: Result<(FactCheckAnswer, String), String>,
+    ) -> Option<Act> {
+        let paused = self
+            .host
+            .lock()
+            .clone()
+            .and_then(|h| h.settings(parent))
+            .is_some_and(|s| s.paused);
+        let mut state = self.state.lock();
+        let l = state.loops.get_mut(parent)?;
+        let running = l
+            .card
+            .fact_check
+            .as_ref()
+            .is_some_and(|c| c.state == FactCheckState::Running);
+        if l.card.review_id != review_id
+            || l.card.round != round
+            || l.card.state != ReviewState::Reviewing
+            || !running
+        {
+            return None;
+        }
+        let mut check = l.card.fact_check.take().unwrap_or_default();
+        match answer {
+            Err(error) => {
+                check.state = FactCheckState::Failed;
+                check.reason = Some(format!("核查没跑成：{error}；意见全部保留"));
+            }
+            Ok((answer, diff)) => {
+                check.model = answer.model;
+                match fact_check::parse(&answer.text) {
+                    None => {
+                        check.state = FactCheckState::Failed;
+                        check.reason = Some("核查的回答读不出来；意见全部保留".into());
+                    }
+                    Some(judgements) => {
+                        let findings = std::mem::take(&mut l.card.findings);
+                        let outcome = fact_check::apply(findings, &judgements, &diff);
+                        l.card.findings = outcome.kept;
+                        check.filtered = outcome.filtered;
+                        check.guarded = outcome.guarded;
+                        check.state = FactCheckState::Done;
+                    }
+                }
+            }
+        }
+        l.card.fact_check = Some(check);
+        decide(parent, l, paused)
+    }
+}
+
+/// The round's findings are final: pass, wait for the user, or go to the
+/// writer. No blocker is a pass (Q-B7), so a round whose blockers the fact
+/// check took out passes.
+fn decide(parent: &str, l: &mut Loop, paused: bool) -> Option<Act> {
+    let pass = !l
+        .card
+        .findings
+        .iter()
+        .any(|f| f.severity == Severity::Blocker);
+    let unreviewed = l
+        .card
+        .coverage
+        .as_ref()
+        .is_some_and(|c| c.state == CoverageState::Unreviewed);
+    if pass && unreviewed {
+        l.card.state = ReviewState::Escalated;
+        l.card.raw = Some(coverage::NOT_REVIEWED.into());
+        return None;
+    }
+    if pass {
+        l.card.state = ReviewState::Passed;
+        return None;
+    }
+    if paused {
+        l.card.state = ReviewState::WaitingSend;
+        return None;
+    }
+    Some(to_writer(parent, l))
 }
 
 fn to_writer(parent: &str, l: &mut Loop) -> Act {

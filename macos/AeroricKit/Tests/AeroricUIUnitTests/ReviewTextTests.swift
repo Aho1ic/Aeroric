@@ -137,6 +137,36 @@ final class ReviewTextTests: XCTestCase {
         XCTAssertEqual(ReviewText.notes(lost), ["引用的代码在文件里找不到，位置以审查者写的为准"])
     }
 
+    /// E2 (2026-11-26): the fact check's line on the card, and each
+    /// finding it took out with its ground; settings read `factCheck`.
+    func testTheFactCheckSaysWhatItTookOut() throws {
+        let card = try XCTUnwrap(LiveReviewCard.decode(.object([
+            "reviewId": .string("rv-1"), "state": .string("passed"),
+            "factCheck": .object([
+                "state": .string("done"), "model": .string("deepseek-flash"), "guarded": .number("1"),
+                "filtered": .array([
+                    .object(["finding": .object(["id": .string("r1"), "severity": .string("blocker"),
+                                                 "file": .string("src/a.rs"), "line": .number("3"),
+                                                 "text": .string("重试没有上限")]),
+                             "ground": .string("refuted"), "evidence": .string("if attempt >= MAX_RETRIES {")]),
+                    .object(["finding": .object(["id": .string("r2"), "text": .string("吞掉了错误")]),
+                             "ground": .string("notInDiff"), "evidence": .string("引用的代码不在这次的改动里")]),
+                ]),
+            ]),
+        ])))
+        let check = try XCTUnwrap(card.factCheck)
+        XCTAssertEqual(check.filtered.map(\.id), ["r1", "r2"])
+        XCTAssertEqual(ReviewText.factCheck(check)?.0, "已过滤 2 条被 diff 直接驳倒的意见")
+        XCTAssertEqual(ReviewText.filteredGround(check.filtered[0]), "被这一行驳倒：if attempt >= MAX_RETRIES {")
+        XCTAssertEqual(ReviewText.filteredGround(check.filtered[1]), "引用的代码不在这次的改动里")
+        XCTAssertTrue(ReviewText.factCheckHelp(check).contains("另有 1 条模型想删"))
+        let failed = LiveFactCheck(state: "failed", reason: "核查没跑成：HTTP 401；意见全部保留")
+        XCTAssertEqual(ReviewText.factCheck(failed)?.0, "核查没跑成：HTTP 401；意见全部保留")
+        XCTAssertEqual(ReviewText.factCheck(LiveFactCheck(state: "done"))?.0, "核查过了，没有过滤意见")
+        XCTAssertEqual(LiveReviewSettings.decode(.object(["enabled": .bool(true), "factCheck": .bool(true)]))?.factCheck, true)
+        XCTAssertEqual(LiveReviewSettings.decode(.object(["enabled": .bool(true)]))?.factCheck, false)
+    }
+
     /// E3: round 2 says what is new, what persists, what was resolved and
     /// what nobody looked at again.
     func testTheSecondRoundComparesWithTheFirst() throws {

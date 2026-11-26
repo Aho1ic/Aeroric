@@ -7,7 +7,9 @@
 use std::sync::{Arc, Weak};
 
 use aeroric_core::agent_connections::launch::{catalog_id, config_id_from_catalog};
-use aeroric_core::sessions::live::review::{ReviewError, ReviewHost, Reviewer};
+use aeroric_core::sessions::live::review::{
+    fact_check_eval, FactCheckAnswer, ReviewError, ReviewHost, Reviewer,
+};
 use aeroric_core::storage::Record;
 use aeroric_core::tasks::launch_plan::working_directory;
 use aeroric_core::tasks::session_owner::launch_family_of;
@@ -38,6 +40,9 @@ pub(super) struct HostReviews {
     /// Ask whether the harness is installed (the product binary; a test host
     /// routes to fakes and installs nothing).
     probe_installed: bool,
+    /// E2: the runtime the analysis model's call runs on; the loop calls
+    /// from a plain thread.
+    runtime: Option<tokio::runtime::Handle>,
 }
 
 pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>, probe_installed: bool) {
@@ -46,6 +51,7 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>, probe_installed: b
     reviews.set_host(Arc::new(HostReviews {
         live: Arc::downgrade(live),
         probe_installed,
+        runtime: tokio::runtime::Handle::try_current().ok(),
     }));
     set.register(wire::GET_METHOD, blocking(live, review_get));
     set.register(wire::SET_METHOD, blocking(live, review_set));
@@ -55,6 +61,10 @@ pub(super) fn install(set: &mut ServiceSet, live: &Arc<Live>, probe_installed: b
     set.register(wire::REVIEWERS_METHOD, blocking(live, review_reviewers));
     set.register(wire::ATTENTION_METHOD, blocking(live, review_attention));
     set.register(wire::RULES_METHOD, blocking(live, review_rules));
+    set.register(
+        wire::FACT_CHECK_EVAL_METHOD,
+        blocking(live, review_fact_check_eval),
+    );
 }
 
 /// One harness that could review a task.
@@ -347,6 +357,43 @@ impl ReviewHost for HostReviews {
         )
         .map(|_| ())
     }
+
+    /// E2: the memory's analysis model (its 整理设置), as the memory and the
+    /// Wiki call it.
+    fn fact_check(&self, system: &str, user: &str) -> Result<FactCheckAnswer, String> {
+        let live = self.live.upgrade().ok_or("宿主已关闭")?;
+        let model = live.executor.memory().settings().model;
+        let call = super::memory::analysis_call(
+            &live,
+            aeroric_core::sessions::live::review::fact_check::MAX_TOKENS,
+        );
+        let reply = match &self.runtime {
+            Some(handle) => {
+                let _entered = handle.enter();
+                call(system, user)
+            }
+            None => {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                let _entered = runtime.enter();
+                call(system, user)
+            }
+        }
+        .map_err(|e| {
+            if e.contains("没有选") {
+                "还没有选分析模型（记忆页的“整理设置”）".to_string()
+            } else {
+                e
+            }
+        })?;
+        Ok(FactCheckAnswer {
+            text: reply.text,
+            model,
+        })
+    }
 }
 
 fn review_failure(request: &Request, error: ReviewError) -> Frame {
@@ -395,10 +442,12 @@ struct SetParams {
     reviewer: Option<ReviewerChoice>,
     #[serde(default)]
     paused: Option<bool>,
+    #[serde(default)]
+    fact_check: Option<bool>,
 }
 
-/// `review.set {taskId, enabled?, reviewer?, paused?}`: applies from the
-/// task's next turn on; answers the settings now in force.
+/// `review.set {taskId, enabled?, reviewer?, paused?, factCheck?}`: applies
+/// from the task's next turn on; answers the settings now in force.
 fn review_set(live: &Live, request: &Request) -> Frame {
     let p: SetParams = match params(request) {
         Ok(p) => p,
@@ -422,6 +471,9 @@ fn review_set(live: &Live, request: &Request) -> Frame {
     }
     if let Some(paused) = p.paused {
         settings.paused = paused;
+    }
+    if let Some(fact_check) = p.fact_check {
+        settings.fact_check = fact_check;
     }
     let project_id = project
         .get("id")
@@ -502,6 +554,7 @@ fn review_reviewers(live: &Live, request: &Request) -> Frame {
     let host = HostReviews {
         live: Weak::new(),
         probe_installed: live.probe_installed(),
+        runtime: None,
     };
     let writer = launch_family_of(&record, live.families.as_ref());
     let found = host.candidates(live, &project, &record);
@@ -663,4 +716,30 @@ mod tests {
         let other = config_label(&catalog(), "codex", "magpie", None).unwrap_err();
         assert!(other.contains("不是 codex"), "{other}");
     }
+}
+
+/// `review.factCheckEval {}` (E2, 2026-11-26): the fact check's fixed cases
+/// through the analysis model; `wronglyRemoved` is how many right findings
+/// it took out. Calls the model once per case.
+fn review_fact_check_eval(live: &Live, request: &Request) -> Frame {
+    let model = live.executor.memory().settings().model;
+    if model.is_none() {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "还没有选分析模型：在记忆页的“整理设置”里选一个",
+        );
+    }
+    let call = super::memory::analysis_call(
+        live,
+        aeroric_core::sessions::live::review::fact_check::MAX_TOKENS,
+    );
+    let report = fact_check_eval::run(|system, user| {
+        call(system, user).map(|reply| fact_check_eval::Answer {
+            text: reply.text,
+            input_tokens: reply.input_tokens,
+            output_tokens: reply.output_tokens,
+        })
+    });
+    ok(request, json!({ "model": model, "report": report }))
 }

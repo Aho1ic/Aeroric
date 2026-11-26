@@ -18,6 +18,8 @@ public struct LiveReviewCard: Equatable, Sendable {
     public var coverage: LiveReviewCoverage?
     /// E3: this round against the one before, from round 2 on.
     public var compare: LiveRoundCompare?
+    /// E2 (2026-11-26): the fact check of this round's findings.
+    public var factCheck: LiveFactCheck?
 
     public init(reviewId: String, round: Int = 1, state: String, turnId: String = "", reviewerTaskId: String? = nil,
                 reviewerLabel: String = "", sameFamily: Bool = false, findings: [LiveReviewFinding] = [],
@@ -116,18 +118,24 @@ public struct LiveReviewSettings: Equatable, Sendable {
     public var enabled: Bool
     public var reviewer: LiveReviewerChoice
     public var paused: Bool
+    /// E2 (2026-11-26): check blocking findings against the diff with the
+    /// analysis model before they go to the writer. Off by default.
+    public var factCheck: Bool
 
-    public init(enabled: Bool = false, reviewer: LiveReviewerChoice = .auto, paused: Bool = false) {
+    public init(enabled: Bool = false, reviewer: LiveReviewerChoice = .auto, paused: Bool = false,
+                factCheck: Bool = false) {
         self.enabled = enabled
         self.reviewer = reviewer
         self.paused = paused
+        self.factCheck = factCheck
     }
 
     public static func decode(_ value: JSONValue?) -> LiveReviewSettings? {
         guard let f = value?.objectValue else { return nil }
         return LiveReviewSettings(enabled: f["enabled"]?.boolValue ?? false,
                                   reviewer: LiveReviewerChoice.decode(f["reviewer"]),
-                                  paused: f["paused"]?.boolValue ?? false)
+                                  paused: f["paused"]?.boolValue ?? false,
+                                  factCheck: f["factCheck"]?.boolValue ?? false)
     }
 }
 
@@ -244,6 +252,7 @@ extension LiveReviewCard {
                               summary: f["summary"]?.stringValue, raw: f["raw"]?.stringValue)
         card.coverage = f["coverage"].flatMap(LiveReviewCoverage.decode)
         card.compare = f["compare"].flatMap(LiveRoundCompare.decode)
+        card.factCheck = f["factCheck"].flatMap(LiveFactCheck.decode)
         return card
     }
 }
@@ -264,6 +273,57 @@ extension LiveReviewFinding {
         finding.repeats = g["repeats"]?.stringValue
         finding.rule = g["rule"]?.stringValue
         return finding
+    }
+}
+
+/// E2 (2026-11-26): mirrors `aeroric_protocol::review::FactCheck` — the
+/// analysis model checked the findings against the diff; only findings whose
+/// code is not in the change, or that a diff line refutes word for word,
+/// were taken out.
+public struct LiveFactCheck: Equatable, Sendable {
+    public struct Filtered: Equatable, Sendable, Identifiable {
+        public var finding: LiveReviewFinding
+        /// `notInDiff` or `refuted`.
+        public var ground: String
+        public var evidence: String
+        public var id: String { finding.id }
+
+        public init(finding: LiveReviewFinding, ground: String, evidence: String) {
+            self.finding = finding
+            self.ground = ground
+            self.evidence = evidence
+        }
+    }
+
+    /// `running` `done` `failed`.
+    public var state: String
+    public var model: String?
+    public var filtered: [Filtered]
+    /// Removals the model wanted that a guard turned down.
+    public var guarded: Int
+    public var reason: String?
+
+    public init(state: String, model: String? = nil, filtered: [Filtered] = [], guarded: Int = 0,
+                reason: String? = nil) {
+        self.state = state
+        self.model = model
+        self.filtered = filtered
+        self.guarded = guarded
+        self.reason = reason
+    }
+
+    public static func decode(_ value: JSONValue) -> LiveFactCheck? {
+        let f = value.fields
+        guard let state = f["state"]?.stringValue else { return nil }
+        let filtered: [Filtered] = (f["filtered"]?.arrayValue ?? []).compactMap { item in
+            let g = item.fields
+            guard let finding = g["finding"].flatMap(LiveReviewFinding.decode) else { return nil }
+            return Filtered(finding: finding, ground: g["ground"]?.stringValue ?? "refuted",
+                            evidence: g["evidence"]?.stringValue ?? "")
+        }
+        return LiveFactCheck(state: state, model: f["model"]?.stringValue, filtered: filtered,
+                             guarded: f["guarded"]?.numberText.flatMap { Int($0) } ?? 0,
+                             reason: f["reason"]?.stringValue)
     }
 }
 

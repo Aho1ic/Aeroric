@@ -1904,6 +1904,20 @@ async fn a_changed_turn_is_reviewed_by_another_family_and_answered() {
         .await
         .unwrap();
     assert_eq!(set["settings"]["reviewer"], "auto");
+    // E2: the fact check is off unless asked for, and it keeps the setting.
+    assert!(set["settings"].get("factCheck").is_none(), "{set}");
+    let on = host
+        .call("review.set", json!({"taskId": "task-1", "factCheck": true}))
+        .await
+        .unwrap();
+    assert_eq!(on["settings"]["factCheck"], true, "{on}");
+    assert_eq!(on["settings"]["enabled"], true, "{on}");
+    // Its evaluation needs the analysis model.
+    let eval = host
+        .call("review.factCheckEval", json!({}))
+        .await
+        .unwrap_err();
+    assert!(eval.to_string().contains("还没有选分析模型"), "{eval}");
     let reviewers = host
         .call("review.reviewers", json!({"taskId": "task-1"}))
         .await

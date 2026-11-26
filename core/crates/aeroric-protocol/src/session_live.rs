@@ -795,6 +795,7 @@ pub fn fixture_updates() -> Vec<SessionUpdate> {
                 raw: None,
                 coverage: None,
                 compare: None,
+                fact_check: None,
             },
         },
         K::Delegation {

@@ -14,6 +14,7 @@ struct ReviewCard: View {
     @State private var expanded: Set<String> = []
     @State private var showsFiles = false
     @State private var showsEarlier = false
+    @State private var showsFiltered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: AeroricSpace.s) {
@@ -95,6 +96,46 @@ struct ReviewCard: View {
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                                 .help(line)
+                        }
+                    }
+                    .padding(.leading, AeroricSpace.l)
+                }
+            }
+            if let check = card.factCheck, let (line, tone) = ReviewText.factCheck(check) {
+                Button { showsFiltered.toggle() } label: {
+                    HStack(spacing: AeroricSpace.xs) {
+                        Image(systemName: "checkmark.shield")
+                        Text(line).lineLimit(1).truncationMode(.tail)
+                        if !check.filtered.isEmpty {
+                            Image(systemName: showsFiltered ? "chevron.down" : "chevron.right")
+                                .font(.system(size: AeroricType.caption - 2))
+                        }
+                    }
+                    .font(.system(size: AeroricType.caption))
+                    .foregroundStyle(tone)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(check.reason ?? ReviewText.factCheckHelp(check))
+                .accessibilityIdentifier("review.fact-check")
+                if showsFiltered {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(check.filtered) { item in
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(ReviewText.line(item.finding))
+                                    .foregroundStyle(AeroricColor.textSecondary)
+                                    .strikethrough()
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Text(ReviewText.filteredGround(item))
+                                    .font(.system(size: AeroricType.caption, design: item.ground == "refuted" ? .monospaced : .default))
+                                    .foregroundStyle(AeroricColor.textTertiary)
+                                    .lineLimit(2)
+                                    .truncationMode(.tail)
+                            }
+                            .font(.system(size: AeroricType.caption))
+                            .help(item.finding.text)
+                            .accessibilityIdentifier("review.fact-check.filtered.\(item.id)")
                         }
                     }
                     .padding(.leading, AeroricSpace.l)
@@ -280,6 +321,32 @@ public enum ReviewText {
             .filter { $0.1 > 0 }
             .map { "\($0.0) \($0.1)" }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// E2 (2026-11-26): "已过滤 2 条被 diff 直接驳倒的意见"; nil when the
+    /// check took nothing out and kept nothing back to say.
+    public static func factCheck(_ check: LiveFactCheck) -> (String, Color)? {
+        switch check.state {
+        case "running": return ("正在核查意见…", AeroricColor.textSecondary)
+        case "failed": return (check.reason ?? "核查没跑成；意见全部保留", AeroricColor.warning)
+        default:
+            if !check.filtered.isEmpty {
+                return ("已过滤 \(check.filtered.count) 条被 diff 直接驳倒的意见", AeroricColor.textSecondary)
+            }
+            return ("核查过了，没有过滤意见", AeroricColor.textTertiary)
+        }
+    }
+
+    public static func factCheckHelp(_ check: LiveFactCheck) -> String {
+        var parts = ["分析模型对照改动核查了这一轮的意见；只删引用的代码不在改动里、或被改动里某一行直接驳倒的"]
+        if let model = check.model { parts.append("模型：\(model)") }
+        if check.guarded > 0 { parts.append("另有 \(check.guarded) 条模型想删、但没过 Aeroric 的检查，照样保留") }
+        return parts.joined(separator: "；")
+    }
+
+    /// Why one finding was taken out.
+    public static func filteredGround(_ item: LiveFactCheck.Filtered) -> String {
+        item.ground == "notInDiff" ? item.evidence : "被这一行驳倒：\(item.evidence)"
     }
 
     /// E3: the last round's findings not said again, one line each.

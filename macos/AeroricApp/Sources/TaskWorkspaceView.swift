@@ -731,6 +731,8 @@ struct TaskWorkspaceView: View {
                         services.requestedSelection = SessionNavigation.task(id)
                     case let .setEnabled(on):
                         Task { await checkpointAction { try await $0.setReview(taskId: taskID, enabled: on) } }
+                    case let .setFactCheck(on):
+                        Task { await checkpointAction { try await $0.setReview(taskId: taskID, factCheck: on) } }
                     case let .pick(choice):
                         Task { await checkpointAction { try await $0.setReview(taskId: taskID, reviewer: choice) } }
                     case .request:

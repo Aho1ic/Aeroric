@@ -15,6 +15,7 @@ pub const RETRY_METHOD: &str = "review.retry";
 pub const REVIEWERS_METHOD: &str = "review.reviewers";
 pub const ATTENTION_METHOD: &str = "review.attention";
 pub const RULES_METHOD: &str = "review.rules";
+pub const FACT_CHECK_EVAL_METHOD: &str = "review.factCheckEval";
 
 /// Rounds per loop; past this the loop stops and asks the user (P17).
 pub const MAX_ROUNDS: u32 = 3;
@@ -148,6 +149,59 @@ pub struct ReviewCard {
     /// E3: this round against the one before, from round 2 on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compare: Option<RoundCompare>,
+    /// E2 (2026-11-26): the fact check of this round's findings, when the
+    /// task turned it on and the round had a blocker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact_check: Option<FactCheck>,
+}
+
+/// E2 (2026-11-26): an analysis model checked the findings against the diff
+/// before they went to the writer. Only a finding whose code is not in the
+/// change, or that a line of the diff refutes word for word, is taken out;
+/// the protected topics never are.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FactCheck {
+    pub state: FactCheckState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Taken out, each with its ground; not sent to the writer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filtered: Vec<FilteredFinding>,
+    /// The model would have taken these out; a guard kept them.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub guarded: u32,
+    /// Why the check did not run or failed (every finding was kept).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FactCheckState {
+    #[default]
+    Running,
+    Done,
+    /// Did not run, or its answer could not be read: every finding kept.
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilteredFinding {
+    pub finding: Finding,
+    pub ground: FilterGround,
+    /// The diff line that refutes it, as quoted; or what was looked for.
+    pub evidence: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilterGround {
+    /// The code it quotes is nowhere in the change.
+    NotInDiff,
+    /// A line of the diff says the opposite, word for word.
+    Refuted,
 }
 
 /// E3 (2026-11-19): what became of the previous round's adopted findings
@@ -349,6 +403,10 @@ pub struct ReviewSettings {
     /// Hold findings until the user sends them.
     #[serde(default)]
     pub paused: bool,
+    /// E2 (2026-11-26): check blocking rounds' findings against the diff
+    /// with the analysis model before they go to the writer. Off by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fact_check: bool,
 }
 
 #[cfg(test)]
