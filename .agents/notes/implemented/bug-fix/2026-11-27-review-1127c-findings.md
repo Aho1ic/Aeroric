@@ -50,6 +50,7 @@ Status: implemented
 - **收益：** 交接清单的“已发生改动”只列真正改过东西的调用；Agent 查一下上下文，不会挤掉真正的改动，也不会进“结果未知”。
 - **局限：**
   - 已经存下的检查点不回头改，这次修复之前记下的只读调用仍留在旧清单里，直到被新条目挤掉。
+- **发现、未处理：** 会话中途调 `read_handoff`，清单标题固定写“恢复会话”（宿主 `context_handoff` 传的是 `HandoffReason::Resume`），其实这个会话没有恢复过。只是标签不准，不影响接手；要改得在协议里加一种交接原因，契约跟着变，暂不改。
 - **验证：**
   - Rust：`checkpoint::derive_tests` 的 `aeroric_context_reads_are_not_effects_but_its_writes_are`：Claude、Codex 两种标题的只读调用不算，没等到结果的也不进“结果未知”；`board_write`、`todo_propose` 和外部同名工具照旧算；
-  - 交接清单的页面效果留给下一轮目检。
+  - 目检 1127d（`~/Documents/computer-use/2026-11-27-2123-aeroric-review-1127d/report.md`）：同一个 Claude 会话里依次调 `list_roles`、`board_read`、跑 `ls -1`、`board_write`，再 `read_handoff`；“已发生改动”只有回合 4 的 `ls -1` 和回合 5 的 `board_write`，没有只读工具，也没有“结果未知”一节。
