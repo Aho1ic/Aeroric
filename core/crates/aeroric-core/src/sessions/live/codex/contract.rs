@@ -371,6 +371,7 @@ mod tests {
             "the oldest supported comes first"
         );
         assert!(names.contains(&"app-server-0.167.0"));
+        assert!(names.contains(&"app-server-0.169.1"));
         assert_eq!(version_of("app-server-0.170.10"), Some(vec![0, 170, 10]));
         assert_eq!(version_of("README.md"), None);
     }

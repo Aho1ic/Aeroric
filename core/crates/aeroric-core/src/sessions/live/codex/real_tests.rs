@@ -11,6 +11,14 @@
 //! for it; the subagent runs `touch subagent-probe.txt` asking for
 //! escalation. The test declines with a reason and follows it to whoever can
 //! hear it, then reads the parent's rollout the way the history page does.
+//!
+//! E9 (2026-11-27), the history upgrade: two turns made by one Codex, resumed
+//! by another, must keep their turn ids and their context.
+//!
+//! ```text
+//! AERORIC_REAL_CODEX_OLD=<older codex> AERORIC_REAL_CODEX=<newer codex> \
+//!   cargo test -p aeroric-core --lib real_codex_history -- --ignored
+//! ```
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -64,7 +72,11 @@ async fn subagent_round(v2: bool) {
     let model = Arc::new(Model::default());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    tokio::spawn(serve(listener, Arc::clone(&model)));
+    let answers = Arc::clone(&model);
+    tokio::spawn(serve(
+        listener,
+        Arc::new(move |request| answers.answer(request)),
+    ));
     std::fs::write(
         home.join("config.toml"),
         format!(
@@ -393,7 +405,9 @@ fn message(id: &str, text: &str) -> Vec<Value> {
     ]
 }
 
-async fn serve(listener: TcpListener, model: Arc<Model>) {
+type Answer = Arc<dyn Fn(&Value) -> Vec<Value> + Send + Sync>;
+
+async fn serve(listener: TcpListener, model: Answer) {
     while let Ok((mut socket, _)) = listener.accept().await {
         let model = Arc::clone(&model);
         tokio::spawn(async move {
@@ -402,8 +416,7 @@ async fn serve(listener: TcpListener, model: Arc<Model>) {
             };
             let reply = if head.starts_with("POST") {
                 let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-                let stream: String = model
-                    .answer(&request)
+                let stream: String = model(&request)
                     .iter()
                     .map(|event| {
                         format!(
@@ -462,4 +475,218 @@ async fn read_request(socket: &mut TcpStream) -> Option<(String, Vec<u8>)> {
         body.extend_from_slice(&chunk[..read]);
     }
     Some((head, body))
+}
+
+/// The two turns' markers and the answers the echo model gives them.
+const FIRST: &str = "first ALPHA-1";
+const SECOND: &str = "second BETA-2";
+const THIRD: &str = "third GAMMA-3";
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs AERORIC_REAL_CODEX_OLD=<older codex> and AERORIC_REAL_CODEX=<newer codex>"]
+async fn real_codex_history_survives_an_upgrade() {
+    let (Some(old), Some(new)) = (
+        std::env::var_os("AERORIC_REAL_CODEX_OLD"),
+        std::env::var_os("AERORIC_REAL_CODEX"),
+    ) else {
+        eprintln!("skipped: AERORIC_REAL_CODEX_OLD and AERORIC_REAL_CODEX are not both set");
+        return;
+    };
+    let (old, new) = (
+        old.to_string_lossy().into_owned(),
+        new.to_string_lossy().into_owned(),
+    );
+    let root = std::env::temp_dir().join(format!("aeroric-codex-upgrade-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (home, project) = (root.join("home"), root.join("project"));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
+
+    // An echo model: every answer names the message it answers.
+    let requests: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = Arc::clone(&requests);
+    tokio::spawn(serve(
+        listener,
+        Arc::new(move |request: &Value| {
+            let id = {
+                let mut seen = seen.lock();
+                seen.push(request.clone());
+                format!("resp-{}", seen.len())
+            };
+            message(&id, &format!("ack {}", last_user_text(request)))
+        }),
+    ));
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            r#"model = "gpt-5.1-codex"
+model_provider = "fake"
+
+[model_providers.fake]
+name = "fake"
+base_url = "http://127.0.0.1:{port}/v1"
+wire_api = "responses"
+env_key = "AERORIC_FAKE_MODEL_KEY"
+request_max_retries = 0
+stream_max_retries = 0
+supports_websockets = false
+"#
+        ),
+    )
+    .unwrap();
+    let launch = |program: &str| ProcessSpec {
+        program: program.into(),
+        args: Vec::new(),
+        env: vec![
+            ("CODEX_HOME".into(), home.display().to_string()),
+            ("AERORIC_FAKE_MODEL_KEY".into(), "fake".into()),
+        ],
+        unset_env: Vec::new(),
+        cwd: Some(project.display().to_string()),
+    };
+    let start = |program: &str, thread: Option<String>| {
+        let sink = Arc::new(Sink::default());
+        let session = CodexSession::start(
+            CodexSessionSpec {
+                task_id: "upgrade".into(),
+                project_id: "p".into(),
+                generation: 1,
+                agent: "codex".into(),
+                cwd: project.display().to_string(),
+                extra_dirs: Vec::new(),
+                permission: "ask".into(),
+                model: None,
+                effort: None,
+                thread_id: thread,
+            },
+            CodexServer::new(process_launcher(launch(program))),
+            Arc::clone(&sink) as Arc<dyn LiveStatusSink>,
+            SharedLog::new("upgrade"),
+            &tokio::runtime::Handle::current(),
+        );
+        (sink, session)
+    };
+
+    // Two turns with the older Codex.
+    let (before, session) = start(&old, None);
+    for (n, text) in [FIRST, SECOND].into_iter().enumerate() {
+        session.prompt(text.into()).unwrap();
+        let ended = Arc::clone(&before);
+        wait(&format!("the older Codex's turn {}", n + 1), move || {
+            turns(&ended).1.len() > n && ended.last_status() == Some(TaskStatus::Done)
+        })
+        .await;
+    }
+    let (made, ended) = turns(&before);
+    assert_eq!(made.len(), 2, "{made:?}");
+    assert_eq!(ended, made, "every turn that started ended");
+    let thread = before
+        .sessions
+        .lock()
+        .first()
+        .map(|(id, _)| id.clone())
+        .expect("the older Codex named its thread");
+    session.close().unwrap();
+    drop(session);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // The newer Codex resumes the thread and goes on.
+    let (after, session) = start(&new, Some(thread.clone()));
+    session.prompt(THIRD.into()).unwrap();
+    let ended = Arc::clone(&after);
+    wait("the newer Codex's turn", move || {
+        !turns(&ended).1.is_empty() && ended.last_status() == Some(TaskStatus::Done)
+    })
+    .await;
+    let resumed = after
+        .sessions
+        .lock()
+        .first()
+        .map(|(id, _)| id.clone())
+        .expect("the newer Codex named its thread");
+    assert_eq!(resumed, thread, "the same thread, not a new one");
+    // Its request to the model carries the older turns' messages and answers.
+    let last = requests
+        .lock()
+        .last()
+        .cloned()
+        .expect("the model was asked");
+    let input = last["input"].to_string();
+    let acks = [format!("ack {FIRST}"), format!("ack {SECOND}")];
+    for text in [FIRST, SECOND, THIRD, acks[0].as_str(), acks[1].as_str()] {
+        assert!(input.contains(text), "the context lost {text:?}: {input}");
+    }
+    session.close().unwrap();
+    drop(session);
+
+    // The newer Codex lists the older turns under their own ids, then its own.
+    let server = CodexServer::new(process_launcher(launch(&new)));
+    let connection = server.connect().await.expect("the newer Codex starts");
+    let read = connection
+        .client
+        .request(
+            "thread/read",
+            json!({"threadId": thread, "includeTurns": true}),
+        )
+        .await
+        .expect("thread/read");
+    let listed: Vec<(String, String)> = read
+        .pointer("/thread/turns")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|turn| {
+            (
+                turn["id"].as_str().unwrap_or_default().to_string(),
+                turn["status"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    let (third, _) = turns(&after);
+    let wanted: Vec<String> = made.iter().chain(third.iter()).cloned().collect();
+    assert_eq!(
+        listed.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+        wanted,
+        "turn ids across the upgrade: {read}"
+    );
+    assert!(
+        listed.iter().all(|(_, status)| status == "completed"),
+        "{listed:?}"
+    );
+    drop(connection);
+    drop(server);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The turn ids `sink` saw start and end.
+fn turns(sink: &Sink) -> (Vec<String>, Vec<String>) {
+    let updates = sink.updates.lock();
+    let pick = |started: bool| {
+        updates
+            .iter()
+            .filter_map(|u| match &u.kind {
+                SessionUpdateKind::TurnStarted { turn_id } if started => Some(turn_id.clone()),
+                SessionUpdateKind::TurnEnded { turn_id, .. } if !started => Some(turn_id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    (pick(true), pick(false))
+}
+
+/// The last thing the user said in a Responses request (not Codex's own
+/// `<environment_context>` and the like).
+fn last_user_text(request: &Value) -> String {
+    request["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["role"] == "user")
+        .flat_map(|item| item["content"].as_array().cloned().unwrap_or_default())
+        .filter_map(|part| part["text"].as_str().map(str::to_string))
+        .filter(|text| !text.trim_start().starts_with('<'))
+        .last()
+        .unwrap_or_default()
 }
