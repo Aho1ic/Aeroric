@@ -89,6 +89,36 @@ fn reads_and_searches_are_not_effects() {
 }
 
 #[test]
+fn aeroric_context_reads_are_not_effects_but_its_writes_are() {
+    let b = run(vec![
+        call("c1", ToolKind::Mcp, "mcp__aeroric_context__read_session"),
+        done("c1", ToolStatus::Completed),
+        call("c2", ToolKind::Mcp, "aeroric_context.list_roles"),
+        done("c2", ToolStatus::Completed),
+        call("c3", ToolKind::Mcp, "mcp__aeroric_context__memory_recall"),
+        end(),
+        call("c4", ToolKind::Mcp, "mcp__aeroric_context__board_write"),
+        done("c4", ToolStatus::Completed),
+        call("c5", ToolKind::Mcp, "aeroric_context.todo_propose"),
+        done("c5", ToolStatus::Completed),
+        call("c6", ToolKind::Mcp, "mcp__github__read_session"),
+        done("c6", ToolStatus::Completed),
+        end(),
+    ]);
+    let cp = &b.checkpoint;
+    assert!(cp.unknown.is_empty(), "{:?}", cp.unknown);
+    let effects: Vec<&str> = cp.effects.iter().map(|e| e.summary.as_str()).collect();
+    assert_eq!(
+        effects,
+        [
+            "mcp__aeroric_context__board_write",
+            "aeroric_context.todo_propose",
+            "mcp__github__read_session",
+        ]
+    );
+}
+
+#[test]
 fn a_call_without_a_result_when_the_turn_ends_is_unknown() {
     let b = run(vec![
         call("c1", ToolKind::Command, "cargo test search_timeout"),
