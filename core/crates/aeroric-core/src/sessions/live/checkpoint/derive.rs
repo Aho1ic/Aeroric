@@ -10,6 +10,7 @@ use aeroric_protocol::checkpoint::{
 use aeroric_protocol::session_live::{
     PermissionSendState, SessionUpdate, SessionUpdateKind, ToolKind, ToolStatus,
 };
+use aeroric_protocol::tools::{ToolScope, AERORIC_TOOLS};
 
 use crate::sessions::live::context_server::SERVER_NAME;
 
@@ -462,7 +463,8 @@ pub const ACCEPTANCE_PROFILE: &str = "acceptance:";
 
 /// Commands, file changes and MCP calls are side effects; reads, searches and
 /// subagents are not, and neither are Aeroric's own context tools that only
-/// read (1127c: a handoff listed `read_session` under 已发生改动).
+/// read, as the shared tool table marks them (1127c: a handoff listed
+/// `read_session` under 已发生改动).
 fn counts(kind: ToolKind, title: &str) -> bool {
     match kind {
         ToolKind::Command | ToolKind::FileChange => true,
@@ -470,24 +472,6 @@ fn counts(kind: ToolKind, title: &str) -> bool {
         _ => false,
     }
 }
-
-/// Aeroric context tools that change nothing: no board, todo, memory,
-/// plan or delegation is written by calling them.
-const CONTEXT_READS: &[&str] = &[
-    "search_sessions",
-    "read_session",
-    "read_handoff",
-    "delegations",
-    "list_roles",
-    "board_read",
-    "artifact_list",
-    "artifact_read",
-    "memory_recall",
-    "search_references",
-    "read_reference",
-    "read_wiki",
-    "search_wiki",
-];
 
 /// `mcp__aeroric_context__read_session` (Claude, omp, ACP) or
 /// `aeroric_context.read_session` (Codex).
@@ -501,7 +485,11 @@ fn reads_aeroric_context(title: &str) -> bool {
             name.strip_prefix(SERVER_NAME)
                 .and_then(|rest| rest.strip_prefix('.'))
         });
-    tool.is_some_and(|tool| CONTEXT_READS.contains(&tool))
+    tool.is_some_and(|tool| {
+        AERORIC_TOOLS
+            .iter()
+            .any(|(name, _, scope)| *name == tool && *scope == ToolScope::ReadOnly)
+    })
 }
 
 fn kind_name(kind: ToolKind, title: &str) -> &'static str {

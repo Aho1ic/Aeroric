@@ -103,6 +103,8 @@ fn aeroric_context_reads_are_not_effects_but_its_writes_are() {
         done("c5", ToolStatus::Completed),
         call("c6", ToolKind::Mcp, "mcp__github__read_session"),
         done("c6", ToolStatus::Completed),
+        call("c7", ToolKind::Mcp, "mcp__aeroric_context__ask_expert"),
+        done("c7", ToolStatus::Completed),
         end(),
     ]);
     let cp = &b.checkpoint;
@@ -114,6 +116,7 @@ fn aeroric_context_reads_are_not_effects_but_its_writes_are() {
             "mcp__aeroric_context__board_write",
             "aeroric_context.todo_propose",
             "mcp__github__read_session",
+            "mcp__aeroric_context__ask_expert",
         ]
     );
 }

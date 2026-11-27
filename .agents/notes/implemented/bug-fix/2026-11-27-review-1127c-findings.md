@@ -32,7 +32,7 @@ Status: implemented
 ## Decision
 
 **Aeroric 自己的只读工具不算副作用**（`counts` 多看工具标题）。
-- 只读名单：`search_sessions`、`read_session`、`read_handoff`、`delegations`、`list_roles`、`board_read`、`artifact_list`、`artifact_read`、`memory_recall`、`search_references`、`read_reference`、`read_wiki`、`search_wiki`；
+- 哪些只读，查共用的工具表 `aeroric_protocol::tools::AERORIC_TOOLS`（E13 起 MCP 注解 `readOnlyHint` 也按它标）里 `ToolScope::ReadOnly` 的 13 个：`search_sessions`、`read_session`、`read_handoff`、`delegations`、`list_roles`、`board_read`、`artifact_list`、`artifact_read`、`memory_recall`、`search_references`、`read_reference`、`read_wiki`、`search_wiki`；
 - 两种标题都认：`mcp__aeroric_context__<工具>`（Claude、omp、ACP）和 `aeroric_context.<工具>`（Codex）；
 - 会写东西的照旧算：`board_write`、`board_decide`、`todo_propose`、`plan_propose`、`delegate`、`memory_propose`、`memory_feedback`、`flag_wiki_issue`、`ask_expert`；
 - 别的 MCP 服务器的工具照旧算，即使同名（`mcp__github__read_session` 仍是副作用）：Aeroric 不知道它们改不改东西。
@@ -41,13 +41,14 @@ Status: implemented
 
 **所有 MCP 调用都不算副作用，只算命令和改文件。** 最强的理由是最简单，而且 MCP 工具大多是查询。没选：外部 MCP 能发消息、建工单、改远端数据，这正是交接清单要提醒“不要重做”的东西。
 
-**读 MCP 工具的 `readOnlyHint` 注解来判断。** 最强的理由是对外部服务器也适用。没选：检查点推导只看得到驱动发出的更新，里面没有工具注解；而且注解由服务器自己声明，不一定可信。Aeroric 的工具是自己的，写一份名单最直接。
+**读 MCP 工具的 `readOnlyHint` 注解来判断。** 最强的理由是对外部服务器也适用。没选：检查点推导只看得到驱动发出的更新，里面没有工具注解；而且注解由服务器自己声明，不一定可信。Aeroric 自己的工具直接查共用的工具表，和注解出自同一处，不会两边不一致。
+
+**在检查点推导里另写一份只读名单。** 最强的理由是不跨 crate。没选：以后加工具时要记得两处一起改；共用的表已经在 `aeroric-protocol` 里，核心本来就依赖它。
 
 ## Consequences
 
 - **收益：** 交接清单的“已发生改动”只列真正改过东西的调用；Agent 查一下上下文，不会挤掉真正的改动，也不会进“结果未知”。
 - **局限：**
-  - 名单要跟着 `mcp_context.rs` 的工具表走，以后加只读工具时要同步加进来；
   - 已经存下的检查点不回头改，这次修复之前记下的只读调用仍留在旧清单里，直到被新条目挤掉。
 - **验证：**
   - Rust：`checkpoint::derive_tests` 的 `aeroric_context_reads_are_not_effects_but_its_writes_are`：Claude、Codex 两种标题的只读调用不算，没等到结果的也不进“结果未知”；`board_write`、`todo_propose` 和外部同名工具照旧算；
