@@ -416,6 +416,7 @@ impl SessionDriver for OmpSession {
             resume_blocked: None,
             questions: state.questions.clone(),
             permission_locked: true,
+            notices: Vec::new(),
         }
     }
 

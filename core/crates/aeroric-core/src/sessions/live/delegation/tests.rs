@@ -1614,14 +1614,22 @@ fn a_childs_result_names_its_deliverables_by_version() {
 
 // MARK: E5-4 invariants
 
+/// 1126c verify: the queue writes in the background (a temp file renamed
+/// into place), so an entry can vanish between listing and copying; such
+/// an entry was never a finished file and is skipped.
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap().flatten() {
         let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            std::fs::copy(entry.path(), target).unwrap();
+        let gone = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => copy_tree(&entry.path(), &target),
+            Ok(_) => match std::fs::copy(entry.path(), target) {
+                Err(e) if !gone(&e) => panic!("copy {}: {e}", entry.path().display()),
+                _ => {}
+            },
+            Err(e) if gone(&e) => {}
+            Err(e) => panic!("read {}: {e}", entry.path().display()),
         }
     }
 }

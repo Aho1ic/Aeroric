@@ -356,6 +356,7 @@ impl SessionDriver for ClaudeSession {
             resume_blocked: None,
             questions: Vec::new(),
             permission_locked: false,
+            notices: Vec::new(),
         }
     }
 

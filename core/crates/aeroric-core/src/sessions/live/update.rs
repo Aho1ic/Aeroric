@@ -66,6 +66,26 @@ impl UpdateLog {
         self.next_seq - 1
     }
 
+    /// 1127a: the latest `max` warnings and errors still held, oldest
+    /// first. A page that opens after one was said (a new session's page
+    /// opens a moment after its first turn starts) seeds them from
+    /// `session.state`; its updates start after the snapshot.
+    pub fn recent_notices(&self, max: usize) -> Vec<SessionUpdate> {
+        let mut found: Vec<SessionUpdate> = self
+            .buffer
+            .iter()
+            .rev()
+            .filter(|u| {
+                matches!(&u.kind, SessionUpdateKind::Notice { level, .. }
+                    if level == "warning" || level == "error")
+            })
+            .take(max)
+            .cloned()
+            .collect();
+        found.reverse();
+        found
+    }
+
     /// One page for `session.updates`: at most `limit` updates and about
     /// [`MAX_BATCH_BYTES`] of JSON, always at least one when any are newer.
     pub fn page(&self, after: u64, limit: usize) -> Replay {

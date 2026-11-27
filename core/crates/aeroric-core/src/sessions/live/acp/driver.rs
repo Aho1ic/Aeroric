@@ -454,6 +454,7 @@ impl SessionDriver for AcpSession {
             resume_blocked: None,
             questions: Vec::new(),
             permission_locked: true,
+            notices: Vec::new(),
         }
     }
 

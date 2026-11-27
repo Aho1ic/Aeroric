@@ -310,6 +310,9 @@ public struct LiveSessionModel: Equatable, Sendable {
     private var echoCount = 0
     /// R1-2b: echo id → the delivery it is.
     public private(set) var echoDeliveries: [String: String] = [:]
+    /// 1126c: Aeroric's warnings kept past the last turn's history (they
+    /// are in no transcript); they go when the next turn settles.
+    private var keptNotices: Set<String> = []
 
     public init(state: LiveSessionState) {
         cursor = state.latestSeq
@@ -323,6 +326,16 @@ public struct LiveSessionModel: Equatable, Sendable {
         stats = SessionStats(outputBaseline: state.outputTokens ?? 0)
         config = LiveConfig(model: state.model, permission: state.permission, effort: state.effort)
         turnActive = state.turnActive
+        // 1127a: warnings said before this page opened (a new session's
+        // page opens a moment after its first turn starts, and an MCP
+        // server's failure comes 0.2 s in). From a finished turn they go
+        // when the next one settles; from the running one, as usual.
+        for update in state.notices {
+            guard case let .notice(level, message) = update.kind else { continue }
+            let id = "seq\(update.seq)"
+            items.append(.info(id: id, level: level, message: message))
+            if !state.turnActive { keptNotices.insert(id) }
+        }
     }
 
     /// A2: the user answers again; the old failure no longer describes the card.
@@ -343,11 +356,23 @@ public struct LiveSessionModel: Equatable, Sendable {
         let queued = Set(echoDeliveries.keys.filter { echo in
             delivery(forEcho: echo).map(Self.waitsForUser) ?? false
         })
+        // 1126c: a warning or error Aeroric said during this turn (an MCP
+        // server that did not start, a stopped message) is in no transcript:
+        // it stays until the next turn settles. A 3-second turn used to take
+        // it away before anyone could read it.
+        let earlier = keptNotices
         items.removeAll { item in
             if case let .delegation(_, card) = item { return !card.wantsUser }
             if case let .userEcho(id, _, _) = item { return !queued.contains(id) }
+            if case let .info(id, level, _) = item {
+                return earlier.contains(id) || !["warning", "error"].contains(level)
+            }
             return true
         }
+        keptNotices = Set(items.compactMap { item in
+            if case let .info(id, _, _) = item { return id }
+            return nil
+        })
         echoDeliveries = echoDeliveries.filter { echo, _ in items.contains { $0.id == "user:\(echo)" } }
     }
 

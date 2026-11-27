@@ -154,6 +154,52 @@ final class LiveSessionModelTests: XCTestCase {
         XCTAssertEqual(model.lastTurnChanges?.summary, "+3 −1 · 2 个文件")
     }
 
+    /// 1126c: Aeroric's warning during a short turn (an MCP server that did
+    /// not start) is in no transcript: it outlives that turn's live rows and
+    /// goes when the next turn settles; plain info rows go at once.
+    func testAWarningOutlivesItsTurnsLiveRows() {
+        var model = LiveSessionModel(state: state())
+        _ = model.apply(batch([
+            .turnStarted(turnId: "u1"),
+            .notice(level: "error", message: "MCP 服务 missing-probe 没连上（Claude 报告 failed）"),
+            .notice(level: "info", message: "顺带一提"),
+            .messageChunk(messageId: "m", role: "assistant", text: "gamma"),
+            .turnEnded(turnId: "u1", reason: .completed, error: nil),
+        ]))
+        model.clearItems()
+        XCTAssertEqual(model.items.map(\.id), ["info:seq2"])
+        _ = model.apply(batch([
+            .turnStarted(turnId: "u2"),
+            .messageChunk(messageId: "m2", role: "assistant", text: "delta"),
+            .turnEnded(turnId: "u2", reason: .completed, error: nil),
+        ], from: 6))
+        model.clearItems()
+        XCTAssertTrue(model.items.isEmpty, "\(model.items)")
+    }
+
+    /// 1127a: a warning said before the page opened comes with the state;
+    /// from a finished turn it goes when the next turn settles.
+    func testAWarningSaidBeforeThePageOpenedIsShown() throws {
+        let state = try LiveSessionState.decode(.object([
+            "taskId": .string("t"), "live": .bool(true), "turnActive": .bool(false), "pending": .array([]),
+            "plan": .array([]), "latestSeq": .number("8"),
+            "notices": .array([.object([
+                "taskId": .string("t"), "seq": .number("2"), "atMs": .number("0"), "type": .string("notice"),
+                "level": .string("error"), "message": .string("MCP 服务 missing-probe 没连上（Claude 报告 failed）"),
+            ])]),
+        ]))
+        XCTAssertEqual(state.notices.count, 1)
+        var model = LiveSessionModel(state: state)
+        XCTAssertEqual(model.items.map(\.id), ["info:seq2"])
+        _ = model.apply(batch([
+            .turnStarted(turnId: "u2"),
+            .messageChunk(messageId: "m2", role: "assistant", text: "delta"),
+            .turnEnded(turnId: "u2", reason: .completed, error: nil),
+        ], from: 9))
+        model.clearItems()
+        XCTAssertTrue(model.items.isEmpty, "\(model.items)")
+    }
+
     /// A05: the latest check replaces the earlier one, goes stale once a later
     /// turn changes files, and only a failure offers a report for the agent.
     func testAutoCheckStatesAndStaleness() {

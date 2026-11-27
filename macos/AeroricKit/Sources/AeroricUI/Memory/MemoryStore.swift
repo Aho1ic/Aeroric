@@ -20,6 +20,10 @@ public protocol MemoryService {
     func forget(id: String) async throws -> LiveMemoryWithdrawal?
     func setEnabled(projectID: String, enabled: Bool) async throws
     func native(projectID: String?) async throws -> [LiveNativeMemory]
+    /// E8: what a session started in `projectID` would carry. A requirement,
+    /// not only the extension's default: 1126c found the page always called
+    /// the default (nil) through the protocol, so the line never showed.
+    func load(projectID: String?) async throws -> LiveMemoryLoad?
     func attention() async throws -> [LiveMemoryItem]
     /// B5-2: the 整理设置, 整理记录, the models that can be the analysis model,
     /// and 导入为候选.

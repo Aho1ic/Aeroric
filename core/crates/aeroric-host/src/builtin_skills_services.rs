@@ -128,6 +128,13 @@ fn list(request: Request, context: Arc<CoreContext>) -> Frame {
                 .filter(|(_, names)| names.contains(&skill.id))
                 .map(|(h, _)| *h)
                 .collect();
+            // 1126c: the command-line skill goes only where the tools do
+            // not; the 技能 page said nothing of it (the catalog did).
+            let withheld = (skill.id == skills::CLI_SKILL
+                && aeroric_core::extensions::catalog::HARNESSES
+                    .iter()
+                    .all(|h| skills::has_context_tools(h)))
+            .then_some("只给没有 Aeroric 工具的 Harness；现在这几家都有工具，没有挂给任何一家");
             let missing: Vec<&str> = skill
                 .needs
                 .iter()
@@ -145,6 +152,7 @@ fn list(request: Request, context: Arc<CoreContext>) -> Frame {
                 "shadowedBy": shadowed,
                 "missing": missing,
                 "inProject": copies.contains(&skill.id),
+                "withheld": withheld,
             })
         })
         .collect();

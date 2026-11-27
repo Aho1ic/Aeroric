@@ -14,6 +14,8 @@ public struct BuiltinSkillsClient: Sendable {
         public var enabled: Bool
         public var shadowedBy: [String]
         public var missing: [String]
+        /// 1126c: why no harness is given it (the command-line skill).
+        public var withheld: String? = nil
     }
 
     public struct ProjectCopies: Sendable, Equatable {
@@ -66,7 +68,8 @@ public struct BuiltinSkillsClient: Sendable {
             return Skill(id: id, group: item["group"]?.stringValue ?? "develop", title: title,
                          detail: item["detail"]?.stringValue ?? "", symbol: item["symbol"]?.stringValue ?? "sparkles",
                          needs: strings(item, "needs"), enabled: item["enabled"]?.boolValue ?? true,
-                         shadowedBy: strings(item, "shadowedBy"), missing: strings(item, "missing"))
+                         shadowedBy: strings(item, "shadowedBy"), missing: strings(item, "missing"),
+                         withheld: item["withheld"]?.stringValue)
         }
     }
 

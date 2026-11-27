@@ -229,6 +229,9 @@ impl SharedLog {
     pub fn latest_seq(&self) -> u64 {
         self.0.lock().latest_seq()
     }
+    pub fn recent_notices(&self, max: usize) -> Vec<SessionUpdate> {
+        self.0.lock().recent_notices(max)
+    }
 }
 
 /// A closed session's log stays this long for clients catching up (N3 D5).

@@ -462,6 +462,11 @@ pub struct SessionState {
     /// The permission tier is fixed for this session (omp takes it at start).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub permission_locked: bool,
+    /// 1127a: the latest warnings and errors Aeroric said in this session
+    /// (`notice` updates, oldest first, at most a few), for a page that
+    /// opens after them; filled by the host, not the driver.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<SessionUpdate>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -994,6 +999,7 @@ pub fn fixture_state() -> SessionState {
         resume_blocked: None,
         questions: vec![],
         permission_locked: false,
+        notices: Vec::new(),
     }
 }
 

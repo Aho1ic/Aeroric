@@ -241,6 +241,14 @@ final class SessionPolishTests: XCTestCase {
         XCTAssertEqual(TranscriptTurns.header(nil), "已完成")
         let stopped = SessionTranscriptStats.TurnStat(startedAt: 1_000, endedAt: 37_000, tokens: 0, interrupted: true)
         XCTAssertEqual(TranscriptTurns.header(stopped), "已中断，用时 36 秒")
+        // 1126c: cut mid-work by 停止 in the title bar (no interrupt note).
+        var cut = SessionTranscriptStats.TurnStat(startedAt: 1_000, endedAt: 76_000, tokens: 0)
+        cut.unfinished = true
+        XCTAssertEqual(TranscriptTurns.header(cut), "已中断，用时 1 分 15 秒")
+        let decoded = SessionTranscriptStats.decode(.object([
+            "turns": .array([.object(["startedAt": .number("1"), "tokens": .number("0"), "unfinished": .bool(true)])]),
+        ]))
+        XCTAssertEqual(decoded?.turns.first?.unfinished, true)
     }
 
     /// CU 2026-11-03: a steer is its own turn in history but not in the

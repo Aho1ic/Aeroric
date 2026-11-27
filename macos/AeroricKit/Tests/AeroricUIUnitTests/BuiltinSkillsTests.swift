@@ -1,3 +1,5 @@
+import AeroricClient
+import AeroricProtocol
 import XCTest
 @testable import AeroricUI
 
@@ -54,5 +56,13 @@ final class BuiltinSkillsTests: XCTestCase {
         XCTAssertEqual(BuiltinSkillBook.status(item), "需要 Python")
         item.shadowedBy = ["codex"]
         XCTAssertEqual(BuiltinSkillBook.status(item), "Codex 里已被你的同名技能取代")
+        // 1126c: on, yet given to no harness: the row says why.
+        let cli = BuiltinSkillBook.Item(id: "aeroric", group: "develop", title: "t", detail: "d", symbol: "s",
+                                        withheld: "只给没有 Aeroric 工具的 Harness；现在这几家都有工具，没有挂给任何一家")
+        XCTAssertEqual(BuiltinSkillBook.status(cli), "只给没有 Aeroric 工具的 Harness；现在这几家都有工具，没有挂给任何一家")
+        let decoded = try? BuiltinSkillsClient.decodeSkills(.object(["skills": .array([.object([
+            "id": .string("aeroric"), "title": .string("t"), "withheld": .string("没有挂给任何一家"),
+        ])])]))
+        XCTAssertEqual(decoded?.first?.withheld, "没有挂给任何一家")
     }
 }

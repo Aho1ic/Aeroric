@@ -28,11 +28,16 @@ public final class BuiltinSkillBook {
         public var shadowedBy: [String]
         /// Needs not met on this Mac, e.g. `python`.
         public var missing: [String]
+        /// 1126c: why no harness is given it, though it is on (the
+        /// command-line skill, while every harness has the tools).
+        public var withheld: String?
 
         public init(id: String, group: String, title: String, detail: String, symbol: String,
-                    needs: [String] = [], enabled: Bool = true, shadowedBy: [String] = [], missing: [String] = []) {
+                    needs: [String] = [], enabled: Bool = true, shadowedBy: [String] = [], missing: [String] = [],
+                    withheld: String? = nil) {
             self.id = id; self.group = group; self.title = title; self.detail = detail; self.symbol = symbol
             self.needs = needs; self.enabled = enabled; self.shadowedBy = shadowedBy; self.missing = missing
+            self.withheld = withheld
         }
     }
 
@@ -118,7 +123,7 @@ public final class BuiltinSkillBook {
             return "\(names) 里已被你的同名技能取代"
         }
         if item.missing.contains("python") { return "需要 Python" }
-        return nil
+        return item.withheld
     }
 
     nonisolated static func harnessName(_ harness: String) -> String {

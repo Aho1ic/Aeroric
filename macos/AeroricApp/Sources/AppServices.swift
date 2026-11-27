@@ -1669,7 +1669,8 @@ struct HostBuiltinSkillActions: BuiltinSkillActions {
     func list() async throws -> [BuiltinSkillBook.Item] {
         try await client.list().map {
             BuiltinSkillBook.Item(id: $0.id, group: $0.group, title: $0.title, detail: $0.detail, symbol: $0.symbol,
-                                  needs: $0.needs, enabled: $0.enabled, shadowedBy: $0.shadowedBy, missing: $0.missing)
+                                  needs: $0.needs, enabled: $0.enabled, shadowedBy: $0.shadowedBy, missing: $0.missing,
+                                  withheld: $0.withheld)
         }
     }
 

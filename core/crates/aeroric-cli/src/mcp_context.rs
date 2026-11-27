@@ -597,9 +597,15 @@ pub(crate) async fn call_tool(
         let mut result = ask_expert(client, data_dir, token, &arguments).await;
         if result.get("structuredContent").is_none() {
             let failed = result["isError"].as_bool() == Some(true);
+            // 1127a: the answer too, not only how it went (see `outcome`).
+            let text = result
+                .pointer("/content/0/text")
+                .cloned()
+                .unwrap_or(Value::Null);
             result["structuredContent"] = json!({
                 "status": if failed { Status::Unclear.as_str() } else { Status::Ok.as_str() },
                 "retryable": failed,
+                "text": text,
             });
         }
         return result;
@@ -652,7 +658,12 @@ pub(crate) async fn call_tool(
                 .and_then(Value::as_str)
             {
                 Some(brief) => brief.to_string(),
-                None => serde_json::to_string_pretty(&result).unwrap_or_default(),
+                None => {
+                    // 1127a: the structured result carries the answer as it
+                    // is, not as a string of JSON.
+                    extra["result"] = result.clone();
+                    serde_json::to_string_pretty(&result).unwrap_or_default()
+                }
             };
             let status = if result.get("partial").and_then(Value::as_bool) == Some(true) {
                 Status::Partial
@@ -732,6 +743,11 @@ impl Status {
 
 /// A tool result: the text, as every harness reads it, and (C8)
 /// `structuredContent` with the status and whatever `extra` carries.
+///
+/// 1127a: Claude Code gives the model `structuredContent` instead of the
+/// text when a result has it, so a Claude session's `read_session` saw only
+/// `{"status":"ok","retryable":false}`. The structured result carries the
+/// answer too: `result` (the host's JSON) when `extra` has it, else `text`.
 fn outcome(text: String, status: Status, extra: &Value) -> Value {
     let mut structured = json!({
         "status": status.as_str(),
@@ -740,6 +756,9 @@ fn outcome(text: String, status: Status, extra: &Value) -> Value {
     if let (Some(into), Some(from)) = (structured.as_object_mut(), extra.as_object()) {
         for (key, value) in from {
             into.insert(key.clone(), value.clone());
+        }
+        if !into.contains_key("result") {
+            into.insert("text".into(), Value::String(text.clone()));
         }
     }
     json!({
@@ -1074,6 +1093,27 @@ mod tests {
         assert_eq!(super::salvage_id(b"garbage"), None);
     }
 
+    /// 1127a: Claude Code reads `structuredContent` instead of the text, so
+    /// the structured result carries the answer: the host's JSON as it is,
+    /// or the text (a brief, an error).
+    #[test]
+    fn the_structured_result_carries_the_answer() {
+        let read = outcome(
+            "{\n  \"text\": \"beta\"\n}".into(),
+            Status::Ok,
+            &json!({"result": {"text": "beta", "role": "assistant"}}),
+        );
+        let structured = &read["structuredContent"];
+        assert_eq!(structured["status"], "ok");
+        assert_eq!(structured["result"]["text"], "beta");
+        assert!(structured.get("text").is_none(), "not twice");
+        let brief = outcome("交接简报……".into(), Status::Ok, &json!({}));
+        assert_eq!(brief["structuredContent"]["text"], "交接简报……");
+        let lost = outcome("连不上 Aeroric".into(), Status::Retry, &json!({}));
+        assert_eq!(lost["structuredContent"]["text"], "连不上 Aeroric");
+        assert_eq!(lost["content"][0]["text"], "连不上 Aeroric");
+    }
+
     /// C8: a tool result carries `structuredContent` with its status; a
     /// keyed tool says its operation id (the agent's key, or one made);
     /// tools/list offers the key only on the tools that take one.
@@ -1090,6 +1130,11 @@ mod tests {
             .unwrap();
         assert_eq!(unknown["result"]["structuredContent"]["status"], "rejected");
         assert_eq!(unknown["result"]["structuredContent"]["retryable"], false);
+        // 1127a: what the text says is in the structured result too.
+        assert_eq!(
+            unknown["result"]["structuredContent"]["text"],
+            unknown["result"]["content"][0]["text"]
+        );
         assert_eq!(unknown["result"]["isError"], true);
         let keyed = answer(
             &mut client,

@@ -32,6 +32,11 @@ private final class FakeMemoryService: MemoryService {
     }
     func setEnabled(projectID: String, enabled: Bool) async throws { calls.append("enabled \(projectID) \(enabled)") }
     func native(projectID: String?) async throws -> [LiveNativeMemory] { [] }
+    var memoryLoad: LiveMemoryLoad?
+    func load(projectID: String?) async throws -> LiveMemoryLoad? {
+        calls.append("load \(projectID ?? "global")")
+        return memoryLoad
+    }
     func attention() async throws -> [LiveMemoryItem] { items.filter { $0.state == "pending" } }
     var saved = LiveMemorySettings()
     func settings() async throws -> LiveMemorySettings { saved }
@@ -141,6 +146,19 @@ final class MemoryTests: XCTestCase {
 
     /// C3: 取消 a running row reads 正在取消 until the log says it stopped;
     /// the page knows to keep reading while a row is open; 重建索引 asks.
+    /// 1126c: the load line reached the page only through the protocol's
+    /// default (nil); the service's own answer must arrive.
+    func testThePageReadsTheServicesLoad() async {
+        let service = FakeMemoryService()
+        service.memoryLoad = LiveMemoryLoad(usedChars: 1211, budgetChars: 1200, carried: 11,
+                                            leftOut: [.init(id: "m1", kind: "profile", text: "x", why: "budget")])
+        let store = MemoryStore(service: service)
+        await store.reload()
+        XCTAssertEqual(store.load?.carried, 11)
+        XCTAssertTrue(service.calls.contains("load global"), "\(service.calls)")
+        XCTAssertEqual(MemoryLoadText.line(try XCTUnwrap(store.load)), "新会话会带入 1211 / 1200 字（11 条），另有 1 条没带上")
+    }
+
     func testCancelingARunWaitsForTheLogAndReindexAsks() async {
         let service = FakeMemoryService()
         let running = LiveMemoryRun(id: "run-1", taskId: "t1", state: "running")

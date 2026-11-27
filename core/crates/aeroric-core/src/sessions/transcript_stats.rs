@@ -58,6 +58,12 @@ pub struct TurnStat {
     /// `isApiErrorMessage` line) — not a completed turn.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub failed: bool,
+    /// 1126c: Claude's turn stopped mid-work — its last entry is a tool call
+    /// or a tool's result with no answer after it, and no interrupt note
+    /// (the process was ended: 停止 in the title bar, a restart). The page
+    /// says 已中断 unless the turn is still running.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unfinished: bool,
     /// R5-1: why the turn did not run (`failed` is then set). An error the
     /// agent retried past leaves this unset; `api_errors` counts every API
     /// error line of the turn, the last one included.
@@ -690,6 +696,10 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
     let mut stats = TranscriptStats::default();
     let mut clock = Clock::default();
     let mut ledger = Ledger::default();
+    // 1126c: the current turn worked (said or called something) and is
+    // waiting on Claude: a tool call out, or a result in, with no answer yet.
+    let mut worked = false;
+    let mut waiting = false;
     // (message id, turn index, its latest usage)
     let mut usage: Vec<(String, usize, Value)> = Vec::new();
     for line in lines {
@@ -730,6 +740,13 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
                             turn.interrupted = true;
                         }
                     } else if value["isMeta"] != true {
+                        // A later turn began: the cut one was stopped.
+                        if worked && waiting {
+                            if let Some(turn) = stats.turns.last_mut() {
+                                turn.interrupted |= !turn.failed;
+                            }
+                        }
+                        (worked, waiting) = (false, false);
                         clock.start_turn(&mut stats, at);
                         ledger.start_turn();
                     }
@@ -739,6 +756,7 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
                         ledger.talk(chars(&output));
                         clock.tool_end(&mut stats, id, at, failed, &output);
                     }
+                    waiting = true;
                 }
             }
             "assistant" => {
@@ -755,8 +773,11 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
                         turn.failed = false;
                     }
                 }
+                worked = true;
+                waiting = false;
                 for block in blocks.into_iter().flatten() {
                     if block["type"] == "tool_use" {
+                        waiting = true;
                         if let Some(id) = block["id"].as_str() {
                             let name = block["name"].as_str().unwrap_or_default();
                             clock.tool_start(&mut stats, id, name, &block["input"], at);
@@ -790,6 +811,7 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
             _ => {}
         }
     }
+    mark_unfinished(&mut stats, worked && waiting);
     clock.close(&mut stats);
     std::mem::take(&mut clock.retries).finish(&mut stats);
     ledger.finish(&mut stats);
@@ -825,6 +847,14 @@ pub fn claude(lines: &[String]) -> Option<TranscriptStats> {
     }
     price_turns(&mut stats);
     (!stats.is_empty()).then_some(stats)
+}
+
+/// 1126c: the last turn stopped mid-work (or is still at work), unless
+/// Claude said why.
+fn mark_unfinished(stats: &mut TranscriptStats, cut: bool) {
+    if let Some(turn) = stats.turns.last_mut() {
+        turn.unfinished = cut && !turn.interrupted && !turn.failed;
+    }
 }
 
 /// What a Claude Code attachment adds to the prompt. Newer versions write
@@ -1131,6 +1161,45 @@ mod tests {
             crate::sessions::claude::parse_claude_session_line(&line, &mut messages);
         }
         assert_eq!(messages.len(), 2);
+    }
+
+    /// 1126c: 停止 in the title bar ends Claude's process mid-turn; it
+    /// writes no interrupt note. A cut turn with a later one was stopped;
+    /// the last one is unfinished (the page knows whether it still runs).
+    #[test]
+    fn a_claude_turn_cut_mid_work_is_not_completed() {
+        let t = |s: &str| format!("2026-11-27T00:06:{s}Z");
+        let user = |at: &str, text: &str| serde_json::json!({"timestamp": t(at), "type": "user", "message": {"role": "user", "content": text}});
+        let said = |at: &str, text: &str| serde_json::json!({"timestamp": t(at), "type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}});
+        let call = |at: &str, id: &str| serde_json::json!({"timestamp": t(at), "type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {"command": "sleep 20"}}]}});
+        let result = |at: &str, id: &str| serde_json::json!({"timestamp": t(at), "type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": id, "content": "ok"}]}});
+        let raw = [
+            user("00.000", "Reply with alpha."),
+            said("02.000", "alpha"),
+            user("10.000", "Run sleep 20 three times."),
+            said("11.000", "I will run them one by one."),
+            call("12.000", "t1"),
+            result("32.000", "t1"),
+            // Ended here: the result is in, no answer follows.
+            user("40.000", "Again."),
+            call("41.000", "t2"),
+        ];
+        let stats = claude(&lines(&raw)).unwrap();
+        assert_eq!(stats.turns.len(), 3);
+        assert!(!stats.turns[0].interrupted && !stats.turns[0].unfinished);
+        assert!(stats.turns[1].interrupted, "cut, and a later turn began");
+        // Ended while its call ran.
+        assert!(stats.turns[2].unfinished && !stats.turns[2].interrupted);
+        // Answered after its call: finished.
+        let mut done = raw.to_vec();
+        done.extend([result("50.000", "t2"), said("51.000", "done")]);
+        let stats = claude(&lines(&done)).unwrap();
+        assert!(!stats.turns[2].unfinished);
+        // Claude's own note says it was stopped.
+        let mut noted = raw.to_vec();
+        noted.push(serde_json::json!({"timestamp": t("45.000"), "type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}}));
+        let stats = claude(&lines(&noted)).unwrap();
+        assert!(stats.turns[2].interrupted && !stats.turns[2].unfinished);
     }
 
     #[test]

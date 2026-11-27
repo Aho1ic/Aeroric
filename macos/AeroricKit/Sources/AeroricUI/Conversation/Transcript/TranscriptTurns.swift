@@ -85,7 +85,9 @@ public enum TranscriptTurns {
     /// the person stopped; `没跑成（额度或限流）…` for one that ended on the
     /// agent's API error (R5-1).
     public static func header(_ stat: SessionTranscriptStats.TurnStat?) -> String {
-        let state = if stat?.interrupted == true {
+        // 1126c: a turn cut mid-work (停止 in the title bar ends the process)
+        // reads as stopped too; a live page clears it while the turn runs.
+        let state = if stat?.interrupted == true || stat?.unfinished == true {
             "已中断"
         } else if let notRun = stat?.notRun {
             "没跑成（\(TurnBillText.notRunReason(notRun.reason))）"

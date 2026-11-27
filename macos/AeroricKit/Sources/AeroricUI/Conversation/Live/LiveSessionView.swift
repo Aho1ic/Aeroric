@@ -99,6 +99,13 @@ public struct LiveSessionView: View {
 
     /// R2-1 目检: the latest finished turn of a failed task failed.
     private func markingFailure(_ turn: TranscriptTurn, last: Bool) -> TranscriptTurn {
+        // 1126c: the last turn is unfinished because it is still running.
+        if last, store.turnActive || !liveItems.isEmpty, var stat = turn.stat, stat.unfinished {
+            stat.unfinished = false
+            var running = turn
+            running.stat = stat
+            return running
+        }
         guard last, facts.lastTurnFailed, liveItems.isEmpty, !store.turnActive, var stat = turn.stat,
               !stat.interrupted else { return turn }
         stat.failed = true

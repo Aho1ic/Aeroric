@@ -252,6 +252,9 @@ public struct LiveSessionState: Equatable, Sendable {
     public var questions: [LivePendingQuestion] = []
     /// The permission tier is fixed for this session (omp takes it at start).
     public var permissionLocked = false
+    /// 1127a: the latest warnings and errors Aeroric said here, oldest
+    /// first, for a page that opens after them.
+    public var notices: [LiveSessionUpdate] = []
 
     public init(taskId: String, live: Bool, structured: Bool, family: String?, sessionId: String?, turnActive: Bool,
                 pending: [LivePendingPermission], plan: [LivePlanEntry], model: String?, permission: String?,
@@ -505,6 +508,7 @@ extension LiveSessionState {
         state.questions = (f["questions"]?.arrayValue ?? []).compactMap { LivePendingQuestion.decode($0.fields, askedAt: 0) }
         state.permissionLocked = f["permissionLocked"]?.boolValue ?? false
         state.cachedInputTokens = uint(f["cachedInputTokens"])
+        state.notices = (f["notices"]?.arrayValue ?? []).compactMap { try? LiveSessionUpdate.decode($0) }
         return state
     }
 }

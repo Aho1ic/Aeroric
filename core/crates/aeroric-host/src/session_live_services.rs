@@ -1781,11 +1781,18 @@ fn state(live: &Live, request: &Request) -> Frame {
             }
         }
     };
+    let mut snapshot = snapshot;
+    if let Some(log) = live.executor.registry().log(&p.task_id) {
+        snapshot.notices = log.recent_notices(RECENT_NOTICES);
+    }
     match serde_json::to_value(snapshot) {
         Ok(value) => ok(request, value),
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
     }
 }
+
+/// 1127a: how many of a session's warnings `session.state` carries.
+const RECENT_NOTICES: usize = 5;
 
 fn updates(live: &Live, request: &Request) -> Frame {
     let p: UpdatesParams = match params(request) {

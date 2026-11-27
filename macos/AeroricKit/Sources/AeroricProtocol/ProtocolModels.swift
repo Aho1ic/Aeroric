@@ -283,6 +283,9 @@ public struct SessionTranscriptStats: Equatable, Sendable {
         public var interrupted: Bool
         /// The agent's API call failed and the turn gave up (R1-4 目检).
         public var failed: Bool
+        /// 1126c: Claude's last turn stopped mid-work with no interrupt note
+        /// (its process was ended), or is still at work.
+        public var unfinished: Bool = false
         /// The person's messages this turn took: more than one when they
         /// steered it (CU 2026-11-03).
         public var messages: Int
@@ -438,6 +441,7 @@ public struct SessionTranscriptStats: Equatable, Sendable {
             stat.costUsd = row["costUsd"]?.numberText.flatMap { Double($0) }
             stat.moreTools = Int(n("moreTools") ?? 0)
             stat.apiErrors = Int(n("apiErrors") ?? 0)
+            stat.unfinished = row["unfinished"]?.boolValue ?? false
             if let notRun = row["notRun"]?.objectValue, let reason = notRun["reason"]?.stringValue {
                 stat.notRun = NotRun(reason: reason,
                                      status: notRun["status"]?.numberText.flatMap { Int($0) },
